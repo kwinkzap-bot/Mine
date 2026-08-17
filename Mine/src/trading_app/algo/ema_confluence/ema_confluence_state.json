@@ -1,61 +1,61 @@
 {
-  "last_scan_date": "2026-08-14",
+  "last_scan_date": "2026-08-17",
   "stocks": {
     "NIFTY": {
       "phase": "no_setup",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.183660"
+      "scanned_at": "2026-08-17T08:53:15.986895"
     },
     "BANKNIFTY": {
       "phase": "no_setup",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.358330"
+      "scanned_at": "2026-08-17T08:53:16.088915"
     },
     "SBIN": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.702626"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.283038"
     },
     "RELIANCE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.797033",
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.379087",
       "missed_signal_date": "2026-02-03"
     },
     "HDFCBANK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.892982"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.477613"
     },
     "360ONE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.950522"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.536746"
     },
     "ABB": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.044126"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.633295"
     },
     "ABCAPITAL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.114815"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.710377"
     },
     "ADANIENSOL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.213465"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.797254"
     },
     "ADANIENT": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.314581"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.896087"
     },
     "ADANIGREEN": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.378535"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:16.961394"
     },
     "ADANIPORTS": {
       "phase": "watching",
@@ -69,20 +69,20 @@
       "future_token": "NSE:ADANIPORTS26AUGFUT",
       "lot_size": 475,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
-      "ltp": 1702.0,
-      "ltp_time": "2026-08-14T15:29:55.124533",
+      "future_resolved_on": "2026-08-17",
+      "ltp": 1687.7,
+      "ltp_time": "2026-08-17T14:24:52.601689",
       "future_expiry": "2026-08-25"
     },
     "ADANIPOWER": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.475490"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.058205"
     },
     "ALKEM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.556822",
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.139619",
       "missed_signal_date": "2025-08-12"
     },
     "AMBER": {
@@ -90,7 +90,7 @@
       "future_token": "NSE:AMBER26AUGFUT",
       "lot_size": 100,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "scanned_candle": "2026-08-07",
       "scanned_at": "2026-08-10T09:18:13.916512",
       "direction": "Long",
@@ -98,75 +98,75 @@
       "sl_level": 7329.0,
       "target_pct": 15,
       "signal_date": "2026-08-07",
-      "ltp": 7231.0,
-      "ltp_time": "2026-08-14T15:29:55.124540",
+      "ltp": 7322.5,
+      "ltp_time": "2026-08-17T14:24:52.601691",
       "future_expiry": "2026-08-25"
     },
     "AMBUJACEM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.653792"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.252728"
     },
     "ANGELONE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.702132"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.300152"
     },
     "APOLLOHOSP": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.940751"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.543334"
     },
     "ASTRAL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.040690"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.677555"
     },
     "AUBANK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.115833"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.753780"
     },
     "AXISBANK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.215600"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.857790"
     },
     "BAJAJ-AUTO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.314796"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.960007"
     },
     "BAJAJFINSV": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.411171"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.061564"
     },
     "BAJAJHLDNG": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.509016",
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.162621",
       "missed_signal_date": "2026-07-13"
     },
     "BAJFINANCE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.599491"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.257450"
     },
     "BANDHANBNK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.664957"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.327282"
     },
     "BANKBARODA": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.755894"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.419712"
     },
     "BDL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.814324"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.480115"
     },
     "BEL": {
       "phase": "no_setup",
@@ -176,8 +176,8 @@
       "future_resolved_on": "2026-08-06",
       "invalidated_signal_date": "2026-07-11",
       "invalidated_at": "2026-08-06T10:35:40.555692",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:03.914451"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.579353"
     },
     "BHARTIARTL": {
       "phase": "in_position",
@@ -192,13 +192,13 @@
       "sl_level": 1901.3,
       "target_pct": 10,
       "signal_date": "2026-08-12",
-      "ltp": 1995.5,
-      "ltp_time": "2026-08-14T15:29:55.124557",
+      "ltp": 1985.2,
+      "ltp_time": "2026-08-17T14:24:52.601705",
       "entry_price": 1965.0,
       "target_level": 2161.5,
       "qty": 475,
       "entry_time": "2026-08-13T08:47:18.153712",
-      "unrealized_pnl": 14487.5,
+      "unrealized_pnl": 9595.0,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -210,33 +210,33 @@
       "future_resolved_on": "2026-08-06",
       "invalidated_signal_date": "2026-07-11",
       "invalidated_at": "2026-08-06T10:35:40.556278",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.015530"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.678572"
     },
     "BLUESTARCO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.117125"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.778781"
     },
     "BOSCHLTD": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.216560"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.877460"
     },
     "BPCL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.309843"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:18.972303"
     },
     "BRITANNIA": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.408859"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.072971"
     },
     "CAMS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.457782"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.120506"
     },
     "CIPLA": {
       "phase": "watching",
@@ -250,42 +250,42 @@
       "future_token": "NSE:CIPLA26AUGFUT",
       "lot_size": 425,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
-      "ltp": 1456.8,
-      "ltp_time": "2026-08-14T15:29:55.124542",
+      "future_resolved_on": "2026-08-17",
+      "ltp": 1434.2,
+      "ltp_time": "2026-08-17T14:24:52.601693",
       "future_expiry": "2026-08-25"
     },
     "COALINDIA": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.544963"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.211948"
     },
     "COCHINSHIP": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.609575"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.280364"
     },
     "COFORGE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.706113"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.381691"
     },
     "COLPAL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.803301"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.480807"
     },
     "DALBHARAT": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.946632"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.624788"
     },
     "DELHIVERY": {
       "phase": "watching",
       "future_token": "NSE:DELHIVERY26AUGFUT",
       "lot_size": 2075,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "invalidated_signal_date": "2026-03-30",
       "invalidated_at": "2026-08-06T10:35:40.556883",
       "scanned_candle": "2026-08-06",
@@ -295,8 +295,8 @@
       "sl_level": 423.7,
       "target_pct": 2.5,
       "signal_date": "2026-03-30",
-      "ltp": 460.4,
-      "ltp_time": "2026-08-14T15:29:55.124544",
+      "ltp": 457.6,
+      "ltp_time": "2026-08-17T14:24:52.601695",
       "future_expiry": "2026-08-25"
     },
     "DMART": {
@@ -307,43 +307,43 @@
       "future_resolved_on": "2026-08-06",
       "invalidated_signal_date": "2026-07-11",
       "invalidated_at": "2026-08-06T10:35:40.557627",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.021889"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.700091"
     },
     "DRREDDY": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.123450"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.799928"
     },
     "ETERNAL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.165049"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.840524"
     },
     "FEDERALBNK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.263020"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.940955"
     },
     "GLENMARK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.362978"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.044626"
     },
     "GMRAIRPORT": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.456868"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.137659"
     },
     "GODFRYPHLP": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.554643"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.241291"
     },
     "GODREJPROP": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.644722"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.335316"
     },
     "GRASIM": {
       "phase": "no_setup",
@@ -351,15 +351,15 @@
       "lot_size": 250,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-06",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.733560"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.427929"
     },
     "HAL": {
       "phase": "watching",
       "future_token": "NSE:HAL26AUGFUT",
       "lot_size": 150,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "invalidated_signal_date": "2026-07-08",
       "invalidated_at": "2026-08-06T10:35:40.558862",
       "scanned_candle": "2026-08-06",
@@ -369,19 +369,19 @@
       "sl_level": 4433.7,
       "target_pct": 15,
       "signal_date": "2026-07-08",
-      "ltp": 5048.1,
-      "ltp_time": "2026-08-14T15:29:55.124545",
+      "ltp": 5065.9,
+      "ltp_time": "2026-08-17T14:24:52.601696",
       "future_expiry": "2026-08-25"
     },
     "HAVELLS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.828012"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.523152"
     },
     "HCLTECH": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.928026"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.622008"
     },
     "HDFCAMC": {
       "phase": "in_position",
@@ -396,58 +396,58 @@
       "lot_size": 300,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
-      "ltp": 2492.5,
-      "ltp_time": "2026-08-14T15:29:55.124560",
+      "ltp": 2533.8,
+      "ltp_time": "2026-08-17T14:24:52.601707",
       "entry_price": 2562.1,
       "target_level": 2459.62,
       "qty": 300,
       "entry_time": "2026-08-04T11:38:16.248597",
-      "unrealized_pnl": 20880.0,
+      "unrealized_pnl": 8490.0,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
     "HDFCLIFE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:05.999212"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.692194"
     },
     "HINDALCO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.097743"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:20.902477"
     },
     "HINDUNILVR": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.188589",
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.079003",
       "missed_signal_date": "2026-04-30"
     },
     "HINDZINC": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.283682"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.237024"
     },
     "ICICIGI": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.354645"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.370808"
     },
     "IDFCFIRSTB": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.616082"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.794450"
     },
     "INDHOTEL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.787079"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:22.088746"
     },
     "INDIANB": {
       "phase": "watching",
       "future_token": "NSE:INDIANB26AUGFUT",
       "lot_size": 1000,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "invalidated_signal_date": "2025-04-09",
       "invalidated_at": "2026-08-06T10:35:40.558909",
       "scanned_candle": "2026-08-06",
@@ -457,8 +457,8 @@
       "sl_level": 548.0,
       "target_pct": 5,
       "signal_date": "2025-04-09",
-      "ltp": 891.2,
-      "ltp_time": "2026-08-14T15:29:55.124547",
+      "ltp": 887.4,
+      "ltp_time": "2026-08-17T14:24:52.601697",
       "future_expiry": "2026-08-25"
     },
     "INDUSINDBK": {
@@ -466,7 +466,7 @@
       "future_token": "NSE:INDUSINDBK26AUGFUT",
       "lot_size": 700,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "invalidated_signal_date": "2026-04-24",
       "invalidated_at": "2026-08-06T10:35:40.559130",
       "scanned_candle": "2026-08-06",
@@ -476,75 +476,75 @@
       "sl_level": 868.0,
       "target_pct": 15,
       "signal_date": "2026-04-24",
-      "ltp": 1021.5,
-      "ltp_time": "2026-08-14T15:29:55.124548",
+      "ltp": 1016.7,
+      "ltp_time": "2026-08-17T14:24:52.601699",
       "future_expiry": "2026-08-25"
     },
     "INFY": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.969617"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:22.403219"
     },
     "IOC": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.067420"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:22.565871"
     },
     "JUBLFOOD": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.257141"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:22.882999"
     },
     "KALYANKJIL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.300704"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:22.979266"
     },
     "KEI": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.399374"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:23.167301"
     },
     "KFINTECH": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.429754",
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:23.287920",
       "missed_signal_date": "2026-07-27"
     },
     "LAURUSLABS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.500365"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:23.420678"
     },
     "LT": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.599895"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:23.585811"
     },
     "LTF": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.699288"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:23.748041"
     },
     "LTM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.777712"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:23.880427"
     },
     "MANAPPURAM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.974131"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:24.216143"
     },
     "MANKIND": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.001304"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:24.366754"
     },
     "MARICO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.102194"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:24.597556"
     },
     "MAZDOCK": {
       "phase": "in_position",
@@ -559,36 +559,36 @@
       "sl_level": 2373.3,
       "target_pct": 1.5,
       "signal_date": "2026-08-06",
-      "ltp": 2592.8,
-      "ltp_time": "2026-08-14T15:29:55.124562",
+      "ltp": 2563.9,
+      "ltp_time": "2026-08-17T14:24:52.601709",
       "entry_price": 2574.6,
       "target_level": 2613.22,
       "qty": 225,
       "entry_time": "2026-08-10T12:41:58.474682",
-      "unrealized_pnl": 4095.0,
+      "unrealized_pnl": -2407.5,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
     "MFSL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.215166"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:24.750184"
     },
     "MOTHERSON": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.316267"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:24.901249"
     },
     "MOTILALOFS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.417162",
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.054654",
       "missed_signal_date": "2026-07-24"
     },
     "NESTLEIND": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.709397"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.506540"
     },
     "NHPC": {
       "phase": "in_position",
@@ -609,35 +609,35 @@
       "target_pct": 8,
       "signal_date": "2026-08-05",
       "future_resolved_on": "2026-08-06",
-      "ltp": 77.02,
-      "ltp_time": "2026-08-14T15:29:55.124564",
+      "ltp": 76.67,
+      "ltp_time": "2026-08-17T14:24:52.601711",
       "entry_price": 77.76,
       "target_level": 71.54,
       "qty": 6950,
       "entry_time": "2026-08-06T09:17:35.466242",
-      "unrealized_pnl": 5143.0,
+      "unrealized_pnl": 7575.5,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
     "NMDC": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.801443"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.651170"
     },
     "NYKAA": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.905469"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.763390"
     },
     "OBEROIRLTY": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.004265"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.936734"
     },
     "OFSS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.103753"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:26.098726"
     },
     "OIL": {
       "phase": "in_position",
@@ -653,9 +653,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 470.65,
-      "ltp_time": "2026-08-14T15:29:55.124566",
-      "unrealized_pnl": 17710.0,
+      "ltp": 476.6,
+      "ltp_time": "2026-08-17T14:24:52.601713",
+      "unrealized_pnl": 26040.0,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -667,25 +667,25 @@
       "future_resolved_on": "2026-08-06",
       "invalidated_signal_date": "2026-07-11",
       "invalidated_at": "2026-08-06T10:35:40.559985",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.202080"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:26.253429"
     },
     "PAGEIND": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.321154"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:26.411315"
     },
     "PAYTM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.352348"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:26.585135"
     },
     "PFC": {
       "phase": "watching",
       "future_token": "NSE:PFC26AUGFUT",
       "lot_size": 1300,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "scanned_candle": "2026-08-07",
       "scanned_at": "2026-08-10T09:18:27.947868",
       "direction": "Long",
@@ -693,80 +693,80 @@
       "sl_level": 414.5,
       "target_pct": 15,
       "signal_date": "2026-08-07",
-      "ltp": 376.75,
-      "ltp_time": "2026-08-14T15:29:55.124549",
+      "ltp": 376.25,
+      "ltp_time": "2026-08-17T14:24:52.601700",
       "future_expiry": "2026-08-25"
     },
     "PIIND": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.445116"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:26.734654"
     },
     "PNB": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.547472"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:26.891740"
     },
     "PNBHOUSING": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.628416"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:27.024222"
     },
     "POLYCAB": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.685418"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:27.131876"
     },
     "PRESTIGE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.902699"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:27.616205"
     },
     "RADICO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.002539"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:27.767742"
     },
     "RBLBANK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.084000"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:27.903584"
     },
     "RVNL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.241105"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:28.170892"
     },
     "SBICARD": {
       "phase": "no_setup",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.294716"
+      "scanned_at": "2026-08-17T08:53:28.321509"
     },
     "SBILIFE": {
       "phase": "no_setup",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.367134",
+      "scanned_at": "2026-08-17T08:53:28.473265",
       "missed_signal_date": "2026-07-23"
     },
     "SHRIRAMFIN": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.564012"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:04.450687"
     },
     "SOLARINDS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.660940"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:04.603314"
     },
     "SONACOMS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.702885"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:04.698774"
     },
     "SRF": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.800947"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:04.883310"
     },
     "SUNPHARMA": {
       "phase": "no_setup",
@@ -774,18 +774,18 @@
       "lot_size": 350,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-06",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.904037"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:06.936930"
     },
     "SUPREMEIND": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.006291"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:09.250805"
     },
     "SUZLON": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.097361"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:09.392025"
     },
     "TATAPOWER": {
       "phase": "no_setup",
@@ -793,33 +793,33 @@
       "lot_size": 1450,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-06",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.297418"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:11.977684"
     },
     "TCS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.501469"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:14.968048"
     },
     "TECHM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.601640"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:15.116988"
     },
     "TITAN": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.769660"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:17.526048"
     },
     "TMPV": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.868002"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:17.733970"
     },
     "TORNTPHARM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.968302"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:20.572515"
     },
     "TRENT": {
       "phase": "no_setup",
@@ -827,16 +827,16 @@
       "lot_size": 225,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-06",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.069140"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:20.723242"
     },
     "TVSMOTOR": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.170256"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:23.171773"
     },
     "ULTRACEMCO": {
-      "phase": "watching",
+      "phase": "in_position",
       "scanned_candle": "2026-08-13",
       "scanned_at": "2026-08-14T08:30:12.271124",
       "direction": "Short",
@@ -848,16 +848,21 @@
       "lot_size": 50,
       "future_month": "AUG 2026",
       "future_expiry": "2026-08-25",
-      "future_resolved_on": "2026-08-14",
-      "ltp": 11600.0,
-      "ltp_time": "2026-08-14T15:29:55.124551"
+      "future_resolved_on": "2026-08-17",
+      "ltp": 11685.0,
+      "ltp_time": "2026-08-17T14:24:52.601715",
+      "entry_price": 11565.0,
+      "target_level": 10639.8,
+      "qty": 50,
+      "entry_time": "2026-08-17T09:16:00.632204",
+      "unrealized_pnl": -6000.0
     },
     "UPL": {
       "phase": "watching",
       "future_token": "NSE:UPL26AUGFUT",
       "lot_size": 1355,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "invalidated_signal_date": "2026-05-11",
       "invalidated_at": "2026-08-06T10:35:40.560378",
       "scanned_candle": "2026-08-06",
@@ -867,34 +872,34 @@
       "sl_level": 634.05,
       "target_pct": 5,
       "signal_date": "2026-05-11",
-      "ltp": 563.0,
-      "ltp_time": "2026-08-14T15:29:55.124553",
+      "ltp": 567.1,
+      "ltp_time": "2026-08-17T14:24:52.601701",
       "future_expiry": "2026-08-25"
     },
     "VOLTAS": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.470723"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:23.490038"
     },
     "WAAREEENER": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.486566"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:26.230454"
     },
     "WIPRO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.600403"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:26.415671"
     },
     "ZYDUSLIFE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.699269"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:29.045155"
     },
     "SENSEX": {
       "phase": "no_setup",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:01.612550"
+      "scanned_at": "2026-08-17T08:53:16.190060"
     },
     "APLAPOLLO": {
       "phase": "no_setup",
@@ -908,20 +913,20 @@
       "last_exit_price": 2033.77,
       "last_exit_reason": "TARGET",
       "last_pnl": 24069.5,
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:02.791252"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:17.414977"
     },
     "CROMPTON": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:04.885805"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:19.561358"
     },
     "EICHERMOT": {
       "phase": "watching",
       "future_token": "NSE:EICHERMOT26AUGFUT",
       "lot_size": 100,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
+      "future_resolved_on": "2026-08-17",
       "invalidated_signal_date": "2026-06-30",
       "invalidated_at": "2026-08-06T10:35:40.560872",
       "scanned_candle": "2026-08-06",
@@ -931,29 +936,29 @@
       "sl_level": 7392.5,
       "target_pct": 8,
       "signal_date": "2026-06-30",
-      "ltp": 8114.0,
-      "ltp_time": "2026-08-14T15:29:55.124554",
+      "ltp": 8095.5,
+      "ltp_time": "2026-08-17T14:24:52.601702",
       "future_expiry": "2026-08-25"
     },
     "ICICIPRULI": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.435714"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.506531"
     },
     "IDEA": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.532012"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.658211"
     },
     "IEX": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.686111"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:21.930282"
     },
     "INDIGO": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:06.872517"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:22.227818"
     },
     "IRFC": {
       "phase": "watching",
@@ -967,9 +972,9 @@
       "future_token": "NSE:IRFC26AUGFUT",
       "lot_size": 5425,
       "future_month": "AUG 2026",
-      "future_resolved_on": "2026-08-14",
-      "ltp": 87.62,
-      "ltp_time": "2026-08-14T15:29:55.124556",
+      "future_resolved_on": "2026-08-17",
+      "ltp": 87.11,
+      "ltp_time": "2026-08-17T14:24:52.601703",
       "future_expiry": "2026-08-25"
     },
     "ITC": {
@@ -981,62 +986,62 @@
       "invalidated_signal_date": "2025-02-01",
       "invalidated_at": "2026-08-06T10:35:40.561385",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.165246"
+      "scanned_at": "2026-08-17T08:53:22.733780"
     },
     "M&M": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:07.876472"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:24.040449"
     },
     "MUTHOOTFIN": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.516677"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.211392"
     },
     "NAUKRI": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:08.615645"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:25.360256"
     },
     "POWERGRID": {
       "phase": "no_setup",
       "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.785824"
+      "scanned_at": "2026-08-17T08:53:27.307074"
     },
     "PREMIERENE": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:09.804070"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:27.375738"
     },
     "RECLTD": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.182391"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:28.058484"
     },
     "SHREECEM": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:10.469225"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:53:49.614358"
     },
     "TATAELXSI": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.195919"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:09.534306"
     },
     "TATASTEEL": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.399812"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:12.288136"
     },
     "TIINDIA": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:11.671578"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:15.239411"
     },
     "UNIONBANK": {
       "phase": "no_setup",
-      "scanned_candle": "2026-08-13",
-      "scanned_at": "2026-08-14T08:30:12.372348"
+      "scanned_candle": "2026-08-14",
+      "scanned_at": "2026-08-17T08:54:23.338818"
     }
   }
 }

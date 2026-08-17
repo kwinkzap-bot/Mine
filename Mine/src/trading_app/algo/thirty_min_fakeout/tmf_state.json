@@ -1,6 +1,6 @@
 {
-  "date": "2026-08-14",
-  "eod_handled": true,
+  "date": "2026-08-17",
+  "eod_handled": false,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -183,14 +183,7 @@
       "phase": "no_setup"
     },
     "IDEA": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 13.92,
-      "sl_level": 14.14,
-      "sl_risk": 7902.18,
-      "ltp": 14.15,
-      "ltp_time": "2026-08-14T14:03:03.056558",
-      "exit_reason": "Invalidated (SL hit before entry)"
+      "phase": "no_setup"
     },
     "IDFCFIRSTB": {
       "phase": "no_setup"

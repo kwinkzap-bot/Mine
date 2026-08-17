@@ -70973,5 +70973,1373 @@
     ],
     "id": "2c304830-f3e2-4d00-864b-3a098a78b5d8",
     "created_at": 1786700939676
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "quantity": 715,
+    "entry_price": 0.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786943675166,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089219313663139840",
+          "price": 0,
+          "response": {
+            "order_id": "2089219313663139840"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089219314917236736",
+          "price": 0,
+          "response": {
+            "order_id": "2089219314917236736"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "d6fc9425-b57b-471b-abde-a00b1902b4c3",
+    "created_at": 1786943675185
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "quantity": 715,
+    "entry_price": 0.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786943716006,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089219484878823424",
+          "price": 0,
+          "response": {
+            "order_id": "2089219484878823424"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089219486137114624",
+          "price": 0,
+          "response": {
+            "order_id": "2089219486137114624"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "3f4a9e93-8c70-4f09-b63c-0322c5b151aa",
+    "created_at": 1786943716015
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 46.0,
+    "quantity": 715,
+    "entry_price": 46.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786946082376,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089220142679908352",
+          "price": 46.0,
+          "response": {
+            "order_id": "2089220142679908352"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089220144055640064",
+          "price": 46.0,
+          "response": {
+            "order_id": "2089220144055640064"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "0c42c2bc-08d5-43e9-9e77-11131ac87070",
+    "created_at": 1786943872850
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 47.0,
+    "quantity": 715,
+    "entry_price": 47.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786946070243,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089220158207221760",
+          "price": 47.0,
+          "response": {
+            "order_id": "2089220158207221760"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089220159671033856",
+          "price": 47.0,
+          "response": {
+            "order_id": "2089220159671033856"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "99bbc57c-1ce0-4bcf-bb93-f97690d30174",
+    "created_at": 1786943876573
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 48.0,
+    "quantity": 715,
+    "entry_price": 48.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786944708349,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089221269982994432",
+          "price": 48.0,
+          "response": {
+            "order_id": "2089221269982994432"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089221271216119808",
+          "price": 48.0,
+          "response": {
+            "order_id": "2089221271216119808"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "749c2190-21d7-4232-ba62-22ba76c1be96",
+    "created_at": 1786944141591
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 45.0,
+    "quantity": 715,
+    "entry_price": 45.0,
+    "status": "CANCELLED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089229467947294720",
+          "price": 45.0,
+          "response": {
+            "order_id": "2089229467947294720"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089229469419495424",
+          "price": 45.0,
+          "response": {
+            "order_id": "2089229469419495424"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "a35c4f0b-25e9-470e-bd7a-eb4a60baca87",
+    "created_at": 1786946096190
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 46.0,
+    "quantity": 715,
+    "entry_price": 44.0,
+    "status": "CANCELLED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089229490852388864",
+          "price": 44.0,
+          "response": {
+            "order_id": "2089229490852388864"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089229492299423744",
+          "price": 44.0,
+          "response": {
+            "order_id": "2089229492299423744"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "836f30b0-36d6-42b3-bc6b-e8fdb5f7ecf3",
+    "created_at": 1786946101674
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 52.0,
+    "quantity": 715,
+    "entry_price": 52.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786947472432,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089230695649435648",
+          "price": 52.0,
+          "response": {
+            "order_id": "2089230695649435648"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089230696979030016",
+          "price": 52.0,
+          "response": {
+            "order_id": "2089230696979030016"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "e2895f95-92d9-42b9-a894-57a0496072ca",
+    "created_at": 1786946388882
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 55.0,
+    "quantity": 715,
+    "entry_price": 55.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786947647420,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089230731888222208",
+          "price": 55.0,
+          "response": {
+            "order_id": "2089230731888222208"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089230733272342528",
+          "price": 55.0,
+          "response": {
+            "order_id": "2089230733272342528"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "2697ed95-8a02-46f9-9858-a7e6575315f3",
+    "created_at": 1786946397542
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 57.0,
+    "quantity": 715,
+    "entry_price": 57.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786947737349,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089236041675759616",
+          "price": 57.0,
+          "response": {
+            "order_id": "2089236041675759616"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089236043382841344",
+          "price": 57.0,
+          "response": {
+            "order_id": "2089236043382841344"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "1b064e21-d2ba-4090-bc9f-f9c6a40d54d8",
+    "created_at": 1786947663553
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 60.0,
+    "quantity": 715,
+    "entry_price": 60.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786949195481,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089236075431518208",
+          "price": 60.0,
+          "response": {
+            "order_id": "2089236075431518208"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089236076756918272",
+          "price": 60.0,
+          "response": {
+            "order_id": "2089236076756918272"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "e20157a6-c5e1-44e0-832f-8b51bfbdb7f4",
+    "created_at": 1786947671530
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 50.0,
+    "quantity": 715,
+    "entry_price": 50.0,
+    "status": "CANCELLED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089241289802833920",
+          "price": 50.0,
+          "response": {
+            "order_id": "2089241289802833920"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089241291111456768",
+          "price": 50.0,
+          "response": {
+            "order_id": "2089241291111456768"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "06b5ef4c-016b-4b93-96a7-3a3a62f097ae",
+    "created_at": 1786948914729
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 48.0,
+    "quantity": 715,
+    "entry_price": 48.0,
+    "status": "CANCELLED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089241381410627584",
+          "price": 48.0,
+          "response": {
+            "order_id": "2089241381410627584"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089241382836690944",
+          "price": 48.0,
+          "response": {
+            "order_id": "2089241382836690944"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "c2bb2b9a-a871-4965-aa66-0c2fe68a32ca",
+    "created_at": 1786948936594
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 70.0,
+    "quantity": 715,
+    "entry_price": 70.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786950240504,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089242949333737472",
+          "price": 70.0,
+          "response": {
+            "order_id": "2089242949333737472"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089242950617194496",
+          "price": 70.0,
+          "response": {
+            "order_id": "2089242950617194496"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "21facedd-6b51-465f-a177-c2feb95ed509",
+    "created_at": 1786949310426
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 78.0,
+    "quantity": 715,
+    "entry_price": 78.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786951790504,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089252455660838912",
+          "price": 78.0,
+          "response": {
+            "order_id": "2089252455660838912"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089252457015599104",
+          "price": 78.0,
+          "response": {
+            "order_id": "2089252457015599104"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "12bfe8ba-a293-4ef5-a777-dd632d5b7810",
+    "created_at": 1786951576894
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 75.0,
+    "quantity": 715,
+    "entry_price": 74.75,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786951820538,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089253443000000512",
+          "price": 75.0,
+          "response": {
+            "order_id": "2089253443000000512"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089253444287651840",
+          "price": 75.0,
+          "response": {
+            "order_id": "2089253444287651840"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "9d42eac7-7699-4c6e-918f-9badc48f6032",
+    "created_at": 1786951812252
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 70.0,
+    "quantity": 715,
+    "entry_price": 70.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786951965489,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089253595886575616",
+          "price": 70.0,
+          "response": {
+            "order_id": "2089253595886575616"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089253598411546624",
+          "price": 70.0,
+          "response": {
+            "order_id": "2089253598411546624"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "3d30bd49-bee2-4974-b942-dec2c1e33ac8",
+    "created_at": 1786951849095
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 68.0,
+    "quantity": 715,
+    "entry_price": 68.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786952060537,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089254290731753472",
+          "price": 68.0,
+          "response": {
+            "order_id": "2089254290731753472"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089254292061347840",
+          "price": 68.0,
+          "response": {
+            "order_id": "2089254292061347840"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "916ae5cf-6a54-4073-a7f7-712a954191d7",
+    "created_at": 1786952014375
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 64.0,
+    "quantity": 715,
+    "entry_price": 69.45,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786952150486,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089254856572723200",
+          "price": 64.0,
+          "response": {
+            "order_id": "2089254856572723200"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089254857881346048",
+          "price": 64.0,
+          "response": {
+            "order_id": "2089254857881346048"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "3628ae00-4466-4b6e-80dc-030e18403d95",
+    "created_at": 1786952149285
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "SL-M",
+    "type": "SL-M",
+    "instrument": "NFO",
+    "price": 64.0,
+    "trigger_price": 64.0,
+    "quantity": 715,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "broker_order_ids": [
+      {
+        "broker": "zerodha",
+        "instance": 1,
+        "quantity": 650,
+        "success": true,
+        "order_id": "2089254968241872896",
+        "response": {
+          "order_id": "2089254968241872896"
+        }
+      },
+      {
+        "broker": "zerodha",
+        "instance": 2,
+        "quantity": 65,
+        "success": true,
+        "order_id": "2089254969701490688",
+        "response": {
+          "order_id": "2089254969701490688"
+        }
+      }
+    ],
+    "id": "5ab5070f-9f1f-490f-82aa-771555ba9e97",
+    "created_at": 1786952175953,
+    "executed_at": 1786952755377,
+    "entry_price": 63.61
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 80.0,
+    "quantity": 715,
+    "entry_price": 80.0,
+    "status": "OPEN",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089255754665484288",
+          "price": 80.0,
+          "response": {
+            "order_id": "2089255754665484288"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089255756003467264",
+          "price": 80.0,
+          "response": {
+            "order_id": "2089255756003467264"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "f1353a12-f7a2-4975-94f9-3f1ba2a603af",
+    "created_at": 1786952363480
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 80.0,
+    "quantity": 715,
+    "entry_price": 83.0,
+    "status": "OPEN",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089255799322238976",
+          "price": 83.0,
+          "response": {
+            "order_id": "2089255799322238976"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089255800656027648",
+          "price": 83.0,
+          "response": {
+            "order_id": "2089255800656027648"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "da3d6901-8cb1-4204-8d88-b81485f7bff7",
+    "created_at": 1786952374116
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 66.0,
+    "quantity": 715,
+    "entry_price": 66.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786955545393,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089269075271671808",
+          "price": 66.0,
+          "response": {
+            "order_id": "2089269075271671808"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089269076727095296",
+          "price": 66.0,
+          "response": {
+            "order_id": "2089269076727095296"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "aa2af1aa-b35a-4cd1-9278-4e45446d8ba3",
+    "created_at": 1786955539336
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 64.0,
+    "quantity": 715,
+    "entry_price": 64.0,
+    "status": "OPEN",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089269154892144640",
+          "price": 64.0,
+          "response": {
+            "order_id": "2089269154892144640"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089269156225933312",
+          "price": 64.0,
+          "response": {
+            "order_id": "2089269156225933312"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "89e21b57-3fdd-4038-b36f-32bf1cf1fbed",
+    "created_at": 1786955558274
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 72.0,
+    "quantity": 715,
+    "entry_price": 72.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1786956107173,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089269263306514432",
+          "price": 72.0,
+          "response": {
+            "order_id": "2089269263306514432"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089269264690634752",
+          "price": 72.0,
+          "response": {
+            "order_id": "2089269264690634752"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "f0a3f404-eec8-4ef3-b46f-44286b7fe597",
+    "created_at": 1786955584156
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 67.0,
+    "quantity": 715,
+    "entry_price": 66.0,
+    "status": "OPEN",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089272839751786496",
+          "price": 66.0,
+          "response": {
+            "order_id": "2089272839751786496"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089272841135906816",
+          "price": 66.0,
+          "response": {
+            "order_id": "2089272841135906816"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "0f08aac5-c330-41f4-9537-6f3afaeb69a3",
+    "created_at": 1786956436850
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24400,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 65.0,
+    "quantity": 715,
+    "entry_price": 65.0,
+    "status": "OPEN",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2089273527080771584",
+          "price": 65.0,
+          "response": {
+            "order_id": "2089273527080771584"
+          }
+        },
+        "status": 200,
+        "quantity": 650,
+        "lots": 10
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": "2089273528536195072",
+          "price": 65.0,
+          "response": {
+            "order_id": "2089273528536195072"
+          }
+        },
+        "status": 200,
+        "quantity": 65,
+        "lots": 1
+      }
+    ],
+    "id": "caf619db-1c51-4155-99d8-5a3f76f1149f",
+    "created_at": 1786956600737
   }
 ]

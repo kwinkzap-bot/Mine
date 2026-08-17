@@ -32,6 +32,7 @@
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
                 <option value="ema_pullback" selected>📉 EMA Confluence Breakout</option>
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
+                <option value="pivot_confluence">🎯 Pivot Confluence</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
@@ -69,6 +70,7 @@
                         <option value="2minute">2 Minute</option>
                         <option value="3minute">3 Minute</option>
                         <option value="5minute">5 Minute</option>
+                        <option value="15minute">15 Minute</option>
                     </select>
                 </div>
             </div>
@@ -322,6 +324,146 @@
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="spInvestmentDisplay" class="investment-display">₹50,000</div>
+                </div>
+            </div>
+
+            <!-- Pivot Confluence params — see
+                 src/trading_app/Backtest/pivot_confluence_engine.py for the
+                 rule list (and the source video) each of these maps onto. -->
+            <div id="pivotConfluenceParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="pcTrigger">Trigger</label>
+                    <select id="pcTrigger" title="What has to break for an entry. YH/YL is the video's 'full body above yesterday's high → uptrend day' rule; Pivot is the 'candle formed above the pivot → call side' rule; Either takes whichever fires first.">
+                        <option value="either" selected>Either</option>
+                        <option value="yhl">Yesterday H/L</option>
+                        <option value="pivot">Pivot</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcConfluence">Confluence</label>
+                    <select id="pcConfluence" title="VWAP + 20 EMA is the video's own stack: price above VWAP, 20 EMA above VWAP, candle above the 20 EMA (mirrored for puts). 'None' is the control — it shows what the filter is actually worth.">
+                        <option value="vwap_ema" selected>VWAP + 20 EMA</option>
+                        <option value="vwap">VWAP only</option>
+                        <option value="ema">20 EMA only</option>
+                        <option value="none">None</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcTargetMode">Target</label>
+                    <select id="pcTargetMode" title="Next Level walks the pivot ladder (P→R1→R2→R3), which is what the 76% / 33% / 12% probabilities imply. SL:Target uses a multiple of the stop. Fixed Points is his 'sit for 50–100 points'.">
+                        <option value="next_level" selected>Next Pivot Level</option>
+                        <option value="rr">SL : Target</option>
+                        <option value="points">Fixed Points</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcRrRatio">SL : Target</label>
+                    <select id="pcRrRatio" title="Used when Target is set to SL:Target — and as the fallback when price is already past R3/S3 and the ladder has no rung left.">
+                        <option value="1">1 : 1</option>
+                        <option value="1.5">1 : 1.5</option>
+                        <option value="2" selected>1 : 2</option>
+                        <option value="2.5">1 : 2.5</option>
+                        <option value="3">1 : 3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcTargetPoints">Target (pts)</label>
+                    <input type="number" id="pcTargetPoints" value="0" min="0" step="5"
+                           title="Only used when Target is 'Fixed Points'. The video's guide to a day's travel: NIFTY ~100 points either way, BANKNIFTY ~200, SENSEX ~500 — and take 50–100 of it. 0 falls back to the pivot ladder.">
+                </div>
+                <div class="form-group">
+                    <label for="pcSlMode">Stop Loss</label>
+                    <select id="pcSlMode" title="Candle = the signal candle's own low (buy) / high (sell). Level = the level that was just broken. Fixed = the points below.">
+                        <option value="candle" selected>Signal Candle</option>
+                        <option value="level">Broken Level</option>
+                        <option value="points">Fixed Points</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcSlPoints">SL (pts)</label>
+                    <input type="number" id="pcSlPoints" value="0" min="0" step="5"
+                           title="Only used when Stop Loss is 'Fixed Points'.">
+                </div>
+                <div class="form-group">
+                    <label for="pcMaxSl">Max SL (pts)</label>
+                    <input type="number" id="pcMaxSl" value="0" min="0" step="5"
+                           title="Skip any setup whose stop is wider than this, in INDEX points — the 'small lots, small risk' guard. 0 = no ceiling.">
+                </div>
+                <div class="form-group">
+                    <label for="pcTrailSl">Trail SL (pts)</label>
+                    <input type="number" id="pcTrailSl" placeholder="Off" min="1" step="1"
+                           style="font-style:italic;" oninput="this.style.fontStyle=this.value?'normal':'italic'">
+                </div>
+                <div class="form-group">
+                    <label for="pcWindows">Entry Window</label>
+                    <select id="pcWindows" title="His timing rule: nothing before 9:30 (algo premium decay), a morning trade 9:30–9:45, and a second one at 1:30 when London opens. All Day is the control.">
+                        <option value="both" selected>Morning + Afternoon</option>
+                        <option value="morning">Morning only (9:30–9:45)</option>
+                        <option value="afternoon">Afternoon only (1:30+)</option>
+                        <option value="all_day">All day (9:30–3:00)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcMorningExit">Morning Exit</label>
+                    <input type="time" id="pcMorningExit" value="10:00"
+                           title="Force-closes a trade opened in the morning window. He says 9:45; that would square off a 9:44 entry one bar later, so 10:00 is the default here and the optimiser sweeps both. Clear the field to let it run to SL/Target.">
+                </div>
+                <div class="form-group">
+                    <label for="pcExitCutoff">Exit Cut-off</label>
+                    <input type="time" id="pcExitCutoff" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="pcMaxTrades">Max Trades/Day</label>
+                    <input type="number" id="pcMaxTrades" value="2" min="1" max="10" step="1"
+                           title="One morning trade, one afternoon trade — the windows already ration one each.">
+                </div>
+                <div class="form-group">
+                    <label for="pcFibExt">Fib Extension</label>
+                    <select id="pcFibExt" title="His Amibroker first-candle Fibonacci: the first candle's high is 0% and its low 100%, and a real move needs a 127%/162% break — below that the day is sideways. Off skips the check.">
+                        <option value="0" selected>Off</option>
+                        <option value="1.27">127%</option>
+                        <option value="1.62">162%</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="pcDirection">Direction</label>
+                    <select id="pcDirection">
+                        <option value="both" selected>Buy &amp; Sell</option>
+                        <option value="long">Buy only</option>
+                        <option value="short">Sell only</option>
+                    </select>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="pcFullBody" checked>
+                    <label for="pcFullBody" title="The candle's whole real body must be beyond the level, not just its close — his 'full body above yesterday's high' rule.">Full Body</label>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="pcNoWick">
+                    <label for="pcNoWick" title="His stricter phrasing: the entire candle, wicks included, is clear of the level — 'no wick even touching it'.">No Wick</label>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="pcBlockR2" checked>
+                    <label for="pcBlockR2" title="No fresh entry once price is already at or beyond R2/S2 — he puts the odds of R2→R3 at just 12%.">Block at R2/S2</label>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="pcGoldenCross">
+                    <label for="pcGoldenCross" title="Additionally require the 20 EMA to be above (buy) / below (sell) the 200 EMA on the same timeframe — his golden-cross / death-cross bias.">20/200 Cross</label>
+                </div>
+            </div>
+
+            <!-- Pivot Confluence position sizing -->
+            <div id="pivotConfluenceLotRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="pcLots">Lots</label>
+                    <input type="number" id="pcLots" value="1" min="1" max="50" step="1" oninput="updatePcInvestment()">
+                </div>
+                <div class="form-group">
+                    <label for="pcLotValue">Lot Value (₹/pt)</label>
+                    <input type="number" id="pcLotValue" value="65" min="1" step="1" oninput="updatePcInvestment()">
+                </div>
+                <div class="form-group">
+                    <label>Total Investment</label>
+                    <div id="pcInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -730,6 +872,19 @@
                 </div>
                 <!-- One sortable grid per timeframe, built by renderSpOptResults() -->
                 <div id="spOptGrids"></div>
+            </div>
+
+            <!-- Pivot Confluence Optimise results panel — one grid per timeframe -->
+            <div id="pivotConfluenceOptimisePanel" style="display:none;">
+                <div class="opt-header" data-collapse="#pcOptGrids">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ Pivot Confluence Best Params</h4>
+                        <button id="pcRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="pcOptMeta"></small>
+                </div>
+                <!-- One sortable grid per timeframe, built by renderPcOptResults() -->
+                <div id="pcOptGrids"></div>
             </div>
 
             <!-- 30-Min Opening Fakeout Optimise results panel — flat grid, no

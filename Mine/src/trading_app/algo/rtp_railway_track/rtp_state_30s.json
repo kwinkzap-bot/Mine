@@ -1,11 +1,28 @@
 {
-  "active_trade": null,
-  "buy_needs_reset": false,
+  "active_trade": {
+    "direction": "BUY",
+    "entry_spot": 24327.35,
+    "entry_time": "2026-08-17T12:59:31.601132",
+    "sl_level": 24297.35,
+    "target_level": 24417.35,
+    "strike": 24100,
+    "option_type": "CE",
+    "lot_size": 65,
+    "expiry": "2026-08-18",
+    "broker_entries": [],
+    "fyers_sym": "NSE:NIFTY2681824100CE",
+    "tradingsymbol": "",
+    "total_quantity": 65,
+    "opt_entry_price": 271.6,
+    "strike_mode": "premium250",
+    "paper": true
+  },
+  "buy_needs_reset": true,
   "sell_needs_reset": false,
   "last_exit": {
-    "reason": "EOD",
-    "spot": 24354.85,
-    "time": "2026-08-14T15:28:01.356229"
+    "reason": "SL",
+    "spot": 24334.45,
+    "time": "2026-08-17T12:52:11.244931"
   },
   "pending_signal": null
 }

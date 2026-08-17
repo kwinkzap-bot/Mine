@@ -27,6 +27,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Same generation-token pattern for the Scalp Pullback optimise.
     let _spOptRun    = 0;
     let _spOptAbort  = null;
+    // Same generation-token pattern for the Pivot Confluence optimise.
+    let _pcOptRun    = 0;
+    let _pcOptAbort  = null;
 
     // ── Live-algo configs (LIVE badges) ──────────────────────────────────
     // Param sets currently running as live algos. Used to flag the backtest
@@ -392,9 +395,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateStrategyView() {
         if (!strategySelect) return;
 
-        // Switching strategy abandons any in-flight RTP / 2nd-Candle optimise run.
+        // Switching strategy abandons any in-flight RTP / 2nd-Candle / Pivot
+        // Confluence optimise run.
         if (typeof cancelRtpOptimise === 'function') cancelRtpOptimise();
         if (typeof cancelScOptimise === 'function') cancelScOptimise();
+        if (typeof cancelPcOptimise === 'function') cancelPcOptimise();
 
         const intervalSelect = document.getElementById('interval');
         const startDateInput = document.getElementById('startDate');
@@ -421,6 +426,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const spParamsRow   = document.getElementById('scalpPullbackParamsRow');
         const spLotRow      = document.getElementById('scalpPullbackLotRow');
         const spOptPanel    = document.getElementById('scalpPullbackOptimisePanel');
+        const pcParamsRow   = document.getElementById('pivotConfluenceParamsRow');
+        const pcLotRow      = document.getElementById('pivotConfluenceLotRow');
+        const pcOptPanel    = document.getElementById('pivotConfluenceOptimisePanel');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -437,6 +445,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (spParamsRow)   spParamsRow.style.display   = 'none';
         if (spLotRow)      spLotRow.style.display      = 'none';
         if (spOptPanel)    spOptPanel.style.display    = 'none';
+        if (pcParamsRow)   pcParamsRow.style.display   = 'none';
+        if (pcLotRow)      pcLotRow.style.display      = 'none';
+        if (pcOptPanel)    pcOptPanel.style.display    = 'none';
         // Restore symbol/date/interval visibility (hidden for some strategies)
         const symFg      = document.getElementById('mainSymbolFg');
         const intFg      = document.getElementById('mainIntervalFg');
@@ -449,7 +460,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -534,6 +545,17 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intervalSelect) intervalSelect.value = '2minute';
             if (startDateInput) startDateInput.value = '2017-01-01';
             updateSpInvestment();
+
+        } else if (val === 'pivot_confluence') {
+            if (pcParamsRow) pcParamsRow.style.display = 'grid';
+            if (pcLotRow)    pcLotRow.style.display    = 'grid';
+            // The 9:30–9:45 morning window is only 15 minutes wide, so anything
+            // finer than 5-minute candles is noise and anything coarser than
+            // 15-minute leaves the window a single bar.
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '5minute';
+            if (startDateInput) startDateInput.value = '2017-01-01';
+            updatePcInvestment();
         }
 
         // "All Stocks" only exists for EMA Confluence Breakout — every other
@@ -584,6 +606,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
+    // Pivot Confluence investment display
+    window.updatePcInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('pcInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
     // EMA Confluence Breakout investment display
     window.updateEmaInvestment = function() {
         const lots  = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
@@ -601,7 +631,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         success: ['rtp', 'second_candle', 'expiry_breakout', 'thirty_min_fakeout',
                   'swing_momentum', 'ema_pullback'],
-        testing: ['scalp_pullback'],
+        testing: ['scalp_pullback', 'pivot_confluence'],
         failure: ['vwap'],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -736,6 +766,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setCollapsed(document.querySelector('#rtpOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#secondCandleOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#scalpPullbackOptimisePanel .opt-header'), true);
+        setCollapsed(document.querySelector('#pivotConfluenceOptimisePanel .opt-header'), true);
         if (smOptPanel)     smOptPanel.style.display     = 'none';
         if (vwapOptPanel2)  vwapOptPanel2.style.display  = 'none';
         if (tmfOptPanel2)   tmfOptPanel2.style.display   = 'none';
@@ -782,6 +813,34 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.first_trade_three_candle = document.getElementById('spFirstThreeCandle')?.checked ?? true;
                 const spTrail = document.getElementById('spTrailSl')?.value;
                 if (spTrail) payload.trail_points = parseFloat(spTrail);
+            }
+
+            // Pivot Confluence (yesterday's pivots + YH/YL + VWAP/20 EMA)
+            if (strat === 'pivot_confluence') {
+                endpoint = '/api/backtest/pivot-confluence';
+                payload.interval       = document.getElementById('interval')?.value || '5minute';
+                payload.entry_trigger  = document.getElementById('pcTrigger')?.value || 'either';
+                payload.confluence     = document.getElementById('pcConfluence')?.value || 'vwap_ema';
+                payload.target_mode    = document.getElementById('pcTargetMode')?.value || 'next_level';
+                payload.rr_ratio       = parseFloat(document.getElementById('pcRrRatio')?.value || 2);
+                payload.target_points  = parseFloat(document.getElementById('pcTargetPoints')?.value || 0);
+                payload.sl_mode        = document.getElementById('pcSlMode')?.value || 'candle';
+                payload.sl_points      = parseFloat(document.getElementById('pcSlPoints')?.value || 0);
+                // 0 is meaningful here — it lifts the stop-width ceiling entirely.
+                payload.max_sl_points  = parseFloat(document.getElementById('pcMaxSl')?.value || 0);
+                payload.entry_windows  = document.getElementById('pcWindows')?.value || 'both';
+                // An empty Morning Exit means "let the morning trade run".
+                payload.morning_exit   = document.getElementById('pcMorningExit')?.value || '';
+                payload.exit_cutoff    = document.getElementById('pcExitCutoff')?.value || '15:15';
+                payload.max_trades_per_day = parseInt(document.getElementById('pcMaxTrades')?.value || 2);
+                payload.fib_ext        = parseFloat(document.getElementById('pcFibExt')?.value || 0);
+                payload.direction      = document.getElementById('pcDirection')?.value || 'both';
+                payload.full_body      = document.getElementById('pcFullBody')?.checked ?? true;
+                payload.require_no_wick = document.getElementById('pcNoWick')?.checked ?? false;
+                payload.block_beyond_r2 = document.getElementById('pcBlockR2')?.checked ?? true;
+                payload.require_golden_cross = document.getElementById('pcGoldenCross')?.checked ?? false;
+                const pcTrail = document.getElementById('pcTrailSl')?.value;
+                if (pcTrail) payload.trail_points = parseFloat(pcTrail);
             }
 
             // 30-Min Opening Fakeout breakdown/breakout
@@ -1055,9 +1114,11 @@ document.addEventListener('DOMContentLoaded', function() {
         // Scalp Pullback is single-symbol and points-based like the 2nd-candle
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
-        // 2nd-candle / Scalp Pullback / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
-        const moneyLotsId    = isSc ? 'scLots'     : (isSp ? 'spLots'     : (isEma ? 'emaLots'     : 'vwapLots'));
-        const moneyLotValId  = isSc ? 'scLotValue' : (isSp ? 'spLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue'));
+        // Pivot Confluence is single-symbol and points-based too.
+        const isPc   = strategySelect && strategySelect.value === 'pivot_confluence';
+        // 2nd-candle / Scalp Pullback / Pivot Confluence / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
+        const moneyLotsId    = isSc ? 'scLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : (isEma ? 'emaLots'     : 'vwapLots')));
+        const moneyLotValId  = isSc ? 'scLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue')));
         lastData.is_multi_symbol = isMultiSymbol;
 
         if (isSM) {
@@ -1165,7 +1226,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc || isSp || (isEma && !isEmaAll)) && rtpRow) {
+        } else if ((isVwap || isSc || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1254,13 +1315,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc || isSp || isEma)
+        const lots2     = (isVwap || isSc || isSp || isPc || isEma)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc || isSp || isEma)
+        const lotValue2 = (isVwap || isSc || isSp || isPc || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc || isSp || isTmf || isEma;
+        const isMoney     = isRtp || isVwap || isSc || isSp || isPc || isTmf || isEma;
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
@@ -2691,6 +2752,200 @@ document.addEventListener('DOMContentLoaded', function() {
     const spRecalcBtn = document.getElementById('spRecalcOptBtn');
     if (spRecalcBtn) spRecalcBtn.addEventListener('click', () => runSpOptimise(true));
 
+    // ── Pivot Confluence Optimise (Find Best Params) — one grid per timeframe ─
+    // Same shape as the Scalp Pullback sweep above. No Live column: this
+    // strategy is backtest-only, with no live algo to badge rows against.
+    function _pcOptMoney() {
+        const lots     = Math.max(1, parseInt(document.getElementById('pcLots')?.value    || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('pcLotValue')?.value || 65));
+        return { lots, lotValue };
+    }
+    function _pcOptBrokerage(r, lots) { return calcBrokeragePerTrade(lots) * (r.total_trades || 0); }
+    function _pcOptNetRs(r, lots, lotValue) { return (r.total_pnl || 0) * lotValue * lots - _pcOptBrokerage(r, lots); }
+
+    const PC_TRIGGER_LABELS = { either: 'Either', yhl: 'YH/YL', pivot: 'Pivot' };
+    const PC_CONF_LABELS    = { vwap_ema: 'VWAP+EMA', vwap: 'VWAP', ema: '20 EMA', none: 'none' };
+    const PC_WINDOW_LABELS  = { both: 'AM + PM', morning: 'AM only', afternoon: 'PM only', all_day: 'All day' };
+
+    const PC_OPT_COLS = [
+        { label: '#',             key: null,             fmt: (r, i) => i + 1 },
+        { label: 'Trigger',       key: 'entry_trigger',  fmt: r => PC_TRIGGER_LABELS[r.entry_trigger] || r.entry_trigger },
+        { label: 'Confluence',    key: 'confluence',     fmt: r => PC_CONF_LABELS[r.confluence] || r.confluence },
+        { label: 'Dir',           key: 'direction',      fmt: r => `<span style="white-space:nowrap">${r.direction}</span>` },
+        { label: 'Target',        key: 'target_mode',    fmt: r => r.target_mode === 'next_level' ? 'Next level' : `1:${r.rr_ratio}` },
+        { label: 'Window',        key: 'entry_windows',  fmt: r => PC_WINDOW_LABELS[r.entry_windows] || r.entry_windows },
+        { label: 'AM Exit',       key: 'morning_exit',   fmt: r => r.morning_exit },
+        { label: 'Trades',        key: 'total_trades',   fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',       fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'total_pnl',      fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
+        { label: 'Net P&L (₹)',   key: 'net_pnl_inr',    fmt: r => { const { lots, lotValue } = _pcOptMoney(); const v = _pcOptNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Brokerage (₹)', key: 'brokerage_inr',  fmt: r => { const { lots } = _pcOptMoney(); const b = _pcOptBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Prof. Factor',  key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',   fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,             fmt: () => '' },   // Use button
+    ];
+
+    let _pcOptGroupsByTf = {};
+
+    function renderPcOptResults(data) {
+        const panel     = document.getElementById('pivotConfluenceOptimisePanel');
+        const container = document.getElementById('pcOptGrids');
+        const metaEl    = document.getElementById('pcOptMeta');
+        const recalcBtn = document.getElementById('pcRecalcOptBtn');
+
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        _renderOptTfGrids(container, data.timeframes || [], PC_OPT_COLS, {
+            idPrefix: 'pcOptGrid',
+            isLive: () => false,
+            applyFn: applyPcOptResult,
+            stateStore: _pcOptGroupsByTf,
+            derivedSort: {
+                win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
+                net_pnl_inr: r => { const { lots, lotValue } = _pcOptMoney(); return _pcOptNetRs(r, lots, lotValue); },
+                brokerage_inr: r => { const { lots } = _pcOptMoney(); return _pcOptBrokerage(r, lots); },
+            },
+        });
+
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyPcOptResult(data.best);
+    }
+
+    function cancelPcOptimise() {
+        _pcOptRun += 1;
+        if (_pcOptAbort) {
+            try { _pcOptAbort.abort(); } catch (e) { /* noop */ }
+            _pcOptAbort = null;
+        }
+    }
+
+    async function runPcOptimise(recalculate) {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const panel     = document.getElementById('pivotConfluenceOptimisePanel');
+        const recalcBtn = document.getElementById('pcRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        cancelPcOptimise();
+        const myRun      = _pcOptRun;
+        const controller = new AbortController();
+        _pcOptAbort      = controller;
+
+        try {
+            const resp = await fetch('/api/backtest/pivot-confluence/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify({
+                    symbol,
+                    start_date:  document.getElementById('startDate').value,
+                    end_date:    document.getElementById('endDate').value,
+                    // Not part of the swept grid, so the sweep has to score
+                    // under the same values the single run uses.
+                    exit_cutoff:  document.getElementById('pcExitCutoff')?.value || '15:15',
+                    max_trades_per_day: parseInt(document.getElementById('pcMaxTrades')?.value || 2),
+                    max_sl_points: parseFloat(document.getElementById('pcMaxSl')?.value) || 0,
+                    trail_points: parseFloat(document.getElementById('pcTrailSl')?.value) || null,
+                    recalculate: recalculate,
+                })
+            });
+            const data = await resp.json();
+            if (myRun !== _pcOptRun) return; // superseded
+            if (!data.success) {
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            if (data.from_cache) {
+                _pcOptAbort = null;
+                renderPcOptResults(data);
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            _pollPcOptimise(data.task_id, activeBtn, origText, Date.now(), myRun);
+        } catch (err) {
+            if (err && err.name === 'AbortError') return;
+            console.error('Pivot Confluence optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    function _pollPcOptimise(taskId, activeBtn, origText, startMs, myRun) {
+        const MAX_WAIT_MS = 10 * 60 * 1000;
+        function tick() {
+            if (myRun !== _pcOptRun) return;
+            const elapsed = Math.round((Date.now() - startMs) / 1000);
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            fetch(`/api/backtest/pivot-confluence/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _pcOptRun) return;
+                    if (data.status === 'running') { setTimeout(tick, 2000); return; }
+                    _pcOptAbort = null;
+                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    renderPcOptResults(data);
+                })
+                .catch(err => {
+                    if (myRun !== _pcOptRun) return;
+                    console.error('Pivot Confluence poll error:', err);
+                    setTimeout(tick, 3000);
+                });
+        }
+        setTimeout(tick, 2000);
+    }
+
+    function applyPcOptResult(r) {
+        const trig   = document.getElementById('pcTrigger');
+        const conf   = document.getElementById('pcConfluence');
+        const dir    = document.getElementById('pcDirection');
+        const tmode  = document.getElementById('pcTargetMode');
+        const rr     = document.getElementById('pcRrRatio');
+        const win    = document.getElementById('pcWindows');
+        const amExit = document.getElementById('pcMorningExit');
+        const intervalSel = document.getElementById('interval');
+        if (trig)  trig.value  = r.entry_trigger;
+        if (conf)  conf.value  = r.confluence;
+        if (dir)   dir.value   = r.direction;
+        if (tmode) tmode.value = r.target_mode;
+        if (rr)    rr.value    = r.rr_ratio;
+        if (win)   win.value   = r.entry_windows;
+        // 'off' means the morning force-close was disabled — clearing the time
+        // input is how the form expresses that.
+        if (amExit) amExit.value = (r.morning_exit && r.morning_exit !== 'off') ? r.morning_exit : '';
+        // Winning timeframe → main interval dropdown, so a follow-up single
+        // backtest reproduces the optimised run.
+        if (intervalSel && r.interval) intervalSel.value = r.interval;
+        if (window.showNotification) {
+            const tfStr = r.tf_label ? `${r.tf_label} · ` : '';
+            window.showNotification(
+                `Applied: ${tfStr}${PC_TRIGGER_LABELS[r.entry_trigger] || r.entry_trigger}  ·  ${PC_CONF_LABELS[r.confluence] || r.confluence}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
+            );
+        }
+    }
+
+    const pcRecalcBtn = document.getElementById('pcRecalcOptBtn');
+    if (pcRecalcBtn) pcRecalcBtn.addEventListener('click', () => runPcOptimise(true));
+
     // ── 30-Min Opening Fakeout Optimise ──────────────────────────────────
     // Sweeps Direction × SL/Target-Confirm × the 3 boolean pattern filters
     // (48 combos) across the full F&O stock universe — no per-symbol/
@@ -2895,6 +3150,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);
         else if (strat === 'ema_pullback') runEmaOptimise(false);
         else if (strat === 'scalp_pullback') runSpOptimise(false);
+        else if (strat === 'pivot_confluence') runPcOptimise(false);
         else                            runOptimise(false);
     });
     if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));

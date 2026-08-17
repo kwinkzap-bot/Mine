@@ -205,6 +205,10 @@ _tmf_opt_tasks_lock = threading.Lock()
 _sp_opt_tasks: Dict[str, Dict] = {}
 _sp_opt_tasks_lock = threading.Lock()
 
+# In-memory task store for long-running Pivot Confluence optimisation background jobs
+_pc_opt_tasks: Dict[str, Dict] = {}
+_pc_opt_tasks_lock = threading.Lock()
+
 # Rankings cache — keyed by index name, expires after 15 min
 _sm_rankings_cache: Dict[str, tuple] = {}
 _SM_RANKINGS_TTL = 900  # seconds
@@ -4080,6 +4084,303 @@ def run_scalp_pullback_optimise_status(task_id):
         return auth_error
     with _sp_opt_tasks_lock:
         task = _sp_opt_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
+
+
+@api_bp.route('/backtest/pivot-confluence', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_pivot_confluence_backtest_api():
+    """Run the Pivot Confluence backtest (index spot points).
+
+    Yesterday's floor pivots decide the side, yesterday's High/Low or the pivot
+    itself is the trigger, VWAP + 20 EMA is the confluence filter, and entries
+    are confined to the video's 09:30–09:45 / 13:30 windows. See
+    src/trading_app/Backtest/pivot_confluence_engine.py for the full rule list.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '5minute')
+        entry_trigger  = data.get('entry_trigger', 'either')
+        full_body      = bool(data.get('full_body', True))
+        require_no_wick = bool(data.get('require_no_wick', False))
+        confluence     = data.get('confluence', 'vwap_ema')
+        golden_cross   = bool(data.get('require_golden_cross', False))
+        block_r2       = bool(data.get('block_beyond_r2', True))
+        fib_ext        = float(data.get('fib_ext', 0) or 0)
+        target_mode    = data.get('target_mode', 'next_level')
+        rr_ratio       = float(data.get('rr_ratio', 2.0))
+        target_points  = float(data.get('target_points', 0) or 0)
+        sl_mode        = data.get('sl_mode', 'candle')
+        sl_points      = float(data.get('sl_points', 0) or 0)
+        max_sl_points  = float(data.get('max_sl_points', 0) or 0)
+        trail_points   = data.get('trail_points')
+        trail_points   = float(trail_points) if trail_points else None
+        entry_windows  = data.get('entry_windows', 'both')
+        # 'morning_exit' is deliberately falsy-tolerant: '' / 0 / null all mean
+        # "let the morning trade run to its SL/Target".
+        morning_exit   = data.get('morning_exit', '10:00')
+        exit_cutoff    = data.get('exit_cutoff', '15:15')
+        max_trades     = int(data.get('max_trades_per_day', 2))
+        direction      = data.get('direction', 'both')
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+
+        # Pull 1-minute and resample: Fyers keeps 10+ years of 1-minute data but
+        # only ~1 year of pre-aggregated 5-minute bars.
+        candles = _fetch_1min_and_resample(
+            current_kite, instrument_token, start_date_str, end_date_str, interval
+        )
+
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+
+        logger.info('[PivotConf BT] %d %s bars received  first=%s  last=%s',
+                    len(candles), interval,
+                    candles[0].get('date', '?'),
+                    candles[-1].get('date', '?'))
+
+        import pandas as pd
+        import importlib
+        import trading_app.Backtest.pivot_confluence_engine as _pc_mod
+        importlib.reload(_pc_mod)
+        from trading_app.Backtest.pivot_confluence_engine import PivotConfluenceEngine
+
+        engine = PivotConfluenceEngine(
+            df=pd.DataFrame(candles),
+            entry_trigger=entry_trigger,
+            full_body=full_body,
+            require_no_wick=require_no_wick,
+            confluence=confluence,
+            require_golden_cross=golden_cross,
+            block_beyond_r2=block_r2,
+            fib_ext=fib_ext,
+            target_mode=target_mode,
+            rr_ratio=rr_ratio,
+            target_points=target_points,
+            sl_mode=sl_mode,
+            sl_points=sl_points,
+            max_sl_points=max_sl_points,
+            trail_points=trail_points,
+            entry_windows=entry_windows,
+            morning_exit=morning_exit,
+            exit_cutoff=exit_cutoff,
+            max_trades_per_day=max_trades,
+            direction=direction,
+        )
+        trades, summary = engine.run()
+
+        logger.info('[PivotConf BT] engine done: %d trades', len(trades))
+
+        return jsonify({
+            'success': True,
+            'trades':  trades,
+            '_debug': {
+                'bars_fetched': len(candles),
+                'first_bar':    str(candles[0].get('date', '?')),
+                'last_bar':     str(candles[-1].get('date', '?')),
+            },
+            'summary': {
+                'total_trades':  summary['total_trades'],
+                'wins':          summary['wins'],
+                'losses':        summary['losses'],
+                'total_pnl':     summary['total_pnl'],
+                'win_rate':      summary['win_rate'],
+                'profit_factor': summary['profit_factor'],
+                'max_drawdown':  summary['max_drawdown'],
+                'avg_win':       summary['avg_win'],
+                'avg_loss':      summary['avg_loss'],
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in Pivot Confluence backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/pivot-confluence/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_pivot_confluence_optimise():
+    """Sweep the Pivot Confluence (trigger × confluence × direction × target ×
+    entry window) grid across the 3/5/15-minute timeframes and return one
+    leaderboard per timeframe — same shape as /backtest/scalp-pullback/optimise."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date', '2017-01-01')
+        end_date_str   = data.get('end_date')
+        exit_cutoff    = data.get('exit_cutoff', '15:15')
+        max_trades     = int(data.get('max_trades_per_day', 2))
+        max_sl_points  = float(data.get('max_sl_points', 0) or 0)
+        trail_points   = data.get('trail_points')
+        trail_points   = float(trail_points) if trail_points else None
+        recalculate    = bool(data.get('recalculate', False))
+
+        if not symbol or not start_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        if not end_date_str:
+            end_date_str = datetime.today().strftime('%Y-%m-%d')
+
+        # One run sweeps every timeframe, so the cache key only needs the inputs
+        # that are NOT part of the swept grid.
+        cache_key = (f"{symbol}_pc_multiTF_{str(exit_cutoff).replace(':', '')}"
+                     f"_{max_trades}_{max_sl_points}_{trail_points or 0}_v1")
+
+        if not recalculate:
+            cache = _load_opt_cache()
+            if cache_key in cache:
+                entry = cache[cache_key]
+                return jsonify({
+                    'success':             True,
+                    'from_cache':          True,
+                    'cached_at':           entry.get('cached_at'),
+                    'symbol':              entry['symbol'],
+                    'interval':            entry['interval'],
+                    'total_combos_tested': entry['total_combos_tested'],
+                    'best':                entry['best'],
+                    'timeframes':          entry.get('timeframes', []),
+                })
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        task_id = str(uuid.uuid4())
+        with _pc_opt_tasks_lock:
+            _pc_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
+
+        def _run():
+            try:
+                instrument_token = _sp_instrument_token(current_kite, symbol)
+
+                import pandas as pd
+                import importlib
+                import trading_app.Backtest.pivot_confluence_engine as _pc_mod
+                importlib.reload(_pc_mod)
+                from trading_app.Backtest.pivot_confluence_engine import optimise_pivot_confluence
+
+                grid_size = (len(_pc_mod._TRIGGER_GRID) * len(_pc_mod._CONFLUENCE_GRID)
+                             * len(_pc_mod._DIR_GRID) * len(_pc_mod._TARGET_GRID)
+                             * len(_pc_mod._WINDOW_GRID))
+                lot_value     = _rtp_lot_value(symbol)   # ₹/pt, shared with RTP
+                tf_groups     = []
+                combos_tested = 0
+
+                # The 09:30–09:45 morning window is only 15 minutes wide, so a
+                # timeframe coarser than 15 minutes would leave it with a single
+                # signal bar — hence 3/5/15 rather than the scalp sweep's 2/3/5.
+                for minutes, interval_str, tf_label in [
+                    (3, '3minute', '3m'), (5, '5minute', '5m'), (15, '15minute', '15m'),
+                ]:
+                    try:
+                        candles = _fetch_1min_and_resample(
+                            current_kite, instrument_token,
+                            start_date_str, end_date_str, interval_str,
+                        )
+                        if not candles:
+                            logger.info("[PivotConf OPT] timeframe %s: no data — skipped", interval_str)
+                            continue
+
+                        tf_results = optimise_pivot_confluence(
+                            pd.DataFrame(candles),
+                            exit_cutoff=exit_cutoff,
+                            max_trades_per_day=max_trades,
+                            trail_points=trail_points,
+                            max_sl_points=max_sl_points,
+                        )
+                        combos_tested += grid_size
+                        for r in tf_results:
+                            r['tf_label'] = tf_label
+                            r['interval'] = interval_str
+                            brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+                            r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
+
+                        # Only combos still profitable after brokerage belong on the board.
+                        profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
+                        top_by_pnl = sorted(
+                            profitable, key=lambda r: r.get('total_pnl', 0), reverse=True
+                        )[:10]
+                        tf_groups.append({
+                            'tf_label': tf_label,
+                            'tf_min':   minutes,
+                            'interval': interval_str,
+                            'total':    len(tf_results),
+                            'results':  top_by_pnl,
+                        })
+                    except Exception as tf_exc:
+                        logger.warning(f"[PivotConf OPT] timeframe {interval_str} failed: {tf_exc}")
+
+                if not tf_groups:
+                    with _pc_opt_tasks_lock:
+                        _pc_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
+                    return
+
+                tf_groups.sort(key=lambda g: g['tf_min'])
+
+                all_top = [g['results'][0] for g in tf_groups if g['results']]
+                best_overall = max(all_top, key=lambda r: r.get('total_pnl', 0), default=None)
+
+                payload = {
+                    'symbol':              symbol,
+                    'interval':            'multi-TF (3–15 min)',
+                    'total_combos_tested': combos_tested,
+                    'best':                best_overall,
+                    'timeframes':          tf_groups,
+                    'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }
+
+                disk_cache            = _load_opt_cache()
+                disk_cache[cache_key] = payload
+                _save_opt_cache(disk_cache)
+
+                with _pc_opt_tasks_lock:
+                    _pc_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
+            except Exception as e:
+                logger.error(f"[PivotConf OPT] background error: {e}", exc_info=True)
+                with _pc_opt_tasks_lock:
+                    _pc_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+    except Exception as e:
+        logger.error(f"Error in Pivot Confluence optimise API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/pivot-confluence/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def run_pivot_confluence_optimise_status(task_id):
+    """Poll the status of a background Pivot Confluence optimisation job."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _pc_opt_tasks_lock:
+        task = _pc_opt_tasks.get(task_id)
     if not task:
         return jsonify({'success': False, 'error': 'Task not found'}), 404
     if task['status'] == 'running':
