@@ -300,12 +300,19 @@ const OIP_RS_OI_CHG_STYLE_IDS = { ce: 'oipRSOiChgCeColorInp', pe: 'oipRSOiChgPeC
 // calls and OI building in puts point opposite ways, so the leg colours read
 // against the direction the strike's writers are leaning, not with it.
 const OIP_RS_OI_CHG_DEFAULT_COLORS = { ce: '#f23645', pe: '#16a34a' };
-// Height of ONE ΔOI pane, and the chart's height carrying none. Each pane is
+// Height of the ΔOI pane, and the chart's height carrying none. The pane is
 // added to the chart's height rather than carved out of the 575 the candles
 // have, so switching a leg on never shrinks them. .oip-chart-wrap pins 575px in
-// CSS, so the wrapper grows too (inline, which beats the class) or the panes
+// CSS, so the wrapper grows too (inline, which beats the class) or the pane
 // would land outside it.
-const OIP_RS_OI_CHG_PANE_HEIGHT = 100;
+//
+// 150 rather than the original 100: the two legs now share this one pane and
+// split it in half (OIP_RS_OI_CHG_MARGINS_SPLIT), so at 100 each leg had only
+// ~42px of drawing room. 150 gives each band ~63px while the whole chart still
+// comes to 725 with both legs on — under the 775 the two stacked panes used to
+// reach. Nudge this one number to taste; the candles are the separate constant
+// below and are unaffected either way.
+const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
 const OIP_RS_BASE_CHART_HEIGHT = 575;
 
 function oipRSSetChartHeight(px) {
