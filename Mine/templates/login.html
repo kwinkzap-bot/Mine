@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Trading Application</title>
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
+    {# login.html is standalone (does not extend base.html), so it needs the
+       shared fluid layer explicitly — before login.css so the page still wins. #}
+    <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/responsive.css') }}?v={{ sv('css/responsive.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}?v={{ sv('css/login.css') }}">
 </head>
 <body>

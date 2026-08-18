@@ -186,7 +186,9 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
 /* ── Pending accordions ───────────────────────────────────────── */
 .fin-accs {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+    /* See cpr_filter.css .results-row — auto-fit cannot shrink below its
+       minimum, so a bare 430px overflows any narrower viewport. */
+    grid-template-columns: repeat(auto-fit, minmax(min(430px, 100%), 1fr));
     gap: 8px;
     margin-bottom: 8px;
 }

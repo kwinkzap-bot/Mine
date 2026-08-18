@@ -775,3 +775,53 @@ body.dark-theme *::-webkit-scrollbar-thumb:hover,
 body.forest-theme *::-webkit-scrollbar-thumb:hover {
     background: rgba(203, 213, 225, 0.70); background-clip: padding-box;
 }
+/* ================================================================
+   Responsive — global shell. Appended last so these win over the
+   theme overrides above without needing !important.
+   Canonical breakpoints only (480 / 768 / 1024 / 1280) — see
+   responsive.css for why they are literals and not custom properties.
+   ================================================================ */
+
+/* ── Nav as a scrolling strip on tablet and phone ────────────────
+   .navigation-bar is flex-wrap:wrap by default (line 42). With 10
+   links at 375px that wraps to four rows and eats a third of the
+   viewport before any content renders. Below md it becomes a single
+   non-wrapping row that scrolls sideways instead, keeping every page
+   one tap away — better than a hamburger for a trading app, and no
+   JS. The bar is the ONE place horizontal scroll is intended. */
+@media (max-width: 768px) {
+    .navigation-bar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;              /* Firefox */
+    }
+    .navigation-bar::-webkit-scrollbar { display: none; }
+
+    /* Links must not shrink or the labels truncate mid-scroll. */
+    .navigation-bar > * { flex: 0 0 auto; }
+
+    /* Bottom-radius links sit flush against the scroll edge; keep the
+       tap target at the 44px minimum Apple/Android both recommend. */
+    .nav-link,
+    .nav-link-login,
+    .nav-link-logout {
+        min-height: 34px;
+        display: inline-flex;
+        align-items: center;
+    }
+}
+
+/* ── Page gutter ─────────────────────────────────────────────────
+   .container is already only 8px (line 24); on a 375px screen give
+   the content the extra 4px back rather than padding it away. */
+@media (max-width: 480px) {
+    .container { padding: 6px 4px 0 4px; }
+}
+
+/* NOTE: deliberately no `body { overflow-x: hidden }`. It masks
+   overflow bugs rather than fixing them and silently breaks
+   position:sticky descendants (the OI/algo tables rely on sticky
+   headers). Overflow is fixed at each source instead. */

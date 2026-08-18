@@ -72,7 +72,9 @@
 }
 
 .chart-grid-two {
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    /* min() guards the auto-fit minimum — a bare 400px cannot shrink and
+       overflows any narrower viewport. Two-up on desktop, one-up on phone. */
+    grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
 }
 
 /* --- Status Badge Styles --- */

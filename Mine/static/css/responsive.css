@@ -1,0 +1,107 @@
+/* ================================================================
+   responsive.css — shared fluid-layout layer.
+
+   Loaded after main.css/theme.css/data-grid.css and BEFORE any page
+   stylesheet, so a page can always override. Every selector here is
+   wrapped in :where() where practical, giving it zero specificity —
+   existing page rules win by default and nothing silently changes
+   appearance on desktop.
+
+   ── Canonical breakpoints ──────────────────────────────────────
+   The app had accumulated ten different values (400, 480, 600, 640,
+   720, 768, 860, 900, 1024, 1100). Use ONLY these four from now on:
+
+       sm    480px    large phone and below
+       md    768px    tablet portrait and below
+       lg   1024px    tablet landscape / small laptop
+       xl   1280px    desktop
+
+   These are a convention, not tokens: CSS custom properties are NOT
+   evaluated inside @media conditions, and this project serves plain
+   CSS with no build step. `@media (max-width: var(--bp-md))` would
+   never match. Write the literal px and keep it to the four above.
+
+   Target: every page usable at 375px with no horizontal PAGE scroll.
+   Wide tables keep every column and scroll inside their own box.
+   ================================================================ */
+
+:root {
+    /* Spacing scale — these ARE usable as custom properties. */
+    --rwd-space-1: 4px;
+    --rwd-space-2: 8px;
+    --rwd-space-3: 12px;
+    --rwd-space-4: 16px;
+    --rwd-space-5: 24px;
+    --rwd-space-6: 32px;
+
+    /* Gutter the page shell uses; shrinks on phones (see below). */
+    --rwd-gutter: 16px;
+}
+
+@media (max-width: 480px) {
+    :root { --rwd-gutter: 8px; }
+}
+
+/* ── Horizontal scroll container ─────────────────────────────────
+   Generalisation of the DataGrid's .dg-scroll (components/data-grid.css).
+   Wrap any hand-rolled wide <table> in this: the table keeps its full
+   width and scrolls inside the box, while the page does not.
+
+   -webkit-overflow-scrolling gives iOS momentum; overscroll-behavior-x
+   stops a horizontal fling from triggering browser back-navigation. */
+:where(.rwd-scroll) {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+}
+
+/* A table inside .rwd-scroll must be allowed to exceed the box. */
+:where(.rwd-scroll) > table {
+    width: max-content;
+    min-width: 100%;
+}
+
+/* ── Grid/flex children that refuse to shrink ────────────────────
+   Grid and flex items default to min-width:auto, which is the
+   automatic minimum size — they will not shrink below their content,
+   which is what pushes a page sideways. Opt-in rather than global:
+   a blanket reset would change desktop layouts we have not tested.
+
+   Apply to the CONTAINER; it resets the direct children. */
+:where(.rwd-min0) > * {
+    min-width: 0;
+    min-height: 0;
+}
+
+/* ── Stack utilities ─────────────────────────────────────────────
+   Collapse a multi-column grid to one column at a breakpoint.
+   !important because the rules they override are frequently written
+   as a bare `grid-template-columns` on a higher-specificity page
+   selector, and the whole point of the utility is to win. */
+@media (max-width: 768px) {
+    .rwd-stack-md { grid-template-columns: 1fr !important; }
+}
+
+@media (max-width: 480px) {
+    .rwd-stack-sm { grid-template-columns: 1fr !important; }
+}
+
+/* ── Media never overflows its box ───────────────────────────────
+   Zero-specificity so any page rule still wins. */
+:where(img, svg, video, canvas) {
+    max-width: 100%;
+}
+
+/* Canvas is excluded from height:auto on purpose — chart libraries
+   size canvases explicitly and forcing auto height distorts them. */
+
+/* ── Long strings ────────────────────────────────────────────────
+   Symbol names and error text can be unbreakable tokens wide enough
+   to push the layout. Applies only where opted in. */
+:where(.rwd-break) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}

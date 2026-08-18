@@ -1790,8 +1790,11 @@ body.ocean-theme .sm-gl-overlay {
 }
 .sm-gl-box.sm-flow-sip { border-top-color: var(--ag-pos, #16a34a); }
 .sm-gl-box.sm-flow-swp { border-top-color: var(--ag-neg, #ef4444); }
-.sm-gl-box.sm-gl-narrow { width: 330px; }
-.sm-gl-box.sm-gl-wide { width: 760px; }
+/* max-width, not width: at 760px this was the last hard layout width in the
+   app and overflowed every phone. Capped instead so it still renders at its
+   intended size on desktop but shrinks to the viewport below that. */
+.sm-gl-box.sm-gl-narrow { width: 100%; max-width: 330px; }
+.sm-gl-box.sm-gl-wide { width: 100%; max-width: 760px; }
 .sm-po-broker {
     display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
     font-size: 12px; color: var(--ag-text, #0f172a);

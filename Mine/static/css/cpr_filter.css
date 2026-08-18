@@ -194,7 +194,11 @@ body.ocean-theme {
 
 .results-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+    /* min() guards the auto-fit minimum: a bare minmax(450px, 1fr) cannot
+       shrink below 450px, so on any viewport narrower than that the track
+       overflows and the whole PAGE scrolls sideways. min(450px, 100%) keeps
+       the two-column behaviour on desktop and collapses cleanly on a phone. */
+    grid-template-columns: repeat(auto-fit, minmax(min(450px, 100%), 1fr));
     gap: 8px;
 }
 

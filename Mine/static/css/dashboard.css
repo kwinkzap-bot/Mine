@@ -303,7 +303,9 @@
     text-align: center; vertical-align: middle;
 }
 .collapsed-hide { display: none !important; }
-.opt-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 10px; }
+/* See .sw-table — .opt-table-wrap is overflow-x:auto, so max-content lets the
+   optimiser results scroll rather than compress on a narrow screen. */
+.opt-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 10px; }
 .opt-table th {
     background: var(--oip-header-bg); color: var(--oip-metric-lbl);
     font-weight: 700; padding: 5px 8px; text-align: left;
@@ -893,7 +895,8 @@ body.ocean-theme .fii-wrap {
 .fii-distr .fii-table-wrap { border-color: var(--fii-distr-border); }
 
 /* table — mirrors .hoi-table */
-.fii-table { width: 100%; border-collapse: collapse; background: var(--fii-surface); font-size: 12px; }
+/* See .sw-table — scroll inside .fii-table-wrap rather than compress. */
+.fii-table { width: max-content; min-width: 100%; border-collapse: collapse; background: var(--fii-surface); font-size: 12px; }
 .fii-table thead th {
     padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700;
     color: var(--fii-text-3); text-transform: uppercase; letter-spacing: 0.06em;
@@ -1140,7 +1143,13 @@ body.ocean-theme .sw-wrap {
     border: 1px solid var(--pf-border);
     border-radius: 8px; overflow: hidden; overflow-x: auto; box-shadow: var(--pf-shadow);
 }
-.sw-table { width: 100%; border-collapse: collapse; background: var(--pf-surface); font-size: 12px; }
+/* width:max-content + min-width:100% (the .dg-table idiom from
+   components/data-grid.css) rather than width:100%. Inside .sw-table-wrap's
+   overflow-x:auto, a width:100% table COMPRESSES its columns to the wrapper
+   instead of scrolling — at 375px that squashes 9 columns into unreadable
+   slivers and the scrollbar never engages. This fills the wrapper when it
+   fits and scrolls when it doesn't. */
+.sw-table { width: max-content; min-width: 100%; border-collapse: collapse; background: var(--pf-surface); font-size: 12px; }
 .sw-table thead th {
     padding: 8px 12px; text-align: right;
     font-size: 10px; font-weight: 700; color: var(--pf-text-3);

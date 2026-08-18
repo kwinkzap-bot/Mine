@@ -31,6 +31,11 @@
          still override a --dg-* token for its own surface. -->
     <link rel="stylesheet"
         href="{{ url_for('static', filename='css/components/data-grid.css') }}?v={{ sv('css/components/data-grid.css') }}">
+    <!-- Shared fluid-layout layer. Last of the shared sheets and before every
+         page stylesheet: its selectors are :where()-wrapped (zero specificity)
+         so a page always wins, and it documents the four canonical breakpoints. -->
+    <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/responsive.css') }}?v={{ sv('css/responsive.css') }}">
     {# DataGrid loads here, in
 
     <head>, and deliberately without `defer`. Several
