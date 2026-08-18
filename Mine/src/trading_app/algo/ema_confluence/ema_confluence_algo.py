@@ -629,6 +629,14 @@ class EmaConfluenceAlgo:
             self.log.info(f"{symbol}: setup found — {direction.upper()} "
                           f"trigger={s['trigger_level']} sl={s['sl_level']} "
                           f"(signal candle {signal_date}, {age}d old; scanned up to {scanned_candle})")
+            # Inside `not already_seen`, so this is the dedupe: a setup that
+            # stays armed across days announces itself once, on the scan that
+            # first found that signal candle. Guarded — a failed alert must not
+            # abort the scan and leave the remaining symbols unscanned.
+            try:
+                self._notify_signal(symbol, s, age)
+            except Exception as e:
+                self.log.error(f"{symbol}: signal notification failed: {e}")
         return scanned_candle
 
     def _run_daily_scan(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
@@ -858,6 +866,101 @@ class EmaConfluenceAlgo:
         ])
         self._send_telegram(symbol, message, tag='roll')
 
+    # ── Exit notification ────────────────────────────────────────────────
+    # Fired for SL and TARGET. NOT for ROLL: a roll already gets its own
+    # _notify_roll, which explains the contract swap — announcing it a second
+    # time as an "exit" would read as the trade having closed when it is still
+    # open on the next month.
+    #
+    # Same contract as _notify_new_entry: this sits on the algo's poll thread,
+    # so nothing here may raise or block.
+    _EXIT_STYLE = {
+        'SL':     ('🛑', 'SL HIT'),
+        'TARGET': ('🎯', 'TARGET HIT'),
+    }
+
+    def _notify_exit(self, symbol: str, s: Dict[str, Any], record: Dict[str, Any]) -> None:
+        reason = record.get('reason') or 'EXIT'
+        emoji, headline = self._EXIT_STYLE.get(reason, ('📕', f'{reason} EXIT'))
+        pnl = record.get('pnl') or 0.0
+        won = pnl >= 0
+
+        if self._uvar('EMA_CONFLUENCE_NOTIFY', 'true').lower() != 'false':
+            try:
+                from trading_app.service.notification_service import create_notification
+                create_notification(
+                    category='ema_confluence_exit',
+                    title=f"EMA Confluence — {headline} {symbol}",
+                    summary=(f"Exit ₹{record['exit_price']} · entry ₹{record['entry_price']} · "
+                             f"P&L {'+' if won else ''}₹{pnl} · qty {record['qty']}"),
+                    data=dict(record),
+                )
+            except Exception as e:
+                self.log.error(f"{symbol}: in-app exit notification failed: {e}")
+
+        try:
+            exited = str(record.get('exit_time') or '')[11:19]
+            message = '\n'.join([
+                f"{emoji} EMA Confluence — {headline}",
+                f"{symbol} · {record['direction']} · {s.get('future_month') or 'FUT'}",
+                f"Entry  ₹{record['entry_price']}",
+                f"Exit   ₹{record['exit_price']}",
+                f"P&L    {'+' if won else ''}₹{pnl}",
+                f"Qty    {record['qty']}",
+                f"Signal {record.get('signal_date') or '-'} · exited {exited or '-'}",
+                "(paper trade)",
+            ])
+            self._send_telegram(symbol, message, tag='exit')
+        except Exception as e:
+            self.log.error(f"{symbol}: exit Telegram alert failed to build: {e}")
+
+    # ── Signal-candle notification ───────────────────────────────────────
+    # Fired when a setup is first ARMED — the symbol moves to `watching` with a
+    # trigger and SL off the signal candle. Deduped on signal_date by the
+    # caller's `already_seen` check, so a setup that stays armed for days
+    # announces itself once rather than on every scan.
+    def _notify_signal(self, symbol: str, s: Dict[str, Any], age_days: int) -> None:
+        payload = {
+            'symbol':        symbol,
+            'direction':     'BUY' if s.get('direction') == 'Long' else 'SELL',
+            'trigger_level': s.get('trigger_level'),
+            'sl_price':      s.get('sl_level'),
+            'target_pct':    s.get('target_pct'),
+            'signal_date':   s.get('signal_date'),
+            'future_month':  s.get('future_month'),
+            'age_days':      age_days,
+            'mode':          'paper',
+        }
+
+        if self._uvar('EMA_CONFLUENCE_NOTIFY', 'true').lower() != 'false':
+            try:
+                from trading_app.service.notification_service import create_notification
+                create_notification(
+                    category='ema_confluence_signal',
+                    title=f"EMA Confluence — {payload['direction']} setup {symbol}",
+                    summary=(f"Trigger ₹{payload['trigger_level']} · SL ₹{payload['sl_price']} · "
+                             f"signal candle {payload['signal_date']}"),
+                    data=payload,
+                )
+            except Exception as e:
+                self.log.error(f"{symbol}: in-app signal notification failed: {e}")
+
+        try:
+            tgt_pct = payload.get('target_pct')
+            message = '\n'.join([
+                f"👀 EMA Confluence — NEW SETUP (watching)",
+                f"{symbol} · {payload['direction']} · {payload.get('future_month') or 'FUT'}",
+                f"Trigger ₹{payload['trigger_level']}",
+                f"SL      ₹{payload['sl_price']}",
+                (f"Target  {tgt_pct}% from entry" if tgt_pct else "Target  -"),
+                f"Signal candle {payload['signal_date']}"
+                + (f" ({age_days}d old)" if age_days else ""),
+                "(no order yet — waiting for the trigger)",
+            ])
+            self._send_telegram(symbol, message, tag='signal')
+        except Exception as e:
+            self.log.error(f"{symbol}: signal Telegram alert failed to build: {e}")
+
     def _record_exit(self, symbol: str, s: Dict[str, Any], exit_price: float, reason: str) -> None:
         direction   = s['direction']
         entry_price = s['entry_price']
@@ -883,6 +986,14 @@ class EmaConfluenceAlgo:
         s['last_exit_reason'] = reason
         s['last_pnl']         = record['pnl']
         self.log.info(f"[PAPER] {symbol}: EXIT ({reason}) @ {exit_price}, P&L ₹{record['pnl']}")
+        # ROLL is excluded — _notify_roll covers it with the right wording.
+        # Guarded so a notification failure can never lose the exit itself: the
+        # history record and state above are already written by this point.
+        if reason != 'ROLL':
+            try:
+                self._notify_exit(symbol, s, record)
+            except Exception as e:
+                self.log.error(f"{symbol}: exit notification failed: {e}")
 
     # Survives _reset_for_next_scan: the resolved contract (which doesn't
     # change intraday, so a same-symbol re-arm needn't re-resolve it) and the
