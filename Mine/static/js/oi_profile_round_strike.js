@@ -313,7 +313,15 @@ const OIP_RS_OI_CHG_DEFAULT_COLORS = { ce: '#f23645', pe: '#16a34a' };
 // reach. Nudge this one number to taste; the candles are the separate constant
 // below and are unaffected either way.
 const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
-const OIP_RS_BASE_CHART_HEIGHT = 575;
+// The candles' own height. Raised 575 -> 595 so the chart is 20px taller in
+// EVERY state, whether or not a ΔOI leg is showing — putting the 20px on the
+// pane instead would only have grown the chart while an indicator was on.
+//
+// This is deliberately NOT the 575 in .oip-chart-wrap's CSS: that class is
+// shared with the main OI and Premium charts ("both OI and Premium charts are
+// same height") and must stay where it is. The Round Strike wrapper is sized
+// inline by oipRSSetChartHeight, which beats the class.
+const OIP_RS_BASE_CHART_HEIGHT = 595;
 
 function oipRSSetChartHeight(px) {
     try { oipRSChart?.chart?.applyOptions({ height: px }); } catch (e) {}
@@ -486,6 +494,13 @@ function oipRSSyncOiChgPane() {
         if (oipRSOiChgIsOn(side)) oipRSCreateOiChgSeries(side);
         else oipRSDestroyOiChgSeries(side);
     });
+    // Unconditional, and load-bearing on the both-legs-off path: the create and
+    // destroy helpers each size the chart themselves, but destroy returns early
+    // when there was no series to remove — so a page opening with BOTH legs off
+    // would never size the wrapper at all, leaving it on .oip-chart-wrap's
+    // hardcoded 575px CSS instead of OIP_RS_BASE_CHART_HEIGHT. Harmless while
+    // those two numbers happened to be equal; wrong the moment they differ.
+    oipRSApplyOiChgChartHeight();
     oipRSUpdateOiChangeSeries(oipRSLastCeData, oipRSLastPeData);
 }
 
