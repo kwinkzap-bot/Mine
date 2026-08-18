@@ -226,31 +226,40 @@ const OIP_RS_DECIDER_COLOR = '#ec4899';
 // gave none, which is what lets oipRSComputeOiChange below break the diff
 // across a hole instead of inventing a cliff-sized bar out of a missing value.
 //
-// ONE PANE PER LEG — CE's above PE's, each with its own price scale. The two
-// legs are different contracts: a 24000 CE and a 24200 PE carry unrelated open
-// interest, and their changes differ by orders of magnitude through the day. On
-// a shared scale the quieter leg flattens against the busier one's bars, and
-// with both drawn over each other only colour separated them. Given separate
-// panes each autoscales to its own leg, so both stay readable.
+// ONE SHARED PANE, TWO INDEPENDENT SCALES — both legs sit in the same space
+// under the candles, CE read against the pane's RIGHT axis and PE against its
+// LEFT.
 //
-// Each pane is a SINGLE colour — CE red, PE green — not a per-bar up/down pair.
+// This replaced a pane-per-leg layout. The reason that layout existed still
+// holds and is what the split scales preserve: the two legs are different
+// contracts — a 24000 CE and a 24200 PE carry unrelated open interest, and
+// their changes differ by orders of magnitude through the day — so on one
+// SHARED scale the quieter leg flattens into the axis against the busier one's
+// bars. Giving each leg its own price scale inside the one pane keeps both
+// autoscaling to their own range, so they overlay in the same space and stay
+// individually readable. Putting them on a single scale would be the one
+// change to avoid here.
+//
+// Each leg is a SINGLE colour — CE red, PE green — not a per-bar up/down pair.
 // Which way OI went is already stated by the side of zero a bar falls on, so
-// colour is spent on the leg instead, and the two panes stay apart at a glance.
+// colour is spent on the leg instead. With both legs now overlaid rather than
+// stacked, that colour is the only thing telling them apart, so it matters more
+// than it did.
 //
-// The panes are created on demand and destroyed when their checkbox goes off,
-// so the chart only carries the ones actually being watched. They're tracked by
-// their IPaneApi OBJECT, never by a stored index — removing a pane shifts every
-// index after it, so the index is re-read (pane.paneIndex()) at the moment it's
-// needed.
-let oipRSOiChgPanes = { ce: null, pe: null };   // side -> { series, pane }
-// Draw order, top to bottom, under the candles.
+// The pane is created on demand when the first leg is switched on and torn down
+// when the last goes off, so the chart never carries a dead empty pane. It is
+// tracked by its IPaneApi OBJECT, never by a stored index — removing a pane
+// shifts every index after it, so the index is re-read (pane.paneIndex()) at
+// the moment it's needed.
+let oipRSOiChgPane = null;                       // IPaneApi | null — shared
+let oipRSOiChgSeries = { ce: null, pe: null };   // side -> ISeriesApi | null
 const OIP_RS_OI_CHG_SIDES = ['ce', 'pe'];
-// Each pane's OWN right-hand scale, not a custom overlay id: price scales are
-// per-pane in v5, so 'right' here belongs to that pane alone and never touches
-// the candles' scale — and an overlay (custom-id) scale draws no axis at all
+// One built-in scale per leg, not a custom overlay id: price scales are
+// per-pane in v5, so these belong to the ΔOI pane alone and never touch the
+// candles' scale — and an overlay (custom-id) scale draws no axis at all
 // (lightweight-charts ignores `visible` on those), which would cost each
 // histogram the labelled ±contracts axis it is read against.
-const OIP_RS_OI_CHG_SCALE = 'right';
+const OIP_RS_OI_CHG_SCALES = { ce: 'right', pe: 'left' };
 const OIP_RS_OI_CHG_SPECS = {
     ce: { checkbox: 'oipRSShowOiChgCe', title: 'CE ΔOI', defaultOn: true },
     pe: { checkbox: 'oipRSShowOiChgPe', title: 'PE ΔOI', defaultOn: true }
@@ -283,15 +292,20 @@ function oipRSSetChartHeight(px) {
     if (wrap) wrap.style.height = `${px}px`;
 }
 
-// Grows/shrinks the chart to fit however many ΔOI panes are currently open, then
-// re-pins each to its fixed height — lightweight-charts redistributes pane
-// heights when the chart's own height changes, so the pin has to come after.
+// Grows/shrinks the chart by the one ΔOI pane, then re-pins it to its fixed
+// height — lightweight-charts redistributes pane heights when the chart's own
+// height changes, so the pin has to come after.
+//
+// Both legs now share this single pane, so the added height is a flat
+// OIP_RS_OI_CHG_PANE_HEIGHT whether one leg is showing or both — it no longer
+// scales with the number of legs. Neither constant changed: the candles keep
+// their 575 and a ΔOI pane is still 100.
 function oipRSApplyOiChgChartHeight() {
-    const open = OIP_RS_OI_CHG_SIDES.filter(side => oipRSOiChgPanes[side]);
-    oipRSSetChartHeight(OIP_RS_BASE_CHART_HEIGHT + open.length * OIP_RS_OI_CHG_PANE_HEIGHT);
-    open.forEach(side => {
-        try { oipRSOiChgPanes[side].pane.setHeight(OIP_RS_OI_CHG_PANE_HEIGHT); } catch (e) {}
-    });
+    const extra = oipRSOiChgPane ? OIP_RS_OI_CHG_PANE_HEIGHT : 0;
+    oipRSSetChartHeight(OIP_RS_BASE_CHART_HEIGHT + extra);
+    if (oipRSOiChgPane) {
+        try { oipRSOiChgPane.setHeight(OIP_RS_OI_CHG_PANE_HEIGHT); } catch (e) {}
+    }
 }
 
 function oipRSOiChgColor(side) {
@@ -330,30 +344,38 @@ function oipRSComputeOiChange(candles) {
 // last-drawn bars the way the volume overlays do (_oipVolBarCache in
 // oi_indicators.js, where colour is per-bar because it tracks candle direction).
 function oipRSPaintOiChangeBars(side, bars) {
-    const series = oipRSOiChgPanes[side]?.series;
+    const series = oipRSOiChgSeries[side];
     if (!series) return;
     try { series.setData(bars.map(b => ({ time: b.time, value: b.value }))); } catch (e) {}
 }
 
 function oipRSApplyOiChgColors() {
     OIP_RS_OI_CHG_SIDES.forEach(side => {
-        try { oipRSOiChgPanes[side]?.series.applyOptions({ color: oipRSOiChgColor(side) }); } catch (e) {}
+        try { oipRSOiChgSeries[side]?.applyOptions({ color: oipRSOiChgColor(side) }); } catch (e) {}
     });
 }
 
-// Opens ONE leg's pane and its histogram. Called lazily (see oipRSSyncOiChgPane)
-// rather than from oipRSInitCharts, so a leg the user has switched off never
-// carries a dead empty pane under the candles.
-function oipRSCreateOiChgPane(side) {
+// The shared pane, created on first use. Both legs live here, so this runs once
+// however many legs are switched on.
+function oipRSEnsureOiChgPane() {
     const chart = oipRSChart?.chart;
-    if (!chart || oipRSOiChgPanes[side]) return;
+    if (!chart) return null;
+    if (!oipRSOiChgPane) oipRSOiChgPane = chart.addPane();
+    return oipRSOiChgPane;
+}
+
+// Adds ONE leg's histogram to the shared pane, on that leg's own price scale.
+// Called lazily (see oipRSSyncOiChgPane) rather than from oipRSInitCharts, so a
+// leg the user has switched off never carries a dead series.
+function oipRSCreateOiChgSeries(side) {
+    const chart = oipRSChart?.chart;
+    if (!chart || oipRSOiChgSeries[side]) return;
     try {
-        // addPane() appends below whatever is already there; oipRSOrderOiChgPanes
-        // then puts CE back above PE if PE happened to be opened first.
-        const pane = chart.addPane();
+        const pane = oipRSEnsureOiChgPane();
+        if (!pane) return;
         const series = chart.addSeries(LightweightCharts.HistogramSeries, {
             priceFormat: { type: 'volume' },
-            priceScaleId: OIP_RS_OI_CHG_SCALE,
+            priceScaleId: OIP_RS_OI_CHG_SCALES[side],
             title: OIP_RS_OI_CHG_SPECS[side].title,
             color: oipRSOiChgColor(side),
             priceLineVisible: false,
@@ -365,86 +387,91 @@ function oipRSCreateOiChgPane(side) {
         // Reached through the SERIES rather than chart.priceScale(id): price
         // scales are per-pane in v5 and chart.priceScale() defaults to pane 0,
         // so the id alone would have styled a scale in the candle pane.
+        //
+        // `visible: true` is load-bearing for PE specifically — a pane's LEFT
+        // scale is hidden by default, and without this the leg would draw with
+        // no axis to read its ±contracts against.
         series.priceScale()?.applyOptions({
             scaleMargins: { top: 0.12, bottom: 0.12 }, visible: true
         });
-        oipRSOiChgPanes[side] = { series, pane };
+        oipRSOiChgSeries[side] = series;
         // The new series carries the bare default title; clear the memo so
-        // oipRSSetOiChgTitles re-stamps the strike onto it (a pane the user
+        // oipRSSetOiChgTitles re-stamps the strike onto it (a leg the user
         // toggles off and back on would otherwise keep the unnamed axis).
         _oipRSOiChgTitleFor[side] = null;
         oipRSApplyOiChgChartHeight();
     } catch (e) {
-        console.warn(`[RoundStrike] ${side.toUpperCase()} Chg in OI pane could not be created:`, e);
+        console.warn(`[RoundStrike] ${side.toUpperCase()} Chg in OI series could not be created:`, e);
     }
 }
 
-function oipRSDestroyOiChgPane(side) {
+// Drops one leg, and the shared pane with it once the last leg goes.
+function oipRSDestroyOiChgSeries(side) {
     const chart = oipRSChart?.chart;
-    const rec = oipRSOiChgPanes[side];
-    if (!chart || !rec) return;
-    try { chart.removeSeries(rec.series); } catch (e) {}
-    // The index is read HERE, not stored: closing the other leg's pane earlier
-    // would have shifted it. Guarded rather than checked because
-    // lightweight-charts may already have dropped the now-empty pane itself,
-    // and removing it twice throws.
-    try {
-        const idx = rec.pane.paneIndex();
-        if (idx > 0 && chart.panes()?.length > idx) chart.removePane(idx);
-    } catch (e) {}
-    oipRSOiChgPanes[side] = null;
+    const series = oipRSOiChgSeries[side];
+    if (!chart || !series) return;
+    try { chart.removeSeries(series); } catch (e) {}
+    oipRSOiChgSeries[side] = null;
+
+    // Only tear the pane down when NEITHER leg is left — the other leg is still
+    // drawing in it otherwise.
+    const anyLeft = OIP_RS_OI_CHG_SIDES.some(s => oipRSOiChgSeries[s]);
+    if (!anyLeft && oipRSOiChgPane) {
+        // The index is read HERE, not stored: panes above may have shifted.
+        // Guarded rather than checked because lightweight-charts may already
+        // have dropped the now-empty pane itself, and removing it twice throws.
+        try {
+            const idx = oipRSOiChgPane.paneIndex();
+            if (idx > 0 && chart.panes()?.length > idx) chart.removePane(idx);
+        } catch (e) {}
+        oipRSOiChgPane = null;
+    }
     oipRSApplyOiChgChartHeight();
 }
 
-// Keeps CE's pane above PE's. Only matters when the two are opened out of
-// order — turning CE on while PE is already showing would otherwise append CE's
-// pane underneath, leaving the legs in the opposite order to the checkboxes and
-// to the CE/PE reading order used everywhere else on this page.
-function oipRSOrderOiChgPanes() {
-    const ce = oipRSOiChgPanes.ce?.pane, pe = oipRSOiChgPanes.pe?.pane;
-    if (!ce || !pe) return;
-    try {
-        const ceIdx = ce.paneIndex(), peIdx = pe.paneIndex();
-        if (ceIdx > peIdx) ce.moveTo(peIdx);
-    } catch (e) {}
-}
-
-// Brings both panes in line with their checkboxes — each opened or torn down on
-// its own — and repaints from the candles the last render parked, so a toggle
-// takes effect immediately rather than waiting for the next poll.
+// Brings both legs in line with their checkboxes — each added or torn down on
+// its own within the shared pane — and repaints from the candles the last
+// render parked, so a toggle takes effect immediately rather than waiting for
+// the next poll.
+//
+// No pane ordering step any more: with one shared pane there is nothing to
+// order, and CE-above-PE is now expressed by the axis each leg is read against
+// (CE right, PE left) rather than by vertical position.
 function oipRSSyncOiChgPane() {
     if (!oipRSChart?.chart) return;
     OIP_RS_OI_CHG_SIDES.forEach(side => {
-        if (oipRSOiChgIsOn(side)) oipRSCreateOiChgPane(side);
-        else oipRSDestroyOiChgPane(side);
+        if (oipRSOiChgIsOn(side)) oipRSCreateOiChgSeries(side);
+        else oipRSDestroyOiChgSeries(side);
     });
-    oipRSOrderOiChgPanes();
     oipRSUpdateOiChangeSeries(oipRSLastCeData, oipRSLastPeData);
 }
 
-// Pushes each leg's bars into its own pane. Safe to call on every render — a
-// no-op for a leg whose pane isn't open.
+// Pushes each leg's bars into its series. Safe to call on every render — a
+// no-op for a leg that isn't switched on.
 function oipRSUpdateOiChangeSeries(ceData, peData) {
     const data = { ce: ceData, pe: peData };
     OIP_RS_OI_CHG_SIDES.forEach(side => {
-        if (oipRSOiChgPanes[side]) oipRSPaintOiChangeBars(side, oipRSComputeOiChange(data[side]));
+        if (oipRSOiChgSeries[side]) oipRSPaintOiChangeBars(side, oipRSComputeOiChange(data[side]));
     });
 }
 
-// Names each pane's axis with the contract it is actually showing — "24000 CE
-// ΔOI" rather than a bare "CE ΔOI" — so a glance says which strike the bars
-// belong to, the way Dhan's own pane header does. Skipped unless the strike
-// changed: this runs on a 1-second poll and applyOptions redraws.
+// Names each leg with the contract it is actually showing — "24000 CE ΔOI"
+// rather than a bare "CE ΔOI" — so a glance says which strike the bars belong
+// to, the way Dhan's own pane header does. Skipped unless the strike changed:
+// this runs on a 1-second poll and applyOptions redraws.
+//
+// Now that both legs share one pane these two labels sit side by side in the
+// same legend, which is what makes the strike in each one worth having.
 let _oipRSOiChgTitleFor = { ce: null, pe: null };
 
 function oipRSSetOiChgTitles(ceStrike, peStrike) {
     const strikes = { ce: ceStrike, pe: peStrike };
     OIP_RS_OI_CHG_SIDES.forEach(side => {
-        const rec = oipRSOiChgPanes[side];
+        const series = oipRSOiChgSeries[side];
         const strike = strikes[side];
-        if (!rec || !strike || _oipRSOiChgTitleFor[side] === strike) return;
+        if (!series || !strike || _oipRSOiChgTitleFor[side] === strike) return;
         try {
-            rec.series.applyOptions({ title: `${strike} ${OIP_RS_OI_CHG_SPECS[side].title}` });
+            series.applyOptions({ title: `${strike} ${OIP_RS_OI_CHG_SPECS[side].title}` });
             _oipRSOiChgTitleFor[side] = strike;
         } catch (e) {}
     });
