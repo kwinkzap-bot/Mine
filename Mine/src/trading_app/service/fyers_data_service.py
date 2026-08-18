@@ -928,6 +928,16 @@ class FyersDataServiceAdapter:
                             if attempt > 0:
                                 time.sleep(0.2)
                             
+                            # oi_flag is sent UNCONDITIONALLY, not gated on the
+                            # `oi` argument. Fyers answers it with a 7th column
+                            # (open interest) on derivatives and with the plain
+                            # 6-column row everywhere else, so it costs nothing
+                            # on an index/equity and — crucially — keeps ONE
+                            # cache entry per symbol/range/resolution. Gating it
+                            # would split the cache in two (an OI-less copy and
+                            # an OI copy of the same bars), which on a 1-second
+                            # poll means twice the history calls against the
+                            # app-wide 8 req/s Fyers cap.
                             response = self.fyers.history(data={
                                 "symbol":     str(instrument_token),
                                 "resolution": f_res,
@@ -935,6 +945,7 @@ class FyersDataServiceAdapter:
                                 "range_from": c_from,
                                 "range_to":   c_to,
                                 "cont_flag":  "1",
+                                "oi_flag":    "1",
                             })
                         except Exception as e:
                             if "json" in str(e).lower() or "expecting value" in str(e).lower():
@@ -1009,8 +1020,17 @@ class FyersDataServiceAdapter:
                         'close':  candle[4],
                         'volume': candle[5],
                     }
-                    if oi:
-                        entry['oi'] = candle[6] if len(candle) > 6 else 0
+                    # Present on derivatives only (see oi_flag above). Left
+                    # ABSENT rather than zero-filled when Fyers omits it, so a
+                    # caller can tell "this instrument carries no OI" from "OI
+                    # was genuinely zero" — the Change-in-OI histogram on the
+                    # Round Strike chart draws nothing for the former and a real
+                    # bar for the latter. `oi=True` still forces the key so the
+                    # older callers that expect it always keep working.
+                    if len(candle) > 6:
+                        entry['oi'] = candle[6]
+                    elif oi:
+                        entry['oi'] = 0
                     all_candles.append(entry)
                 
                 logger.debug(f"[FyersAdapter] Successfully parsed {len(response.get('candles', []))} candles for {instrument_token}")

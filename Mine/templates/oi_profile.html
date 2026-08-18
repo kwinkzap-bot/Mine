@@ -87,6 +87,33 @@
                                             title="Border color of the candle that closes each 5-minute block (1m / 30s only — candle borders have no width or style option)">
                                     </span>
                                 </div>
+
+                                <!-- Change in Open Interest (Absolute) — the same reading Dhan's
+                                     indicator gives: bar-to-bar change in an option leg's own open
+                                     interest, in contracts. The CE and PE strikes are separate
+                                     contracts with unrelated open interest, so each leg gets its
+                                     OWN pane under the candles (CE above PE), autoscaled to itself.
+                                     A pane exists only while its checkbox is on. -->
+                                <div class="oip-ind-section-title">Change in OI (Abs)</div>
+                                <label class="oip-ind-item"
+                                    title="Bar-to-bar change in the CE strike's open interest, as a histogram in its own pane. One colour for the whole leg — bars above zero are OI added, below zero OI unwound">
+                                    <input type="checkbox" id="oipRSShowOiChgCe" checked>
+                                    <span style="color:#f23645">CE Chg in OI</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSOiChgCeColorInp" class="oip-ray-color-inp"
+                                            value="#f23645" title="CE histogram bar color">
+                                    </span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Bar-to-bar change in the PE strike's open interest, as a histogram in its own pane below the CE one. One colour for the whole leg — bars above zero are OI added, below zero OI unwound">
+                                    <input type="checkbox" id="oipRSShowOiChgPe" checked>
+                                    <span style="color:#16a34a">PE Chg in OI</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSOiChgPeColorInp" class="oip-ray-color-inp"
+                                            value="#16a34a" title="PE histogram bar color">
+                                    </span>
+                                </label>
+
                                 <div class="oip-ind-section-title">CE Line Style</div>
                                 <div class="oip-ind-item">
                                     <span>Color</span>
@@ -179,9 +206,9 @@
                                     <span class="oip-line-props">
                                         <select id="oipRSDecLineStyleSel" class="oip-ray-style-sel"
                                             title="Decider line style">
-                                            <option value="0">Solid</option>
+                                            <option value="0" selected>Solid</option>
                                             <option value="1">Dotted</option>
-                                            <option value="2" selected>Dashed</option>
+                                            <option value="2">Dashed</option>
                                         </select>
                                     </span>
                                 </div>

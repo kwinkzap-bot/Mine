@@ -47,6 +47,13 @@
  * Both run through the same engine (_oipRSDayStep, and _oipRSPrevDayStep for
  * the ones that look a day back). There are no createPriceLine()s left here.
  *
+ * Plus one indicator that is NOT a level line: Change in OI (Abs), the same
+ * reading Dhan's "Change in Open Interest Absolute" gives. It is drawn as a
+ * histogram of a leg's bar-to-bar open-interest change, and because the two
+ * legs are different contracts with unrelated open interest, each gets its OWN
+ * pane under the candles rather than sharing one. See the block above
+ * OIP_RS_CE_STYLE_IDS.
+ *
  * This block owns ALL of its data end to end: everything it draws — the CE/PE
  * candles, both volume overlays, and every pill in the stats strip above the
  * chart (Price, CE OI, PE OI, ATM, CPR, VWAP Bias, 9:18 Bias, PCR, Lot, Trend,
@@ -87,6 +94,7 @@ const OIP_RS_STORAGE_KEY_INDICATORS = 'oipRS_indicators_v1';
 const OIP_RS_STORAGE_KEY_RAYS = 'oipRS_rays_v1';
 const OIP_RS_INDICATOR_CHECKBOX_IDS = [
     'oipRSShowVwap', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
+    'oipRSShowOiChgCe', 'oipRSShowOiChgPe',
     'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
     'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo',
     'oipRSShowDecOpen', 'oipRSShowDecHigh', 'oipRSShowDecLow', 'oipRSShowDecClose'
@@ -201,6 +209,258 @@ const OIP_RS_DECIDER_CHECKBOX_IDS = { openD: 'oipRSShowDecOpen', highD: 'oipRSSh
 // violet/grey and the amber 5m-close border. The picker changes all four.
 const OIP_RS_DECIDER_COLOR = '#ec4899';
 
+// ── Change in Open Interest (Absolute) ───────────────────────────────────────
+// A histogram of each option leg's own bar-to-bar OPEN INTEREST change, in
+// contracts, in a pane of its own beneath the candles — the reading Dhan's
+// "Change in Open Interest Absolute" indicator gives.
+//
+// The number is a DIFF of a level, not a per-bar flow the way volume is: the
+// broker reports the leg's outstanding OI as it stood at each bar's close, so
+// the bar drawn here is oi[i] - oi[i-1]. Positive means contracts were written
+// into the strike over that bar, negative means positions were closed out.
+//
+// The data rides in on the candles themselves — every bar of ce_candles /
+// pe_candles now carries an `oi` field, sourced from Fyers' history API with
+// oi_flag set (see _oip_format_candles in api.py and the fyers adapter). It is
+// present on derivative legs only, and ABSENT rather than zero where the broker
+// gave none, which is what lets oipRSComputeOiChange below break the diff
+// across a hole instead of inventing a cliff-sized bar out of a missing value.
+//
+// ONE PANE PER LEG — CE's above PE's, each with its own price scale. The two
+// legs are different contracts: a 24000 CE and a 24200 PE carry unrelated open
+// interest, and their changes differ by orders of magnitude through the day. On
+// a shared scale the quieter leg flattens against the busier one's bars, and
+// with both drawn over each other only colour separated them. Given separate
+// panes each autoscales to its own leg, so both stay readable.
+//
+// Each pane is a SINGLE colour — CE red, PE green — not a per-bar up/down pair.
+// Which way OI went is already stated by the side of zero a bar falls on, so
+// colour is spent on the leg instead, and the two panes stay apart at a glance.
+//
+// The panes are created on demand and destroyed when their checkbox goes off,
+// so the chart only carries the ones actually being watched. They're tracked by
+// their IPaneApi OBJECT, never by a stored index — removing a pane shifts every
+// index after it, so the index is re-read (pane.paneIndex()) at the moment it's
+// needed.
+let oipRSOiChgPanes = { ce: null, pe: null };   // side -> { series, pane }
+// Draw order, top to bottom, under the candles.
+const OIP_RS_OI_CHG_SIDES = ['ce', 'pe'];
+// Each pane's OWN right-hand scale, not a custom overlay id: price scales are
+// per-pane in v5, so 'right' here belongs to that pane alone and never touches
+// the candles' scale — and an overlay (custom-id) scale draws no axis at all
+// (lightweight-charts ignores `visible` on those), which would cost each
+// histogram the labelled ±contracts axis it is read against.
+const OIP_RS_OI_CHG_SCALE = 'right';
+const OIP_RS_OI_CHG_SPECS = {
+    ce: { checkbox: 'oipRSShowOiChgCe', title: 'CE ΔOI', defaultOn: true },
+    pe: { checkbox: 'oipRSShowOiChgPe', title: 'PE ΔOI', defaultOn: true }
+};
+const OIP_RS_OI_CHG_STYLE_IDS = { ce: 'oipRSOiChgCeColorInp', pe: 'oipRSOiChgPeColorInp' };
+// ONE colour per leg — the whole CE histogram red, the whole PE histogram green
+// — rather than a per-bar up/down pair. Direction is already unambiguous from
+// which side of zero a bar sits on, so tinting by sign spent colour restating
+// the axis; spending it on the LEG instead means a glance at any bar says which
+// contract it belongs to, which is the thing two panes of near-identical
+// histograms actually make hard to tell.
+//
+// The red is the page's established histogram red (already the volume bars'
+// down colour); the green is this block's CE reference-line green
+// (OIP_RS_CE_REF_COLOR). CE takes the red and PE the green — OI building in
+// calls and OI building in puts point opposite ways, so the leg colours read
+// against the direction the strike's writers are leaning, not with it.
+const OIP_RS_OI_CHG_DEFAULT_COLORS = { ce: '#f23645', pe: '#16a34a' };
+// Height of ONE ΔOI pane, and the chart's height carrying none. Each pane is
+// added to the chart's height rather than carved out of the 575 the candles
+// have, so switching a leg on never shrinks them. .oip-chart-wrap pins 575px in
+// CSS, so the wrapper grows too (inline, which beats the class) or the panes
+// would land outside it.
+const OIP_RS_OI_CHG_PANE_HEIGHT = 100;
+const OIP_RS_BASE_CHART_HEIGHT = 575;
+
+function oipRSSetChartHeight(px) {
+    try { oipRSChart?.chart?.applyOptions({ height: px }); } catch (e) {}
+    const wrap = document.getElementById('oipRSCombinedChartWrap');
+    if (wrap) wrap.style.height = `${px}px`;
+}
+
+// Grows/shrinks the chart to fit however many ΔOI panes are currently open, then
+// re-pins each to its fixed height — lightweight-charts redistributes pane
+// heights when the chart's own height changes, so the pin has to come after.
+function oipRSApplyOiChgChartHeight() {
+    const open = OIP_RS_OI_CHG_SIDES.filter(side => oipRSOiChgPanes[side]);
+    oipRSSetChartHeight(OIP_RS_BASE_CHART_HEIGHT + open.length * OIP_RS_OI_CHG_PANE_HEIGHT);
+    open.forEach(side => {
+        try { oipRSOiChgPanes[side].pane.setHeight(OIP_RS_OI_CHG_PANE_HEIGHT); } catch (e) {}
+    });
+}
+
+function oipRSOiChgColor(side) {
+    return document.getElementById(OIP_RS_OI_CHG_STYLE_IDS[side])?.value
+        || OIP_RS_OI_CHG_DEFAULT_COLORS[side];
+}
+
+function oipRSOiChgIsOn(side) {
+    return document.getElementById(OIP_RS_OI_CHG_SPECS[side].checkbox)?.checked
+        ?? OIP_RS_OI_CHG_SPECS[side].defaultOn;
+}
+
+// Bar-to-bar OI change for one leg. Bars WITHOUT an `oi` (a non-derivative leg,
+// or the locally rebuilt synthetic tail) don't just get skipped — they reset the
+// running previous value, so the next real bar starts a fresh diff instead of
+// subtracting across the hole and drawing a spike that never happened.
+//
+// The first bar of the series has nothing to diff against and is therefore
+// omitted, not drawn at zero: a zero bar would claim OI held flat, which is a
+// different statement from "not known yet".
+function oipRSComputeOiChange(candles) {
+    const bars = [];
+    let prevOi = null;
+    (candles || []).forEach(c => {
+        const oi = (c && c.oi != null) ? Number(c.oi) : null;
+        if (oi == null || !Number.isFinite(oi)) { prevOi = null; return; }
+        if (prevOi != null) bars.push({ time: Number(c.time), value: oi - prevOi });
+        prevOi = oi;
+    });
+    return bars;
+}
+
+// The bars carry no colour of their own — the whole leg is one colour, so it
+// lives on the SERIES. That is what makes a colour change a bare applyOptions
+// below instead of a re-push of every bar, and why this needs no cache of the
+// last-drawn bars the way the volume overlays do (_oipVolBarCache in
+// oi_indicators.js, where colour is per-bar because it tracks candle direction).
+function oipRSPaintOiChangeBars(side, bars) {
+    const series = oipRSOiChgPanes[side]?.series;
+    if (!series) return;
+    try { series.setData(bars.map(b => ({ time: b.time, value: b.value }))); } catch (e) {}
+}
+
+function oipRSApplyOiChgColors() {
+    OIP_RS_OI_CHG_SIDES.forEach(side => {
+        try { oipRSOiChgPanes[side]?.series.applyOptions({ color: oipRSOiChgColor(side) }); } catch (e) {}
+    });
+}
+
+// Opens ONE leg's pane and its histogram. Called lazily (see oipRSSyncOiChgPane)
+// rather than from oipRSInitCharts, so a leg the user has switched off never
+// carries a dead empty pane under the candles.
+function oipRSCreateOiChgPane(side) {
+    const chart = oipRSChart?.chart;
+    if (!chart || oipRSOiChgPanes[side]) return;
+    try {
+        // addPane() appends below whatever is already there; oipRSOrderOiChgPanes
+        // then puts CE back above PE if PE happened to be opened first.
+        const pane = chart.addPane();
+        const series = chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: { type: 'volume' },
+            priceScaleId: OIP_RS_OI_CHG_SCALE,
+            title: OIP_RS_OI_CHG_SPECS[side].title,
+            color: oipRSOiChgColor(side),
+            priceLineVisible: false,
+            crosshairMarkerVisible: false
+        }, pane.paneIndex());
+        // Room above and below zero — these bars run both ways, unlike the
+        // volume histograms that sit on the floor of the candle pane.
+        //
+        // Reached through the SERIES rather than chart.priceScale(id): price
+        // scales are per-pane in v5 and chart.priceScale() defaults to pane 0,
+        // so the id alone would have styled a scale in the candle pane.
+        series.priceScale()?.applyOptions({
+            scaleMargins: { top: 0.12, bottom: 0.12 }, visible: true
+        });
+        oipRSOiChgPanes[side] = { series, pane };
+        // The new series carries the bare default title; clear the memo so
+        // oipRSSetOiChgTitles re-stamps the strike onto it (a pane the user
+        // toggles off and back on would otherwise keep the unnamed axis).
+        _oipRSOiChgTitleFor[side] = null;
+        oipRSApplyOiChgChartHeight();
+    } catch (e) {
+        console.warn(`[RoundStrike] ${side.toUpperCase()} Chg in OI pane could not be created:`, e);
+    }
+}
+
+function oipRSDestroyOiChgPane(side) {
+    const chart = oipRSChart?.chart;
+    const rec = oipRSOiChgPanes[side];
+    if (!chart || !rec) return;
+    try { chart.removeSeries(rec.series); } catch (e) {}
+    // The index is read HERE, not stored: closing the other leg's pane earlier
+    // would have shifted it. Guarded rather than checked because
+    // lightweight-charts may already have dropped the now-empty pane itself,
+    // and removing it twice throws.
+    try {
+        const idx = rec.pane.paneIndex();
+        if (idx > 0 && chart.panes()?.length > idx) chart.removePane(idx);
+    } catch (e) {}
+    oipRSOiChgPanes[side] = null;
+    oipRSApplyOiChgChartHeight();
+}
+
+// Keeps CE's pane above PE's. Only matters when the two are opened out of
+// order — turning CE on while PE is already showing would otherwise append CE's
+// pane underneath, leaving the legs in the opposite order to the checkboxes and
+// to the CE/PE reading order used everywhere else on this page.
+function oipRSOrderOiChgPanes() {
+    const ce = oipRSOiChgPanes.ce?.pane, pe = oipRSOiChgPanes.pe?.pane;
+    if (!ce || !pe) return;
+    try {
+        const ceIdx = ce.paneIndex(), peIdx = pe.paneIndex();
+        if (ceIdx > peIdx) ce.moveTo(peIdx);
+    } catch (e) {}
+}
+
+// Brings both panes in line with their checkboxes — each opened or torn down on
+// its own — and repaints from the candles the last render parked, so a toggle
+// takes effect immediately rather than waiting for the next poll.
+function oipRSSyncOiChgPane() {
+    if (!oipRSChart?.chart) return;
+    OIP_RS_OI_CHG_SIDES.forEach(side => {
+        if (oipRSOiChgIsOn(side)) oipRSCreateOiChgPane(side);
+        else oipRSDestroyOiChgPane(side);
+    });
+    oipRSOrderOiChgPanes();
+    oipRSUpdateOiChangeSeries(oipRSLastCeData, oipRSLastPeData);
+}
+
+// Pushes each leg's bars into its own pane. Safe to call on every render — a
+// no-op for a leg whose pane isn't open.
+function oipRSUpdateOiChangeSeries(ceData, peData) {
+    const data = { ce: ceData, pe: peData };
+    OIP_RS_OI_CHG_SIDES.forEach(side => {
+        if (oipRSOiChgPanes[side]) oipRSPaintOiChangeBars(side, oipRSComputeOiChange(data[side]));
+    });
+}
+
+// Names each pane's axis with the contract it is actually showing — "24000 CE
+// ΔOI" rather than a bare "CE ΔOI" — so a glance says which strike the bars
+// belong to, the way Dhan's own pane header does. Skipped unless the strike
+// changed: this runs on a 1-second poll and applyOptions redraws.
+let _oipRSOiChgTitleFor = { ce: null, pe: null };
+
+function oipRSSetOiChgTitles(ceStrike, peStrike) {
+    const strikes = { ce: ceStrike, pe: peStrike };
+    OIP_RS_OI_CHG_SIDES.forEach(side => {
+        const rec = oipRSOiChgPanes[side];
+        const strike = strikes[side];
+        if (!rec || !strike || _oipRSOiChgTitleFor[side] === strike) return;
+        try {
+            rec.series.applyOptions({ title: `${strike} ${OIP_RS_OI_CHG_SPECS[side].title}` });
+            _oipRSOiChgTitleFor[side] = strike;
+        } catch (e) {}
+    });
+}
+
+function oipRSOnOiChgToggle() {
+    oipRSSyncOiChgPane();
+    oipRSSaveIndicatorState();
+}
+
+function oipRSOnOiChgColorChange() {
+    oipRSApplyOiChgColors();
+    oipRSUpdateCheckboxSpanColors();
+    oipRSSaveLineStyleState();
+}
+
 // Per-side (CE / PE) style pickers — one color/width/style applies to ALL 5
 // lines of that side at once (PDH, PDL, Open, 5m Hi, 5m Lo), same idea as the
 // Ray tool's style pickers. Persisted alongside indicator show/hide state.
@@ -222,13 +482,26 @@ function oipRSDeciderStyle() {
     return oipRSLineStyleFromPickers(OIP_RS_DEC_STYLE_IDS, OIP_RS_DECIDER_COLOR);
 }
 
+// Bumped when a DEFAULT in this popup changes in a way a previously saved state
+// would otherwise mask. Everything here is persisted the moment any one picker
+// moves, so a returning user carries a full snapshot of the OLD defaults — and a
+// new default would never be seen. The version lets a restore drop just the one
+// stale field instead of discarding the user's other, deliberate choices.
+//
+//   1 -> 2: the Decider lines defaulted to Dashed and now default to Solid.
+const OIP_RS_LINESTYLE_STATE_VERSION = 2;
+
 function oipRSSaveLineStyleState() {
     const state = {
+        v: OIP_RS_LINESTYLE_STATE_VERSION,
         ce: oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR),
         pe: oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR),
         dec: oipRSDeciderStyle(),
         // 5m Close Border has a colour only (no width/style — see oipRSMark5mCloseBorders).
-        fiveMClose: document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT
+        fiveMClose: document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT,
+        // Chg in OI carries one colour per leg and nothing else — a histogram
+        // bar has no width or dash style to set.
+        oiChg: { ce: oipRSOiChgColor('ce'), pe: oipRSOiChgColor('pe') }
     };
     try { localStorage.setItem(OIP_RS_STORAGE_KEY_LINESTYLE, JSON.stringify(state)); } catch (e) {}
 }
@@ -237,17 +510,31 @@ function oipRSRestoreLineStyleState() {
     let state;
     try { state = JSON.parse(localStorage.getItem(OIP_RS_STORAGE_KEY_LINESTYLE) || 'null'); } catch (e) { state = null; }
     if (!state) return;
-    const apply = (ids, saved) => {
+    const version = state.v || 1;
+    const apply = (ids, saved, skipStyle = false) => {
         if (!saved) return;
         const c = document.getElementById(ids.color); if (c && saved.color) c.value = saved.color;
         const w = document.getElementById(ids.width); if (w && saved.width != null) w.value = saved.width;
-        const s = document.getElementById(ids.style); if (s && saved.lineStyle != null) s.value = saved.lineStyle;
+        const s = document.getElementById(ids.style);
+        if (s && !skipStyle && saved.lineStyle != null) s.value = saved.lineStyle;
     };
     apply(OIP_RS_CE_STYLE_IDS, state.ce);
     apply(OIP_RS_PE_STYLE_IDS, state.pe);
-    apply(OIP_RS_DEC_STYLE_IDS, state.dec);
+    // A pre-v2 snapshot carries the old Dashed default for the Deciders, saved
+    // whether or not the user ever chose it. Keep their colour and width, but let
+    // the line style fall through to the markup's new Solid default.
+    apply(OIP_RS_DEC_STYLE_IDS, state.dec, version < 2);
     const f = document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID);
     if (f && state.fiveMClose) f.value = state.fiveMClose;
+    ['ce', 'pe'].forEach(side => {
+        // Skips the object an earlier build saved here ({up, dn}) — that shape
+        // predates the one-colour-per-leg histogram and has no single colour to
+        // restore, so those legs fall back to their green/red defaults.
+        const saved = state.oiChg?.[side];
+        if (typeof saved !== 'string') return;
+        const inp = document.getElementById(OIP_RS_OI_CHG_STYLE_IDS[side]);
+        if (inp) inp.value = saved;
+    });
 }
 
 // Reflects the current CE/PE/Decider colors onto the indicator checkbox labels
@@ -270,6 +557,10 @@ function oipRSUpdateCheckboxSpanColors() {
     });
     const fiveMSpan = document.getElementById('oipRSShow5mClose')?.nextElementSibling;
     if (fiveMSpan) fiveMSpan.style.color = document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT;
+    OIP_RS_OI_CHG_SIDES.forEach(side => {
+        const span = document.getElementById(OIP_RS_OI_CHG_SPECS[side].checkbox)?.nextElementSibling;
+        if (span) span.style.color = oipRSOiChgColor(side);
+    });
 }
 
 // Style shared by all 5 of a leg's level series.
@@ -471,7 +762,8 @@ function oipRSInitCharts() {
         // own TF dropdown after the chart is created, and the ray tool's reach
         // needs the CURRENT interval, not the one at attach time (same
         // reasoning as the main OI chart's ray tool).
-        isCombined: true, timeframe: () => oipRSInterval, options: { height: 575 },
+        isCombined: true, timeframe: () => oipRSInterval,
+        options: { height: OIP_RS_BASE_CHART_HEIGHT },
         onRayDrawn: oipRSRayDisarm,
         onRayRemoved: oipRSRemoveSavedRay
     });
@@ -679,6 +971,21 @@ function oipRSInitIndicatorsPopup() {
     // 5m Close Border — toggle + colour both re-tag the loaded candles in place.
     document.getElementById('oipRSShow5mClose')?.addEventListener('change', oipRSOn5mCloseChange);
     document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.addEventListener('input', oipRSOn5mCloseChange);
+
+    // Chg in OI — the toggles build or tear down the pane itself (not just a
+    // series' visibility), the colour swatches repaint the parked bars.
+    ['ce', 'pe'].forEach(side => {
+        document.getElementById(OIP_RS_OI_CHG_SPECS[side].checkbox)
+            ?.addEventListener('change', oipRSOnOiChgToggle);
+        const inp = document.getElementById(OIP_RS_OI_CHG_STYLE_IDS[side]);
+        if (!inp) return;
+        // The swatch sits INSIDE the checkbox's own <label>, so the click has to
+        // stop here or it reaches the label and flips the indicator off every
+        // time the user opens the colour picker. Same guard _oipWireColorInput
+        // applies to the shared swatches.
+        inp.addEventListener('click', e => e.stopPropagation());
+        inp.addEventListener('input', oipRSOnOiChgColorChange);
+    });
 }
 
 // ── Data layer — /api/oi-profile/round-strike ────────────────────────────────
@@ -888,6 +1195,12 @@ function oipRSRenderChart(data) {
         if (oipRSVwapCESeries) oipRSVwapCESeries.setData(oipCalculateVWAP(ceData));
         if (oipRSVwapPESeries) oipRSVwapPESeries.setData(oipCalculateVWAP(peData));
     }
+
+    // Chg in OI reads the `oi` field on these same candles, so it rides the
+    // anti-flicker parking above for free — a rate-limited leg keeps its last
+    // good histogram rather than blanking for a tick.
+    oipRSUpdateOiChangeSeries(ceData, peData);
+    oipRSSetOiChgTitles(ceStrike, peStrike);
 
     // Step series. Each leg's five levels come from its own candles; the
     // Deciders blend the two, so they're built once here from both.
@@ -1285,6 +1598,10 @@ async function oipRSInit() {
     oipRSInitOrderButtons();
     oipRSInitRayTool();
     oipRSInitIndicatorsPopup();
+    // Opens the Chg in OI pane if the restored checkboxes ask for it. Deliberately
+    // NOT in oipRSInitCharts: the pane is created on demand so a user with the
+    // indicator off never carries an empty one under the candles.
+    oipRSSyncOiChgPane();
 
     // First real tick — the strikes only just resolved, so the call above went
     // out without them. Rays are restored by the render that follows (see

@@ -9872,6 +9872,13 @@ def _oip_format_candles(raw_data, ist_offset, requested_interval):
         # rather than passing it off as exchange data.
         if c.get('synthetic'):
             bar['synthetic'] = True
+        # Open interest, present on derivative legs only (the broker adapter
+        # omits the key for an index/equity, and for locally rebuilt synthetic
+        # bars). Left off the bar entirely in that case rather than zero-filled
+        # — a missing OI must not read as "OI collapsed to zero" when the
+        # Change-in-OI histogram diffs consecutive bars.
+        if c.get('oi') is not None:
+            bar['oi'] = c['oi']
         temp.append(bar)
 
     if requested_interval == '2minute':
@@ -9888,6 +9895,12 @@ def _oip_format_candles(raw_data, ist_offset, requested_interval):
             }
             if any(x.get('synthetic') for x in batch):
                 merged['synthetic'] = True
+            # OI is a LEVEL, not a flow: the merged bar's open interest is
+            # whatever it stood at when the bar closed, so take the last
+            # sub-bar that carries one (never the sum, the way volume above is).
+            oi_vals = [x['oi'] for x in batch if x.get('oi') is not None]
+            if oi_vals:
+                merged['oi'] = oi_vals[-1]
             return merged
 
         aggregated = []

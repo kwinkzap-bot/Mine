@@ -71998,9 +71998,9 @@
     "price": 80.0,
     "quantity": 715,
     "entry_price": 80.0,
-    "status": "OPEN",
+    "status": "EXECUTED",
     "username": "Mine",
-    "executed_at": null,
+    "executed_at": 1786957615399,
     "broker_order_ids": [
       {
         "broker": "zerodha_1",
@@ -72048,10 +72048,10 @@
     "instrument": "NFO",
     "price": 80.0,
     "quantity": 715,
-    "entry_price": 83.0,
-    "status": "OPEN",
+    "entry_price": 80.0,
+    "status": "EXECUTED",
     "username": "Mine",
-    "executed_at": null,
+    "executed_at": 1786957615478,
     "broker_order_ids": [
       {
         "broker": "zerodha_1",
@@ -72151,7 +72151,7 @@
     "price": 64.0,
     "quantity": 715,
     "entry_price": 64.0,
-    "status": "OPEN",
+    "status": "CANCELLED",
     "username": "Mine",
     "executed_at": null,
     "broker_order_ids": [
@@ -72250,10 +72250,10 @@
     "order_type": "LIMIT",
     "type": "LIMIT",
     "instrument": "NFO",
-    "price": 67.0,
+    "price": 68.0,
     "quantity": 715,
     "entry_price": 66.0,
-    "status": "OPEN",
+    "status": "CANCELLED",
     "username": "Mine",
     "executed_at": null,
     "broker_order_ids": [
@@ -72301,10 +72301,10 @@
     "order_type": "LIMIT",
     "type": "LIMIT",
     "instrument": "NFO",
-    "price": 65.0,
+    "price": 66.0,
     "quantity": 715,
     "entry_price": 65.0,
-    "status": "OPEN",
+    "status": "CANCELLED",
     "username": "Mine",
     "executed_at": null,
     "broker_order_ids": [

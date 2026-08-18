@@ -70,8 +70,8 @@
       "lot_size": 475,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-17",
-      "ltp": 1687.7,
-      "ltp_time": "2026-08-17T14:24:52.601689",
+      "ltp": 1688.4,
+      "ltp_time": "2026-08-17T15:29:50.106873",
       "future_expiry": "2026-08-25"
     },
     "ADANIPOWER": {
@@ -98,8 +98,8 @@
       "sl_level": 7329.0,
       "target_pct": 15,
       "signal_date": "2026-08-07",
-      "ltp": 7322.5,
-      "ltp_time": "2026-08-17T14:24:52.601691",
+      "ltp": 7300.5,
+      "ltp_time": "2026-08-17T15:29:50.106879",
       "future_expiry": "2026-08-25"
     },
     "AMBUJACEM": {
@@ -192,13 +192,13 @@
       "sl_level": 1901.3,
       "target_pct": 10,
       "signal_date": "2026-08-12",
-      "ltp": 1985.2,
-      "ltp_time": "2026-08-17T14:24:52.601705",
+      "ltp": 1980.0,
+      "ltp_time": "2026-08-17T15:29:50.106910",
       "entry_price": 1965.0,
       "target_level": 2161.5,
       "qty": 475,
       "entry_time": "2026-08-13T08:47:18.153712",
-      "unrealized_pnl": 9595.0,
+      "unrealized_pnl": 7125.0,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -251,8 +251,8 @@
       "lot_size": 425,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-17",
-      "ltp": 1434.2,
-      "ltp_time": "2026-08-17T14:24:52.601693",
+      "ltp": 1434.6,
+      "ltp_time": "2026-08-17T15:29:50.106882",
       "future_expiry": "2026-08-25"
     },
     "COALINDIA": {
@@ -295,8 +295,8 @@
       "sl_level": 423.7,
       "target_pct": 2.5,
       "signal_date": "2026-03-30",
-      "ltp": 457.6,
-      "ltp_time": "2026-08-17T14:24:52.601695",
+      "ltp": 456.45,
+      "ltp_time": "2026-08-17T15:29:50.106888",
       "future_expiry": "2026-08-25"
     },
     "DMART": {
@@ -369,8 +369,8 @@
       "sl_level": 4433.7,
       "target_pct": 15,
       "signal_date": "2026-07-08",
-      "ltp": 5065.9,
-      "ltp_time": "2026-08-17T14:24:52.601696",
+      "ltp": 5046.8,
+      "ltp_time": "2026-08-17T15:29:50.106891",
       "future_expiry": "2026-08-25"
     },
     "HAVELLS": {
@@ -396,13 +396,13 @@
       "lot_size": 300,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
-      "ltp": 2533.8,
-      "ltp_time": "2026-08-17T14:24:52.601707",
+      "ltp": 2532.2,
+      "ltp_time": "2026-08-17T15:29:50.106915",
       "entry_price": 2562.1,
       "target_level": 2459.62,
       "qty": 300,
       "entry_time": "2026-08-04T11:38:16.248597",
-      "unrealized_pnl": 8490.0,
+      "unrealized_pnl": 8970.0,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -457,8 +457,8 @@
       "sl_level": 548.0,
       "target_pct": 5,
       "signal_date": "2025-04-09",
-      "ltp": 887.4,
-      "ltp_time": "2026-08-17T14:24:52.601697",
+      "ltp": 887.0,
+      "ltp_time": "2026-08-17T15:29:50.106895",
       "future_expiry": "2026-08-25"
     },
     "INDUSINDBK": {
@@ -476,8 +476,8 @@
       "sl_level": 868.0,
       "target_pct": 15,
       "signal_date": "2026-04-24",
-      "ltp": 1016.7,
-      "ltp_time": "2026-08-17T14:24:52.601699",
+      "ltp": 1017.7,
+      "ltp_time": "2026-08-17T15:29:50.106897",
       "future_expiry": "2026-08-25"
     },
     "INFY": {
@@ -559,13 +559,13 @@
       "sl_level": 2373.3,
       "target_pct": 1.5,
       "signal_date": "2026-08-06",
-      "ltp": 2563.9,
-      "ltp_time": "2026-08-17T14:24:52.601709",
+      "ltp": 2577.1,
+      "ltp_time": "2026-08-17T15:29:50.106918",
       "entry_price": 2574.6,
       "target_level": 2613.22,
       "qty": 225,
       "entry_time": "2026-08-10T12:41:58.474682",
-      "unrealized_pnl": -2407.5,
+      "unrealized_pnl": 562.5,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -609,13 +609,13 @@
       "target_pct": 8,
       "signal_date": "2026-08-05",
       "future_resolved_on": "2026-08-06",
-      "ltp": 76.67,
-      "ltp_time": "2026-08-17T14:24:52.601711",
+      "ltp": 76.59,
+      "ltp_time": "2026-08-17T15:29:50.106921",
       "entry_price": 77.76,
       "target_level": 71.54,
       "qty": 6950,
       "entry_time": "2026-08-06T09:17:35.466242",
-      "unrealized_pnl": 7575.5,
+      "unrealized_pnl": 8131.5,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -653,9 +653,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 476.6,
-      "ltp_time": "2026-08-17T14:24:52.601713",
-      "unrealized_pnl": 26040.0,
+      "ltp": 477.65,
+      "ltp_time": "2026-08-17T15:29:50.106925",
+      "unrealized_pnl": 27510.0,
       "future_delisted": false,
       "future_expiry": "2026-08-25"
     },
@@ -693,8 +693,8 @@
       "sl_level": 414.5,
       "target_pct": 15,
       "signal_date": "2026-08-07",
-      "ltp": 376.25,
-      "ltp_time": "2026-08-17T14:24:52.601700",
+      "ltp": 377.5,
+      "ltp_time": "2026-08-17T15:29:50.106900",
       "future_expiry": "2026-08-25"
     },
     "PIIND": {
@@ -849,13 +849,13 @@
       "future_month": "AUG 2026",
       "future_expiry": "2026-08-25",
       "future_resolved_on": "2026-08-17",
-      "ltp": 11685.0,
-      "ltp_time": "2026-08-17T14:24:52.601715",
+      "ltp": 11655.0,
+      "ltp_time": "2026-08-17T15:29:50.106928",
       "entry_price": 11565.0,
       "target_level": 10639.8,
       "qty": 50,
       "entry_time": "2026-08-17T09:16:00.632204",
-      "unrealized_pnl": -6000.0
+      "unrealized_pnl": -4500.0
     },
     "UPL": {
       "phase": "watching",
@@ -872,8 +872,8 @@
       "sl_level": 634.05,
       "target_pct": 5,
       "signal_date": "2026-05-11",
-      "ltp": 567.1,
-      "ltp_time": "2026-08-17T14:24:52.601701",
+      "ltp": 566.0,
+      "ltp_time": "2026-08-17T15:29:50.106902",
       "future_expiry": "2026-08-25"
     },
     "VOLTAS": {
@@ -936,8 +936,8 @@
       "sl_level": 7392.5,
       "target_pct": 8,
       "signal_date": "2026-06-30",
-      "ltp": 8095.5,
-      "ltp_time": "2026-08-17T14:24:52.601702",
+      "ltp": 8111.0,
+      "ltp_time": "2026-08-17T15:29:50.106905",
       "future_expiry": "2026-08-25"
     },
     "ICICIPRULI": {
@@ -973,8 +973,8 @@
       "lot_size": 5425,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-17",
-      "ltp": 87.11,
-      "ltp_time": "2026-08-17T14:24:52.601703",
+      "ltp": 87.25,
+      "ltp_time": "2026-08-17T15:29:50.106907",
       "future_expiry": "2026-08-25"
     },
     "ITC": {

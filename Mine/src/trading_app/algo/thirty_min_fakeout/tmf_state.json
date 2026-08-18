@@ -1,6 +1,6 @@
 {
   "date": "2026-08-17",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
