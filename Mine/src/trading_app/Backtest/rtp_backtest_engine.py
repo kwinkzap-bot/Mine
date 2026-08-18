@@ -498,7 +498,13 @@ class RTPBacktestEngine:
                 i += 1
                 continue
 
-            # Entry fills at next bar open (process_orders_on_close=false)
+            # Entry fills at next bar open (process_orders_on_close=false).
+            #
+            # DELIBERATE divergence from the live algo, which fills at the
+            # signal bar's close (rtp_algo.py, `signal_bar_close`). Do not
+            # "unify" the two while deduping the RTP state machine — it would
+            # change live fill prices. tests/test_rtp_live_vs_backtest.py
+            # sidesteps it with gapless synthetic data so the two coincide.
             if i + 1 >= n:
                 i += 1
                 continue

@@ -5,7 +5,11 @@ Feeds a crafted 30-second OHLC series to both the live breakout detector and the
 backtest's single-day simulator and asserts they agree on direction + SL/Target.
 
 Run:
-    PYTHONPATH=src python3 src/trading_app/algo/second_candle/test_second_candle_signal.py
+    pytest tests/test_second_candle_signal.py
+
+Lived under src/trading_app/algo/second_candle/ until 2026-08-18, which put it
+outside pyproject's `testpaths` — so it had never run in CI despite being fully
+hermetic. `src/` reaches sys.path via the rootdir conftest.py.
 """
 import sys
 import pandas as pd
@@ -178,6 +182,11 @@ def _stale_spot_case():
     assert algo._get_nifty_spot(_Q(24596.55, 1)) == 24596.55, \
         "a fresh quote must be accepted"
     print("  ✓ stale spot quote rejected, fresh quote accepted")
+
+
+def test_live_breakout_matches_backtest_engine():
+    """pytest entry point. `main()` asserts directly, so let it propagate."""
+    main()
 
 
 if __name__ == '__main__':

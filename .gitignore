@@ -1,7 +1,25 @@
-# Environment files (keep only Mine.env for production)
+# Environment files — NEVER track these. They hold live broker API keys,
+# secrets, access tokens and MPINs. An earlier "!Mine/env/Mine.env" negation
+# kept Mine.env tracked on a public remote; it is gone and must not come back.
 Mine/env/*.env
-!Mine/env/Mine.env
-!Mine/env/.env
+Mine/env/.env
+Mine/env/sheets-key.json
+
+# App user credentials (SHA-256 password hashes)
+.users.json
+
+# Live algo runtime state — rewritten by the running app every tick.
+# Tracking these means a git checkout/stash/reset can resurrect a closed
+# position or erase an open one, and the next algo tick acts on it.
+# Trade history (*_trades_history*.json) stays tracked as the off-site log.
+Mine/src/trading_app/algo/**/*_state*.json
+Mine/src/trading_app/app/utils/mine_orders.json
+Mine/src/trading_app/app/utils/bot_orders.json
+Mine/src/trading_app/app/utils/rtp_opt_cache.json
+Mine/src/trading_app/app/utils/sm_opt_cache.json
+
+# Scratch / throwaway scripts
+Mine/scratch/
 
 # Cache files
 Mine/src/.token_cache

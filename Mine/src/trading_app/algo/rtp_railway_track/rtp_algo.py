@@ -455,8 +455,17 @@ class RTPAlgo:
 
         Returns (signal, updated_state, new_last_bar_dt, signal_bar_close).
         signal_bar_close is the CLOSE of the signal bar — used as the SL/Target
-        reference so that live behaviour matches backtest exactly (backtest
-        entries are always at bar close, not at real-time spot).
+        reference rather than real-time spot, so entries are bar-aligned.
+
+        DELIBERATE divergence: the backtest engine fills at the NEXT bar's open
+        (rtp_backtest_engine.py, "Entry fills at next bar open"), not at this
+        bar's close. On gapless data the two coincide, which is why
+        tests/test_rtp_live_vs_backtest.py generates gapless synthetic candles.
+        On real gaps they differ. Do not unify the two paths while deduping the
+        RTP state machine — it would change live fill prices.
+
+        (An earlier version of this docstring claimed backtest entries are "at
+        bar close". They are not; see the engine comment.)
         """
         try:
             from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine

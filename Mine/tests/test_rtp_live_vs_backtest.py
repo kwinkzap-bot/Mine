@@ -12,7 +12,12 @@ close), so the engine's "enter at next bar open" equals the live "enter at
 signal bar close" and every trade must match EXACTLY: entry bar, direction,
 exit bar, exit reason and prices.
 
-Run:  python3 test_rtp_live_vs_backtest.py
+Run:  pytest tests/test_rtp_live_vs_backtest.py
+
+Lived under src/trading_app/algo/rtp_railway_track/ until 2026-08-18, which put
+it outside pyproject's `testpaths` — so despite being fully hermetic (synthetic
+data, fake clock, stub provider, tempfile state) it had never once run in CI.
+`src/` reaches sys.path via the rootdir conftest.py.
 """
 import json
 import os
@@ -24,14 +29,10 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_SRC  = os.path.abspath(os.path.join(_HERE, '..', '..', '..'))
-if _SRC not in sys.path:
-    sys.path.insert(0, _SRC)
-
-from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine  # noqa: E402
-import trading_app.algo.rtp_railway_track.rtp_algo as rtp               # noqa: E402
+from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
+import trading_app.algo.rtp_railway_track.rtp_algo as rtp
 
 IST = 'Asia/Kolkata'
 
@@ -268,8 +269,9 @@ def compare(vkey, eng_trades, live_trades):
     return ok
 
 
-def main():
-    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 7
+def main(seed=7):
+    """`seed` is a parameter, not sys.argv[1] — under pytest argv holds
+    pytest's own flags, and parsing those as a seed blows up."""
     print(f"seed={seed}")
     rows30 = make_30s_data(seed=seed)
     data = {
@@ -303,5 +305,36 @@ def main():
     sys.exit(0)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN LIVE/BACKTEST DRIFT since 91d8c45 (2026-07-09). Bisect result:\n"
+        "  4f9eb5b 2026-07-08  PASS - test written, all variants matched\n"
+        "  91d8c45 2026-07-09  FAIL - 1m, 3m, 5m diverge\n"
+        "  bdd094b 2026-07-20  FAIL - 30s diverges too\n"
+        "  11487cf 2026-07-30  FAIL - unchanged\n"
+        "91d8c45 is 'add 2-minute RTP strategy, implement candle-break "
+        "confirmation logic, update trend criteria for 30s/1m'. It changed both "
+        "rtp_algo.py and rtp_backtest_engine.py, but not identically.\n"
+        "The drift went unnoticed for ~6 weeks because this file lived under "
+        "src/trading_app/algo/ and so fell outside pyproject's testpaths.\n"
+        "Consequence: backtest-derived parameters (SL/target/trend criteria) do "
+        "not describe what the live algo actually does. Someone has to decide "
+        "which side is correct - that is a strategy call, not a refactor.\n"
+        "strict=True on purpose: when it is fixed, this test fails as XPASS and "
+        "tells you to delete the marker."
+    ),
+)
+def test_live_logic_matches_backtest_for_all_variants():
+    """pytest entry point. `main()` signals via sys.exit, so translate that."""
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 0, (
+            "RTP live logic diverged from the backtest engine — see the parity "
+            "output above for the failing variants."
+        )
+
+
 if __name__ == '__main__':
-    main()
+    main(int(sys.argv[1]) if len(sys.argv) > 1 else 7)
