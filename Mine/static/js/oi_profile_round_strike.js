@@ -260,6 +260,28 @@ const OIP_RS_OI_CHG_SIDES = ['ce', 'pe'];
 // (lightweight-charts ignores `visible` on those), which would cost each
 // histogram the labelled ±contracts axis it is read against.
 const OIP_RS_OI_CHG_SCALES = { ce: 'right', pe: 'left' };
+// WHEN BOTH LEGS ARE ON, each gets its own HALF of the shared pane — CE in the
+// top band, PE in the bottom. That is the CE-above-PE order the two stacked
+// panes used to express by position, and the same order as the checkboxes.
+//
+// This is what actually keeps them apart. Separate price scales alone do NOT
+// separate them on screen — they only stop one leg's range from crushing the
+// other's. Without these margins both legs centre on their own zero and each
+// spans the FULL pane height, so the histograms draw straight through one
+// another and neither is readable.
+//
+// scaleMargins are fractions of the pane measured from its top and bottom, so
+// {top:0.04, bottom:0.54} pins a series into the 4%–46% band and
+// {top:0.54, bottom:0.04} into 54%–96%, leaving an 8% gutter between them. Each
+// leg still autoscales independently inside its own band.
+const OIP_RS_OI_CHG_MARGINS_SPLIT = {
+    ce: { top: 0.04, bottom: 0.54 },   // top half
+    pe: { top: 0.54, bottom: 0.04 }    // bottom half
+};
+// With only ONE leg on there is nothing to collide with, so it takes the whole
+// pane rather than sitting in half of it with the other half left empty — the
+// full height a single leg had back when it owned a pane to itself.
+const OIP_RS_OI_CHG_MARGIN_FULL = { top: 0.12, bottom: 0.12 };
 const OIP_RS_OI_CHG_SPECS = {
     ce: { checkbox: 'oipRSShowOiChgCe', title: 'CE ΔOI', defaultOn: true },
     pe: { checkbox: 'oipRSShowOiChgPe', title: 'PE ΔOI', defaultOn: true }
@@ -355,6 +377,26 @@ function oipRSApplyOiChgColors() {
     });
 }
 
+// Puts each open leg in its band. Re-run on every open and close, because the
+// answer depends on how many legs are showing: two legs split the pane in half,
+// a lone leg takes all of it.
+//
+// `visible: true` is re-stated here rather than only at creation — it is
+// load-bearing for PE, whose LEFT scale is hidden by default, and keeping it
+// alongside the margins means one place decides how a leg's scale is laid out.
+function oipRSApplyOiChgMargins() {
+    const open = OIP_RS_OI_CHG_SIDES.filter(s => oipRSOiChgSeries[s]);
+    const split = open.length > 1;
+    open.forEach(side => {
+        try {
+            oipRSOiChgSeries[side].priceScale()?.applyOptions({
+                scaleMargins: split ? OIP_RS_OI_CHG_MARGINS_SPLIT[side] : OIP_RS_OI_CHG_MARGIN_FULL,
+                visible: true
+            });
+        } catch (e) {}
+    });
+}
+
 // The shared pane, created on first use. Both legs live here, so this runs once
 // however many legs are switched on.
 function oipRSEnsureOiChgPane() {
@@ -381,20 +423,11 @@ function oipRSCreateOiChgSeries(side) {
             priceLineVisible: false,
             crosshairMarkerVisible: false
         }, pane.paneIndex());
-        // Room above and below zero — these bars run both ways, unlike the
-        // volume histograms that sit on the floor of the candle pane.
-        //
-        // Reached through the SERIES rather than chart.priceScale(id): price
-        // scales are per-pane in v5 and chart.priceScale() defaults to pane 0,
-        // so the id alone would have styled a scale in the candle pane.
-        //
-        // `visible: true` is load-bearing for PE specifically — a pane's LEFT
-        // scale is hidden by default, and without this the leg would draw with
-        // no axis to read its ±contracts against.
-        series.priceScale()?.applyOptions({
-            scaleMargins: { top: 0.12, bottom: 0.12 }, visible: true
-        });
         oipRSOiChgSeries[side] = series;
+        // Band assignment depends on how many legs are open, so it runs after
+        // the series is registered above and again on every open/close — see
+        // oipRSApplyOiChgMargins.
+        oipRSApplyOiChgMargins();
         // The new series carries the bare default title; clear the memo so
         // oipRSSetOiChgTitles re-stamps the strike onto it (a leg the user
         // toggles off and back on would otherwise keep the unnamed axis).
@@ -426,6 +459,9 @@ function oipRSDestroyOiChgSeries(side) {
         } catch (e) {}
         oipRSOiChgPane = null;
     }
+    // The surviving leg (if any) goes back to the full pane now that it has the
+    // space to itself.
+    oipRSApplyOiChgMargins();
     oipRSApplyOiChgChartHeight();
 }
 
