@@ -254,12 +254,21 @@ const OIP_RS_DECIDER_COLOR = '#ec4899';
 let oipRSOiChgPane = null;                       // IPaneApi | null — shared
 let oipRSOiChgSeries = { ce: null, pe: null };   // side -> ISeriesApi | null
 const OIP_RS_OI_CHG_SIDES = ['ce', 'pe'];
-// One built-in scale per leg, not a custom overlay id: price scales are
-// per-pane in v5, so these belong to the ΔOI pane alone and never touch the
-// candles' scale — and an overlay (custom-id) scale draws no axis at all
-// (lightweight-charts ignores `visible` on those), which would cost each
-// histogram the labelled ±contracts axis it is read against.
-const OIP_RS_OI_CHG_SCALES = { ce: 'right', pe: 'left' };
+// CE on the pane's built-in RIGHT scale; PE on a CUSTOM OVERLAY id.
+//
+// PE was briefly on the built-in 'left' scale, which gave it a labelled axis but
+// cost a blank gutter down the WHOLE chart: lightweight-charts reserves the left
+// axis column across every pane so they stay aligned, so switching it on for the
+// ΔOI pane put an empty strip beside the candles too.
+//
+// An overlay scale still autoscales on its own and still honours scaleMargins —
+// which is all the band separation below needs — it just draws no axis of its
+// own (`visible` is ignored on overlays). PE therefore trades numeric axis
+// labels for the reclaimed width; its live value is still on the legend badge,
+// which is where it is actually read. CE keeps the right axis, and both legs are
+// in the same ±contracts order of magnitude, so that axis stays a fair ruler for
+// reading PE's bars too.
+const OIP_RS_OI_CHG_SCALES = { ce: 'right', pe: 'oipRSPeOiChgOverlay' };
 // WHEN BOTH LEGS ARE ON, each gets its own HALF of the shared pane — CE in the
 // top band, PE in the bottom. That is the CE-above-PE order the two stacked
 // panes used to express by position, and the same order as the checkboxes.
@@ -396,19 +405,18 @@ function oipRSApplyOiChgColors() {
 // answer depends on how many legs are showing: two legs split the pane in half,
 // a lone leg takes all of it.
 //
-// `visible: true` is re-stated here rather than only at creation — it is
-// load-bearing for PE, whose LEFT scale is hidden by default, and keeping it
-// alongside the margins means one place decides how a leg's scale is laid out.
+// `visible` is set only for CE, the one leg on a built-in scale. PE rides an
+// overlay id, where lightweight-charts ignores `visible` outright — passing it
+// there would read as a promise of an axis that never appears.
 function oipRSApplyOiChgMargins() {
     const open = OIP_RS_OI_CHG_SIDES.filter(s => oipRSOiChgSeries[s]);
     const split = open.length > 1;
     open.forEach(side => {
-        try {
-            oipRSOiChgSeries[side].priceScale()?.applyOptions({
-                scaleMargins: split ? OIP_RS_OI_CHG_MARGINS_SPLIT[side] : OIP_RS_OI_CHG_MARGIN_FULL,
-                visible: true
-            });
-        } catch (e) {}
+        const opts = {
+            scaleMargins: split ? OIP_RS_OI_CHG_MARGINS_SPLIT[side] : OIP_RS_OI_CHG_MARGIN_FULL
+        };
+        if (side === 'ce') opts.visible = true;
+        try { oipRSOiChgSeries[side].priceScale()?.applyOptions(opts); } catch (e) {}
     });
 }
 
