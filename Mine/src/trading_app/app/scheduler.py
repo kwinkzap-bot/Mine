@@ -606,6 +606,12 @@ class MarketScheduler:
             svc = FIISectorService()
             rows = svc.get_sector_fpi_data()
             if rows:
+                # No report_date on purpose: save_snapshot derives it from the
+                # rows' own period label. This job runs DAILY but CDSL publishes
+                # fortnightly, so dating by "today" filed the same fortnight
+                # under a new date every run and the dashboard's date strip
+                # filled with identical entries. Keyed on the period, a re-run
+                # of an already-stored fortnight is now a no-op overwrite.
                 svc.save_snapshot(rows)
                 logger.info(f"[FIISector Scheduler] Saved {len(rows)} sector rows")
             else:

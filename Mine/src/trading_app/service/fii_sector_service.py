@@ -12,6 +12,7 @@ Columns stored per sector per period:
 
 import calendar
 import os
+import re
 import sqlite3
 import logging
 import time
@@ -189,15 +190,56 @@ class FIISectorService:
 
         return {'periods': periods, 'sectors': sectors, 'holdings': holdings}
 
+    _PERIOD_RE = re.compile(
+        r'Net Investment\s+([A-Za-z]+)\s+(\d{1,2})\s*-\s*(\d{1,2}),\s*(\d{4})',
+        re.IGNORECASE)
+
+    @classmethod
+    def period_end_date(cls, period_label: Optional[str]) -> Optional[str]:
+        """The last day of a CDSL period label, as YYYY-MM-DD.
+
+        'Net Investment June 16-30, 2026' -> '2026-06-30'.
+
+        This is the natural key for a fortnight's data. CDSL publishes twice a
+        month, so the report is identified by the period it covers, never by the
+        day we happened to download it.
+        """
+        if not period_label:
+            return None
+        m = cls._PERIOD_RE.search(str(period_label))
+        if not m:
+            return None
+        month_name, _d1, d2, year = m.groups()
+        try:
+            month = datetime.strptime(month_name[:3], '%b').month
+            return date(int(year), month, int(d2)).isoformat()
+        except ValueError:
+            # A malformed day (Feb 30) is not worth guessing at — let the caller
+            # fall back rather than inventing a date.
+            return None
+
     @classmethod
     def save_snapshot(cls, rows: List[Dict[str, Any]], report_date: Optional[str] = None) -> None:
         """
         Persist rows to SQLite.
-        report_date: the CDSL report date (YYYY-MM-DD); defaults to today if not given.
+
+        report_date: the CDSL report date (YYYY-MM-DD). When omitted it is
+        derived from the rows' own period label, NOT from today's date.
+
+        That default matters. CDSL publishes fortnightly, but the scheduler
+        snapshots daily, so stamping "today" filed the SAME fortnight under a
+        new date on every run — 'June 16-30' ended up stored under ten separate
+        dates, and the Current tab's date strip filled with identical entries.
+        Keying on the period instead means a re-run of an already-stored
+        fortnight collapses onto its existing row via UNIQUE(date, sector).
+
+        Today's date is used only if the label cannot be parsed at all.
         """
         if not rows:
             return
-        use_date = report_date or datetime.now().date().isoformat()
+        use_date = (report_date
+                    or cls.period_end_date(rows[0].get('period'))
+                    or datetime.now().date().isoformat())
         try:
             with sqlite3.connect(_DB_PATH) as conn:
                 conn.executemany(
