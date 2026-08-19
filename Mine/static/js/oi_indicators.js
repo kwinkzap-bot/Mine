@@ -205,12 +205,19 @@ function oipVolumeBarColors(kind) {
    can't re-tint the ones already drawn — a max-of-series scale would, on every
    new high. Median rather than average because the average is moved by the very
    spikes this is meant to pick out: one 6x bar lifts a 20-bar mean by a quarter
-   and quietly fades the next twenty normal bars, where the median doesn't
-   budge. A bar the size of its recent typical one lands at ~0.47 alpha, near
-   the flat 0.5 everything used to be, so a normal day still looks normal. */
+   and quietly fades the next twenty normal bars, where the median doesn't budge.
+
+   The ramp STARTS at the median rather than straddling it. It used to run
+   0.5x..2x median into alpha 0.22..0.95, which put a merely typical bar at
+   ~0.46 — barely lighter than the flat 0.5 it replaced — and anything 1.5x at
+   0.71. Nearly every bar therefore read as dark and the shading picked nothing
+   out. Now a bar at or below its recent typical size sits at the light end and
+   only genuinely above-average volume darkens: ~0.41 at 1.5x, ~0.68 at 2x, and
+   solid from 2.5x up. Below-median bars all clamp to the same light alpha,
+   which is the point — they are the background the spikes stand out against. */
 const _OIP_VOL_INTENSITY_LOOKBACK = 20;
-const _OIP_VOL_INTENSITY_RATIO = [0.5, 2.0];   // x recent median: light end .. dark end
-const _OIP_VOL_INTENSITY_ALPHA = [0.22, 0.95];
+const _OIP_VOL_INTENSITY_RATIO = [1.0, 2.5];   // x recent median: light end .. dark end
+const _OIP_VOL_INTENSITY_ALPHA = [0.14, 0.95];
 
 function _oipAlphaHex(a) {
     return Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0');
@@ -223,13 +230,17 @@ function _oipVolIntensityAlphas(bars) {
     const [rLo, rHi] = _OIP_VOL_INTENSITY_RATIO;
     const [aLo, aHi] = _OIP_VOL_INTENSITY_ALPHA;
     const vals = bars.map(b => Number(b.value) || 0);
+    // A bar with nothing behind it yet gets the LIGHT end, not the flat 0.5 of
+    // the non-intensity path: with no window there is no evidence it is big,
+    // and defaulting dark made the first bars of every series look like spikes.
+    const noRef = _oipAlphaHex(aLo);
     return vals.map((v, i) => {
         const win = vals.slice(Math.max(0, i - _OIP_VOL_INTENSITY_LOOKBACK), i);
-        if (!win.length) return _OIP_VOL_BAR_ALPHA;
+        if (!win.length) return noRef;
         win.sort((a, b) => a - b);
         const mid = win.length >> 1;
         const ref = win.length % 2 ? win[mid] : (win[mid - 1] + win[mid]) / 2;
-        if (!(ref > 0)) return _OIP_VOL_BAR_ALPHA;
+        if (!(ref > 0)) return noRef;
         const t = Math.max(0, Math.min(1, (v / ref - rLo) / (rHi - rLo)));
         return _oipAlphaHex(aLo + t * (aHi - aLo));
     });
