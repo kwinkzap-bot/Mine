@@ -1271,14 +1271,20 @@ function oipRSRenderChart(data) {
     oipRSLastBnfVol = bnfVol;
     oipRSLastVolInterval = oipRSInterval;
 
-    oipSetVolumeBars(oipRSVolumeSeries, futVol, ceData);
+    // Both overlays shade by size (the `intensity` flag): a bar well above the
+    // recent median paints near solid, a quiet one fades back. The two bands
+    // are only 20% of the pane tall and each autoscales on its own, so height
+    // alone made a heavy bar hard to spot — and impossible to compare across
+    // the two bands. Opt-in per call, so the main OI Profile charts keep their
+    // flat 50% alpha.
+    oipSetVolumeBars(oipRSVolumeSeries, futVol, ceData, 'nifty', true);
     // Banknifty deliberately uses the NIFTY colour pair here. Everywhere else the
     // two histograms share one scale and overlap, so Banknifty needs its own
     // colours to stay distinguishable; on this chart it hangs from its own top
     // band (bnfOnTop), so the same up/down pair reads consistently across both
     // bands instead of introducing a second colour language. The Banknifty
     // swatches are omitted from this block's Indicator popup for that reason.
-    oipSetVolumeBars(oipRSBnfVolumeSeries, bnfVol, ceData);
+    oipSetVolumeBars(oipRSBnfVolumeSeries, bnfVol, ceData, 'nifty', true);
     const volLegendEl = document.getElementById('oipRSVolLegendItem');
     if (volLegendEl) volLegendEl.classList.toggle('hidden', !data.future_symbol);
     const volSymbolEl = document.getElementById('oipRSLegendVolSymbol');

@@ -13,7 +13,7 @@ import gc
 import math
 import time
 from datetime import datetime, timedelta, time as dt_time, timezone
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import NetworkException, TokenException
@@ -1423,7 +1423,21 @@ class OpenInterestService:
             # Step 2: Get all instruments for the exchange and find available strikes
             exchange = config.get('exchange', 'NFO')
             instruments = None
-            
+
+            # Fyers' own whole-chain OI totals (`data.callOi` / `data.putOi`),
+            # kept aside for the PCR and the CE/PE OI totals below. The
+            # `optionsChain` rows are capped at strikecount=50 either side of
+            # ATM (101 strikes), and summing only those is not a rounding
+            # difference on the put side: on 2026-08-19 the strikes outside
+            # NIFTY's 21550-26550 window held ~4% of all PE OI but almost no CE
+            # OI, so the window read PCR 0.65 where the whole chain — and NSE,
+            # and Sensibull — said 0.68. `fetch_totals` in oi_crossover_service
+            # already prefers these totals for exactly this reason.
+            # None whenever the strikes did not come from a native chain (CSV
+            # fallback, Kite), which puts PCR back on the window sum.
+            chain_ce_oi = chain_pe_oi = None
+            chain_source_data = None
+
             # OPTIMIZATION: If Fyers, try to use native optionchain API first (MUCH FASTER than CSV)
             proper_name_target = config['name'].strip().upper()
             if self._is_fyers:
@@ -1438,6 +1452,7 @@ class OpenInterestService:
                     
                     if chain_resp and chain_resp.get('s') == 'ok' and 'data' in chain_resp:
                         chain_data = chain_resp['data']
+                        chain_source_data = chain_data
                         options_list = chain_data.get('optionsChain', [])
                         if options_list:
                             logger.info(f"✓ Found {len(options_list)} options via Fyers Chain API for {symbol}")
@@ -1552,14 +1567,23 @@ class OpenInterestService:
                                         if (next_resp and next_resp.get('s') == 'ok'
                                                 and next_resp.get('data', {}).get('optionsChain')):
                                             options_list = next_resp['data']['optionsChain']
+                                            # Totals must follow the chain we
+                                            # actually price, not the nearest one.
+                                            chain_source_data = next_resp['data']
                                             expiry_dt = target_dt
                                             rolled_to_other_expiry = True
                                     if not options_list:
+                                        chain_source_data = None
                                         logger.warning(
                                             f"[OI] {symbol}: chain for expiry {target_dt} "
                                             f"unavailable, falling back to CSV (OI may be zero)"
                                         )
                             if options_list:
+                                # Read the whole-chain totals only here, where the
+                                # strikes really are this chain's rows.
+                                if chain_source_data:
+                                    chain_ce_oi = chain_source_data.get('callOi')
+                                    chain_pe_oi = chain_source_data.get('putOi')
                                 instruments = []
                                 logged_opt_keys = False
                                 for opt in options_list:
@@ -1616,6 +1640,11 @@ class OpenInterestService:
             
             # Step 3: Fallback to Global Instruments Cache (CSV based)
             if not instruments:
+                # The CSV master carries every strike of the expiry, so the
+                # window sum is the whole chain here — and the chain response's
+                # totals, if any survived from a chain we ended up not using,
+                # would be from a different set of rows.
+                chain_ce_oi = chain_pe_oi = None
                 # Memory Optimization: Check global cache first to avoid 100MB download
                 with _global_nfo_cache['lock']:
                     now = datetime.now()
@@ -1667,8 +1696,16 @@ class OpenInterestService:
             
             logger.info(f"✅ Successfully fetched OI data for {symbol}")
             
-            # Calculate PCR (Put-Call Ratio), Max Pain, and IV Percentile
-            pcr_oi = self._calculate_pcr(oi_data['strikes'])
+            # Calculate PCR (Put-Call Ratio), Max Pain, and IV Percentile.
+            # PCR and the CE/PE OI totals come off the broker's whole-chain
+            # numbers when the chain gave them; everything else on the strip
+            # (OI change, max OI strike, IV) stays window-based — Fyers
+            # publishes no whole-chain total for the OI *change*.
+            chain_totals = self._chain_oi_totals(oi_data, chain_ce_oi, chain_pe_oi, symbol)
+            if chain_totals:
+                oi_data.setdefault('ce_summary', {})['total_oi'] = chain_totals[0]
+                oi_data.setdefault('pe_summary', {})['total_oi'] = chain_totals[1]
+            pcr_oi = self._calculate_pcr(oi_data['strikes'], chain_totals)
             max_pain = self._calculate_max_pain(oi_data['strikes'], current_price)
             
             # IV Metrics
@@ -2285,27 +2322,72 @@ class OpenInterestService:
             'avg_iv': avg_iv
         }
     
-    def _calculate_pcr(self, strikes: List[Dict[str, Any]]) -> float:
+    def _chain_oi_totals(self, oi_data: Dict[str, Any],
+                         chain_ce_oi: Optional[Any], chain_pe_oi: Optional[Any],
+                         symbol: str) -> Optional[Tuple[int, int]]:
+        """The broker's whole-chain CE/PE OI totals, or None to use the window.
+
+        `data.callOi` / `data.putOi` cover every strike of the expiry, while the
+        strikes we hold stop 50 steps either side of ATM. Sanity-checked before
+        use: a whole-chain total can only be >= the window it contains (bar a
+        little drift, since quote() enrichment re-reads some strikes a moment
+        after the chain), and a value more than 3x the window means the field
+        stopped meaning what it means today (all expiries at once, say) —
+        either way the window sum is the safer answer.
+        """
+        try:
+            if chain_ce_oi in (None, 0) or chain_pe_oi in (None, 0):
+                return None
+            chain_ce, chain_pe = int(chain_ce_oi), int(chain_pe_oi)
+            strikes = oi_data.get('strikes') or []
+            win_ce = sum(s.get('ce_oi', 0) or 0 for s in strikes)
+            win_pe = sum(s.get('pe_oi', 0) or 0 for s in strikes)
+            if win_ce <= 0 or win_pe <= 0:
+                return None
+            for side, chain_v, win_v in (('CE', chain_ce, win_ce), ('PE', chain_pe, win_pe)):
+                if chain_v < win_v * 0.98 or chain_v > win_v * 3:
+                    logger.warning(
+                        f"[OI] {symbol}: ignoring chain {side} OI total {chain_v:,} — "
+                        f"outside 0.98x-3x of the {win_v:,} our {len(strikes)} strikes hold; "
+                        f"falling back to the strike-window sum"
+                    )
+                    return None
+            return chain_ce, chain_pe
+        except (TypeError, ValueError) as e:
+            logger.warning(f"[OI] {symbol}: unusable chain OI totals ({e}); using window sum")
+            return None
+
+    def _calculate_pcr(self, strikes: List[Dict[str, Any]],
+                       chain_totals: Optional[Tuple[int, int]] = None) -> float:
         """
         Calculate Put-Call Ratio (PCR) based on Open Interest.
-        
+
         PCR = Total PE OI / Total CE OI
-        
+
         Args:
             strikes: List of strike data
-            
+            chain_totals: (CE OI, PE OI) for the whole chain when the broker
+                gave them. Preferred over summing `strikes`, which only covers
+                ATM +/- 50 strikes and so drops the deep-OTM puts that other
+                terminals count — the difference between PCR 0.65 and 0.68.
+
         Returns:
             PCR value (float)
         """
         try:
-            total_pe_oi = sum(s.get('pe_oi', 0) for s in strikes)
-            total_ce_oi = sum(s.get('ce_oi', 0) for s in strikes)
-            
+            if chain_totals:
+                total_ce_oi, total_pe_oi = chain_totals
+                source = 'chain'
+            else:
+                total_pe_oi = sum(s.get('pe_oi', 0) for s in strikes)
+                total_ce_oi = sum(s.get('ce_oi', 0) for s in strikes)
+                source = 'window'
+
             if total_ce_oi == 0:
                 return 0.0
-            
+
             pcr = total_pe_oi / total_ce_oi
-            logger.info(f"PCR calculated: {pcr:.2f} (PE OI: {total_pe_oi}, CE OI: {total_ce_oi})")
+            logger.info(f"PCR calculated: {pcr:.2f} (PE OI: {total_pe_oi}, CE OI: {total_ce_oi}, {source})")
             return round(pcr, 2)
         except Exception as e:
             logger.error(f"Error calculating PCR: {e}")

@@ -186,10 +186,53 @@ const _OIP_VOL_COLOR_KEYS = {
     banknifty: ['bnfVolUp', 'bnfVolDn'],
 };
 const _OIP_VOL_COLOR_KEY_SET = new Set(Object.values(_OIP_VOL_COLOR_KEYS).flat());
+// The overlay's up/down hues, WITHOUT an alpha suffix — the painter appends
+// that, since it is per-bar once intensity shading is on.
 function oipVolumeBarColors(kind) {
     const [upKey, dnKey] = _OIP_VOL_COLOR_KEYS[kind] || _OIP_VOL_COLOR_KEYS.nifty;
-    return { up: oipGetLineColor(upKey) + _OIP_VOL_BAR_ALPHA,
-             down: oipGetLineColor(dnKey) + _OIP_VOL_BAR_ALPHA };
+    return { up: oipGetLineColor(upKey), down: oipGetLineColor(dnKey) };
+}
+
+/* Volume-weighted shading — opt-in per call site via oipSetVolumeBars'
+   `intensity`, on for the Round Strike block. Squeezed into a 20%-tall band,
+   bar HEIGHT alone is a poor read of how big a bar is; with intensity on the
+   alpha carries it too, so a spike paints near solid and a quiet bar fades
+   back. Hue still comes from the candle direction, so the colour pickers keep
+   working exactly as before — this only moves the transparency.
+
+   The yardstick is the MEDIAN of the LOOKBACK bars BEFORE each bar, never the
+   bar itself and never the whole series. Trailing, so appending the live bar
+   can't re-tint the ones already drawn — a max-of-series scale would, on every
+   new high. Median rather than average because the average is moved by the very
+   spikes this is meant to pick out: one 6x bar lifts a 20-bar mean by a quarter
+   and quietly fades the next twenty normal bars, where the median doesn't
+   budge. A bar the size of its recent typical one lands at ~0.47 alpha, near
+   the flat 0.5 everything used to be, so a normal day still looks normal. */
+const _OIP_VOL_INTENSITY_LOOKBACK = 20;
+const _OIP_VOL_INTENSITY_RATIO = [0.5, 2.0];   // x recent median: light end .. dark end
+const _OIP_VOL_INTENSITY_ALPHA = [0.22, 0.95];
+
+function _oipAlphaHex(a) {
+    return Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0');
+}
+
+// Per-bar alpha suffixes for `bars`, same length and order. Bars with no
+// history behind them yet (the first of the series, or an all-zero window) keep
+// the flat alpha rather than guessing.
+function _oipVolIntensityAlphas(bars) {
+    const [rLo, rHi] = _OIP_VOL_INTENSITY_RATIO;
+    const [aLo, aHi] = _OIP_VOL_INTENSITY_ALPHA;
+    const vals = bars.map(b => Number(b.value) || 0);
+    return vals.map((v, i) => {
+        const win = vals.slice(Math.max(0, i - _OIP_VOL_INTENSITY_LOOKBACK), i);
+        if (!win.length) return _OIP_VOL_BAR_ALPHA;
+        win.sort((a, b) => a - b);
+        const mid = win.length >> 1;
+        const ref = win.length % 2 ? win[mid] : (win[mid - 1] + win[mid]) / 2;
+        if (!(ref > 0)) return _OIP_VOL_BAR_ALPHA;
+        const t = Math.max(0, Math.min(1, (v / ref - rLo) / (rHi - rLo)));
+        return _oipAlphaHex(aLo + t * (aHi - aLo));
+    });
 }
 
 // Creates one chart's pair of volume histograms. By default both sit on the
@@ -241,11 +284,16 @@ const _oipVolBarCache = new Map();
 // with the real positive volumes.
 const _oipInvertedVolSeries = new WeakSet();
 
-function _oipPaintVolumeBars(series, kind, bars) {
+function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
     const { up, down } = oipVolumeBarColors(kind);
+    const alphas = intensity ? _oipVolIntensityAlphas(bars) : null;
     const sign = _oipInvertedVolSeries.has(series) ? -1 : 1;
     try {
-        series.setData(bars.map(b => ({ time: b.time, value: sign * b.value, color: b.up ? up : down })));
+        series.setData(bars.map((b, i) => ({
+            time: b.time,
+            value: sign * b.value,
+            color: (b.up ? up : down) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
+        })));
     } catch (e) {}
 }
 
@@ -255,8 +303,10 @@ function _oipPaintVolumeBars(series, kind, bars) {
 // interval-driven time-bucket grid, so matching by exact time key is safe.
 // Bars are emitted only where refCandles has a REAL (non-whitespace) candle,
 // so gaps don't render a misleading zero-volume bar. `kind` picks the colour
-// pair — see _OIP_VOL_COLOR_KEYS.
-function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty') {
+// pair — see _OIP_VOL_COLOR_KEYS. `intensity` shades each bar by its size
+// against the recent median instead of one flat alpha — see
+// _oipVolIntensityAlphas.
+function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty', intensity = false) {
     if (!series) return;
     const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
     const bars = [];
@@ -268,8 +318,8 @@ function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty') {
             bars.push({ time: t, value: futVolMap.get(t), up: Number(c.close) >= Number(c.open) });
         });
     }
-    _oipVolBarCache.set(series, { kind, bars });
-    _oipPaintVolumeBars(series, kind, bars);
+    _oipVolBarCache.set(series, { kind, bars, intensity });
+    _oipPaintVolumeBars(series, kind, bars, intensity);
 }
 
 // Re-tints every already-drawn histogram in place — no refetch, no redraw of
@@ -277,7 +327,7 @@ function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty') {
 // each series repaints from its own cached `kind`, so only the overlay that
 // actually changed ends up looking different.
 function oipRepaintAllVolumeBars() {
-    _oipVolBarCache.forEach(({ kind, bars }, series) => _oipPaintVolumeBars(series, kind, bars));
+    _oipVolBarCache.forEach(({ kind, bars, intensity }, series) => _oipPaintVolumeBars(series, kind, bars, intensity));
 }
 
 // The PE candle colour this overlay defaults to flips with the theme, so follow
