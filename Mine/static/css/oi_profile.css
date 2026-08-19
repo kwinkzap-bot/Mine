@@ -1761,9 +1761,7 @@ body.ocean-theme .oip-tooltip {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 5px;
-    margin-top: 6px;
-    padding: 5px 7px;
+    padding: 2px 5px;
     border: 1px solid var(--oip-hairline);
     border-radius: 7px;
     background: var(--oip-ctl-bg);

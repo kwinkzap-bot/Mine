@@ -1,5 +1,89 @@
 [
   {
+    "date": "2026-08-19",
+    "direction": "SELL",
+    "entry_spot": 24105.75,
+    "exit_spot": 24056.62,
+    "pnl_pts": 49.13,
+    "reason": "TARGET",
+    "entry_time": "2026-08-19T09:17:15.286491",
+    "entry_spot_live": 24104.75,
+    "exit_time": "2026-08-19T10:35:04.086614",
+    "strike": 24350,
+    "option_type": "PE",
+    "lot_size": 65,
+    "sl_level": 24125.4,
+    "target_level": 24056.62,
+    "opt_entry_price": 257.15,
+    "opt_exit_price": 279.15,
+    "opt_pnl_pts": 22.0,
+    "opt_pnl_inr": 1430.0,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "2089922110251524096",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26AUG24350PE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "2089922111614672896",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26AUG24350PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-08-18",
+    "direction": "BUY",
+    "entry_spot": 24250.35,
+    "exit_spot": 24234.75,
+    "pnl_pts": -15.6,
+    "reason": "SL",
+    "entry_time": "2026-08-18T09:16:33.467082",
+    "entry_spot_live": 24247.2,
+    "exit_time": "2026-08-18T09:17:35.475872",
+    "strike": 24000,
+    "option_type": "CE",
+    "lot_size": 65,
+    "sl_level": 24234.75,
+    "target_level": 24289.35,
+    "opt_entry_price": 250.1,
+    "opt_exit_price": 237.0,
+    "opt_pnl_pts": -13.1,
+    "opt_pnl_inr": -851.5,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "2089559547143708672",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2681824000CE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "2089559548859179008",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2681824000CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
     "date": "2026-08-17",
     "direction": "SELL",
     "entry_spot": 24295.85,

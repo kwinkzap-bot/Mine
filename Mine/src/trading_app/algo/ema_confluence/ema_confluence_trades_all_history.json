@@ -1,5 +1,22 @@
 [
   {
+    "symbol": "MAZDOCK",
+    "direction": "BUY",
+    "mode": "paper",
+    "qty": 225,
+    "lot_size": 225,
+    "entry_price": 2574.6,
+    "exit_price": 2613.22,
+    "sl_price": 2373.3,
+    "target_price": 2613.22,
+    "pnl": 8689.5,
+    "reason": "TARGET",
+    "signal_date": "2026-08-06",
+    "entry_time": "2026-08-10T12:41:58.474682",
+    "exit_time": "2026-08-18T12:59:19.912337",
+    "date": "2026-08-18"
+  },
+  {
     "symbol": "APLAPOLLO",
     "direction": "BUY",
     "mode": "paper",
