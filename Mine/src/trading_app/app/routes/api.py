@@ -12975,6 +12975,33 @@ def _sm_period_return(flows: list):
     return closing / paid_in - 1.0
 
 
+def _sm_config_flows(config: dict, as_of, closing_value: float) -> list:
+    """Dated external cash flows for one live config, in _xirr's convention:
+    money in negative, the closing mark positive.
+
+    Rebalances are deliberately absent. They log amount 0 because they move
+    money between holdings INSIDE a config rather than in or out of it, and
+    counting them would invent flows that never crossed the boundary.
+
+    Shared by the per-config signal endpoint and the group aggregate, so the two
+    can never disagree about what a config's cash flows were.
+    """
+    flows = []
+    since = config.get('live_since')
+    if since:
+        flows.append((datetime.strptime(since, '%Y-%m-%d').date(),
+                      -float(config.get('investment', 0) or 0)))
+    for entry in config.get('monthly_investment_log', []) or []:
+        amt = float(entry.get('amount', 0) or 0)
+        if not amt or not entry.get('date'):
+            continue          # rebalances log 0 — internal, no external cash
+        flows.append((datetime.strptime(entry['date'], '%Y-%m-%d').date(), -amt))
+    # Idle cash is still the group's money. Excluding it would read as a loss
+    # rather than as the drag on returns that it actually is.
+    flows.append((as_of, float(closing_value)))
+    return flows
+
+
 def _sm_compute_today_rankings(index_name: str):
     """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
 
@@ -14155,20 +14182,8 @@ def sm_live_signal(config_id):
         xirr_pct        = None
         xirr_annualised = True
         try:
-            flows  = []
-            since  = config.get('live_since')
-            if since:
-                flows.append((datetime.strptime(since, '%Y-%m-%d').date(),
-                              -float(config.get('investment', 0) or 0)))
-            for entry in monthly_log:
-                amt = float(entry.get('amount', 0) or 0)
-                if not amt or not entry.get('date'):
-                    continue          # rebalances log 0 — internal, no external cash
-                flows.append((datetime.strptime(entry['date'], '%Y-%m-%d').date(), -amt))
-            # Idle cash is still the group's money. Excluding it would read as a
-            # loss rather than as the drag on returns that it actually is.
-            flows.append((today, total_curr_val + cash_bal))
-            rate = _xirr(flows)
+            flows = _sm_config_flows(config, today, total_curr_val + cash_bal)
+            rate  = _xirr(flows)
             if rate is None:
                 # Too new (or too flat) to annualise — show the period return so
                 # a config has a figure from the day it goes live.
@@ -14211,6 +14226,97 @@ def sm_live_signal(config_id):
         })
     except Exception as e:
         logger.exception(f'SM live signal error for config {config_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _sm_pooled_returns(configs_by_id: dict, marks: dict, today) -> dict:
+    """Pooled CAGR + XIRR for one scope (a broker group, or a whole section).
+
+    Rates do not aggregate by averaging. Two configs at +20% and +90% are not a
+    +55% portfolio: the answer depends on how much money sat in each and for how
+    long. XIRR is defined for exactly this — pool every config's dated flows and
+    solve ONCE for the single rate that discounts them all to zero.
+    """
+    pooled, invested, current, earliest, used = [], 0.0, 0.0, None, 0
+    for cid, mark in (marks or {}).items():
+        config = configs_by_id.get(cid)
+        if not config:
+            continue
+        try:
+            closing = float(mark)
+        except (TypeError, ValueError):
+            continue
+        pooled.extend(_sm_config_flows(config, today, closing))
+        current += closing
+        used    += 1
+        # Cost basis = every rupee put in: opening investment plus SIPs, less
+        # SWPs taken back out (logged negative, so one sum does both).
+        invested += float(config.get('investment', 0) or 0)
+        for entry in config.get('monthly_investment_log', []) or []:
+            invested += float(entry.get('amount', 0) or 0)
+        since = config.get('live_since')
+        if since:
+            d0 = datetime.strptime(since, '%Y-%m-%d').date()
+            earliest = d0 if earliest is None else min(earliest, d0)
+
+    if not used:
+        return {'cagr_pct': None, 'xirr_pct': None, 'xirr_annualised': True, 'configs': 0}
+
+    # CAGR measured from the EARLIEST go-live, mirroring the per-config formula.
+    # A newer config is credited with less than its own age — the correct
+    # direction, since the group has only compounded since its first rupee.
+    cagr_pct = None
+    if invested > 0 and current > 0 and earliest:
+        years = max((today - earliest).days, 1) / 365.25
+        if years >= 0.02:      # ~1 week, the same floor per-config CAGR uses
+            cagr_pct = round(((current / invested) ** (1 / years) - 1) * 100, 2)
+        else:
+            cagr_pct = round((current / invested - 1) * 100, 2)
+
+    xirr_annualised = True
+    rate = _xirr(pooled)
+    if rate is None:
+        # Too new or too flat to annualise — show the plain period return so a
+        # freshly gone-live group still has a figure, same as a single config.
+        rate            = _sm_period_return(pooled)
+        xirr_annualised = False
+
+    return {
+        'cagr_pct':        cagr_pct,
+        'xirr_pct':        round(rate * 100, 2) if rate is not None else None,
+        'xirr_annualised': xirr_annualised,
+        'configs':         used,
+    }
+
+
+@api_bp.route('/algo/swing-momentum/aggregate-returns', methods=['POST'])
+@csrf.exempt
+def sm_live_aggregate_returns():
+    """Pooled CAGR and XIRR for the TOTAL rows on Live Watch — one broker group
+    or section per scope, all of them in a single round trip.
+
+    Flows come from the server's own config store, never from the caller. The
+    request supplies only `scopes`: per scope, each config's CURRENT value
+    including idle cash, which the client has just computed from live quotes via
+    /signal/<id> and which the server would otherwise have to re-fetch. Keeping
+    the solve here also keeps the money math in one place, rather than a second
+    copy of the XIRR bisection in JS that could drift from this one.
+    """
+    body   = request.get_json(silent=True) or {}
+    scopes = body.get('scopes')
+    if not isinstance(scopes, dict) or not scopes:
+        return jsonify({'success': False, 'error': 'scopes is required'}), 400
+
+    try:
+        configs_by_id = {c['id']: c for c in _sm_load_live_configs()}
+        today         = datetime.today().date()
+        return jsonify({
+            'success': True,
+            'scopes': {sid: _sm_pooled_returns(configs_by_id, marks, today)
+                       for sid, marks in scopes.items()},
+        })
+    except Exception as e:
+        logger.exception(f'SM aggregate returns failed: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

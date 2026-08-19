@@ -3990,6 +3990,9 @@ function _smLiveFetchConfigs() {
 function _smLiveRenderConfigs(configs) {
     // Clear per-config P&L so the header total resets for this render
     Object.keys(_smPnlByConfig).forEach(k => delete _smPnlByConfig[k]);
+    // Same for the pooled rates: a config removed or paused changes what the
+    // TOTAL rows cover, and a stale rate beside fresh money reads as fact.
+    Object.keys(_smAggReturns).forEach(k => delete _smAggReturns[k]);
     _smUpdateTotalPnl();
 
     const badge      = document.getElementById('smLiveBadge');
@@ -4175,7 +4178,7 @@ function _smUpdateGroupPnls() {
     });
     const fmtVal = (v) => (v >= 0 ? '+₹' : '-₹') +
         Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-    const paint = (el, s, base, itemCls, labelCls, sepCls) => {
+    const paint = (el, s, base, itemCls, labelCls, sepCls, scopeId) => {
         if (!s || !s.has) { el.className = base; el.innerHTML = ''; return; }
         el.className = `${base} ${base}-loaded`;
         el.innerHTML = `
@@ -4189,14 +4192,90 @@ function _smUpdateGroupPnls() {
             <span class="${sepCls}">|</span>
             <span class="${itemCls} ${s.total >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
                 <span class="${labelCls}">Total</span>${fmtVal(s.total)}
-            </span>`;
+            </span>` + _smAggRatesHtml(scopeId, itemCls, labelCls, sepCls);
     };
-    document.querySelectorAll('.sm-broker-group-pnl').forEach(el =>
-        paint(el, sums[el.id.replace('sm-grp-pnl-', '')], 'sm-broker-group-pnl',
-              'sm-grp-pnl-item', 'sm-grp-pnl-label', 'sm-grp-pnl-sep'));
-    document.querySelectorAll('.sm-section-pnl').forEach(el =>
-        paint(el, secSums[el.id.replace('sm-sec-pnl-', '')], 'sm-section-pnl',
-              'sm-sec-pnl-item', 'sm-sec-pnl-label', 'sm-sec-pnl-sep'));
+    document.querySelectorAll('.sm-broker-group-pnl').forEach(el => {
+        const gid = el.id.replace('sm-grp-pnl-', '');
+        paint(el, sums[gid], 'sm-broker-group-pnl',
+              'sm-grp-pnl-item', 'sm-grp-pnl-label', 'sm-grp-pnl-sep', `grp-${gid}`);
+    });
+    document.querySelectorAll('.sm-section-pnl').forEach(el => {
+        const sid = el.id.replace('sm-sec-pnl-', '');
+        paint(el, secSums[sid], 'sm-section-pnl',
+              'sm-sec-pnl-item', 'sm-sec-pnl-label', 'sm-sec-pnl-sep', `sec-${sid}`);
+    });
+}
+
+// ── Aggregate CAGR / XIRR for the TOTAL rows ────────────────────────────────
+// Per-config rates cannot be summed or averaged into a group figure: two
+// configs at +20% and +90% are not a +55% portfolio. The server pools every
+// config's dated cash flows and solves one XIRR per scope, so the maths lives
+// in exactly one place (see /algo/swing-momentum/aggregate-returns).
+const _smAggReturns = {};        // scope id -> { cagr_pct, xirr_pct, xirr_annualised }
+let _smAggTimer = null;
+
+// Debounced: each card resolves its own /signal call, so this is invoked once
+// per card as they land. One request after they settle beats N-1 wasted ones.
+function _smRequestAggregateReturns() {
+    clearTimeout(_smAggTimer);
+    _smAggTimer = setTimeout(_smFetchAggregateReturns, 250);
+}
+
+function _smFetchAggregateReturns() {
+    const scopes = {};
+    Object.keys(_smPnlByConfig).forEach(id => {
+        const gid = _smGroupOfConfig[id];
+        if (!gid) return;
+        const mark = _smPnlByConfig[id].mark;
+        if (mark == null) return;
+        const sid = gid === 'none' ? 'sec-none' : 'sec-live';
+        (scopes[`grp-${gid}`] || (scopes[`grp-${gid}`] = {}))[id] = mark;
+        (scopes[sid]          || (scopes[sid]          = {}))[id] = mark;
+    });
+    if (!Object.keys(scopes).length) return;
+
+    fetch('/api/algo/swing-momentum/aggregate-returns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scopes }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d?.success) return;
+            Object.assign(_smAggReturns, d.scopes || {});
+            _smUpdateGroupPnls();     // repaint with the rates filled in
+        })
+        // Silent: the totals row already shows invested/today/total, and a
+        // failed rate must not blank the numbers that did load.
+        .catch(() => {});
+}
+
+// The two rate chips appended to a TOTAL row. Returns '' when the scope has no
+// figure yet, so the row renders exactly as before until the fetch lands.
+function _smAggRatesHtml(scopeId, itemCls, labelCls, sepCls) {
+    const a = _smAggReturns[scopeId];
+    if (!a) return '';
+    const pct = (v) => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+    let html = '';
+    if (a.cagr_pct !== null && a.cagr_pct !== undefined) {
+        html += `<span class="${sepCls}">|</span>
+            <span class="${itemCls} ${a.cagr_pct >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+                <span class="${labelCls}">CAGR</span>${pct(a.cagr_pct)}
+            </span>`;
+    }
+    if (a.xirr_pct !== null && a.xirr_pct !== undefined) {
+        // The asterisk marks a period return rather than an annualised rate —
+        // same convention the per-config chip uses.
+        const star = a.xirr_annualised ? '' : '*';
+        html += `<span class="${sepCls}">|</span>
+            <span class="${itemCls} ${a.xirr_pct >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}"
+                  title="${a.xirr_annualised
+                      ? 'Money-weighted annualised return across every config in this total, pooling each one&apos;s dated cash flows.'
+                      : 'Return so far across this total, not annualised — under a week of history to project from.'}">
+                <span class="${labelCls}">XIRR</span>${pct(a.xirr_pct)}${star}
+            </span>`;
+    }
+    return html;
 }
 
 function _smUpdateTotalPnl() {
@@ -4386,9 +4465,16 @@ function _smUpdateMetaRow(id, d) {
     }
     if (reb) reb.textContent = 'Rebal ' + (d.next_rebalance || '—');
 
-    _smPnlByConfig[id] = { today: todayAbs, total: totAbs, invested: d.total_invested || 0 };
+    // `mark` is what the aggregate CAGR/XIRR is computed from: the config's
+    // CURRENT value including idle cash, matching what the per-config XIRR
+    // discounts to. Kept here so /aggregate-returns never has to re-fetch quotes.
+    _smPnlByConfig[id] = {
+        today: todayAbs, total: totAbs, invested: d.total_invested || 0,
+        mark: (d.current_port_val || 0) + (d.cash_balance || 0),
+    };
     _smUpdateTotalPnl();
     _smUpdateGroupPnls();
+    _smRequestAggregateReturns();
 }
 
 function _smUpdateHdrPnl(id, d) {

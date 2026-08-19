@@ -45,6 +45,7 @@
 /api/algo/sc/settings	api.algo_sc_settings	GET,HEAD,OPTIONS,POST	True
 /api/algo/sc/start	api.algo_sc_start	OPTIONS,POST	True
 /api/algo/sc/status	api.algo_sc_status	GET,HEAD,OPTIONS	True
+/api/algo/swing-momentum/aggregate-returns	api.sm_live_aggregate_returns	OPTIONS,POST	True
 /api/algo/swing-momentum/configs	api.sm_live_configs_add	OPTIONS,POST	True
 /api/algo/swing-momentum/configs	api.sm_live_configs_list	GET,HEAD,OPTIONS	True
 /api/algo/swing-momentum/configs/<config_id>	api.sm_live_configs_delete	DELETE,OPTIONS	True
