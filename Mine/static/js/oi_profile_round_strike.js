@@ -891,13 +891,17 @@ function oipRSInitCharts() {
     }
 
     const showVwap = document.getElementById('oipRSShowVwap')?.checked ?? true;
+    // crosshairMarkerVisible:false on every line series here — see addStepSeries
+    // below for why.
     oipRSVwapCESeries = oipRSChart.chart.addSeries(LightweightCharts.LineSeries, {
         color: '#1b9981', lineWidth: 1, visible: showVwap,
-        priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null
     });
     oipRSVwapPESeries = oipRSChart.chart.addSeries(LightweightCharts.LineSeries, {
         color: '#8b5cf6', lineWidth: 1, visible: showVwap,
-        priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null
     });
 
     document.getElementById('oipRSShowVwap')?.addEventListener('change', (e) => {
@@ -912,9 +916,16 @@ function oipRSInitCharts() {
     // candles. autoscaleInfoProvider is left at null (as the VWAP lines above
     // do) so a level sitting far from today's premium can't stretch the price
     // scale and squash the candles.
+    //
+    // crosshairMarkerVisible:false: lightweight-charts defaults it ON, so every
+    // one of these lines drew a filled dot where the crosshair met it. With ~14
+    // near-horizontal levels stacked across the pane that is a column of large
+    // dots following the cursor, obscuring the candles it is meant to help read.
+    // The crosshair line and the axis labels already say where the cursor is.
     const addStepSeries = (style, title, visible) => oipRSChart.chart.addSeries(LightweightCharts.LineSeries, {
         color: style.color, lineWidth: style.width, lineStyle: style.lineStyle, title, visible,
-        priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null
     });
 
     const legStyle = { Ce: oipRSLegStyle('Ce'), Pe: oipRSLegStyle('Pe') };

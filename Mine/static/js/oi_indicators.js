@@ -207,17 +207,25 @@ function oipVolumeBarColors(kind) {
    spikes this is meant to pick out: one 6x bar lifts a 20-bar mean by a quarter
    and quietly fades the next twenty normal bars, where the median doesn't budge.
 
-   The ramp STARTS at the median rather than straddling it. It used to run
+   The ramp starts ABOVE the median rather than straddling it. It used to run
    0.5x..2x median into alpha 0.22..0.95, which put a merely typical bar at
    ~0.46 — barely lighter than the flat 0.5 it replaced — and anything 1.5x at
    0.71. Nearly every bar therefore read as dark and the shading picked nothing
-   out. Now a bar at or below its recent typical size sits at the light end and
-   only genuinely above-average volume darkens: ~0.41 at 1.5x, ~0.68 at 2x, and
-   solid from 2.5x up. Below-median bars all clamp to the same light alpha,
-   which is the point — they are the background the spikes stand out against. */
+   out.
+
+   Where the ramp sits is a taste call, tuned against a live chart — RATIO below
+   is the only thing to move. At [4, 5] a bar must be four times its recent
+   median before it darkens at all and hits solid at five, so the dark bars are
+   the rare genuine spikes and everything else is deliberately flat.
+
+   The ALPHA floor is a separate decision from where the ramp starts. It sits at
+   0.24 rather than lower because that clamped mass is most of the row: at 0.14
+   the quiet bars washed out almost to the pane background and the histogram
+   stopped reading as one between spikes. The floor is the baseline the eye
+   measures the spikes against, so it can be quiet but not absent. */
 const _OIP_VOL_INTENSITY_LOOKBACK = 20;
-const _OIP_VOL_INTENSITY_RATIO = [1.0, 2.5];   // x recent median: light end .. dark end
-const _OIP_VOL_INTENSITY_ALPHA = [0.14, 0.95];
+const _OIP_VOL_INTENSITY_RATIO = [4.0, 5.0];  // x recent median: light end .. dark end
+const _OIP_VOL_INTENSITY_ALPHA = [0.35, 0.95];
 
 function _oipAlphaHex(a) {
     return Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0');
