@@ -1500,12 +1500,26 @@ function oipRSInitOrderButtons() {
         }
     });
 
-    document.getElementById('oipRSLimitPrice')?.addEventListener('input', (e) => {
-        const enabled = parseFloat(e.target.value) > 0;
-        const ceBtn = document.getElementById('oipRSSLCE');
-        const peBtn = document.getElementById('oipRSSLPE');
-        if (ceBtn) ceBtn.disabled = !enabled;
-        if (peBtn) peBtn.disabled = !enabled;
+    document.getElementById('oipRSLimitPrice')?.addEventListener('input', oipRSSyncSLButtons);
+    // Also on init, not only on input. The field's value can arrive without an
+    // input event ever firing — most often the browser restoring it across a
+    // reload — and deriving the state solely from that event left both SL
+    // buttons stuck disabled next to a perfectly valid trigger price.
+    oipRSSyncSLButtons();
+}
+
+// SL buttons are enabled exactly when there is a usable trigger price. One rule,
+// applied from every path that can change either input: typing, page init, and
+// the end of a placement.
+//
+// A button mid-flight is skipped: it carries data-placing while its request is
+// out, so a keystroke landing during the round trip cannot re-enable it and let
+// the same SL be fired twice.
+function oipRSSyncSLButtons() {
+    const ok = parseFloat(document.getElementById('oipRSLimitPrice')?.value) > 0;
+    ['oipRSSLCE', 'oipRSSLPE'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b && !b.dataset.placing) b.disabled = !ok;
     });
 }
 
@@ -1565,6 +1579,7 @@ async function oipRSPlaceSLOrders(btn, side) {
     }
 
     btn.disabled = true;
+    btn.dataset.placing = '1';
     const origText = btn.innerText;
     btn.innerText = 'PLACING...';
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
@@ -1591,7 +1606,17 @@ async function oipRSPlaceSLOrders(btn, side) {
     }
 
     btn.innerText = origText;
-    // Stays disabled — user must re-enter/change price to re-fire (matches Opt Prem's guard against double placement).
+    delete btn.dataset.placing;
+    // Back to whatever the trigger price says, rather than staying dead until
+    // the price field is touched again. The old behaviour was a double-placement
+    // guard, but a weak one — any keystroke re-enabled it, including retyping
+    // the same number — and it left the button unusable after a placement that
+    // had already reached the brokers, which is when you most want to arm the
+    // other leg or re-arm this one.
+    //
+    // The real protection against a double fire is data-placing above: the
+    // button cannot be clicked again while its own request is still out.
+    oipRSSyncSLButtons();
 }
 
 async function oipRSExitAllOrders(btn) {
