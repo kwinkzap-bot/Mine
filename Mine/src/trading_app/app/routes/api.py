@@ -10596,15 +10596,61 @@ _cpr_width_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _cpr_width_cache_lock = threading.Lock()
 _CPR_WIDTH_MAX_CACHE = 200
 
-# CPR Width % = |TC - BC| / previous-day-close * 100. Thresholds follow the
-# common Narrow/Medium/Wide day-range convention used by Indian intraday
-# traders (narrow CPR -> more likely a trending/breakout day; wide CPR ->
-# more likely to chop sideways within the band).
-_CPR_WIDTH_NARROW_MAX = 0.5   # < 0.5%  -> Narrow
-_CPR_WIDTH_MEDIUM_MAX = 1.0   # 0.5-1%  -> Medium; >= 1% -> Wide
+# CPR Width % = |TC - BC| / previous-day-close * 100.
+#
+# Classified RELATIVE TO THE INSTRUMENT'S OWN recent CPR widths, not against
+# fixed percentages. Fixed cut-offs cannot work here, and the arithmetic says so:
+# TC - BC reduces to (2C - H - L) / 3, so |TC - BC| is at most (H - L) / 3 —
+# reached only when the day closes exactly on its high or low. The width is
+# therefore capped at (H - L) / (3C) * 100.
+#
+# NIFTY ranges roughly 0.5-1.2% on a normal day, which caps its CPR width at
+# 0.17-0.40%. The old thresholds (< 0.5% Narrow, < 1.0% Medium) sat above that
+# ceiling, so the card read "Narrow" every single day for both Index and Future
+# — NIFTY would have needed a 1.5% range closing on its extreme just to reach
+# Medium, and 3% for Wide. Those numbers are a STOCK convention (stocks range
+# 2-5% daily) misapplied to index-scale data.
+#
+# Comparing today's CPR to the average of the preceding sessions is the usual
+# Pivot Boss reading and self-scales: it works the same for NIFTY, BANKNIFTY, a
+# futures contract and a 3%-a-day midcap, because each is measured against its
+# own normal.
+_CPR_WIDTH_HISTORY_DAYS = 10   # sessions of context to average against
+_CPR_WIDTH_MIN_HISTORY  = 4    # below this, fall back to the absolute scale
+_CPR_WIDTH_NARROW_RATIO = 0.8  # < 0.8x its own average -> Narrow
+_CPR_WIDTH_WIDE_RATIO   = 1.2  # > 1.2x -> Wide; between -> Medium
+
+# Absolute fallback, used only when there is too little history to average — a
+# newly listed contract, or a provider returning a short series. Deliberately
+# scaled to what the metric can actually reach (see the ceiling above) rather
+# than the stock-sized numbers this replaced.
+_CPR_WIDTH_NARROW_MAX = 0.15  # < 0.15% -> Narrow
+_CPR_WIDTH_MEDIUM_MAX = 0.30  # 0.15-0.30% -> Medium; >= 0.30% -> Wide
 
 
-def _classify_cpr_width(width_pct: float) -> str:
+def _cpr_width_pct(high: float, low: float, close: float) -> Optional[float]:
+    """CPR width as a percentage of the close, for one daily bar."""
+    if not close:
+        return None
+    _pp, bc, tc = CPRService.calculate_cpr(high, low, close)
+    return abs(tc - bc) / close * 100
+
+
+def _classify_cpr_width(width_pct: float, avg_width_pct: Optional[float] = None) -> str:
+    """Narrow / Medium / Wide for one CPR width.
+
+    With `avg_width_pct` (the instrument's own recent average) the call is
+    relative — the only reading that means anything across instruments whose CPR
+    widths differ by an order of magnitude. Without it, falls back to the
+    absolute scale, which only happens when history is too short to average.
+    """
+    if avg_width_pct and avg_width_pct > 0:
+        ratio = width_pct / avg_width_pct
+        if ratio < _CPR_WIDTH_NARROW_RATIO:
+            return 'Narrow'
+        if ratio > _CPR_WIDTH_WIDE_RATIO:
+            return 'Wide'
+        return 'Medium'
     if width_pct < _CPR_WIDTH_NARROW_MAX:
         return 'Narrow'
     if width_pct < _CPR_WIDTH_MEDIUM_MAX:
@@ -10618,27 +10664,54 @@ def _cpr_band_from_daily(kite_service: 'KiteService', token) -> Optional[Dict[st
     COMPLETE trading day (i.e. excludes today's still-forming daily bar)."""
     try:
         today = datetime.now().date()
-        from_dt = datetime.now() - timedelta(days=15)
+        # Wide enough for the CPR that applies today PLUS
+        # _CPR_WIDTH_HISTORY_DAYS of context to average it against. 15 calendar
+        # days only yields ~10 sessions once weekends and a holiday are removed,
+        # which was one short of the 11 needed and would have silently dropped
+        # every symbol onto the absolute fallback scale.
+        from_dt = datetime.now() - timedelta(days=_CPR_WIDTH_HISTORY_DAYS * 3 + 10)
         bars = kite_service._historical_with_retry(instrument_token=token, from_date=from_dt, to_date=datetime.now(), interval='day')
         if not bars:
             return None
         bars.sort(key=lambda b: b['date'], reverse=True)
-        prev_bar = None
+        # Every COMPLETE session, newest first — [0] is the bar today's CPR is
+        # built from, the rest are the context it gets compared against. Today's
+        # still-forming bar is excluded, so no look-ahead.
+        complete_bars = []
         for b in bars:
             b_date = b['date'].date() if hasattr(b['date'], 'date') else b['date']
             if b_date < today:
-                prev_bar = b
-                break
-        if not prev_bar:
+                complete_bars.append(b)
+        if not complete_bars:
             return None
+        prev_bar = complete_bars[0]
 
         h, l, c = float(prev_bar['high']), float(prev_bar['low']), float(prev_bar['close'])
         pp, bc, tc = CPRService.calculate_cpr(h, l, c)
         width_pct = (abs(tc - bc) / c * 100) if c else 0.0
+
+        # Context for the relative classification: the CPR widths of the
+        # sessions BEFORE the one in force today, so today's is compared against
+        # this instrument's own normal rather than a fixed percentage.
+        history = []
+        for b in complete_bars[1:1 + _CPR_WIDTH_HISTORY_DAYS]:
+            try:
+                w = _cpr_width_pct(float(b['high']), float(b['low']), float(b['close']))
+            except (TypeError, ValueError, KeyError):
+                continue
+            if w is not None:
+                history.append(w)
+
+        avg_width_pct = (sum(history) / len(history)
+                         if len(history) >= _CPR_WIDTH_MIN_HISTORY else None)
         return {
             'pp': round(pp, 2), 'bc': round(bc, 2), 'tc': round(tc, 2),
             'width_pct': round(width_pct, 3),
-            'type': _classify_cpr_width(width_pct)
+            'avg_width_pct': round(avg_width_pct, 3) if avg_width_pct else None,
+            'width_ratio': (round(width_pct / avg_width_pct, 2)
+                            if avg_width_pct else None),
+            'history_days': len(history),
+            'type': _classify_cpr_width(width_pct, avg_width_pct)
         }
     except Exception as e:
         logger.warning(f"[CPR-Width] Band calc failed for token {token}: {e}")

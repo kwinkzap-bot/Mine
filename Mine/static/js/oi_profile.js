@@ -2628,8 +2628,15 @@ function oipRenderCprCard() {
     oipElems.hdrCpr.textContent = band.type;
     const colorClass = band.type === 'Narrow' ? 'grn' : (band.type === 'Wide' ? 'red' : 'amber');
     oipElems.hdrCpr.className = 'oip-hdr-val ' + colorClass;
+    // Spell out WHY it says what it says. The label is relative to this
+    // instrument's own recent CPR widths, so the bare width % on its own never
+    // explained the verdict — 0.30% is wide for an index and narrow for a
+    // volatile midcap.
+    const scale = band.width_ratio
+        ? `width ${band.width_pct}% = ${band.width_ratio}x its ${band.history_days}-day average of ${band.avg_width_pct}%`
+        : `width ${band.width_pct}% (absolute scale — only ${band.history_days || 0} days of history)`;
     oipElems.hdrCprCard?.setAttribute('title',
-        `${oipCprShowFuture ? 'Future' : 'Index'} CPR: PP ${band.pp} / BC ${band.bc} / TC ${band.tc} (width ${band.width_pct}%) — click to toggle Index vs Future`);
+        `${oipCprShowFuture ? 'Future' : 'Index'} CPR: PP ${band.pp} / BC ${band.bc} / TC ${band.tc} — ${scale} — click to toggle Index vs Future`);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
