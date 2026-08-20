@@ -323,3 +323,141 @@ def test_square_off_without_any_price_reference_does_not_crash(algo):
 
     assert svc.placed == []
     assert s['phase'] == 'in_position'
+
+
+# ── 4. A stale broker session must not silently eat the day (2026-08-20) ────
+#
+# The thread caches its KiteService objects at 9:15, and a Kite access token
+# lasts one trading day. On 2026-08-20 the app came up at 08:03 and the daily
+# browser login landed at 08:54, so the cached session held a token that was
+# already dead while a valid one sat in env/Mine.env. Every entry from 10:47
+# was rejected with "Incorrect `api_key` or `access_token`" and 360ONE, PFC
+# and BDL were each marked done with a bare "Entry order placement failed".
+
+_KITE_AUTH_ERROR = 'Incorrect `api_key` or `access_token`.'
+_TICK_SIZE_ERROR = ('Tick size for this script is 0.10. Kindly enter price in '
+                    'the multiple of tick size for this script')
+
+
+class RejectingService(FakeService):
+    """A broker that rejects every order with one fixed message."""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def place_equity_order(self, tradingsymbol, transaction_type, quantity, price, product='MIS'):
+        self.placed.append({'kind': 'LIMIT', 'symbol': tradingsymbol, 'txn': transaction_type,
+                            'qty': quantity, 'price': price})
+        return {'success': False, 'error': self.error}
+
+
+def test_auth_errors_are_told_apart_from_real_rejections():
+    from trading_app.algo.thirty_min_fakeout.tmf_algo import _is_auth_error
+    assert _is_auth_error(_KITE_AUTH_ERROR)
+    assert _is_auth_error('Invalid session; please re-login')
+    # A price the exchange refused is a rejection to respect, not a session to
+    # rebuild — retrying it just sends the same bad price again.
+    assert not _is_auth_error(_TICK_SIZE_ERROR)
+    assert not _is_auth_error('Insufficient funds')
+    assert not _is_auth_error(None)
+
+
+def test_entry_is_retried_on_a_fresh_session_after_an_auth_rejection(algo, monkeypatch):
+    """The trade the trigger fired for must survive a token refresh."""
+    stale, fresh = RejectingService(_KITE_AUTH_ERROR), FakeService()
+    algo._broker_list = [(1, stale)]
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: [(1, fresh)])
+
+    s = {'direction': 'long', 'trigger': 1325.0, 'sl_level': 1315.0, 'ltp': 1325.0}
+    algo._fire_entry('BDL', s, capital_per_trade=100000, algo_active=True)
+
+    assert len(stale.placed) == 1, 'the stale session should be tried exactly once'
+    assert len(fresh.placed) == 1, 'the rebuilt session should carry the retry'
+    assert s['phase'] == 'pending_entry'
+    assert s['broker_positions'][0]['broker_idx'] == 1
+    # Same order, not a re-priced one — this is still the trigger's own trade.
+    assert fresh.placed[0]['price'] == stale.placed[0]['price']
+    assert fresh.placed[0]['qty'] == stale.placed[0]['qty']
+
+
+def test_a_genuine_rejection_is_not_retried(algo, monkeypatch):
+    """A tick-size rejection is the exchange refusing this price. Rebuilding
+    the session and sending it again would only get it refused twice."""
+    svc = RejectingService(_TICK_SIZE_ERROR)
+    algo._broker_list = [(1, svc)]
+    rebuilt = []
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: rebuilt.append(1) or [(1, svc)])
+
+    s = {'direction': 'long', 'trigger': 1325.0, 'sl_level': 1315.0, 'ltp': 1325.0}
+    algo._fire_entry('BDL', s, capital_per_trade=100000, algo_active=True)
+
+    assert rebuilt == [], 'a price rejection must not trigger a session rebuild'
+    assert len(svc.placed) == 1
+    assert s['phase'] == 'done'
+
+
+def test_failed_entry_reason_carries_the_brokers_own_words(algo, monkeypatch):
+    """"Entry order placement failed" alone cannot tell a dead login from a
+    refused price — the difference is a log dig hours later."""
+    svc = RejectingService(_KITE_AUTH_ERROR)
+    algo._broker_list = [(1, svc)]
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: [(1, svc)])
+
+    s = {'direction': 'short', 'trigger': 1211.2, 'sl_level': 1222.9, 'ltp': 1211.0}
+    algo._fire_entry('360ONE', s, capital_per_trade=100000, algo_active=True)
+
+    assert s['phase'] == 'done'
+    assert s['exit_reason'].startswith('Entry order placement failed')
+    assert 'access_token' in s['exit_reason']
+
+
+def test_stale_session_is_alerted_once_not_once_per_stock(algo, monkeypatch):
+    """A dead login fails every stock in the universe. Twenty identical
+    alerts is how the one that mattered gets scrolled past."""
+    sent = []
+    monkeypatch.setattr('trading_app.service.notification_service.create_notification',
+                        lambda **kw: sent.append(kw) or 1)
+    svc = RejectingService(_KITE_AUTH_ERROR)
+    algo._broker_list = [(1, svc)]
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: [(1, svc)])
+
+    for symbol in ('360ONE', 'PFC', 'BDL'):
+        algo._fire_entry(symbol, {'direction': 'long', 'trigger': 400.0,
+                                  'sl_level': 395.0, 'ltp': 400.0},
+                         capital_per_trade=100000, algo_active=True)
+
+    assert len(sent) == 1
+    assert sent[0]['category'] == 'tmf_order_failed'
+
+
+def test_a_failed_positions_read_rebuilds_the_session_before_a_trigger_fires(algo, monkeypatch):
+    """The 30s reconcile is the earliest sight of a dead session — rebuilding
+    there means the next trigger goes out on a live token, with no trade
+    riding on the retry."""
+    class DeadKite:
+        def positions(self):
+            raise Exception(_KITE_AUTH_ERROR)
+
+    dead = FakeService()
+    dead.kite = DeadKite()
+    algo._broker_list = [(1, dead)]
+    fresh = FakeService()
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: [(1, fresh)])
+
+    assert algo._get_broker_mis_positions(dead) == {}
+    assert algo._broker_list == [(1, fresh)], 'auth failure should rebuild the sessions'
+
+
+def test_a_non_auth_positions_failure_does_not_churn_the_session(algo, monkeypatch):
+    class FlakyKite:
+        def positions(self):
+            raise Exception('Read timed out')
+
+    flaky = FakeService()
+    flaky.kite = FlakyKite()
+    algo._broker_list = [(1, flaky)]
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: pytest.fail('rebuilt on a timeout'))
+
+    assert algo._get_broker_mis_positions(flaky) == {}
+    assert algo._broker_list == [(1, flaky)]

@@ -154,6 +154,23 @@ _ENTRY_MARKETABLE_PAD = 0.002   # 0.2%
 
 _DEFAULT_TICK_SIZE = 0.05  # fallback when the broker's tick map is unavailable
 
+# Zerodha reports a dead session per-request, and an order rejected for it comes
+# back looking exactly like any other rejection ("Incorrect `api_key` or
+# `access_token`."). Matching the message is the only signal the API gives.
+_AUTH_ERROR_HINTS = ('api_key', 'access_token', 'unauthor', 'authenticat',
+                     'invalid session', 'session expired', 'token')
+
+# How often the passive path (a failed positions() read) is allowed to rebuild
+# the broker sessions. A genuinely dead login must not turn every 30s reconcile
+# into an env re-read storm; the entry path bypasses this, since a trade is on
+# the line there and the read is one small file.
+_BROKER_REFRESH_MIN_GAP_SECS = 60
+
+
+def _is_auth_error(err: Any) -> bool:
+    msg = str(err or '').lower()
+    return any(hint in msg for hint in _AUTH_ERROR_HINTS)
+
 
 def _round_to_tick(price: float, tick: float, mode: str) -> float:
     """Snap a computed price to a valid exchange tick for that scrip. `tick`
@@ -199,6 +216,9 @@ class TMFAlgo:
         self._thread: Optional[threading.Thread] = None
         self._broker_list: List[Tuple[int, Any]] = []  # [(broker_idx, KiteService), ...]
         self._last_reconcile_ts: float = 0.0
+        # See _refresh_brokers / _on_broker_error.
+        self._last_broker_refresh_ts: float = 0.0
+        self._auth_alert_date: Optional[str] = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -286,7 +306,17 @@ class TMFAlgo:
         """(broker_idx, KiteService) for every active+TMF-enabled Zerodha
         broker slot. Only 'zerodha' is wired up for TMF right now — other
         broker types are silently skipped (fresh equity order-placement
-        code, only exercised against Zerodha so far)."""
+        code, only exercised against Zerodha so far).
+
+        Drops this user's cached env first. The daily Kite login rewrites
+        env/Mine.env while this process is running, and UserEnvManager caches
+        that file for the life of the process — so without this a rebuild
+        would hand back the very token that just expired, which is the whole
+        reason a rebuild is being asked for. `get_data_provider` does the same
+        thing for the same reason."""
+        from trading_app.app.utils.user_env import UserEnvManager
+        UserEnvManager._user_env_cache.pop(self.username, None)
+
         result: List[Tuple[int, Any]] = []
         for i in range(1, 11):
             if self._uvar(f'BROKER_{i}_ACTIVE', 'false').lower() != 'true':
@@ -304,6 +334,61 @@ class TMFAlgo:
             except Exception as e:
                 logger.error(f"[TMF] Broker {i} (zerodha) init failed: {e}")
         return result
+
+    def _refresh_brokers(self, reason: str, force: bool = False) -> bool:
+        """Rebuild every broker session from the env as it is right now.
+
+        The thread caches its KiteService objects once, at 9:15. A Kite
+        access token lasts one trading day and the daily browser login often
+        lands AFTER that (2026-08-20: app up 08:03, login 08:54), so the
+        cached session carries a token that is already dead while a perfectly
+        good one sits in env/Mine.env. Every order then fails auth for the
+        rest of the day, and every setup that triggers is lost.
+
+        Returns False when the rate limit swallowed the request, so a caller
+        that wants to retry knows nothing changed.
+        """
+        now = time.time()
+        if not force and (now - self._last_broker_refresh_ts) < _BROKER_REFRESH_MIN_GAP_SECS:
+            return False
+        self._last_broker_refresh_ts = now
+        self._broker_list = self._get_active_brokers()
+        logger.warning(f"[TMF] Broker sessions rebuilt from env ({reason}) — "
+                       f"active brokers: {[i for i, _ in self._broker_list] or 'none'}")
+        return True
+
+    def _on_broker_error(self, err: Any, where: str) -> None:
+        """Called wherever a broker call fails. An auth-shaped failure means
+        the cached session is stale, so rebuild it — the next order then goes
+        out on the current token instead of being rejected."""
+        if _is_auth_error(err):
+            self._refresh_brokers(f'{where} failed auth')
+
+    def _alert_stale_session(self, symbol: str, detail: str) -> None:
+        """Raise the broker-session failure once a day.
+
+        Once, not per symbol: a dead login fails every stock in the universe,
+        and twenty identical alerts is how the one that mattered gets
+        scrolled past. The daily reset is the point — it is a
+        once-per-session, go-and-log-in condition.
+        """
+        today = date.today().isoformat()
+        if self._auth_alert_date == today:
+            return
+        self._auth_alert_date = today
+        if self._uvar('TMF_NOTIFY', 'true').lower() == 'false':
+            return
+        try:
+            from trading_app.service.notification_service import create_notification
+            create_notification(
+                category='tmf_order_failed',
+                title='30-Min Fakeout — broker session rejected the order',
+                summary=(f"{symbol}: {detail[:160]} — re-login to the Kite broker; "
+                         f"setups that trigger until then cannot be entered."),
+                data={'symbol': symbol, 'error': str(detail)},
+            )
+        except Exception as e:
+            logger.error(f"[TMF] {symbol}: order-failure notification failed: {e}")
 
     def _tick_size_for(self, symbol: str) -> float:
         """The scrip's real NSE tick size, via whichever broker is wired up
@@ -480,22 +565,54 @@ class TMFAlgo:
             limit_price = _round_to_tick(max(ref, trigger) * (1 + _ENTRY_MARKETABLE_PAD), tick, 'up')
         s['entry_limit_price'] = limit_price
 
-        broker_positions = []
-        for idx, svc in self._broker_list:
-            result = svc.place_equity_order(symbol, transaction, qty, price=limit_price, product='MIS')
-            if result.get('success'):
-                broker_positions.append({'broker_idx': idx, 'entry_order_id': str(result['order_id']), 'filled': False})
-                logger.info(f"[TMF] {symbol}: entry {transaction} LIMIT x{qty} @ {limit_price} "
-                            f"(marketable, trigger {trigger}, ltp {ref}) placed via broker {idx} — order_id={result['order_id']}")
-            else:
-                logger.error(f"[TMF] {symbol}: entry order FAILED via broker {idx}: {result.get('error')}")
+        broker_positions, errors = self._place_entry_orders(
+            symbol, transaction, qty, limit_price, trigger, ref)
+
+        # A dead broker session is indistinguishable from any other rejection
+        # in the response, and the login that fixes it routinely happens after
+        # this thread cached its sessions (2026-08-20: every entry from 10:47
+        # was rejected with "Incorrect `api_key` or `access_token`" while a
+        # valid token sat in env/Mine.env, and 360ONE, PFC and BDL were all
+        # lost to it). Rebuild and place again within the same tick — a retry
+        # this immediate is still the trade the trigger fired for, unlike a
+        # re-entry minutes later, which _entry_order_expired deliberately
+        # refuses to take.
+        if not broker_positions and any(_is_auth_error(e) for e in errors):
+            if self._refresh_brokers(f'{symbol} entry rejected on auth', force=True):
+                broker_positions, retry_errors = self._place_entry_orders(
+                    symbol, transaction, qty, limit_price, trigger, ref)
+                errors = retry_errors or errors
 
         if not broker_positions:
             s['phase'] = 'done'
-            s['exit_reason'] = 'Entry order placement failed'
+            detail = errors[0] if errors else 'no active broker'
+            # The reason the grid shows carries the broker's own words. Reading
+            # "Entry order placement failed" alone, the difference between a
+            # dead login and a rejected price is a log dig at the end of the day.
+            s['exit_reason'] = f'Entry order placement failed: {detail[:120]}'
+            if any(_is_auth_error(e) for e in errors):
+                self._alert_stale_session(symbol, detail)
             return
         s['broker_positions'] = broker_positions
         s['phase'] = 'pending_entry'
+
+    def _place_entry_orders(self, symbol: str, transaction: str, qty: int,
+                             limit_price: float, trigger: float,
+                             ref: float) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Place the entry LIMIT with every active broker. Returns the legs
+        that went through and the errors from the ones that didn't."""
+        placed: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        for idx, svc in self._broker_list:
+            result = svc.place_equity_order(symbol, transaction, qty, price=limit_price, product='MIS')
+            if result.get('success'):
+                placed.append({'broker_idx': idx, 'entry_order_id': str(result['order_id']), 'filled': False})
+                logger.info(f"[TMF] {symbol}: entry {transaction} LIMIT x{qty} @ {limit_price} "
+                            f"(marketable, trigger {trigger}, ltp {ref}) placed via broker {idx} — order_id={result['order_id']}")
+            else:
+                errors.append(str(result.get('error')))
+                logger.error(f"[TMF] {symbol}: entry order FAILED via broker {idx}: {result.get('error')}")
+        return placed, errors
 
     def _entry_order_expired(self, s: Dict[str, Any], now_mins: int, cutoff_mins: int) -> Optional[str]:
         """Why the still-open entry LIMIT order should be given up on, or
@@ -870,6 +987,10 @@ class TMFAlgo:
             return result
         except Exception as e:
             logger.warning(f"[TMF] positions() fetch failed: {e}")
+            # Runs every 30s, so this is where a session that died (or was
+            # replaced by a later login) is noticed long before a trigger
+            # fires — the rebuild happens while nothing is at stake.
+            self._on_broker_error(e, 'positions()')
             return {}
 
     def _exit_leg_fills(self, svc: Any, bp: Dict[str, Any]) -> List[Tuple[str, int, Optional[float]]]:
@@ -979,6 +1100,7 @@ class TMFAlgo:
                     return p
         except Exception as e:
             logger.warning(f"[TMF] {symbol}: positions() fetch failed: {e}")
+            self._on_broker_error(e, 'positions()')
         return None
 
     def _book_closed_at_broker(self, state: Dict[str, Any]) -> None:

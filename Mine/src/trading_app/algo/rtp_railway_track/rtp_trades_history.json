@@ -1,20 +1,20 @@
 [
   {
-    "date": "2026-08-19",
-    "direction": "SELL",
-    "entry_spot": 24083.05,
-    "exit_spot": 24048.55,
-    "pnl_pts": 34.5,
+    "date": "2026-08-20",
+    "direction": "BUY",
+    "entry_spot": 24219.75,
+    "exit_spot": 24211.6,
+    "pnl_pts": -8.15,
     "reason": "EOD",
-    "entry_time": "2026-08-19T10:17:07.439806",
-    "exit_time": "2026-08-19T15:28:01.005977",
-    "strike": 24350,
-    "option_type": "PE",
+    "entry_time": "2026-08-20T10:24:00.901899",
+    "exit_time": "2026-08-20T15:28:00.916790",
+    "strike": 24050,
+    "option_type": "CE",
     "lot_size": 65,
-    "opt_entry_price": 258.0,
-    "opt_exit_price": 265.85,
-    "opt_pnl_pts": 7.85,
-    "opt_pnl_inr": 510.25,
+    "opt_entry_price": 254.15,
+    "opt_exit_price": 266.3,
+    "opt_pnl_pts": 12.15,
+    "opt_pnl_inr": 789.75,
     "broker_entries": []
   }
 ]
