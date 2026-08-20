@@ -162,6 +162,17 @@ def portfolio():
     """Portfolio page — positions and holdings across all logged-in brokers."""
     return render_template('portfolio.html')
 
+@pages_bp.route('/watchlist')
+@require_user_auth
+def watchlist():
+    """Watchlist — user-defined tabs of stocks/indices with 52-week range and PE.
+
+    No @login_required: the page's own data comes from the fundamentals cache
+    and the public symbol master, so it builds and reads without a broker
+    session. A live token only upgrades the price column from delayed to live.
+    """
+    return render_template('watchlist.html')
+
 @pages_bp.route('/markets')
 @require_user_auth
 @login_required

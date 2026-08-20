@@ -104,6 +104,8 @@
             <a href="/dashboard"
                 class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
                 Dashboard</a>
+             <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}">👁
+                Watchlist</a>
             <a href="/trend-detection" class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈
                 Trend</a>
             <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>

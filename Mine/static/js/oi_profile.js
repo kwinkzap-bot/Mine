@@ -151,7 +151,11 @@ let oipSymbol = 'NIFTY';
 // CPR-width card: { index: {pp,bc,tc,width_pct,type}, future: {...}, future_symbol } — refetched
 // once per symbol switch (previous-day OHLC doesn't change intraday, so no poll needed).
 let oipCprData = null;
-let oipCprShowFuture = false;
+// Which DAY the CPR card is showing, not which instrument. Both views are the
+// INDEX: 'today' is the CPR in force now (from the last settled session) and
+// 'next' is the one that will be in force tomorrow (from today's forming bar).
+// Clicking the card flips between them.
+let oipCprDay = 'today';
 let oipLotSize = 50, oipStrikeStep = 50;
 // Timeframe for every chart on this page EXCEPT Round Strike, which has its own
 // dropdown and its own oipRSInterval (see oi_profile_round_strike.js). Must match
@@ -2614,15 +2618,19 @@ async function oipFetchCprWidth(symbol) {
 
 function oipRenderCprCard() {
     if (!oipElems.hdrCpr) return;
-    const band = oipCprData ? (oipCprShowFuture ? oipCprData.future : oipCprData.index) : null;
-    if (oipElems.hdrCprSrc) oipElems.hdrCprSrc.textContent = oipCprShowFuture ? 'FUT' : 'IDX';
+    const isNext = oipCprDay === 'next';
+    const band = oipCprData ? (isNext ? oipCprData.index_next : oipCprData.index) : null;
+    // Always IDX — both views are the index, they differ only by day.
+    if (oipElems.hdrCprSrc) oipElems.hdrCprSrc.textContent = isNext ? 'IDX · NEXT' : 'IDX · TODAY';
     if (!band) {
         oipElems.hdrCpr.textContent = '--';
         oipElems.hdrCpr.className = 'oip-hdr-val';
         oipElems.hdrCprCard?.setAttribute('title',
-            oipCprShowFuture && oipCprData && !oipCprData.future
-                ? 'No futures contract found for this symbol'
-                : 'CPR day-range type (Narrow/Medium/Wide) — click to toggle Index vs Future');
+            isNext
+                // Before the open, and on a holiday, there is no forming bar to
+                // build tomorrow's CPR from yet.
+                ? "Next-day CPR needs today's daily bar, which doesn't exist until the session opens — click to go back to today"
+                : 'CPR day-range type (Narrow/Medium/Wide) — click to toggle today vs next day');
         return;
     }
     oipElems.hdrCpr.textContent = band.type;
@@ -2636,12 +2644,18 @@ function oipRenderCprCard() {
         ? `width ${band.width_pct}% = ${band.width_ratio}x its ${band.history_days}-day average of ${band.avg_width_pct}%`
         : `width ${band.width_pct}% (absolute scale — only ${band.history_days || 0} days of history)`;
     oipElems.hdrCprCard?.setAttribute('title',
-        `${oipCprShowFuture ? 'Future' : 'Index'} CPR: PP ${band.pp} / BC ${band.bc} / TC ${band.tc} — ${scale} — click to toggle Index vs Future`);
+        `Index CPR — ${isNext ? 'NEXT DAY' : 'TODAY'}: PP ${band.pp} / BC ${band.bc} / TC ${band.tc} — ${scale}`
+        + (isNext
+            // Say it plainly: this one is not settled. It is derived from a bar
+            // that is still moving, so it can change until the close.
+            ? " — provisional: built from today's still-forming bar, so it moves"
+              + ' until the close. Click to go back to today.'
+            : ' — click for next day')); 
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('hdrCprCard')?.addEventListener('click', () => {
-        oipCprShowFuture = !oipCprShowFuture;
+        oipCprDay = oipCprDay === 'next' ? 'today' : 'next';
         oipRenderCprCard();
     });
 });

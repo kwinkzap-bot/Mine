@@ -35,6 +35,12 @@ _global_tick_size_cache: Dict[str, Any] = {'lock': threading.Lock()}
 
 DEFAULT_NSE_TICK_SIZE = 0.05
 
+# How far an instrument segment may shrink between downloads before the new dump
+# is treated as truncated rather than as a real change. Contract counts move with
+# the expiry cycle, but never halve — the failure this guards against arrived at
+# 5% of the previous day. See KiteService._load_instruments.
+_INSTRUMENT_MIN_RATIO = 0.5
+
 # ── RATE LIMITING ────────────────────────────────────────────────────────
 class GlobalRateLimiter:
     """Thread-safe global rate limiter for Kite API (3 requests/second)."""
@@ -359,6 +365,55 @@ class KiteService:
         
         self._load_instruments(p_type)
 
+    @staticmethod
+    def _truncated_segments(counts: Dict[str, int], prev: Dict[str, int]) -> List[str]:
+        """Segments too short against the last good download to be believed.
+
+        Only segments that previously had content are judged — a segment that
+        was empty before says nothing about what it should be now.
+        """
+        return [f"{seg} {counts[seg]} vs {prev[seg]}" for seg in counts
+                if prev.get(seg) and counts[seg] < prev[seg] * _INSTRUMENT_MIN_RATIO]
+
+    @staticmethod
+    def _cached_segment_counts(cache_file: str) -> Dict[str, int]:
+        """Raw per-segment row counts of the last dump we accepted, if any."""
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'rb') as f:
+                    return (pickle.load(f) or {}).get('segment_counts') or {}
+        except Exception as e:
+            logging.warning(f"[KiteService] Could not read previous segment counts: {e}")
+        return {}
+
+    def _adopt_previous_cache(self, cache_file: str, p_type: str) -> bool:
+        """Serve the last good pickle when today's download can't be trusted.
+
+        Stamped with today's date in memory so the process doesn't re-download on
+        every KiteService construction, but the pickle itself is left alone — a
+        restart retries, and until then a day-old complete master is used.
+        """
+        try:
+            with open(cache_file, 'rb') as f:
+                disk_cache = pickle.load(f)
+            self._instrument_tokens_by_symbol = disk_cache['tokens_by_symbol']
+            self._instrument_tokens_by_name = disk_cache['tokens_by_name']
+            self._nfo_by_name = disk_cache.get('nfo_by_name', {})
+            self._nfo_cache_asof = date.today()
+            with _global_instruments_cache['lock']:
+                _global_instruments_cache[p_type] = {
+                    'tokens_by_symbol': self._instrument_tokens_by_symbol,
+                    'tokens_by_name': self._instrument_tokens_by_name,
+                    'nfo_by_name': self._nfo_by_name,
+                    'cache_date': date.today()
+                }
+            logging.warning(f"[KiteService] Serving {p_type} instruments from the previous "
+                            f"cache ({len(self._instrument_tokens_by_symbol)} items)")
+            return True
+        except Exception as e:
+            logging.error(f"[KiteService] Could not fall back to the previous cache: {e}")
+            return False
+
     def _load_instruments(self, p_type: str = 'kite'):
         """Fetch and prune instruments for memory efficiency (~70% reduction)."""
         global _global_instruments_cache
@@ -370,8 +425,30 @@ class KiteService:
             nfo_raw = self.kite.instruments('NFO') or []
             bse_raw = self.kite.instruments('BSE') or []
             bfo_raw = self.kite.instruments('BFO') or []
-            logging.info(f"[KiteService] Fetched: NSE({len(nse_raw)}), NFO({len(nfo_raw)}), BSE({len(bse_raw)}), BFO({len(bfo_raw)})")
-            
+            counts = {'NSE': len(nse_raw), 'NFO': len(nfo_raw),
+                      'BSE': len(bse_raw), 'BFO': len(bfo_raw)}
+            logging.info(f"[KiteService] Fetched: NSE({counts['NSE']}), NFO({counts['NFO']}), "
+                         f"BSE({counts['BSE']}), BFO({counts['BFO']})")
+
+            # A download can come back truncated. On 2026-08-20 NFO arrived with
+            # 4,125 rows against a normal ~76,000, which left NIFTY holding three
+            # futures rows and no strikes at all — and because the short dump was
+            # cached under today's date it stuck for the whole session, so the
+            # Round Strike block had nothing to fill its dropdowns with and drew
+            # an empty chart. Yesterday's complete master beats today's 5% one,
+            # so refuse the short dump rather than overwrite what works.
+            short = self._truncated_segments(counts, self._cached_segment_counts(cache_file))
+            if short:
+                logging.error(
+                    f"[KiteService] Rejecting truncated {p_type} instrument dump — "
+                    f"{'; '.join(short)}, under {_INSTRUMENT_MIN_RATIO:.0%} of the last good "
+                    f"download. Keeping the previous cache; accepting this would leave "
+                    f"symbols with no strikes.")
+                if self._adopt_previous_cache(cache_file, p_type):
+                    return
+                logging.error("[KiteService] No usable previous cache — falling through to "
+                              "the short dump, expect missing strikes")
+
             self._instrument_tokens_by_symbol = {}
             self._instrument_tokens_by_name = {}
             self._nfo_by_name = {}
@@ -422,9 +499,11 @@ class KiteService:
             disk_data = {
                 'tokens_by_symbol': self._instrument_tokens_by_symbol,
                 'tokens_by_name': self._instrument_tokens_by_name,
-                'nfo_by_name': self._nfo_by_name
+                'nfo_by_name': self._nfo_by_name,
+                # What a complete download looks like, for the next run to
+                # compare against — see _cached_segment_counts.
+                'segment_counts': counts
             }
-            disk_data = {'tokens_by_symbol': self._instrument_tokens_by_symbol, 'tokens_by_name': self._instrument_tokens_by_name, 'nfo_by_name': self._nfo_by_name}
             with open(cache_file, 'wb') as f: pickle.dump(disk_data, f)
             with _global_instruments_cache['lock']:
                 _global_instruments_cache[p_type] = {

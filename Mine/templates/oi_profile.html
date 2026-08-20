@@ -96,7 +96,7 @@
                                      A pane exists only while its checkbox is on. -->
                                 <div class="oip-ind-section-title">Change in OI (Abs)</div>
                                 <label class="oip-ind-item"
-                                    title="Bar-to-bar change in the CE strike's open interest, as a histogram. Shares one pane with PE, read against the RIGHT axis so it keeps its own scale. One colour for the whole leg — bars above zero are OI added, below zero OI unwound">
+                                    title="Bar-to-bar change in the CE strike's open interest, as a histogram. Shares one pane with PE, in the upper half, read against the RIGHT axis. One colour for the whole leg — bars above zero are OI added, below zero OI unwound">
                                     <input type="checkbox" id="oipRSShowOiChgCe" checked>
                                     <span style="color:#f23645">CE Chg in OI</span>
                                     <span class="oip-line-props">
@@ -105,7 +105,7 @@
                                     </span>
                                 </label>
                                 <label class="oip-ind-item"
-                                    title="Bar-to-bar change in the PE strike's open interest, as a histogram. Shares one pane with CE, read against the LEFT axis so it keeps its own scale. One colour for the whole leg — bars above zero are OI added, below zero OI unwound">
+                                    title="Bar-to-bar change in the PE strike's open interest, as a histogram. Shares one pane with CE, in the lower half on its own scale so it keeps its own range (no axis of its own — read the value off this legend). One colour for the whole leg — bars above zero are OI added, below zero OI unwound">
                                     <input type="checkbox" id="oipRSShowOiChgPe" checked>
                                     <span style="color:#16a34a">PE Chg in OI</span>
                                     <span class="oip-line-props">
@@ -427,8 +427,8 @@
                     <span id="hdrAtm" class="oip-hdr-val">--</span>
                 </div>
                 <div id="hdrCprCard" class="oip-hdr-metric oip-hdr-metric--clickable"
-                    title="CPR day-range type (Narrow/Medium/Wide) — click to toggle Index vs Future">
-                    <span class="oip-hdr-lbl">CPR <span id="hdrCprSrc" class="oip-hdr-lbl-badge">IDX</span></span>
+                    title="CPR day-range type (Narrow/Medium/Wide) — click to toggle today vs next day">
+                    <span class="oip-hdr-lbl">CPR <span id="hdrCprSrc" class="oip-hdr-lbl-badge">IDX · TODAY</span></span>
                     <span id="hdrCpr" class="oip-hdr-val">--</span>
                 </div>
                 <div class="oip-hdr-metric"

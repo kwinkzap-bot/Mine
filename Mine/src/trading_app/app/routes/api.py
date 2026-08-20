@@ -10590,11 +10590,40 @@ def oi_profile_candles() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
-# CPR Width cache — keyed by (symbol, calendar date), since the previous
-# trading day's OHLC (and therefore its CPR band) is fixed for the whole day.
+# CPR Width cache — keyed by (symbol, calendar date).
+#
+# The TODAY band really is fixed for the session: it comes from the previous
+# day's settled OHLC. The NEXT band is not — it is built from today's forming
+# bar and moves whenever the high or low extends, so a day-long entry would
+# pin it to whatever it was on the first request of the morning and quietly
+# show a stale next-day CPR for the rest of the session.
+#
+# Hence a short TTL rather than none. At 5 minutes the daily-history call runs
+# ~12 times a session per symbol instead of once, which is nothing against the
+# app-wide rate budget, and the next-day band tracks the day closely enough to
+# be worth looking at.
 _cpr_width_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _cpr_width_cache_lock = threading.Lock()
 _CPR_WIDTH_MAX_CACHE = 200
+_CPR_WIDTH_CACHE_TTL = 300      # seconds
+
+
+def _cpr_cache_get(key):
+    """Cached bands for `key`, or None once past the TTL."""
+    with _cpr_width_cache_lock:
+        hit = _cpr_width_cache.get(key)
+    if not hit:
+        return None
+    if _time.time() - hit[0] > _CPR_WIDTH_CACHE_TTL:
+        return None
+    return hit[1]
+
+
+def _cpr_cache_put(key, value):
+    with _cpr_width_cache_lock:
+        if len(_cpr_width_cache) > _CPR_WIDTH_MAX_CACHE:
+            _cpr_width_cache.clear()
+        _cpr_width_cache[key] = (_time.time(), value)
 
 # CPR Width % = |TC - BC| / previous-day-close * 100.
 #
@@ -10658,10 +10687,21 @@ def _classify_cpr_width(width_pct: float, avg_width_pct: Optional[float] = None)
     return 'Wide'
 
 
-def _cpr_band_from_daily(kite_service: 'KiteService', token) -> Optional[Dict[str, Any]]:
-    """Fetches recent daily candles for `token` and computes the CPR band
-    (PP/BC/TC + Narrow/Medium/Wide classification) from the most recent
-    COMPLETE trading day (i.e. excludes today's still-forming daily bar)."""
+def _cpr_bands_from_daily(kite_service: 'KiteService', token) -> Dict[str, Any]:
+    """Both CPR bands for `token` from ONE daily-history fetch.
+
+    Returns {'today': band|None, 'next': band|None}.
+
+      today  built from the most recent COMPLETE session — the CPR in force
+             right now. Fixed for the whole day.
+      next   built from TODAY's still-forming daily bar — the CPR that will be
+             in force tomorrow. It moves as today's high/low extend, and is
+             only final once the session closes. Callers must say so rather
+             than presenting it as settled.
+
+    One fetch for both: the two differ only in which bar they take as the
+    source, and the daily history call is the expensive, rate-limited part.
+    """
     try:
         today = datetime.now().date()
         # Wide enough for the CPR that applies today PLUS
@@ -10683,39 +10723,58 @@ def _cpr_band_from_daily(kite_service: 'KiteService', token) -> Optional[Dict[st
             if b_date < today:
                 complete_bars.append(b)
         if not complete_bars:
-            return None
-        prev_bar = complete_bars[0]
+            return {'today': None, 'next': None}
 
-        h, l, c = float(prev_bar['high']), float(prev_bar['low']), float(prev_bar['close'])
-        pp, bc, tc = CPRService.calculate_cpr(h, l, c)
-        width_pct = (abs(tc - bc) / c * 100) if c else 0.0
+        # Today's bar, if the session has started. Absent before the open, and
+        # on a holiday or weekend — in which case there is no next-day CPR to
+        # offer yet and the card says so rather than showing a stale one.
+        forming_bar = next(
+            (b for b in bars
+             if (b['date'].date() if hasattr(b['date'], 'date') else b['date']) >= today),
+            None)
 
-        # Context for the relative classification: the CPR widths of the
-        # sessions BEFORE the one in force today, so today's is compared against
-        # this instrument's own normal rather than a fixed percentage.
-        history = []
-        for b in complete_bars[1:1 + _CPR_WIDTH_HISTORY_DAYS]:
-            try:
-                w = _cpr_width_pct(float(b['high']), float(b['low']), float(b['close']))
-            except (TypeError, ValueError, KeyError):
-                continue
-            if w is not None:
-                history.append(w)
+        def _band(src_bar, context_bars):
+            """CPR from `src_bar`, classified against `context_bars` — the
+            sessions BEFORE it, so the verdict is relative to this instrument's
+            own normal rather than a fixed percentage."""
+            if not src_bar:
+                return None
+            h, l, c = float(src_bar['high']), float(src_bar['low']), float(src_bar['close'])
+            pp, bc, tc = CPRService.calculate_cpr(h, l, c)
+            width_pct = (abs(tc - bc) / c * 100) if c else 0.0
 
-        avg_width_pct = (sum(history) / len(history)
-                         if len(history) >= _CPR_WIDTH_MIN_HISTORY else None)
+            history = []
+            for b in context_bars[:_CPR_WIDTH_HISTORY_DAYS]:
+                try:
+                    w = _cpr_width_pct(float(b['high']), float(b['low']), float(b['close']))
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if w is not None:
+                    history.append(w)
+
+            avg_width_pct = (sum(history) / len(history)
+                             if len(history) >= _CPR_WIDTH_MIN_HISTORY else None)
+            return {
+                'pp': round(pp, 2), 'bc': round(bc, 2), 'tc': round(tc, 2),
+                'width_pct': round(width_pct, 3),
+                'avg_width_pct': round(avg_width_pct, 3) if avg_width_pct else None,
+                'width_ratio': (round(width_pct / avg_width_pct, 2)
+                                if avg_width_pct else None),
+                'history_days': len(history),
+                'type': _classify_cpr_width(width_pct, avg_width_pct)
+            }
+
         return {
-            'pp': round(pp, 2), 'bc': round(bc, 2), 'tc': round(tc, 2),
-            'width_pct': round(width_pct, 3),
-            'avg_width_pct': round(avg_width_pct, 3) if avg_width_pct else None,
-            'width_ratio': (round(width_pct / avg_width_pct, 2)
-                            if avg_width_pct else None),
-            'history_days': len(history),
-            'type': _classify_cpr_width(width_pct, avg_width_pct)
+            # In force now: built from the last complete session, compared
+            # against the sessions before that one.
+            'today': _band(complete_bars[0], complete_bars[1:]),
+            # In force tomorrow: built from today's forming bar, compared
+            # against every complete session including the one driving 'today'.
+            'next': _band(forming_bar, complete_bars),
         }
     except Exception as e:
         logger.warning(f"[CPR-Width] Band calc failed for token {token}: {e}")
-        return None
+        return {'today': None, 'next': None}
 
 
 @api_bp.route('/oi-profile/cpr-width', methods=['GET'])
@@ -10730,8 +10789,7 @@ def oi_profile_cpr_width() -> EndpointResponse:
         today_str = datetime.now().strftime('%Y-%m-%d')
         cache_key = (symbol, today_str)
 
-        with _cpr_width_cache_lock:
-            cached = _cpr_width_cache.get(cache_key)
+        cached = _cpr_cache_get(cache_key)
         if cached:
             return jsonify(cached)
 
@@ -10743,24 +10801,28 @@ def oi_profile_cpr_width() -> EndpointResponse:
         kite_service = KiteService(kite_instance=effective_instance)
 
         index_token = NSE_INDEX_TOKENS_CPR.get(symbol) or kite_service.get_instrument_token(symbol)
-        index_band = _cpr_band_from_daily(kite_service, index_token) if index_token else None
+        index_bands = (_cpr_bands_from_daily(kite_service, index_token)
+                       if index_token else {'today': None, 'next': None})
 
         future_symbol = kite_service.get_future_symbol(symbol)
         future_token = kite_service.get_instrument_token(future_symbol) if future_symbol else None
-        future_band = _cpr_band_from_daily(kite_service, future_token) if future_token else None
+        future_bands = (_cpr_bands_from_daily(kite_service, future_token)
+                        if future_token else {'today': None, 'next': None})
 
+        # `index` / `future` keep their original meaning — the band in force
+        # today — so existing consumers are untouched. The *_next pair is
+        # additive.
         response_data = {
             'success': True,
             'symbol': symbol,
-            'index': index_band,
-            'future': future_band,
+            'index': index_bands['today'],
+            'future': future_bands['today'],
+            'index_next': index_bands['next'],
+            'future_next': future_bands['next'],
             'future_symbol': future_symbol,
         }
 
-        with _cpr_width_cache_lock:
-            if len(_cpr_width_cache) > _CPR_WIDTH_MAX_CACHE:
-                _cpr_width_cache.clear()
-            _cpr_width_cache[cache_key] = response_data
+        _cpr_cache_put(cache_key, response_data)
 
         return jsonify(response_data)
     except Exception as exc:
@@ -11473,11 +11535,23 @@ def oi_profile_round_strike() -> EndpointResponse:
             }
 
         def _strike_list():
-            all_inst = kite_service.get_nfo_instruments(symbol)
-            if not all_inst:
-                return []
+            # Raises rather than returning [] on an empty result, the same way the
+            # leg producers above do: _rs_cached then serves the previous good
+            # list instead of pinning an empty one for the full 600 s TTL.
+            #
+            # An empty list is never a real market state — it means the broker's
+            # instrument master came up short. On 2026-08-20 a truncated NFO dump
+            # (4,125 rows against a normal ~76,000) left NIFTY with three futures
+            # rows and no strikes, and since the block cannot choose a CE/PE pair
+            # without this list, it never asked for option legs and drew an empty
+            # chart with both dropdowns blank.
+            all_inst = kite_service.get_nfo_instruments(symbol) or []
             uniq = sorted({float(i['strike']) for i in all_inst
                            if i.get('strike') is not None and i['strike'] > 0})
+            if not uniq:
+                raise RuntimeError(
+                    f'no option strikes for {symbol} in the instrument master '
+                    f'({len(all_inst)} rows, none carrying a strike)')
             return [{'strike': s} for s in uniq]
 
         def _lot_size():
@@ -11496,24 +11570,26 @@ def oi_profile_round_strike() -> EndpointResponse:
             # OHLC is fixed for the whole day, so whichever caller gets there
             # first spares the other two daily-history fetches.
             cpr_key = (symbol, today_str)
-            with _cpr_width_cache_lock:
-                shared = _cpr_width_cache.get(cpr_key)
+            shared = _cpr_cache_get(cpr_key)
             if shared:
                 return shared
             idx_tok = NSE_INDEX_TOKENS_CPR.get(symbol) or kite_service.get_instrument_token(symbol)
             fut_sym = kite_service.get_future_symbol(symbol)
             fut_tok = kite_service.get_instrument_token(fut_sym) if fut_sym else None
+            idx_bands = (_cpr_bands_from_daily(kite_service, idx_tok)
+                         if idx_tok else {'today': None, 'next': None})
+            fut_bands = (_cpr_bands_from_daily(kite_service, fut_tok)
+                         if fut_tok else {'today': None, 'next': None})
             bands = {
                 'success': True,
                 'symbol': symbol,
-                'index': _cpr_band_from_daily(kite_service, idx_tok) if idx_tok else None,
-                'future': _cpr_band_from_daily(kite_service, fut_tok) if fut_tok else None,
+                'index': idx_bands['today'],
+                'future': fut_bands['today'],
+                'index_next': idx_bands['next'],
+                'future_next': fut_bands['next'],
                 'future_symbol': fut_sym,
             }
-            with _cpr_width_cache_lock:
-                if len(_cpr_width_cache) > _CPR_WIDTH_MAX_CACHE:
-                    _cpr_width_cache.clear()
-                _cpr_width_cache[cpr_key] = bands
+            _cpr_cache_put(cpr_key, bands)
             return bands
 
         # Only the index leg is worth a worker of its own — it is the one cached
@@ -11600,6 +11676,12 @@ def oi_profile_round_strike() -> EndpointResponse:
             else:
                 fetch_error = (f"Broker returned no candles for {', '.join(l for l, _ in empty_legs)} — "
                                f"strike/expiry may be untraded or wrong. Retrying next poll.")
+        # Without strikes the block can't populate its dropdowns, so it never asks
+        # for option legs and there are no empty_legs to report — it just draws
+        # nothing. Name the real cause instead of leaving a blank chart.
+        if not fetch_error and not strikes_list:
+            fetch_error = (f"No option strikes for {symbol} — the broker's instrument master is "
+                           f"incomplete. It is re-downloaded on restart.")
         stale_error = None
         if stale_legs:
             names = sorted({leg_labels.get(tok, tok) for tok in stale_legs})

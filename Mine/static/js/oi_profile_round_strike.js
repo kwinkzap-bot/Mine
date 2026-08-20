@@ -857,6 +857,15 @@ function oipRSInitCharts() {
         // reasoning as the main OI chart's ray tool).
         isCombined: true, timeframe: () => oipRSInterval,
         options: { height: OIP_RS_BASE_CHART_HEIGHT },
+        // The DeltaOI panes run to millions of contracts, which the default 2dp
+        // formatter rendered as "-2500000.00" — six digits of noise on a narrow
+        // axis. Compact ticks only kick in at a lakh, so the premium axis on the
+        // candle pane (~100-200) is untouched.
+        compactPriceAxis: true,
+        // Narrower than the 85 default: with compact ticks the widest label on
+        // this chart is a premium like "191.60" or a DeltaOI like "-25L", so the
+        // extra width was empty gutter between the plot and the axis.
+        priceAxisWidth: 62,
         onRayDrawn: oipRSRayDisarm,
         onRayRemoved: oipRSRemoveSavedRay
     });
@@ -1390,7 +1399,7 @@ function oipRSApplyHeader(h) {
     // CPR keeps oi_profile.js's renderer: the card's Index/Future toggle lives
     // there and reads the same oipCprData, so feeding it here keeps one code
     // path for both the click and the poll.
-    if (h.cpr && (h.cpr.index || h.cpr.future) && typeof oipRenderCprCard === 'function') {
+    if (h.cpr && (h.cpr.index || h.cpr.index_next) && typeof oipRenderCprCard === 'function') {
         oipCprData = h.cpr;
         oipRenderCprCard();
     }

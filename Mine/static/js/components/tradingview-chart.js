@@ -25,6 +25,26 @@ window.lwBringToFront = window.lwBringToFront || function (series) {
     try { if (series && typeof series.setSeriesOrder === 'function') series.setSeriesOrder(1e6); } catch (e) {}
 };
 
+// Compact price-axis ticks, Indian convention, for panes whose values run to
+// lakhs — the Round Strike ΔOI histograms sit at ±10^4..10^6 contracts and
+// rendered as "-2500000.00", six digits of noise on a 100px axis.
+//
+// Only magnitudes at or above one lakh are abbreviated. Everything below keeps
+// the exact 2dp it had, which covers every price these charts actually plot:
+// option premiums (~10^2), NIFTY (~2.4x10^4), even SENSEX (~8x10^4). So turning
+// this on for a chart changes its DeltaOI axis and leaves its price axis alone.
+function _tvCompactPrice(val) {
+    const v = Number(val) || 0;
+    const abs = Math.abs(v);
+    const sign = v < 0 ? '-' : '';
+    if (abs >= 1e7) return sign + (abs / 1e7).toFixed(2).replace(/\.?0+$/, '') + 'Cr';
+    if (abs >= 1e5) return sign + (abs / 1e5).toFixed(2).replace(/\.?0+$/, '') + 'L';
+    // Bare '0' rather than '0.00': on a DeltaOI axis reading -20L / -10L / 0,
+    // two decimal places on the zero line is the only thing carrying them.
+    if (v === 0) return '0';
+    return v.toFixed(2);
+}
+
 window.TradingViewChart = (function () {
     'use strict';
 
@@ -612,17 +632,34 @@ window.TradingViewChart = (function () {
                         style: 0                     // Solid lines
                     }
                 },
+                // Both arms of the crosshair, and both readable.
+                //
+                // They were always both enabled, but at style 3 (LargeDashed) and
+                // a fixed '#9ca3af' the horizontal arm was effectively invisible:
+                // long dashes with long gaps, drawn straight across the candle
+                // bodies and the horizontal grid lines it runs parallel to. The
+                // vertical arm got away with the same styling because it crosses
+                // mostly empty background and is anchored by a bold time label,
+                // so the chart read as having only one arm.
+                //
+                // Style 2 (Dashed) keeps the dashed look with a tighter period,
+                // and taking the colour from the active theme's text — already
+                // tuned to be legible on that theme's background — fixes the
+                // light/cream themes, where a mid-grey on white was faint even
+                // vertically.
                 crosshair: {
                     mode: 0,                        // Normal mode - follows cursor exactly (not snapping to candle)
                     vertLine: {
-                        color: '#9ca3af',           // Lighter grey crosshair vertical
-                        width: 1,                   // Slightly thicker for better visibility
-                        style: 3                     // Large dashed line style
+                        color: themeCfg.text,
+                        width: 1,
+                        style: 2,                   // Dashed
+                        labelVisible: true
                     },
                     horzLine: {
-                        color: '#9ca3af',           // Lighter grey crosshair horizontal
-                        width: 1,                   // Slightly thicker for better visibility
-                        style: 3                     // Large dashed line style
+                        color: themeCfg.text,
+                        width: 1,
+                        style: 2,                   // Dashed
+                        labelVisible: true          // the price under the cursor, on the axis
                     }
                 },
                 timeScale: {
@@ -639,7 +676,12 @@ window.TradingViewChart = (function () {
                 rightPriceScale: {
                     textColor: '#64748b',
                     borderColor: 'transparent',
-                    width: 85,
+                    // 85 is sized for the widest label the default 2dp formatter
+                    // can produce. A chart using compactPriceAxis prints "-25L"
+                    // instead of "-2500000.00" and doesn't need the room, so it
+                    // can claim it back for the plot. Opt-in per chart for the
+                    // same reason as the formatter — nothing else should move.
+                    width: config.priceAxisWidth || 85,
                     autoScale: true,
                     visible: true,
                     scaleMargins: { top: 0, bottom: 0 },
@@ -649,7 +691,19 @@ window.TradingViewChart = (function () {
                 // Apply IST timezone formatter to x-axis
                 localization: {
                     locale: 'en-IN',
-                    priceFormatter: val => val.toFixed(2),
+                    // Chart-level, and it WINS over any per-series priceFormat —
+                    // including type:'volume' and type:'custom'. Verified against
+                    // lightweight-charts 5.2.1: a histogram declaring
+                    // priceFormat:{type:'volume'} still renders its axis through
+                    // this function, even though series.priceFormatter() reports
+                    // the volume one. A pane wanting compact ticks therefore
+                    // cannot get them from its series — it has to come from here.
+                    //
+                    // Opt-in per chart so nothing else moves: a chart that does
+                    // not ask keeps the plain 2dp it has always had.
+                    priceFormatter: config.compactPriceAxis
+                        ? _tvCompactPrice
+                        : val => val.toFixed(2),
                     timeFormatter: t => {
                         const d = new Date(t * 1000);
                         const h = String(d.getUTCHours()).padStart(2, '0');

@@ -99,8 +99,14 @@ def _bar(d, high, low, close):
     return {'date': _dt(2026, 8, d), 'high': high, 'low': low, 'close': close}
 
 
-def _band(bars, monkeypatch):
-    """Drive the real _cpr_band_from_daily against a stub provider."""
+def _band(bars, monkeypatch, day='today'):
+    """Drive the real band builder against a stub provider.
+
+    _cpr_band_from_daily became _cpr_bands_from_daily, which returns BOTH the
+    band in force today and the one that will be in force tomorrow from a single
+    fetch. These cases are all about the 'today' band, so that stays the default
+    and every existing assertion below is unchanged.
+    """
     from datetime import date
     import trading_app.app.routes.api as api
 
@@ -114,7 +120,7 @@ def _band(bars, monkeypatch):
             return api.datetime(2026, 8, 19, 9, 30)
 
     monkeypatch.setattr(api, 'datetime', _FakeDT)
-    return api._cpr_band_from_daily(_Svc(), token=256265)
+    return api._cpr_bands_from_daily(_Svc(), token=256265)[day]
 
 
 def test_band_flags_a_wider_than_usual_cpr(monkeypatch):
@@ -159,3 +165,66 @@ def test_history_is_capped_at_the_configured_window(monkeypatch):
     bars += [_bar(d, 24200, 24000, 24150) for d in range(1, 18)]
     b = _band(bars, monkeypatch)
     assert b['history_days'] == _CPR_WIDTH_HISTORY_DAYS
+
+
+# ── next-day band ────────────────────────────────────────────────────────
+# The CPR card toggles between the band in force TODAY (from the last settled
+# session) and the one that will be in force TOMORROW (from today's still-
+# forming bar). Both are the index; only the source bar differs.
+
+def test_next_band_is_built_from_todays_forming_bar():
+    """_bar() dates are in August 2026 and the stub clock is the 19th, so a bar
+    dated the 19th is today's — the one 'today' deliberately excludes."""
+    bars = [_bar(19, 24500, 24000, 24500)]                        # today, forming
+    bars += [_bar(18, 24200, 24100, 24150)]                       # last settled
+    bars += [_bar(d, 24200, 24000, 24102) for d in range(7, 18)]  # context
+
+    import pytest as _p
+    mp = _p.MonkeyPatch()
+    try:
+        today_band = _band(bars, mp, 'today')
+        nxt = _band(bars, mp, 'next')
+    finally:
+        mp.undo()
+
+    # today comes from the 18th: H 24200 L 24100 C 24150
+    assert today_band['pp'] == round((24200 + 24100 + 24150) / 3, 2)
+    # next comes from the 19th: H 24500 L 24000 C 24500
+    assert nxt['pp'] == round((24500 + 24000 + 24500) / 3, 2)
+    assert nxt['pp'] != today_band['pp']
+
+
+def test_next_band_is_none_before_the_session_opens():
+    """No bar dated today — pre-open, a weekend or a holiday. There is nothing
+    to build tomorrow's CPR from, and inventing one from the settled session
+    would just duplicate 'today' under the wrong label."""
+    bars = [_bar(18, 24200, 24100, 24150)]
+    bars += [_bar(d, 24200, 24000, 24102) for d in range(7, 18)]
+
+    import pytest as _p
+    mp = _p.MonkeyPatch()
+    try:
+        assert _band(bars, mp, 'next') is None
+        assert _band(bars, mp, 'today') is not None
+    finally:
+        mp.undo()
+
+
+def test_next_band_context_includes_the_session_today_is_built_from():
+    """'today' is classified against the sessions before its own source bar;
+    'next' is a day later, so the bar driving 'today' becomes part of its
+    context. With a settled session far wider than the quiet ones behind it,
+    that extra sample must lift the average 'next' is measured against."""
+    wide = _bar(18, 24800, 24000, 24800)                           # very wide CPR
+    quiet = [_bar(d, 24200, 24000, 24102) for d in range(7, 18)]   # near-zero CPR
+    bars = [_bar(19, 24300, 24200, 24250)] + [wide] + quiet
+
+    import pytest as _p
+    mp = _p.MonkeyPatch()
+    try:
+        today_band = _band(bars, mp, 'today')
+        nxt = _band(bars, mp, 'next')
+    finally:
+        mp.undo()
+
+    assert today_band['avg_width_pct'] < nxt['avg_width_pct']

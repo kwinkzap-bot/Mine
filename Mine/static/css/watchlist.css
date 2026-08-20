@@ -1,0 +1,639 @@
+/* ================================================================
+   Watchlist.
+
+   The table itself is components/data-grid.css — this file only dresses
+   what the grid doesn't own: the topbar with its type-ahead, the tab bar,
+   the docked drilldown chart, and the tab-name dialog.
+
+   Colours alias the shared --color-* set from theme.css rather than
+   repeating five per-theme blocks, so the page follows the theme switcher
+   with one local token block. The drilldown redeclares them because it is
+   portalled to <body> and so sits outside .wl-page.
+
+   Breakpoints are the four canonical ones from responsive.css (480 / 768 /
+   1024 / 1280); only sm and md are needed here.
+   ================================================================ */
+
+.wl-page {
+    --wl-surface:  var(--color-surface);
+    --wl-bg:       var(--color-bg);
+    --wl-border:   var(--color-border);
+    --wl-text:     var(--color-text);
+    --wl-text-2:   var(--color-text-2);
+    --wl-text-3:   var(--color-text-3);
+    --wl-accent:   var(--color-accent);
+
+    padding-bottom: 24px;
+}
+
+/* ── Topbar ───────────────────────────────────────────────────── */
+
+.wl-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 0 12px;
+}
+
+.wl-title {
+    flex: 0 0 auto;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--wl-text);
+}
+
+/* Positioning context for the suggestion list, which is absolutely
+   positioned so it overlays the tab bar instead of shoving it down. */
+.wl-search-wrap {
+    position: relative;
+    margin-left: auto;
+    flex: 1 1 220px;
+    max-width: 340px;
+}
+
+.wl-search {
+    width: 100%;
+    padding: 6px 11px;
+    font-size: 12px;
+    color: var(--wl-text);
+    background: var(--wl-surface);
+    border: 1px solid var(--wl-border);
+    border-radius: 6px;
+    outline: none;
+}
+.wl-search:focus { border-color: var(--wl-accent); }
+.wl-search:disabled { opacity: .55; cursor: not-allowed; }
+
+.wl-suggest {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--wl-surface);
+    border: 1px solid var(--wl-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-card, 0 4px 12px rgba(0, 0, 0, .15));
+}
+
+.wl-sug {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    font-size: 12px;
+    text-align: left;
+    color: var(--wl-text);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--color-border-sub, var(--wl-border));
+    cursor: pointer;
+}
+.wl-sug:last-child { border-bottom: 0; }
+.wl-sug:hover,
+.wl-sug.wl-sug-active { background: var(--color-row-hover); }
+
+.wl-sug-sym { font-weight: 700; }
+.wl-sug-co {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 11px;
+    color: var(--wl-text-3);
+}
+.wl-sug-kind {
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    color: var(--wl-text-2);
+    border: 1px solid var(--wl-border);
+    border-radius: 9px;
+}
+.wl-sug-kind.wl-kind-index {
+    color: var(--color-special);
+    border-color: var(--color-special);
+}
+
+.wl-sug-empty {
+    padding: 10px;
+    font-size: 11px;
+    color: var(--wl-text-3);
+    text-align: center;
+}
+
+.wl-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--wl-text-2);
+    background: var(--wl-surface);
+    border: 1px solid var(--wl-border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.wl-btn:hover { color: var(--wl-text); border-color: var(--wl-accent); }
+.wl-btn-primary {
+    color: #fff;
+    background: var(--wl-accent);
+    border-color: var(--wl-accent);
+}
+.wl-btn-primary:hover { color: #fff; opacity: .9; }
+
+/* The glyph spins while a refresh is in flight; the label must not, so the
+   animation is on the icon rather than the button. */
+.wl-refresh-icon { display: inline-block; }
+.wl-refreshing { opacity: .7; }
+.wl-refreshing .wl-refresh-icon { animation: wl-spin .8s linear infinite; }
+@keyframes wl-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .wl-refreshing .wl-refresh-icon { animation: none; }
+}
+
+.wl-asof {
+    font-size: 11px;
+    color: var(--wl-text-3);
+    white-space: nowrap;
+}
+
+/* Green when the broker is pricing the rows, amber when they are coming
+   from the delayed fundamentals cache — the difference matters enough to
+   be on screen rather than in a tooltip only. */
+.wl-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-warning);
+}
+.wl-dot.wl-live { background: var(--color-pos); }
+
+/* ── Tab bar ──────────────────────────────────────────────────── */
+
+.wl-tabbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--wl-border);
+    margin-bottom: 12px;
+}
+
+.wl-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--wl-text-2);
+    background: var(--wl-surface);
+    border: 1px solid var(--wl-border);
+    border-radius: 7px;
+    cursor: pointer;
+}
+.wl-tab:hover { color: var(--wl-text); }
+.wl-tab.active {
+    color: #fff;
+    background: var(--wl-accent);
+    border-color: var(--wl-accent);
+}
+
+.wl-tab-count {
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--wl-text-3);
+    background: var(--wl-bg);
+    border-radius: 8px;
+}
+.wl-tab.active .wl-tab-count {
+    color: #fff;
+    background: rgba(255, 255, 255, .22);
+}
+
+/* Rename/delete only appear on the active tab: showing them on every chip
+   turns a five-tab bar into fifteen click targets. */
+.wl-tab-act {
+    padding: 0 2px;
+    font-size: 11px;
+    line-height: 1;
+    color: inherit;
+    background: none;
+    border: 0;
+    opacity: .75;
+    cursor: pointer;
+}
+.wl-tab-act:hover { opacity: 1; }
+
+.wl-tab-add {
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--wl-accent);
+    background: transparent;
+    border: 1px dashed var(--wl-border);
+    border-radius: 7px;
+    cursor: pointer;
+}
+.wl-tab-add:hover { border-color: var(--wl-accent); }
+
+.wl-empty {
+    padding: 40px 16px;
+    font-size: 13px;
+    color: var(--wl-text-3);
+    text-align: center;
+}
+.wl-empty strong { color: var(--wl-text-2); }
+
+/* ── Grid extras ──────────────────────────────────────────────── */
+
+/* The 52-week position bar: where the last price sits between the low and
+   the high, which is the question the two numbers are really asked in
+   pairs to answer. */
+.wl-band {
+    display: inline-block;
+    position: relative;
+    width: 100%;
+    height: 5px;
+    min-width: 54px;
+    background: var(--wl-bg);
+    border: 1px solid var(--wl-border);
+    border-radius: 3px;
+}
+.wl-band-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    background: var(--wl-accent);
+    border-radius: 3px 0 0 3px;
+    opacity: .5;
+}
+.wl-band-mark {
+    position: absolute;
+    top: -2px;
+    width: 2px;
+    height: 9px;
+    background: var(--wl-text);
+    border-radius: 1px;
+}
+
+/* The row whose chart is open in the dock, so it is findable after
+   stepping through several with ‹ ›. */
+.wl-row-open { background: var(--color-accent-dim) !important; }
+/* The tint alone is nearly invisible in the light themes, and after a few
+   ‹ › steps "which row am I on" is the whole question. */
+.wl-row-open td:first-child { box-shadow: inset 3px 0 0 var(--color-accent); }
+
+/* The PE cell is the chart handle the brief asks for, so it has to look
+   clickable rather than being a silent hit area. */
+.wl-pe-cell {
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.wl-del {
+    padding: 1px 6px;
+    font-size: 11px;
+    color: var(--wl-text-3);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.wl-del:hover { color: var(--color-neg); border-color: var(--color-neg); }
+
+/* ── Drilldown ────────────────────────────────────────────────── */
+
+.wl-drill {
+    /* Portalled to <body>, so it sits outside .wl-page where the --wl-*
+       tokens are declared. Same set, redeclared. */
+    --wl-surface:  var(--color-surface);
+    --wl-bg:       var(--color-bg);
+    --wl-border:   var(--color-border);
+    --wl-text:     var(--color-text);
+    --wl-text-2:   var(--color-text-2);
+    --wl-text-3:   var(--color-text-3);
+    --wl-accent:   var(--color-accent);
+
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    background: var(--wl-surface);
+    border-top: 1px solid var(--wl-border);
+    border-radius: 10px 10px 0 0;
+    box-shadow: 0 -6px 28px rgba(0, 0, 0, .18);
+}
+
+/* Room to scroll the last table rows clear of the docked panel. */
+body.wl-drill-open .wl-page { padding-bottom: 430px; }
+
+.wl-drill-hdr {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--wl-border);
+}
+
+.wl-drill-sym {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--wl-text);
+}
+.wl-drill-co {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--wl-text-3);
+}
+
+/* Stand-in for a company logo — a lettered chip is honest, a broken image
+   is not. Same device the OI Crossover drilldown uses. */
+.wl-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 700;
+    color: #fff;
+    background: var(--wl-accent);
+    border-radius: 50%;
+}
+
+.wl-drill-nav {
+    display: inline-flex;
+    border: 1px solid var(--wl-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.wl-drill-nav button {
+    padding: 2px 10px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--wl-text-2);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.wl-drill-nav button + button { border-left: 1px solid var(--wl-border); }
+.wl-drill-nav button:disabled { opacity: .3; cursor: default; }
+
+.wl-tabs,
+.wl-ranges {
+    display: inline-flex;
+    padding: 2px;
+    background: var(--wl-bg);
+    border: 1px solid var(--wl-border);
+    border-radius: 7px;
+}
+.wl-tabs { margin-left: auto; }
+
+.wl-tabs button,
+.wl-ranges button {
+    padding: 3px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--wl-text-2);
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.wl-tabs button.active,
+.wl-ranges button.active {
+    color: var(--wl-text);
+    background: var(--wl-surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+}
+.wl-tabs button:disabled { opacity: .35; cursor: not-allowed; }
+
+.wl-drill-close {
+    font-size: 12px;
+    color: var(--wl-text-3);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+/* Positioning context for the crosshair's date tag, which is a real DOM
+   element rather than SVG text so it can size itself to its content. */
+.wl-drill-body {
+    position: relative;
+    padding: 8px 14px 10px;
+}
+
+.wl-drill-empty {
+    padding: 28px 0;
+    font-size: 12px;
+    color: var(--wl-text-3);
+    text-align: center;
+}
+
+.wl-drill-note {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--wl-text-3);
+}
+
+/* ── Chart ────────────────────────────────────────────────────── */
+
+.wl-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+.wl-leg {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--wl-text-2);
+    background: transparent;
+    border: 1px solid var(--wl-border);
+    border-radius: 11px;
+    cursor: pointer;
+}
+.wl-leg-key {
+    width: 12px;
+    height: 0;
+    border-top: 2px solid currentColor;
+}
+.wl-leg-price .wl-leg-key { color: var(--wl-accent); }
+.wl-leg-pe    .wl-leg-key { color: var(--color-special); }
+.wl-leg-off { opacity: .45; text-decoration: line-through; }
+.wl-eye { font-size: 9px; line-height: 1; }
+
+/* Sized in real pixels by the renderer — no viewBox stretching, so the
+   axis labels don't distort on a wide panel. */
+.wl-svg { display: block; }
+
+.wl-line { fill: none; stroke-width: 1.6; }
+.wl-line-price { stroke: var(--wl-accent); }
+.wl-line-pe { stroke: var(--color-special); }
+
+/* Area under the price line — the drilldown is a single-series read most
+   of the time, and the fill is what makes it legible at a glance. */
+.wl-area-price { fill: var(--color-accent-dim); stroke: none; }
+
+.wl-grid { stroke: var(--wl-border); opacity: .45; stroke-width: 1; }
+.wl-frame { fill: none; stroke: var(--wl-border); stroke-width: 1; opacity: .7; }
+
+/* The 52-week high and low, drawn across the price axis: the chart is
+   opened from a row whose headline numbers are exactly those two. */
+.wl-ref { stroke-width: 1; stroke-dasharray: 4 4; opacity: .65; }
+.wl-ref-high { stroke: var(--color-neg); }
+.wl-ref-low { stroke: var(--color-pos); }
+.wl-ref-label { font-size: 9px; font-weight: 700; }
+.wl-ref-label-high { fill: var(--color-neg); }
+.wl-ref-label-low { fill: var(--color-pos); }
+
+.wl-axis { font-size: 10px; fill: var(--wl-text-3); }
+.wl-axis-t { font-weight: 600; }
+
+.wl-tag circle { stroke: none; }
+.wl-tag-rule { stroke-width: 1; stroke-dasharray: 4 4; opacity: .5; }
+.wl-tag text { font-size: 10px; font-weight: 700; fill: #fff; }
+.wl-tag-price circle, .wl-tag-price rect { fill: var(--wl-accent); }
+.wl-tag-price .wl-tag-rule { stroke: var(--wl-accent); }
+.wl-tag-pe circle, .wl-tag-pe rect { fill: var(--color-special); }
+.wl-tag-pe .wl-tag-rule { stroke: var(--color-special); }
+
+/* The crosshair parts are toggled with the `hidden` attribute. Belt and
+   braces on an SVG subtree: without an explicit rule an unset dot renders
+   as a stray mark in the chart's top-left corner. */
+.wl-cross[hidden], .wl-cross-dot[hidden], .wl-tip[hidden] { display: none; }
+
+.wl-cross-line { stroke: var(--wl-text-2); stroke-width: 1; stroke-dasharray: 3 3; }
+.wl-cross-dot { stroke: var(--wl-surface, #fff); stroke-width: 1.5; }
+.wl-dot-price { fill: var(--wl-accent); }
+.wl-dot-pe { fill: var(--color-special); }
+
+/* Transparent capture surface for the crosshair — the lines themselves are
+   too thin to hit reliably with a pointer. */
+.wl-hit { fill: transparent; cursor: crosshair; }
+
+.wl-tip {
+    position: absolute;
+    bottom: 22px;
+    transform: translateX(-50%);
+    padding: 3px 9px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: #fff;
+    background: #111827;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+/* ── Tab-name dialog ──────────────────────────────────────────── */
+
+/* `display: flex` beats the [hidden] attribute's UA `display: none`, so the
+   dialog would sit open on page load without this. */
+.wl-modal-back[hidden] { display: none; }
+
+.wl-modal-back {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, .45);
+}
+
+.wl-modal {
+    width: 100%;
+    max-width: 380px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .3);
+}
+
+.wl-modal-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text);
+    border-bottom: 1px solid var(--color-border);
+}
+.wl-modal-close {
+    font-size: 12px;
+    color: var(--color-text-3);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.wl-modal-body { padding: 14px; }
+
+.wl-modal-input {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    outline: none;
+}
+.wl-modal-input:focus { border-color: var(--color-accent); }
+
+.wl-modal-msg {
+    min-height: 15px;
+    margin: 7px 0 0;
+    font-size: 11px;
+    color: var(--color-neg);
+}
+
+.wl-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 14px 14px;
+}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .wl-tabs { margin-left: 0; }
+    .wl-drill-nav { margin-left: auto; }
+    body.wl-drill-open .wl-page { padding-bottom: 360px; }
+}
+
+@media (max-width: 480px) {
+    .wl-topbar { gap: 8px; }
+    .wl-title { width: 100%; }
+    .wl-search-wrap { margin-left: 0; max-width: none; }
+    /* The header wraps to three rows on a phone; the chart gets the rest. */
+    body.wl-drill-open .wl-page { padding-bottom: 330px; }
+    .wl-drill-hdr { gap: 6px; padding: 7px 10px; }
+    .wl-drill-body { padding: 8px 10px 10px; }
+    .wl-ranges button, .wl-tabs button { padding: 3px 8px; }
+}
