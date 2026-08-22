@@ -427,6 +427,48 @@ def remove_item(username: str, item_id: int) -> Dict[str, Any]:
     return {'success': True}
 
 
+def move_item(username: str, item_id: int, target_tab_id: int) -> Dict[str, Any]:
+    """Move one symbol to another of this user's tabs.
+
+    A move rather than a remove-and-re-add: re-adding would go through the
+    symbol master, so a scrip that has since been delisted or renamed (NSE
+    retired TATAMOTORS for TMCV/TMPV mid-2026) could not be put back, and the
+    row would simply vanish. Carrying the existing row across keeps whatever
+    it was added as.
+    """
+    _ensure_schema()
+    with _connect() as conn:
+        item = conn.execute("""
+            SELECT i.* FROM watchlist_items i
+            JOIN watchlist_tabs t ON t.id = i.tab_id
+            WHERE i.id = ? AND t.username = ?
+        """, (item_id, username)).fetchone()
+        if not item:
+            return {'success': False, 'error': 'Symbol not found'}
+        if not _owns_tab(conn, username, target_tab_id):
+            return {'success': False, 'error': 'Target tab not found'}
+        if item['tab_id'] == target_tab_id:
+            return {'success': True, 'moved': False}
+
+        count = conn.execute("SELECT COUNT(*) FROM watchlist_items WHERE tab_id = ?",
+                             (target_tab_id,)).fetchone()[0]
+        if count >= MAX_ITEMS_PER_TAB:
+            return {'success': False,
+                    'error': f'That tab already holds {MAX_ITEMS_PER_TAB} symbols'}
+        clash = conn.execute(
+            "SELECT 1 FROM watchlist_items WHERE tab_id = ? AND symbol = ?",
+            (target_tab_id, item['symbol'])).fetchone()
+        if clash:
+            return {'success': False,
+                    'error': f"{item['symbol']} is already in that tab"}
+
+        pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM watchlist_items "
+                           "WHERE tab_id = ?", (target_tab_id,)).fetchone()[0]
+        conn.execute("UPDATE watchlist_items SET tab_id = ?, position = ? WHERE id = ?",
+                     (target_tab_id, pos, item_id))
+        return {'success': True, 'moved': True, 'symbol': item['symbol']}
+
+
 # ── fundamentals ─────────────────────────────────────────────────────────
 
 def _finite(v: Any) -> Optional[float]:
@@ -657,9 +699,13 @@ def _eps_steps(ticker, current_eps: Optional[float]) -> List[Tuple[datetime, flo
     would sum three quarters as if they were four, so those windows are
     dropped rather than summed.
 
-    Falling back to the annual statement when no clean quarterly window
-    exists is what gives a 5-year chart a real re-rating line instead of the
-    price line rescaled.
+    Yahoo's quarterly statement reaches back about five quarters, so on its
+    own it leaves a 5-year chart with a P/E line over its last year and
+    nothing before it — which reads as a broken chart, not as missing data.
+    The annual statement goes back four years, so the two are merged: annual
+    steps carry the early part, quarterly steps take over from the first one
+    they cover. Where both could apply the quarterly figure wins, being the
+    more current of the two.
 
     Both are then checked against today's reported TTM EPS, because Yahoo
     ships statements that are simply not on the same basis as the quote —
@@ -671,7 +717,7 @@ def _eps_steps(ticker, current_eps: Optional[float]) -> List[Tuple[datetime, flo
     """
     DEVIATION = 2.0
 
-    steps: List[Tuple[datetime, float]] = []
+    quarterly: List[Tuple[datetime, float]] = []
     try:
         quarters = _dated_eps(ticker.quarterly_income_stmt)
     except Exception:
@@ -681,14 +727,17 @@ def _eps_steps(ticker, current_eps: Optional[float]) -> List[Tuple[datetime, flo
         spans = [(window[j + 1][0] - window[j][0]).days for j in range(3)]
         if any(span > 130 for span in spans):  # a gap wider than one quarter
             continue
-        steps.append((window[-1][0], sum(v for _, v in window)))
+        quarterly.append((window[-1][0], sum(v for _, v in window)))
 
-    if not steps:
-        try:
-            steps = [(when, eps) for when, eps in _dated_eps(ticker.income_stmt) if eps > 0]
-        except Exception:
-            steps = []
+    try:
+        annual = [(when, eps) for when, eps in _dated_eps(ticker.income_stmt) if eps > 0]
+    except Exception:
+        annual = []
 
+    # Annual up to the first quarterly window, quarterly from there on.
+    cutoff = quarterly[0][0] if quarterly else None
+    steps = [(when, eps) for when, eps in annual
+             if cutoff is None or when < cutoff] + quarterly
     if not steps:
         return []
 

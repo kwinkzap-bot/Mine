@@ -32,10 +32,17 @@
         rows: [],
         // Drilldown
         openSymbol: null,
-        chartMode: 'price',
+        // Opens on Both: price alone answers "what did it do", and the pair
+        // answers "was that earnings or re-rating", which is what a P/E
+        // column is being clicked to ask.
+        chartMode: 'both',
         range: '1y',
         chartData: null,
         hiddenSeries: new Set(),
+        // symbol|range -> payload, and the in-flight promises for the same
+        // keys. See fetchHistory / prefetchNeighbours.
+        history: new Map(),
+        inflight: new Map(),
         timer: null,
         // Type-ahead
         suggestions: [],
@@ -43,6 +50,9 @@
         sugSeq: 0,
         // The dialog is shared by "new tab" and "rename"; this is which.
         modalTab: null,
+        // Order ticket: the row it was opened for, and the broker list.
+        ticket: null,
+        brokers: [],
     };
 
     // ── formatting ───────────────────────────────────────────────────
@@ -128,7 +138,7 @@
                     </button>`;
         }).join('');
         bar.innerHTML = chips +
-            '<button class="wl-tab-add" id="wlAddTab" title="Create a new tab">＋ New tab</button>';
+            '<button class="wl-tab-add" id="wlAddTab" title="Create a new tab">＋</button>';
     }
 
     async function loadTabs(selectId) {
@@ -252,6 +262,227 @@
         await loadTabs(state.activeTab);
     }
 
+    // ── order ticket ─────────────────────────────────────────────────
+    //
+    // The order is built from the ticket's own fields at send time, never
+    // from the row that opened it: the grid re-prices every 60s, and an
+    // order must be the one that was on screen when the button was pressed.
+
+    const PRODUCTS = [['CNC', 'Delivery (CNC)'], ['MIS', 'Intraday (MIS)']];
+    const ORDER_TYPES = [['MARKET', 'Market'], ['LIMIT', 'Limit']];
+
+    // What an MIS order actually blocks. Delivery is the full value; intraday
+    // is that divided by the leverage the broker allows. This is a house
+    // estimate, not a quote — the real multiple is per-stock and per-broker,
+    // and only the broker's own margin call knows it. Change it here.
+    const MIS_LEVERAGE = 5;
+
+    async function loadBrokers() {
+        try {
+            const data = await getJSON(`${API}/brokers`);
+            state.brokers = data.success ? (data.brokers || []) : [];
+        } catch (e) {
+            state.brokers = [];
+        }
+    }
+
+    function ticketBody(row, side) {
+        const price = row.ltp != null ? Number(row.ltp).toFixed(2) : '';
+        const brokers = state.brokers.length
+            ? state.brokers.map((b) => `<option value="${b.instance}">` +
+                `${DataGrid.escape(b.name)} · ${DataGrid.escape(b.type)}</option>`).join('')
+            : '<option value="">No broker configured</option>';
+        return `
+          <div class="wl-ticket-head">
+            <span class="wl-ticket-side wl-side-${side.toLowerCase()}">${side}</span>
+            <strong>${DataGrid.escape(row.symbol)}</strong>
+            <span class="wl-ticket-co">${DataGrid.escape(row.company || '')}</span>
+            <span class="wl-ticket-ltp">LTP ${DataGrid.escape(money(row.ltp))}</span>
+          </div>
+          <div class="wl-ticket-grid">
+            <label for="wlTicketQty">Quantity</label>
+            <input type="number" id="wlTicketQty" min="1" step="1" value="1">
+
+            <label for="wlTicketType">Order type</label>
+            <select id="wlTicketType">
+              ${ORDER_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+            </select>
+
+            <label for="wlTicketPrice">Limit price</label>
+            <input type="number" id="wlTicketPrice" step="0.05" min="0.05" value="${price}" disabled>
+
+            <label for="wlTicketProduct">Product</label>
+            <select id="wlTicketProduct">
+              ${PRODUCTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+            </select>
+
+            <label for="wlTicketBroker">Broker</label>
+            <select id="wlTicketBroker">${brokers}</select>
+          </div>
+          <dl class="wl-ticket-cost" id="wlTicketCost"></dl>
+          <p class="wl-ticket-note" id="wlTicketNote"></p>`;
+    }
+
+    // The one-line restatement of what pressing the button will actually
+    // send. It is rebuilt on every field change, because the thing being
+    // confirmed is the order, not the form.
+    function syncTicket() {
+        const t = state.ticket;
+        if (!t) return;
+        const type = $('wlTicketType').value;
+        const qty = Number($('wlTicketQty').value || 0);
+        const price = $('wlTicketPrice');
+        price.disabled = type !== 'LIMIT';
+
+        // The money the order ties up, priced off whatever the order would
+        // actually go out at: the typed limit, or the last traded price for a
+        // market order. A market order fills where it fills — this is the
+        // size of the position, not a promise about the fill.
+        const product = $('wlTicketProduct').value;
+        const basis = type === 'LIMIT' ? Number(price.value || 0) : Number(t.row.ltp || 0);
+        const value = qty > 0 && basis > 0 ? qty * basis : null;
+        const margin = value === null ? null
+            : (product === 'MIS' ? value / MIS_LEVERAGE : value);
+        $('wlTicketCost').innerHTML =
+            `<dt>Order value</dt><dd>${DataGrid.escape(money(value))}</dd>` +
+            `<dt>Margin</dt><dd>${DataGrid.escape(money(margin))}` +
+            `<span class="wl-ticket-basis">${product === 'MIS'
+                ? `MIS · approx. ${MIS_LEVERAGE}× intraday`
+                : 'CNC · full value'}</span></dd>`;
+
+        const at = type === 'LIMIT'
+            ? `@ ${money(price.value)} limit`
+            : '@ market';
+        const broker = state.brokers.find(
+            (b) => String(b.instance) === $('wlTicketBroker').value);
+        $('wlTicketNote').textContent = qty > 0 && broker
+            ? `${t.side} ${qty} ${t.row.symbol} ${at} · ` +
+              `${product} · ${broker.name}`
+            : 'Fill in a quantity and choose a broker.';
+        $('wlTicketSend').disabled = !(qty > 0 && broker);
+    }
+
+    function openTicket(symbol, side) {
+        const row = state.rows.find((r) => r.symbol === symbol);
+        if (!row || row.kind === 'INDEX') return;
+
+        state.ticket = { row, side };
+        $('wlTicketTitle').textContent = `${side} ${row.symbol}`;
+        $('wlTicketBody').innerHTML = ticketBody(row, side);
+        $('wlTicketMsg').textContent = '';
+        $('wlTicketMsg').className = 'wl-ticket-msg';
+        $('wlTicketSend').textContent = 'Place order';
+        $('wlTicketSend').className = `wl-btn wl-btn-primary wl-send-${side.toLowerCase()}`;
+        $('wlTicketBack').hidden = false;
+
+        ['wlTicketQty', 'wlTicketType', 'wlTicketPrice', 'wlTicketProduct', 'wlTicketBroker']
+            .forEach((id) => {
+                $(id).addEventListener('input', syncTicket);
+                $(id).addEventListener('change', syncTicket);
+            });
+        syncTicket();
+        $('wlTicketQty').focus();
+        $('wlTicketQty').select();
+    }
+
+    function closeTicket() {
+        state.ticket = null;
+        $('wlTicketBack').hidden = true;
+    }
+
+    async function sendOrder() {
+        const t = state.ticket;
+        if (!t) return;
+        const send = $('wlTicketSend');
+        const msg = $('wlTicketMsg');
+        send.disabled = true;
+        send.textContent = 'Placing…';
+        msg.textContent = '';
+        msg.className = 'wl-ticket-msg';
+
+        const body = {
+            symbol: t.row.symbol,
+            side: t.side,
+            qty: Number($('wlTicketQty').value || 0),
+            order_type: $('wlTicketType').value,
+            product: $('wlTicketProduct').value,
+            broker: Number($('wlTicketBroker').value || 0),
+            ltp: t.row.ltp,
+        };
+        if (body.order_type === 'LIMIT') body.limit_price = Number($('wlTicketPrice').value || 0);
+
+        let result;
+        try {
+            result = await sendJSON(`${API}/order`, 'POST', body);
+        } catch (e) {
+            result = { success: false, error: e.message };
+        }
+
+        if (!result.success) {
+            msg.textContent = result.error || 'The broker rejected the order';
+            msg.className = 'wl-ticket-msg wl-ticket-err';
+            send.disabled = false;
+            send.textContent = 'Place order';
+            return;
+        }
+        // Left on screen with the order id rather than closed on success: the
+        // id is the only thing that ties this back to the broker's order book.
+        msg.textContent = `Placed · order ${result.order_id} at ${result.broker}`;
+        msg.className = 'wl-ticket-msg wl-ticket-ok';
+        send.textContent = 'Placed';
+        toast(`${body.side} ${body.qty} ${body.symbol} placed`, true);
+    }
+
+    async function moveItem(id, symbol, tabId) {
+        const result = await sendJSON(`${API}/items/${id}/tab`, 'PUT', { tab_id: tabId });
+        if (!result.success) { toast(result.error || 'Could not move the symbol', false); return; }
+        const target = state.tabs.find((t) => t.id === tabId);
+        if (state.openSymbol === symbol) closeDrill();
+        toast(`${symbol} moved to ${target ? target.name : 'the other tab'}`, true);
+        await loadTabs(state.activeTab);
+    }
+
+    // Target-tab picker. A popup rather than a select in every row: the list
+    // is the same for all of them, and a row of dropdowns is a wall of chrome
+    // for something clicked once in a while.
+    function openMoveMenu(button) {
+        closeMoveMenu();
+        const id = Number(button.dataset.move);
+        const symbol = button.dataset.symbol;
+        const others = state.tabs.filter((t) => t.id !== state.activeTab);
+        if (!others.length) return;
+
+        const menu = document.createElement('div');
+        menu.className = 'wl-menu';
+        menu.id = 'wlMoveMenu';
+        menu.innerHTML = `<div class="wl-menu-hdr">Move ${DataGrid.escape(symbol)} to</div>` +
+            others.map((t) => `<button class="wl-menu-item" data-tab="${t.id}">` +
+                `${DataGrid.escape(t.name)}<span class="wl-tab-count">${t.count}</span>` +
+                `</button>`).join('');
+        document.body.appendChild(menu);
+
+        // Anchored to the button, then pulled back inside the viewport — the
+        // action column sits at the right edge, so a menu placed naively
+        // hangs off the page on a narrow screen.
+        const rect = button.getBoundingClientRect();
+        const width = menu.offsetWidth;
+        menu.style.top = `${window.scrollY + rect.bottom + 4}px`;
+        menu.style.left =
+            `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+
+        menu.addEventListener('click', (e) => {
+            const pick = e.target.closest('[data-tab]');
+            if (!pick) return;
+            closeMoveMenu();
+            moveItem(id, symbol, Number(pick.dataset.tab));
+        });
+    }
+
+    function closeMoveMenu() {
+        const menu = $('wlMoveMenu');
+        if (menu) menu.remove();
+    }
+
     // ── grid ─────────────────────────────────────────────────────────
 
     // The 52-week position bar. Rendered rather than formatted because it is
@@ -269,22 +500,23 @@
 
     const COLUMNS = [
         {
+            // The company name is the cell's tooltip rather than a column of
+            // its own: it is the widest thing in the grid and the one field
+            // nobody scans down. It still leads the drilldown header, which
+            // is where "which company is this" actually gets asked.
             key: 'symbol', label: 'Symbol', sortable: true, strong: true,
+            title: (v, row) => row.company || v,
             render: (v, row) => DataGrid.escape(v) +
                 (row.kind === 'INDEX' ? ' <span class="wl-sug-kind wl-kind-index">INDEX</span>' : ''),
-        },
-        {
-            key: 'company', label: 'Stock Name', sortable: true,
-            cellClass: 'dg-muted', title: (v) => v || '',
-            format: (v) => v || '—',
         },
         { key: 'ltp', label: 'LTP', sortable: true, align: 'right', strong: true, format: money },
         {
             key: 'change_pct', label: 'Chg %', sortable: true, align: 'right',
             format: pct, tone: DataGrid.sign,
         },
-        { key: 'low52', label: '52W Low', sortable: true, align: 'right', format: money },
-        { key: 'high52', label: '52W High', sortable: true, align: 'right', format: money },
+        // The two raw 52-week numbers are gone from the grid; the range bar
+        // is the read they existed for, and it carries both of them in its
+        // tooltip. They still label the reference lines on the chart.
         { key: 'band52', label: '52W Range', sortable: true, align: 'center', render: bandCell },
         {
             key: 'from_high', label: 'Off High', sortable: true, align: 'right',
@@ -305,16 +537,33 @@
         },
         {
             key: 'id', label: '', align: 'center',
-            render: (v, row) => `<button class="wl-del" data-remove="${v}" ` +
-                `data-symbol="${DataGrid.escape(row.symbol)}" title="Remove from this tab">✕</button>`,
+            render: (v, row) => {
+                const sym = DataGrid.escape(row.symbol);
+                const alone = state.tabs.length < 2;
+                // An index has no cash-market instrument to buy, so it gets no
+                // order buttons at all rather than buttons that always fail.
+                const trade = row.kind === 'INDEX' ? '' :
+                    `<button class="wl-act wl-buy" data-order="BUY" data-symbol="${sym}" ` +
+                    `title="Buy ${sym}">B</button>` +
+                    `<button class="wl-act wl-sell" data-order="SELL" data-symbol="${sym}" ` +
+                    `title="Sell ${sym}">S</button>`;
+                return trade +
+                       `<button class="wl-act" data-move="${v}" data-symbol="${sym}"` +
+                       `${alone ? ' disabled' : ''} title="${alone
+                            ? 'Create another tab to move this into'
+                            : 'Move to another watchlist'}">⇄</button>` +
+                       `<button class="wl-act wl-del" data-remove="${v}" data-symbol="${sym}" ` +
+                       `title="Remove from this tab">✕</button>`;
+            },
         },
     ];
 
     function renderGrid() {
+        closeMoveMenu();   // its anchor row is about to be replaced
         const host = $('wlGrid');
         if (!state.activeTab) {
             host.innerHTML = '<div class="wl-empty">No tabs yet. ' +
-                'Create one with <strong>＋ New tab</strong> to start a watchlist.</div>';
+                'Create one with <strong>＋</strong> to start a watchlist.</div>';
             return;
         }
         if (!state.rows.length) {
@@ -585,7 +834,7 @@
             <rect class="wl-hit" x="${PAD.L}" y="${PAD.T}" width="${geo.plotW}"
                   height="${geo.plotH}"></rect>
         </svg>
-        <div class="wl-tip" hidden></div>`;
+        <div class="wl-tip" hidden></div>`;   // filled by the crosshair
     }
 
     function renderLegend(data) {
@@ -627,7 +876,7 @@
             line.setAttribute('x1', cx.toFixed(1));
             line.setAttribute('x2', cx.toFixed(1));
 
-            const parts = [];
+            const rows = [];
             cross.querySelectorAll('.wl-cross-dot').forEach((dot) => {
                 const name = dot.dataset.key;
                 const s = SERIES[name];
@@ -636,13 +885,23 @@
                 dot.removeAttribute('hidden');
                 dot.setAttribute('cx', cx.toFixed(1));
                 dot.setAttribute('cy', geo.y(name)(value).toFixed(1));
-                parts.push(`${s.label} ${s.fmt(value)}`);
+                rows.push(`<span class="wl-tip-row">` +
+                          `<i class="wl-tip-key wl-key-${s.cls}"></i>` +
+                          `<span class="wl-tip-label">${DataGrid.escape(s.label)}</span>` +
+                          `<b>${DataGrid.escape(s.fmt(value))}</b></span>`);
             });
 
-            tip.textContent = `${dayLabel(p.ts)}  ·  ${parts.join('  ·  ')}`;
+            tip.innerHTML = `<span class="wl-tip-date">${DataGrid.escape(dayLabel(p.ts))}</span>` +
+                            rows.join('');
             tip.removeAttribute('hidden');
-            const half = tip.offsetWidth / 2;
-            tip.style.left = Math.min(Math.max(cx, half), geo.width - half) + 'px';
+
+            // Rides the crosshair, flipping to its left near the right edge
+            // so the card never runs off the panel or covers the line it is
+            // reading. Vertically pinned near the top of the plot, out of the
+            // way of both series.
+            const width = tip.offsetWidth;
+            const flip = cx + 14 + width > geo.width - 4;
+            tip.style.left = Math.max(4, flip ? cx - 14 - width : cx + 14) + 'px';
         };
 
         svg.addEventListener('mousemove', (ev) => move(ev.clientX));
@@ -692,22 +951,13 @@
         const width = Math.max(320, measured);
         const geo = buildGeometry(data, width);
 
+        $('wlLegend').innerHTML = renderLegend(data);
         body.innerHTML =
-            `<div class="wl-legend">${renderLegend(data)}</div>` +
             (geo ? renderChart(data, geo)
                  : '<div class="wl-drill-empty">Not enough history to draw this view.</div>') +
             `<div class="wl-drill-note">${DataGrid.escape(chartNote(data))}</div>`;
 
         if (geo) bindCrosshair(body, geo);
-
-        body.querySelectorAll('.wl-leg').forEach((btn) => {
-            btn.addEventListener('click', () => {
-                const name = btn.dataset.series;
-                if (state.hiddenSeries.has(name)) state.hiddenSeries.delete(name);
-                else state.hiddenSeries.add(name);
-                drawChart(body, data);
-            });
-        });
     }
 
     function syncChartTabs(data) {
@@ -720,6 +970,52 @@
         $('wlRanges').querySelectorAll('button').forEach((b) => {
             b.classList.toggle('active', b.dataset.range === state.range);
         });
+    }
+
+    // Daily closes for a symbol do not change while the panel is open, so a
+    // series is fetched once per sitting. Without this, every ‹ › press paid
+    // a round trip plus a yfinance download for a series it had already had
+    // on screen a moment earlier — seconds of a blank panel to redraw the
+    // chart the user just stepped away from.
+    const HISTORY_CACHE_MAX = 40;
+
+    function fetchHistory(symbol, range) {
+        const key = `${symbol}|${range}`;
+        const hit = state.history.get(key);
+        if (hit) return Promise.resolve(hit);
+        // Stepping quickly can ask for the same series twice before the first
+        // answer lands;;both callers should wait on the one request.
+        const pending = state.inflight.get(key);
+        if (pending) return pending;
+
+        const request = getJSON(
+            `${API}/history?symbol=${encodeURIComponent(symbol)}&range=${range}`)
+            .then((data) => {
+                if (data && data.success) {
+                    // Oldest-first eviction, so a long session on one tab
+                    // cannot grow this without bound.
+                    if (state.history.size >= HISTORY_CACHE_MAX) {
+                        state.history.delete(state.history.keys().next().value);
+                    }
+                    state.history.set(key, data);
+                }
+                return data;
+            })
+            .finally(() => state.inflight.delete(key));
+
+        state.inflight.set(key, request);
+        return request;
+    }
+
+    // The two symbols ‹ › would land on, fetched quietly once the current one
+    // is drawn. It turns the *first* press into a cache hit too, which is the
+    // press that used to hurt.
+    function prefetchNeighbours(symbol) {
+        const i = state.rows.findIndex((r) => r.symbol === symbol);
+        if (i < 0) return;
+        [state.rows[i - 1], state.rows[i + 1]]
+            .filter(Boolean)
+            .forEach((row) => { fetchHistory(row.symbol, state.range).catch(() => {}); });
     }
 
     async function openDrill(symbol, mode) {
@@ -738,35 +1034,56 @@
             DataGrid.escape(symbol) +
             `<span class="wl-drill-co">${DataGrid.escape(row.company || '')}</span>`;
         syncNav();
-        syncChartTabs(null);
-        body.innerHTML = '<div class="wl-drill-empty">Loading…</div>';
 
-        try {
-            const data = await getJSON(
-                `${API}/history?symbol=${encodeURIComponent(symbol)}&range=${state.range}`);
-            if (state.openSymbol !== symbol) return;  // stepped away while loading
-            if (!data.success) {
-                body.innerHTML = `<div class="wl-drill-empty">${DataGrid.escape(data.error ||
-                    'No history available')}</div>`;
-                return;
-            }
-            // The 52-week rules come from the row, not the history call —
-            // they are the same numbers the grid is showing, and drawing a
-            // separately-derived pair would invite them to disagree.
-            data.high52 = row.high52;
-            data.low52 = row.low52;
-            state.chartData = data;
-            syncChartTabs(data);
-            if (data.kind === 'INDEX' && state.chartMode !== 'price') {
-                state.chartMode = 'price';
-                syncChartTabs(data);
-            }
-            drawChart(body, data);
-            renderGrid();
-        } catch (e) {
-            body.innerHTML = `<div class="wl-drill-empty">Could not load ` +
-                `${DataGrid.escape(symbol)}: ${DataGrid.escape(e.message)}</div>`;
+        const cached = state.history.get(`${symbol}|${state.range}`);
+        if (cached) {
+            // Straight to the chart, no loading state at all — this is the
+            // path every ‹ › press takes once the neighbours are prefetched.
+            paintChart(body, cached, row);
+            prefetchNeighbours(symbol);
+            return;
         }
+
+        // Nothing cached yet. Keep whatever chart is already on screen and
+        // just mark it stale: replacing it with a "Loading…" box collapsed
+        // the panel to a small bubble and back on every step, which read as
+        // slower than the fetch actually was.
+        if (!body.querySelector('.wl-svg')) {
+            body.innerHTML = '<div class="wl-drill-empty">Loading…</div>';
+        }
+        drill.classList.add('wl-drill-loading');
+        syncChartTabs(null);
+
+        let data;
+        try {
+            data = await fetchHistory(symbol, state.range);
+        } catch (e) {
+            data = { success: false, error: e.message };
+        }
+        if (state.openSymbol !== symbol) return;   // stepped away while loading
+        drill.classList.remove('wl-drill-loading');
+
+        if (!data || !data.success) {
+            body.innerHTML = `<div class="wl-drill-empty">${DataGrid.escape(
+                (data && data.error) || 'No history available')}</div>`;
+            return;
+        }
+        paintChart(body, data, row);
+        prefetchNeighbours(symbol);
+    }
+
+    // Everything between "the series is in hand" and "it is on screen".
+    function paintChart(body, payload, row) {
+        // The 52-week rules come from the row, not the history call — they are
+        // the same numbers the grid is showing, and drawing a separately
+        // derived pair would invite them to disagree. Copied onto a shallow
+        // clone rather than the cached payload, which outlives this row.
+        const data = { ...payload, high52: row.high52, low52: row.low52 };
+        state.chartData = data;
+        if (data.kind === 'INDEX' && state.chartMode !== 'price') state.chartMode = 'price';
+        syncChartTabs(data);
+        drawChart(body, data);
+        renderGrid();
     }
 
     function step(delta) {
@@ -786,6 +1103,7 @@
         state.openSymbol = null;
         state.chartData = null;
         $('wlDrill').hidden = true;
+        $('wlLegend').innerHTML = '';
         document.body.classList.remove('wl-drill-open');
         renderGrid();
     }
@@ -809,20 +1127,32 @@
             if (chip) selectTab(Number(chip.dataset.tab));
         });
 
-        // Grid — remove button, P/E cell, and row click, in that order of
-        // specificity so the remove button never also opens the chart.
+        // Grid — the row's own buttons, then the P/E cell, then the row, in
+        // that order of specificity so a button never also opens the chart.
         $('wlGrid').addEventListener('click', (e) => {
+            const order = e.target.closest('[data-order]');
+            if (order) {
+                e.stopPropagation();
+                openTicket(order.dataset.symbol, order.dataset.order);
+                return;
+            }
             const del = e.target.closest('[data-remove]');
             if (del) {
                 e.stopPropagation();
                 removeItem(Number(del.dataset.remove), del.dataset.symbol);
                 return;
             }
+            const move = e.target.closest('[data-move]');
+            if (move) {
+                e.stopPropagation();
+                if (!move.disabled) openMoveMenu(move);
+                return;
+            }
             const tr = e.target.closest('tr[data-symbol]');
             if (!tr) return;
             const symbol = tr.dataset.symbol;
             if (symbol === state.openSymbol) { closeDrill(); return; }
-            openDrill(symbol, e.target.closest('.wl-pe-cell') ? 'pe' : 'price');
+            openDrill(symbol, e.target.closest('.wl-pe-cell') ? 'pe' : 'both');
         });
 
         // Type-ahead
@@ -852,6 +1182,7 @@
         });
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.wl-search-wrap')) hideSuggestions();
+            if (!e.target.closest('#wlMoveMenu, [data-move]')) closeMoveMenu();
         });
 
         // Refresh forces the fundamentals cache too — the plain 60s poll
@@ -870,10 +1201,26 @@
             if (e.target === $('wlModalBack')) closeModal();
         });
 
+        // Order ticket. The confirm button is the only path to /order.
+        $('wlTicketSend').addEventListener('click', sendOrder);
+        $('wlTicketCancel').addEventListener('click', closeTicket);
+        $('wlTicketClose').addEventListener('click', closeTicket);
+        $('wlTicketBack').addEventListener('click', (e) => {
+            if (e.target === $('wlTicketBack')) closeTicket();
+        });
+
         // Drilldown controls
         $('wlDrillClose').addEventListener('click', closeDrill);
         $('wlPrev').addEventListener('click', () => step(-1));
         $('wlNext').addEventListener('click', () => step(1));
+        $('wlLegend').addEventListener('click', (e) => {
+            const btn = e.target.closest('.wl-leg');
+            if (!btn || btn.disabled || !state.chartData) return;
+            const name = btn.dataset.series;
+            if (state.hiddenSeries.has(name)) state.hiddenSeries.delete(name);
+            else state.hiddenSeries.add(name);
+            drawChart($('wlDrillBody'), state.chartData);
+        });
         $('wlChartTabs').addEventListener('click', (e) => {
             const btn = e.target.closest('button[data-mode]');
             if (!btn || btn.disabled) return;
@@ -887,10 +1234,19 @@
             if (!btn || btn.dataset.range === state.range) return;
             state.range = btn.dataset.range;
             syncChartTabs(state.chartData);
+            // openDrill re-reads state.range, so this both redraws the open
+            // symbol and re-primes ‹ › for the range just chosen.
             if (state.openSymbol) openDrill(state.openSymbol);
         });
 
         document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && $('wlMoveMenu')) { closeMoveMenu(); return; }
+            // Escape backs out of the order, not out of the panel behind it —
+            // and never places one, whatever has focus.
+            if (!$('wlTicketBack').hidden) {
+                if (e.key === 'Escape') closeTicket();
+                return;
+            }
             if ($('wlModalBack').hidden === false) return;  // the dialog owns Escape
             if ($('wlDrill').hidden) return;
             if (e.target.matches('input, textarea')) return;
@@ -925,10 +1281,18 @@
     }
 
     function init() {
-        // The drilldown is portalled to <body> so `position: fixed` is
-        // relative to the viewport, not to any transformed ancestor.
+        // Both of these are `position: fixed` and both must be portalled out
+        // of .container, which carries `content-visibility: auto` — that
+        // implies paint containment, which makes .container the containing
+        // block for fixed descendants. Left inside it, the dock and the
+        // dialog size and centre themselves against the whole scrolling page
+        // instead of the viewport: with 36 rows on screen the "New tab"
+        // dialog opened level with row 24, a third of the way down the list.
         document.body.appendChild($('wlDrill'));
+        document.body.appendChild($('wlModalBack'));
+        document.body.appendChild($('wlTicketBack'));
         bind();
+        loadBrokers();
         loadTabs();
         state.timer = setInterval(() => loadRows(), REFRESH_MS);
     }

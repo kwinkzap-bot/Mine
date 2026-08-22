@@ -13336,17 +13336,30 @@ def _sm_build_order_service(username: str, instance_num: int, broker_type: str):
 
 
 def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: str = 'BUY',
-                           price: Optional[float] = None):
-    """Place a CNC MARKET BUY/SELL for one NSE equity. Returns (order_id, error).
+                           price: Optional[float] = None, product: str = 'CNC',
+                           order_type: str = 'MARKET', limit_price: Optional[float] = None):
+    """Place a regular BUY/SELL for one NSE equity. Returns (order_id, error).
 
     `price` is the last known price (from the data provider) used to price the
     padded-LIMIT fallback when a broker blocks bare MARKET orders.
+
+    `product` ('CNC' delivery / 'MIS' intraday) and `order_type`
+    ('MARKET' / 'LIMIT' with `limit_price`) both default to what Swing
+    Momentum's go-live has always sent, so its behaviour is unchanged; the
+    Watchlist order ticket is what varies them.
     """
     side = side.upper()
+    product = (product or 'CNC').upper()
+    order_type = (order_type or 'MARKET').upper()
+    intraday = product == 'MIS'
+    if order_type == 'LIMIT' and not limit_price:
+        return (None, 'limit_price is required for a LIMIT order')
     try:
         if broker_type == 'fyers':
             r = svc.place_order(symbol=f'NSE:{symbol}-EQ', side=(1 if side == 'BUY' else -1),
-                                quantity=qty, order_type=2, product_type='CNC')
+                                quantity=qty, order_type=(1 if order_type == 'LIMIT' else 2),
+                                product_type=('INTRADAY' if intraday else 'CNC'),
+                                limit_price=float(limit_price or 0))
             return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
 
         if broker_type == 'dhan':
@@ -13355,14 +13368,23 @@ def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: s
             if not sec_id:
                 return (None, f'No Dhan security_id for {symbol}')
             r = svc.place_order(security_id=str(sec_id), transaction_type=side, quantity=qty,
-                                order_type='MARKET', product_type='CNC', exchange_segment='NSE_EQ')
+                                order_type=order_type,
+                                product_type=('INTRADAY' if intraday else 'CNC'),
+                                exchange_segment='NSE_EQ', price=float(limit_price or 0))
             return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
 
         if broker_type == 'zerodha':
             txn    = svc.TRANSACTION_TYPE_BUY if side == 'BUY' else svc.TRANSACTION_TYPE_SELL
             common = dict(variety=svc.VARIETY_REGULAR, exchange=svc.EXCHANGE_NSE,
-                          tradingsymbol=symbol, transaction_type=txn,
-                          quantity=qty, product=svc.PRODUCT_CNC)
+                          tradingsymbol=symbol, transaction_type=txn, quantity=qty,
+                          product=(svc.PRODUCT_MIS if intraday else svc.PRODUCT_CNC))
+            if order_type == 'LIMIT':
+                # An explicit LIMIT is what the caller asked for — it is not a
+                # fallback, so a rejection here is reported rather than retried
+                # at some other price.
+                oid = svc.place_order(order_type=svc.ORDER_TYPE_LIMIT,
+                                      price=float(limit_price), **common)
+                return (oid, None)
             try:
                 # Try a plain MARKET order first via the SDK (no special permission).
                 oid = svc.place_order(order_type=svc.ORDER_TYPE_MARKET, **common)
@@ -13415,9 +13437,15 @@ def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: s
                     return (oid, None)
 
         if broker_type == 'kotak':
-            r = svc.place_order(tradingsymbol=symbol, transaction_type=side, price=0.0,
-                                quantity=qty, exchange_segment='nse_cm',
-                                product='CNC', order_type='MKT')
+            # `product_type=`, not `product=`: KotakOrderService.place_order has
+            # no `product` parameter, so this call used to raise TypeError and
+            # be swallowed by the except below — every Kotak equity order failed
+            # with an unhelpful message and none of them ever reached Kotak.
+            r = svc.place_order(tradingsymbol=symbol, transaction_type=side,
+                                price=float(limit_price or 0), quantity=qty,
+                                exchange_segment='nse_cm',
+                                product_type=('MIS' if intraday else 'CNC'),
+                                order_type=('L' if order_type == 'LIMIT' else 'MKT'))
             return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
     except Exception as e:
         return (None, str(e))

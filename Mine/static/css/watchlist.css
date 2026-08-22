@@ -22,6 +22,11 @@
     --wl-text-2:   var(--color-text-2);
     --wl-text-3:   var(--color-text-3);
     --wl-accent:   var(--color-accent);
+    /* Amber for the P/E line. Blue is the price line and green/red are spoken
+       for by up/down everywhere else in the app, so a third hue is needed
+       that neither competes with the price nor implies a direction. The
+       purple --color-special it used before reads as "flagged" here. */
+    --wl-pe:       #f59e0b;
 
     padding-bottom: 24px;
 }
@@ -33,7 +38,7 @@
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
-    padding: 10px 0 12px;
+    padding: 0px 0 6px;
 }
 
 .wl-title {
@@ -179,9 +184,8 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    padding-bottom: 10px;
+    padding-bottom: 6px;
     border-bottom: 1px solid var(--wl-border);
-    margin-bottom: 12px;
 }
 
 .wl-tab {
@@ -300,7 +304,9 @@
     cursor: pointer;
 }
 
-.wl-del {
+/* Row actions: move to another watchlist, and remove. Quiet until hovered —
+   twelve columns of data should not be competing with two icons per row. */
+.wl-act {
     padding: 1px 6px;
     font-size: 11px;
     color: var(--wl-text-3);
@@ -309,7 +315,50 @@
     border-radius: 5px;
     cursor: pointer;
 }
+.wl-act:hover { color: var(--wl-accent); border-color: var(--wl-accent); }
+.wl-act:disabled { opacity: .3; cursor: not-allowed; }
+.wl-act:disabled:hover { color: var(--wl-text-3); border-color: transparent; }
 .wl-del:hover { color: var(--color-neg); border-color: var(--color-neg); }
+
+/* Target-tab picker, anchored under the move button and portalled to <body>
+   so the grid's own overflow-x scroll box cannot clip it. */
+.wl-menu {
+    position: absolute;
+    z-index: 50;
+    min-width: 168px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 4px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-card, 0 4px 12px rgba(0, 0, 0, .15));
+}
+.wl-menu-hdr {
+    padding: 5px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+}
+.wl-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    color: var(--color-text);
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.wl-menu-item:hover { background: var(--color-accent-dim); }
 
 /* ── Drilldown ────────────────────────────────────────────────── */
 
@@ -323,6 +372,7 @@
     --wl-text-2:   var(--color-text-2);
     --wl-text-3:   var(--color-text-3);
     --wl-accent:   var(--color-accent);
+    --wl-pe:       #f59e0b;
 
     position: fixed;
     left: 0;
@@ -333,6 +383,24 @@
     border-top: 1px solid var(--wl-border);
     border-radius: 10px 10px 0 0;
     box-shadow: 0 -6px 28px rgba(0, 0, 0, .18);
+}
+
+/* A series that genuinely has to be fetched: the chart already on screen
+   stays put and just dims, with the header showing where the wait is. Far
+   less jarring than swapping the plot for a loading box and back. */
+.wl-drill-loading .wl-drill-body { opacity: .55; transition: opacity .12s ease; }
+.wl-drill-loading .wl-drill-sym::after {
+    content: '';
+    width: 11px;
+    height: 11px;
+    margin-left: 2px;
+    border: 2px solid var(--wl-border);
+    border-top-color: var(--wl-accent);
+    border-radius: 50%;
+    animation: wl-spin .7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .wl-drill-loading .wl-drill-sym::after { animation: none; }
 }
 
 /* Room to scroll the last table rows clear of the docked panel. */
@@ -454,12 +522,14 @@ body.wl-drill-open .wl-page { padding-bottom: 430px; }
 
 /* ── Chart ────────────────────────────────────────────────────── */
 
+/* In the header, beside the symbol it describes. `min-width: 0` so a long
+   company name yields to it rather than pushing it into the tab group. */
 .wl-legend {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    margin-bottom: 4px;
+    min-width: 0;
 }
 .wl-leg {
     display: inline-flex;
@@ -480,7 +550,7 @@ body.wl-drill-open .wl-page { padding-bottom: 430px; }
     border-top: 2px solid currentColor;
 }
 .wl-leg-price .wl-leg-key { color: var(--wl-accent); }
-.wl-leg-pe    .wl-leg-key { color: var(--color-special); }
+.wl-leg-pe    .wl-leg-key { color: var(--wl-pe); }
 .wl-leg-off { opacity: .45; text-decoration: line-through; }
 .wl-eye { font-size: 9px; line-height: 1; }
 
@@ -490,7 +560,7 @@ body.wl-drill-open .wl-page { padding-bottom: 430px; }
 
 .wl-line { fill: none; stroke-width: 1.6; }
 .wl-line-price { stroke: var(--wl-accent); }
-.wl-line-pe { stroke: var(--color-special); }
+.wl-line-pe { stroke: var(--wl-pe); }
 
 /* Area under the price line — the drilldown is a single-series read most
    of the time, and the fill is what makes it legible at a glance. */
@@ -516,8 +586,8 @@ body.wl-drill-open .wl-page { padding-bottom: 430px; }
 .wl-tag text { font-size: 10px; font-weight: 700; fill: #fff; }
 .wl-tag-price circle, .wl-tag-price rect { fill: var(--wl-accent); }
 .wl-tag-price .wl-tag-rule { stroke: var(--wl-accent); }
-.wl-tag-pe circle, .wl-tag-pe rect { fill: var(--color-special); }
-.wl-tag-pe .wl-tag-rule { stroke: var(--color-special); }
+.wl-tag-pe circle, .wl-tag-pe rect { fill: var(--wl-pe); }
+.wl-tag-pe .wl-tag-rule { stroke: var(--wl-pe); }
 
 /* The crosshair parts are toggled with the `hidden` attribute. Belt and
    braces on an SVG subtree: without an explicit rule an unset dot renders
@@ -527,25 +597,220 @@ body.wl-drill-open .wl-page { padding-bottom: 430px; }
 .wl-cross-line { stroke: var(--wl-text-2); stroke-width: 1; stroke-dasharray: 3 3; }
 .wl-cross-dot { stroke: var(--wl-surface, #fff); stroke-width: 1.5; }
 .wl-dot-price { fill: var(--wl-accent); }
-.wl-dot-pe { fill: var(--color-special); }
+.wl-dot-pe { fill: var(--wl-pe); }
 
 /* Transparent capture surface for the crosshair — the lines themselves are
    too thin to hit reliably with a pointer. */
 .wl-hit { fill: transparent; cursor: crosshair; }
 
+/* Hover readout. A card beside the crosshair, one row per line on screen,
+   each with the colour of the line it reports — reading a value off the
+   axis by eye is exactly what a chart tooltip exists to save. */
 .wl-tip {
     position: absolute;
-    bottom: 22px;
-    transform: translateX(-50%);
-    padding: 3px 9px;
-    font-size: 10px;
-    font-weight: 600;
+    top: 34px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 9px;
+    font-size: 11px;
     white-space: nowrap;
-    color: #fff;
-    background: #111827;
-    border-radius: 4px;
+    color: #f8fafc;
+    background: rgba(17, 24, 39, .96);
+    border: 1px solid rgba(148, 163, 184, .25);
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
     pointer-events: none;
 }
+.wl-tip[hidden] { display: none; }
+
+.wl-tip-date {
+    font-size: 10px;
+    font-weight: 700;
+    color: #94a3b8;
+}
+.wl-tip-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.wl-tip-row b { margin-left: auto; font-weight: 700; }
+.wl-tip-label { color: #cbd5e1; }
+.wl-tip-key {
+    width: 10px;
+    height: 0;
+    border-top: 2px solid currentColor;
+}
+.wl-key-price { color: var(--wl-accent); }
+.wl-key-pe { color: var(--wl-pe); }
+
+/* ── Order ticket ─────────────────────────────────────────────── */
+
+.wl-act.wl-buy  { color: var(--color-pos); font-weight: 700; }
+.wl-act.wl-sell { color: var(--color-neg); font-weight: 700; }
+.wl-act.wl-buy:hover  { border-color: var(--color-pos); color: var(--color-pos); }
+.wl-act.wl-sell:hover { border-color: var(--color-neg); color: var(--color-neg); }
+
+.wl-ticket-back[hidden] { display: none; }
+.wl-ticket-back {
+    position: fixed;
+    inset: 0;
+    z-index: 70;   /* above the docked drilldown, which it can be opened over */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(15, 23, 42, .5);
+}
+
+.wl-ticket {
+    width: 100%;
+    max-width: 420px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .3);
+}
+
+.wl-ticket-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text);
+    border-bottom: 1px solid var(--color-border);
+}
+.wl-ticket-close {
+    font-size: 12px;
+    color: var(--color-text-3);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.wl-ticket-body { padding: 14px; }
+
+.wl-ticket-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--color-text);
+}
+.wl-ticket-side {
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    border-radius: 10px;
+    color: #fff;
+}
+.wl-side-buy  { background: var(--color-pos); }
+.wl-side-sell { background: var(--color-neg); }
+.wl-ticket-co {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 11px;
+    color: var(--color-text-3);
+}
+.wl-ticket-ltp { font-size: 11px; color: var(--color-text-2); }
+
+.wl-ticket-grid {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    align-items: center;
+    gap: 8px 10px;
+}
+.wl-ticket-grid label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-2);
+}
+.wl-ticket-grid input,
+.wl-ticket-grid select {
+    width: 100%;
+    padding: 6px 9px;
+    font-size: 13px;
+    color: var(--color-text);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    outline: none;
+}
+.wl-ticket-grid input:focus,
+.wl-ticket-grid select:focus { border-color: var(--color-accent); }
+.wl-ticket-grid input:disabled { opacity: .45; }
+
+/* What the order ties up, above the restatement: order value, and the margin
+   that value blocks under the chosen product. */
+.wl-ticket-cost {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin: 12px 0 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+}
+.wl-ticket-cost dt {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-2);
+}
+.wl-ticket-cost dd {
+    margin: 0;
+    font-weight: 700;
+    color: var(--color-text);
+}
+/* The basis is a caveat, not a number — it never competes with the amount. */
+.wl-ticket-basis {
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--color-text-3);
+}
+
+/* The restatement of what the confirm button will actually send. */
+.wl-ticket-note {
+    margin: 12px 0 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+}
+
+.wl-ticket-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0 14px 14px;
+}
+.wl-ticket-msg {
+    flex: 1;
+    font-size: 11px;
+    color: var(--color-text-3);
+}
+.wl-ticket-err { color: var(--color-neg); font-weight: 600; }
+.wl-ticket-ok  { color: var(--color-pos); font-weight: 600; }
+
+/* The confirm button takes the colour of the side being sent — the last
+   chance to notice a BUY ticket when a SELL was meant. */
+.wl-send-buy  { background: var(--color-pos); border-color: var(--color-pos); }
+.wl-send-sell { background: var(--color-neg); border-color: var(--color-neg); }
+.wl-btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ── Tab-name dialog ──────────────────────────────────────────── */
 

@@ -222,3 +222,103 @@ def test_finite_rejects_the_nan_yahoo_ships_freely():
     assert wl._finite(None) is None
     assert wl._finite('') is None
     assert wl._finite('12.5') == 12.5
+
+
+# ── moving a symbol between tabs ──────────────────────────────────────────
+
+def test_move_carries_the_row_across_rather_than_re_adding_it():
+    """A move must not go back through the symbol master.
+
+    Re-adding would: NSE retired TATAMOTORS for TMCV/TMPV mid-2026, so a
+    symbol that has since been delisted or renamed could not be put back and
+    the row would simply vanish on its way between two tabs.
+    """
+    core = wl.create_tab('Mine', 'Core')['tab']['id']
+    swing = wl.create_tab('Mine', 'Swing')['tab']['id']
+    item = wl.add_item('Mine', core, 'RELIANCE')['item']['id']
+
+    # The symbol leaves the universe after it was added.
+    monkey_universe = [r for r in UNIVERSE if r['symbol'] != 'RELIANCE']
+    original = wl._load_universe
+    wl._load_universe = lambda: monkey_universe
+    try:
+        assert wl.move_item('Mine', item, swing) == {'success': True, 'moved': True,
+                                                     'symbol': 'RELIANCE'}
+    finally:
+        wl._load_universe = original
+
+    counts = {t['name']: t['count'] for t in wl.list_tabs('Mine')}
+    assert counts == {'Core': 0, 'Swing': 1}
+
+
+def test_move_is_refused_across_users_and_into_a_tab_that_has_it():
+    core = wl.create_tab('Mine', 'Core')['tab']['id']
+    swing = wl.create_tab('Mine', 'Swing')['tab']['id']
+    theirs = wl.create_tab('Kavin', 'Theirs')['tab']['id']
+    item = wl.add_item('Mine', core, 'RELIANCE')['item']['id']
+    wl.add_item('Mine', swing, 'RELIANCE')
+
+    # Neither end of the move is reachable from another user's session.
+    assert wl.move_item('Kavin', item, theirs)['success'] is False
+    assert wl.move_item('Mine', item, theirs)['success'] is False
+
+    clash = wl.move_item('Mine', item, swing)
+    assert clash['success'] is False and 'already in that tab' in clash['error']
+    # The refusal left it where it was.
+    assert {t['name']: t['count'] for t in wl.list_tabs('Mine')} == {'Core': 1, 'Swing': 1}
+
+
+def test_moving_into_its_own_tab_is_a_no_op():
+    core = wl.create_tab('Mine', 'Core')['tab']['id']
+    item = wl.add_item('Mine', core, 'RELIANCE')['item']['id']
+    assert wl.move_item('Mine', item, core) == {'success': True, 'moved': False}
+    assert wl.list_tabs('Mine')[0]['count'] == 1
+
+
+def test_move_respects_the_target_tabs_capacity(monkeypatch):
+    monkeypatch.setattr(wl, 'MAX_ITEMS_PER_TAB', 1)
+    core = wl.create_tab('Mine', 'Core')['tab']['id']
+    full = wl.create_tab('Mine', 'Full')['tab']['id']
+    item = wl.add_item('Mine', core, 'RELIANCE')['item']['id']
+    wl.add_item('Mine', full, 'NIFTY')
+
+    result = wl.move_item('Mine', item, full)
+    assert result['success'] is False and 'already holds' in result['error']
+
+
+def test_a_moved_symbol_lands_at_the_end_of_the_target_tab():
+    core = wl.create_tab('Mine', 'Core')['tab']['id']
+    swing = wl.create_tab('Mine', 'Swing')['tab']['id']
+    wl.add_item('Mine', swing, 'NIFTY')
+    item = wl.add_item('Mine', core, 'RELIANCE')['item']['id']
+    wl.move_item('Mine', item, swing)
+
+    _fundamentals(**{'^NSEI': {'yf_price': 24000.0}, 'RELIANCE.NS': {'yf_price': 1300.0}})
+    assert [r['symbol'] for r in wl.rows('Mine', swing)['rows']] == ['NIFTY', 'RELIANCE']
+
+
+def test_annual_and_quarterly_steps_are_merged_to_span_a_long_chart():
+    """Yahoo's quarterly statement reaches back ~5 quarters, so on its own a
+    5-year chart draws a P/E line over its last year and nothing before it
+    (KTKBANK, 2026-08-20). The annual statement covers the earlier years.
+    """
+    quarterly = _stmt('Diluted EPS', [
+        ('2025-09-30', 10.0), ('2025-12-31', 10.0),
+        ('2026-03-31', 10.0), ('2026-06-30', 10.0),
+    ])
+    annual = _stmt('Diluted EPS', [
+        ('2023-03-31', 30.0), ('2024-03-31', 34.0), ('2026-03-31', 38.0),
+    ])
+
+    steps = wl._eps_steps(_FakeTicker(quarterly=quarterly, annual=annual), current_eps=40.0)
+    dated = [(d.date().isoformat(), v) for d, v in steps]
+
+    # Every annual year dated before the first quarterly window, then the
+    # quarterly TTM figure. The FY26 annual is kept rather than superseded:
+    # between April and June 2026 it really was the latest reported TTM, and
+    # the quarterly window ending 2026-06-30 only takes over once it exists.
+    assert dated == [('2023-03-31', 30.0), ('2024-03-31', 34.0),
+                     ('2026-03-31', 38.0), ('2026-06-30', 40.0)]
+    # Ascending, because eps_at() walks the list and stops at the first step
+    # dated after the day it is pricing.
+    assert dated == sorted(dated)

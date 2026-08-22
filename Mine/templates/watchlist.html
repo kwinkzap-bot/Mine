@@ -42,14 +42,14 @@
   <div class="wl-drill" id="wlDrill" hidden>
     <div class="wl-drill-hdr">
       <span class="wl-drill-sym" id="wlDrillSym"></span>
-      <div class="wl-drill-nav">
-        <button id="wlPrev" title="Previous symbol (←)">‹</button>
-        <button id="wlNext" title="Next symbol (→)">›</button>
-      </div>
+      <!-- The legend sits with the name it describes, not above the plot:
+           it names this symbol's lines, so it belongs to the header rather
+           than to the chart area it was stealing a row from. -->
+      <div class="wl-legend" id="wlLegend"></div>
       <div class="wl-tabs" id="wlChartTabs">
-        <button data-mode="price" class="active">Price</button>
+        <button data-mode="price">Price</button>
         <button data-mode="pe">P/E Ratio</button>
-        <button data-mode="both">Both</button>
+        <button data-mode="both" class="active">Both</button>
       </div>
       <div class="wl-ranges" id="wlRanges">
         <button data-range="1m">1M</button>
@@ -58,9 +58,35 @@
         <button data-range="3y">3Y</button>
         <button data-range="5y">5Y</button>
       </div>
+      <!-- Stepping through symbols lives at the right end, next to Close:
+           the controls that change WHICH symbol and whether it stays open
+           are one cluster, away from the ones that change the view. -->
+      <div class="wl-drill-nav">
+        <button id="wlPrev" title="Previous symbol (←)">‹</button>
+        <button id="wlNext" title="Next symbol (→)">›</button>
+      </div>
       <button class="wl-drill-close" id="wlDrillClose" title="Close (Esc)">✕</button>
     </div>
     <div class="wl-drill-body" id="wlDrillBody"></div>
+  </div>
+
+  <!-- Order ticket. Nothing on this page reaches a broker without passing
+       through here: the grid's B/S buttons only ever open it, and the confirm
+       button is the single place that POSTs. Same shape as the OI Crossover
+       scanner's ticket, so an order looks the same wherever it is placed. -->
+  <div class="wl-ticket-back" id="wlTicketBack" hidden>
+    <div class="wl-ticket" role="dialog" aria-modal="true" aria-labelledby="wlTicketTitle">
+      <div class="wl-ticket-hdr">
+        <span id="wlTicketTitle">Place order</span>
+        <button class="wl-ticket-close" id="wlTicketClose" title="Cancel (Esc)">✕</button>
+      </div>
+      <div class="wl-ticket-body" id="wlTicketBody"></div>
+      <div class="wl-ticket-foot">
+        <span class="wl-ticket-msg" id="wlTicketMsg"></span>
+        <button class="wl-btn" id="wlTicketCancel">Cancel</button>
+        <button class="wl-btn wl-btn-primary" id="wlTicketSend">Place order</button>
+      </div>
+    </div>
   </div>
 
   <!-- One dialog for both "New tab" and "Rename tab": the same single field
