@@ -47,13 +47,16 @@
                         <span class="oip-label" style="margin-left: 8px;">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs">
                             <option value="30second">30s</option>
-                            <option value="minute" selected>1m</option>
+                            <option value="minute">1m</option>
                             <option value="2minute">2m</option>
                             <option value="3minute">3m</option>
-                            <option value="5minute">5m</option>
+                            <option value="5minute" selected>5m</option>
                             <option value="15minute">15m</option>
                             <option value="30minute">30m</option>
                             <option value="60minute">1h</option>
+                            <option value="day">1D</option>
+                            <option value="week">1W</option>
+                            <option value="month">1M</option>
                         </select>
                     </div>
 
@@ -62,7 +65,7 @@
                     <!-- Overlay toggles -->
                     <div class="oip-prem-group">
                         <label class="oip-checkbox" title="VWAP">
-                            <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
+                            <input type="checkbox" id="oipShowVwapOI" checked><span>VWAP</span>
                         </label>
                         <label class="oip-checkbox" title="CPR Levels">
                             <input type="checkbox" id="oipShowCpr"><span>CPR</span>
@@ -75,7 +78,7 @@
                     <div class="oip-prem-group oip-ema-group">
                         <span class="oip-label">Lines</span>
                         <label class="oip-ema-chk" title="2nd 30-second Candle Box">
-                            <input type="checkbox" id="oipShow2ndCandle30s" checked><span style="color:#FFC800">2nd 30s</span>
+                            <input type="checkbox" id="oipShow2ndCandle30s"><span style="color:#FFC800">2nd 30s</span>
                         </label>
                         <label class="oip-ema-chk" title="2nd 5-minute Candle Box">
                             <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5m</span>
@@ -88,19 +91,19 @@
                     <div class="oip-prem-group oip-ema-group">
                         <span class="oip-label">EMA</span>
                         <label class="oip-ema-chk" title="EMA 9">
-                            <input type="checkbox" id="oipShowEma9" checked><span>9</span>
+                            <input type="checkbox" id="oipShowEma9"><span>9</span>
                         </label>
                         <label class="oip-ema-chk" title="EMA 20">
-                            <input type="checkbox" id="oipShowEma20" checked><span>20</span>
+                            <input type="checkbox" id="oipShowEma20"><span>20</span>
                         </label>
                         <label class="oip-ema-chk" title="EMA 50">
-                            <input type="checkbox" id="oipShowEma50" checked><span>50</span>
+                            <input type="checkbox" id="oipShowEma50"><span>50</span>
                         </label>
                         <label class="oip-ema-chk" title="EMA 100">
                             <input type="checkbox" id="oipShowEma100"><span>100</span>
                         </label>
                         <label class="oip-ema-chk" title="EMA 200">
-                            <input type="checkbox" id="oipShowEma200" checked><span>200</span>
+                            <input type="checkbox" id="oipShowEma200"><span>200</span>
                         </label>
                     </div>
 
@@ -118,8 +121,7 @@
 
                     <!-- Replay Toggle -->
                     <div class="oip-prem-group">
-                        <button id="oipToggleReplayToolbar" class="oip-btn oip-btn--xs" title="Toggle Bar Replay"
-                            style="background: #fffbeb; color: #854d0e; border-color: #fef08a; display: flex; align-items: center; gap: 4px;">
+                        <button id="oipToggleReplayToolbar" class="oip-btn oip-btn--xs oip-btn--replay" title="Toggle Bar Replay">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                             </svg>
@@ -201,19 +203,28 @@
                         <polygon points="5 3 19 12 5 21 5 3"></polygon>
                     </svg>
                     Replay Controls
+                    <span class="oip-replay-status" style="margin-left:6px;">
+                        <span class="oip-replay-dot"></span>Replay Mode <span id="oipReplayTfLabel">(5m)</span>
+                    </span>
                 </div>
                 <div class="oip-prem-toolbar">
                     <div class="oip-prem-group">
-                        <button id="oipReplayPlay" class="oip-btn"
-                            style="min-width: 60px; background: #854d0e; color: white;">PLAY</button>
-                        <button id="oipReplayPause" class="oip-btn"
-                            style="display: none; min-width: 60px;">PAUSE</button>
-                        <button id="oipReplayNext" class="oip-btn">STEP</button>
+                        <button id="oipReplayPlay" class="oip-btn oip-btn--replay-primary" title="Play">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>Play
+                        </button>
+                        <button id="oipReplayPause" class="oip-btn oip-btn--replay-primary" style="display: none;" title="Pause">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>Pause
+                        </button>
+                        <button id="oipReplayNext" class="oip-btn" title="Next bar">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4" fill="currentColor" stroke="none"/><line x1="19" y1="5" x2="19" y2="19"/></svg>Next
+                        </button>
+                        <button id="oipReplayExit" class="oip-btn oip-btn--replay-exit" title="Exit replay mode">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>Exit
+                        </button>
                     </div>
                     <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group">
-                        <button id="oipJumpReplay" class="oip-btn oip-btn--xs" title="Jump to Replay (Select bar on chart)"
-                            style="background: #1e293b; color: white;">
+                        <button id="oipJumpReplay" class="oip-btn oip-btn--xs oip-btn--jump" title="Jump to Replay (Select bar on chart)">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="m11 17-5-5 5-5" /><path d="m18 17-5-5 5-5" />
                             </svg>
@@ -222,8 +233,13 @@
                     <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group">
                         <span class="oip-label">Speed</span>
-                        <select id="oipReplaySpeed" class="oip-select oip-select--xs">
-                            <option value="100">10x</option><option value="143">7x</option><option value="200">5x</option><option value="333">3x</option><option value="1000" selected>1x</option><option value="2000">0.5x</option><option value="3000">0.3x</option><option value="5000">0.2x</option><option value="10000">0.1x</option>
+                        <select id="oipReplaySpeed" class="oip-select oip-select--xs oip-replay-speed" title="Replay speed">
+                            <option value="100">10x &middot; 10 bars/sec</option>
+                            <option value="200">5x &middot; 5 bars/sec</option>
+                            <option value="500">2x &middot; 2 bars/sec</option>
+                            <option value="1000" selected>1x &middot; 1 bar/sec</option>
+                            <option value="2000">0.5x &middot; 1 bar/2 sec</option>
+                            <option value="5000">0.2x &middot; 1 bar/5 sec</option>
                         </select>
                     </div>
                     <div class="oip-prem-sep"></div>
@@ -232,8 +248,7 @@
                             min="0" value="0">
                     </div>
                     <div class="oip-prem-group">
-                        <span id="oipReplayTime" class="oip-label"
-                            style="min-width: 100px; font-family: monospace; font-weight: 800;">--:--:--</span>
+                        <span id="oipReplayTime" class="oip-replay-clock">--:--:--</span>
                     </div>
                 </div>
             </div>

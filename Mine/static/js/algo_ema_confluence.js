@@ -89,11 +89,33 @@ function _emacRenderStatus(data) {
     const summary = data.summary || {};
     const summaryGrid = document.getElementById('emacSummaryGrid');
     if (summaryGrid) {
+        // Money at risk right now, from the open paper legs only. Investment is
+        // what the entries were marked at, Current Value the same lots at the
+        // latest tick — for a Short the two move apart in the opposite direction
+        // to the P&L, so Open P&L is taken from the algo's own unrealised figure
+        // rather than derived from the difference.
+        const openLegs = Object.values(data.stocks || {}).filter(s => s && s.phase === 'in_position');
+        let invested = 0, curVal = 0, openPnl = 0;
+        openLegs.forEach(s => {
+            const qty = Number(s.qty) || 0;
+            const ent = Number(s.entry_price);
+            const ltp = Number(s.ltp);
+            if (qty && isFinite(ent)) invested += ent * qty;
+            if (qty) curVal += (isFinite(ltp) ? ltp : (isFinite(ent) ? ent : 0)) * qty;
+            openPnl += Number(s.unrealized_pnl) || 0;
+        });
+        const rupee  = v => '₹' + Math.round(v).toLocaleString('en-IN');
+        const signed = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+
         const tiles = [
             { label: 'Watching',    value: summary.watching || 0 },
             { label: 'In Position', value: summary.in_position || 0, cls: (summary.in_position || 0) > 0 ? 'ag-warn' : '' },
             { label: 'No Setup',    value: summary.no_setup || 0 },
             { label: 'Not Scanned', value: summary.pending_scan || 0 },
+            { label: 'Investment',  value: openLegs.length ? rupee(invested) : '—' },
+            { label: 'Current Value', value: openLegs.length ? rupee(curVal) : '—' },
+            { label: 'Open P&L',    value: openLegs.length ? signed(openPnl) : '—',
+              cls: openLegs.length ? (openPnl >= 0 ? 'ag-pos' : 'ag-neg') : '' },
             { label: 'Lots',        value: data.lots || 1 },
             { label: 'Last Scan',   value: data.last_scan_date || '—' },
         ];

@@ -43,7 +43,7 @@ let oipCurrentPrice = 0;
 let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTY MIDCAP 150', 'NIFTY AUTO', 'NIFTY Smallcap 100', 'NIFTY FMCG', 'NIFTY METAL', 'NIFTY PHARMA', 'NIFTY PSU BANK', 'NIFTY IT'];
 let oipSymbol = 'NIFTY';
 let oipLotSize = 50, oipStrikeStep = 50;
-let oipInterval = 'minute';
+let oipInterval = '5minute';   // matches the TF select's default option
 let oipMode = 'change';
 let oipRafId = null;
 let oipOIChartReady = false;
@@ -153,11 +153,11 @@ window.oipInitSecondaryCharts = function() {
         const showV = oipElems.showVwapInt?.checked;
         oipVwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
             color: '#1b9981', lineWidth: 1, title: '', visible: showV,
-            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
         });
         oipVwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
             color: '#8b5cf6', lineWidth: 1, title: '', visible: showV,
-            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
         });
 
         // Individual CE Chart
@@ -352,7 +352,10 @@ function oipInitCharts() {
         };
 
         oipOIChart = LightweightCharts.createChart(elOI, {
-            width: elOI.clientWidth || 1200, height: 375,
+            // Height comes from the wrapper (.oip-chart-wrap), which the Replay tab
+            // sizes to the viewport — a hardcoded 375 left dead space inside the
+            // taller block and had to be edited in two places to change.
+            width: elOI.clientWidth || 1200, height: elOI.clientHeight || 575,
             layout: { textColor: '#374151', background: { type: 'solid', color: '#ffffff' } },
             grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
             crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
@@ -367,12 +370,14 @@ function oipInitCharts() {
             autoscaleInfoProvider: customAutoscale
         });
         lwBringToFront(oipOISeries);
-        oipVwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f59e0b', lineWidth: 2, visible: false, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipEma9Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma20Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma50Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
+        // crosshairMarkerVisible:false on every overlay line — LightweightCharts
+        // otherwise parks a filled dot on the line under the crosshair.
+        oipVwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f59e0b', lineWidth: 2, visible: oipElems.showVwapOI?.checked ?? false, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+        oipEma9Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+        oipEma20Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+        oipEma50Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+        oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+        oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
 
         oipOIChartReady = true;
         
@@ -383,10 +388,79 @@ function oipInitCharts() {
 
         oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(() => oipRequestDraw());
         oipOIChart.timeScale().subscribeVisibleTimeRangeChange(() => oipRequestDraw());
-        if (wrapOI) new ResizeObserver(() => { if (wrapOI.clientWidth > 0) oipOIChart.applyOptions({ width: wrapOI.clientWidth }); oipRequestDraw(); }).observe(wrapOI);
+        if (wrapOI) new ResizeObserver(() => {
+            // Both dimensions: the observer used to track width only, so a taller
+            // wrapper just added blank space under the chart.
+            if (wrapOI.clientWidth > 0) oipOIChart.applyOptions({ width: wrapOI.clientWidth, height: wrapOI.clientHeight });
+            oipRequestDraw();
+        }).observe(wrapOI);
     }
     if (window.oipInitSecondaryCharts) window.oipInitSecondaryCharts();
 }
+
+// 1W and 1M draw YEARLY pivots (see oipAnchorPeriod in oi_indicators.js), which
+// need a completed prior calendar year inside the loaded range — the default
+// From date is 1 Jan of THIS year, so those two timeframes would come up with
+// no CPR at all. Widen the range for them, but never over a From date the user
+// picked themselves.
+let oipStartDateTouched = false;
+
+function oipEnsureRangeForAnchor() {
+    if (oipStartDateTouched || !oipElems.startDate) return;
+    const anchor = typeof oipAnchorPeriod === 'function' ? oipAnchorPeriod(oipInterval) : 'day';
+    const now = new Date();
+    const firstYear = anchor === 'year' ? now.getFullYear() - 1 : now.getFullYear();
+    const want = new Date(Date.UTC(firstYear, 0, 1)).toISOString().split('T')[0];
+    if (oipElems.startDate.value !== want) oipElems.startDate.value = want;
+}
+
+// The Bar Replay button doubles as the mode prompt ("Select Bar On Chart"),
+// so its text is set from JS rather than baked into the template.
+function oipSetToggleLabel(text) {
+    const btn = document.getElementById('oipToggleReplayToolbar');
+    if (!btn) return;
+    const node = [...btn.childNodes].reverse().find(n => n.nodeType === 3 && n.textContent.trim());
+    if (node) node.textContent = ' ' + text;
+    btn.title = text === 'Bar Replay' ? 'Toggle Bar Replay' : 'Select a bar on the chart to replay from';
+}
+
+// "Replay Mode (5m)" — the pill names the timeframe being replayed.
+function oipUpdateReplayTfLabel() {
+    const el = document.getElementById('oipReplayTfLabel');
+    if (!el) return;
+    const sel = oipElems.interval;
+    const label = sel?.options?.[sel.selectedIndex]?.textContent?.trim();
+    el.textContent = label ? `(${label})` : '';
+}
+
+// The index chart's VWAP toggle. oipUpdateEmaVisibility (oi_indicators.js)
+// covers the EMAs for both pages; VWAP is wired differently on OI Profile, so
+// Replay's own switch lives here — it was previously unwired altogether and the
+// series stayed hidden whatever the checkbox said.
+function oipUpdateVwapVisibility() {
+    if (oipVwapSeries) oipVwapSeries.applyOptions({ visible: oipElems.showVwapOI?.checked ?? false });
+}
+
+// oipFullCandles.slice(0, i+1) on every replay step copied the whole loaded
+// history (a year of 5m bars is ~18k entries) just to hand the box/reversal
+// drawers a prefix. The prefix is rebuilt only when the playhead moves
+// anywhere other than one bar forward.
+let _oipVisCache = null, _oipVisCacheIdx = -1;
+
+function oipVisibleCandles(index) {
+    if (!oipFullCandles) return [];
+    if (_oipVisCache && _oipVisCacheIdx === index) return _oipVisCache;
+    if (_oipVisCache && _oipVisCacheIdx === index - 1 && _oipVisCache.length === index) {
+        _oipVisCache.push(oipFullCandles[index]);
+        _oipVisCacheIdx = index;
+        return _oipVisCache;
+    }
+    _oipVisCache = oipFullCandles.slice(0, index + 1);
+    _oipVisCacheIdx = index;
+    return _oipVisCache;
+}
+
+function oipInvalidateVisCache() { _oipVisCache = null; _oipVisCacheIdx = -1; }
 
 function oipRequestDraw() { if (!oipRafId) oipRafId = requestAnimationFrame(oipDrawOIBars); }
 
@@ -396,7 +470,7 @@ function oipDrawOIBars() {
     if (!canvas || !wrap || !oipOISeries || !oipAllStrikes.length) return;
     const ctx = canvas.getContext('2d');
     const W = wrap.clientWidth, H = wrap.clientHeight, dpr = window.devicePixelRatio || 1;
-    if (canvas.width !== W * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; canvas.style.width = W + 'px'; canvas.style.height = H + 'px'; }
+    if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; canvas.style.width = W + 'px'; canvas.style.height = H + 'px'; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
     if (!(oipElems.showOIBars?.checked ?? true)) return;
 
@@ -520,12 +594,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     // will throw "Value is null".
     Object.values(oipCprSeriesMap).forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
     oipCprSeriesMap = {};
-    oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
-    oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
-    oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
-    oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
-    oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
-    oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+    _oipPrecalcDone = false;
+    oipInvalidateVisCache();
+    _oipDayBoxesClearAll();
+    oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
+    oip2nd5mCandleBox  = { oi: [], ce: [], pe: [] };
     oipClear30mReversalLines();
     oipClear1DReversalLines();
 
@@ -628,6 +701,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     }
 }
 
+let _oipPrecalcDone = false;
 let oipFullCeData = [];
 let oipFullPeData = [];
 let oipCachedIndicators = {
@@ -640,9 +714,14 @@ let oipCachedIndicators = {
 
 function oipPrecalculateIndicators() {
     if (!oipFullCandles || !oipFullCandles.length) return;
-    
-    oipFullCeData = oipFullOptionData.filter(d => d.type === 'CE');
-    oipFullPeData = oipFullOptionData.filter(d => d.type === 'PE');
+    _oipPrecalcDone = true;
+
+    // The dashboard's Replay tab has no Option Premium charts, so none of the
+    // CE/PE work below is ever drawn. Skipping it saves splitting and running
+    // VWAP/EMA over two more full-length series on every load.
+    const wantOptions = !!(oipIntrinsicChart || oipCEChart || oipPEChart);
+    oipFullCeData = wantOptions ? oipFullOptionData.filter(d => d.type === 'CE') : [];
+    oipFullPeData = wantOptions ? oipFullOptionData.filter(d => d.type === 'PE') : [];
 
     oipCachedIndicators.index.vwap = oipCalculateVWAP(oipFullCandles);
     oipCachedIndicators.index.ema9 = oipCalculateFixedEMA(oipFullCandles, 9);
@@ -652,6 +731,8 @@ function oipPrecalculateIndicators() {
     oipCachedIndicators.index.ema200 = oipCalculateFixedEMA(oipFullCandles, 200);
     oipCachedIndicators.index.rsi = oipCalculateRSISnR(oipFullCandles);
     oipCachedIndicators.cpr = oipCalculateDynamicCPR(oipFullCandles);
+
+    if (!wantOptions) return;
 
     // Strip master-timeline whitespace bars (close=undefined) before computing
     // EMAs/VWAP — a whitespace first-bar seeds prevEma=NaN, making all values NaN.
@@ -699,7 +780,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
     // LC Candlestick renderer crashes with "Value is null".
     _oipSuppressRangeSync = true;
 
-    if (!oipFullCeData.length) oipPrecalculateIndicators();
+    if (!_oipPrecalcDone) oipPrecalculateIndicators();
 
     const isIncremental = index === oipLastRefreshIndex + 1;
     oipLastRefreshIndex = index;
@@ -737,11 +818,8 @@ function oipRefreshLocalView(view, resetZoom, index) {
     oipSignalMarkers = [];
     if (oipOISeries) lwSetMarkers(oipOISeries, []);
 
-    // CPR Redraw
-    if (oipCachedIndicators.cpr) {
-        const visibleCpr = oipCachedIndicators.cpr.filter(d => d.times[0] <= timeAtIdx);
-        oipRenderPrecalculatedCPR(visibleCpr, timeAtIdx);
-    }
+    // CPR Redraw — the renderer clips to timeAtIdx itself.
+    if (oipCachedIndicators.cpr) oipRenderPrecalculatedCPR(oipCachedIndicators.cpr, timeAtIdx);
 
     // 3. Option Charts
     const hasOHLC = (d) => d && d.open != null;
@@ -836,7 +914,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
             requestAnimationFrame(() => { _oipSuppressRangeSync = false; });
             return;
         }
-        const _vis  = oipFullCandles.slice(0, _idxSnap + 1);
+        const _vis  = oipVisibleCandles(_idxSnap);
         // 30m reversal lines: always repaint (extend to current candle) but only detect
         // new signals when a 30m candle closes (bucket changes).
         const _tCur  = oipFullCandles[_idxSnap]?.time ?? 0;
@@ -880,58 +958,13 @@ function oipRefreshLocalView(view, resetZoom, index) {
     }
 }
 
+// Replay's CPR step. The heavy lifting lives in oi_indicators.js so the static
+// chart and the replay share one renderer — this used to be a near-copy that
+// rebuilt every period's series on every step (and drew them in its own
+// hardcoded colours, ignoring the per-line settings).
 function oipRenderPrecalculatedCPR(daysData, maxTime) {
     if (!oipOIChart || !oipElems.showCpr?.checked) return;
-    Object.values(oipCprSeriesMap).forEach(s => { try { s.setData([]); } catch(e) {} });
-    
-    const lineStyles = {
-        prevH: { color: '#ef07f9', lineWidth: 1 }, prevL: { color: '#ef07f9', lineWidth: 1 },
-        pp: { color: '#3366ff', lineWidth: 1 }, bc: { color: '#3366ff', lineWidth: 1 }, tc: { color: '#3366ff', lineWidth: 1 },
-        r1: { color: '#006400', lineWidth: 1 }, r2: { color: '#006400', lineWidth: 1 }, r3: { color: '#006400', lineWidth: 1 }, r4: { color: '#006400', lineWidth: 1 },
-        s1: { color: '#ff0000', lineWidth: 1 }, s2: { color: '#ff0000', lineWidth: 1 }, s3: { color: '#ff0000', lineWidth: 1 }, s4: { color: '#ff0000', lineWidth: 1 },
-        cr3: { color: '#a020f0', lineWidth: 2 }, cs3: { color: '#a020f0', lineWidth: 2 }
-    };
-
-    daysData.forEach((day, dayIdx) => {
-        const visibleTimes = day.times.filter(t => t <= maxTime);
-        if (!visibleTimes.length) return;
-
-        const keyGroup = {
-            prevH: 'oipCprShowPrevHL', prevL: 'oipCprShowPrevHL',
-            pp: 'oipCprShowBand',      bc: 'oipCprShowBand',    tc: 'oipCprShowBand',
-            r1: 'oipCprShowResistance', r2: 'oipCprShowResistance', r3: 'oipCprShowResistance', r4: 'oipCprShowResistance',
-            s1: 'oipCprShowSupport',   s2: 'oipCprShowSupport', s3: 'oipCprShowSupport', s4: 'oipCprShowSupport',
-            cr3: 'oipCprShowCumR3S3',  cs3: 'oipCprShowCumR3S3'
-        };
-        const boxGroup = {
-            'cpr': 'oipCprShowBand',
-            'r1_r2': 'oipCprShowResistance', 'r2_r3': 'oipCprShowResistance', 'r3_r4': 'oipCprShowResistance',
-            's1_s2': 'oipCprShowSupport',    's2_s3': 'oipCprShowSupport',    's3_s4': 'oipCprShowSupport'
-        };
-        const subChecked = id => document.getElementById(id)?.checked !== false;
-
-        Object.keys(day.levels).forEach(key => {
-            const seriesKey = `line_${key}_${dayIdx}`;
-            let s = oipCprSeriesMap[seriesKey];
-            if (!s) {
-                s = oipOIChart.addSeries(LightweightCharts.LineSeries, { ...lineStyles[key], lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-                oipCprSeriesMap[seriesKey] = s;
-            }
-            s.setData(subChecked(keyGroup[key]) ? visibleTimes.map(t => ({ time: t, value: day.levels[key] })) : []);
-        });
-        day.boxes.forEach((box, bIdx) => {
-            const seriesKey = `box_${box.type}_${dayIdx}_${bIdx}`;
-            let s = oipCprSeriesMap[seriesKey];
-            if (!s) {
-                const col = 'rgba(51, 102, 255, 0.05)';
-                s = oipOIChart.addSeries(LightweightCharts.BaselineSeries, { baseValue: { type: 'price', price: box.min }, topFillColor1: col, topFillColor2: col, topLineColor: 'transparent', bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-                oipCprSeriesMap[seriesKey] = s;
-            }
-            if (!subChecked(boxGroup[box.type])) { s.setData([]); return; }
-            s.applyOptions({ baseValue: { type: 'price', price: box.min } });
-            s.setData(visibleTimes.map(t => ({ time: t, value: box.max })));
-        });
-    });
+    if (!oipAdvanceCprLevels(daysData, maxTime)) oipRenderCprLevels(daysData, maxTime);
 }
 
 /* ── Replay Core ───────────────────────────────────────────── */
@@ -1060,7 +1093,7 @@ function oipInitReplay() {
     if (btnJump) {
         btnJump.onclick = () => {
             window.oipSelectionMode = !window.oipSelectionMode;
-            btnJump.style.background = window.oipSelectionMode ? '#ef4444' : '#1e293b';
+            btnJump.classList.toggle('oip-btn--armed', window.oipSelectionMode);
             if (window.oipSelectionMode) {
                 oipOIChart.applyOptions({ handleScroll: false, handleScale: false });
                 if (window.notify) notify.info('Click a bar on chart to start from there');
@@ -1078,8 +1111,10 @@ function oipInitReplay() {
                 oipReplayIndex = idx;
                 update();
                 window.oipSelectionMode = false;
-                btnJump.style.background = '#1e293b';
+                btnJump.classList.remove('oip-btn--armed');
                 oipOIChart.applyOptions({ handleScroll: true, handleScale: true });
+                // A bar was picked — this is where the control pill appears.
+                window.oipReplayShowControls?.();
             }
         });
     }
@@ -1111,13 +1146,17 @@ function oipInitPremiumSeries() {
 document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems();
-    oipInitIndicatorsPopup('oip-ind-replay');
-    const today = new Date().toISOString().split('T')[0];
-    const prev = new Date(); prev.setDate(prev.getDate() - 30);
-    if (oipElems.startDate) oipElems.startDate.value = prev.toISOString().split('T')[0];
+    oipInitIndicatorsPopup('oip-ind-replay-v3');
+    // Replay opens on the year to date — 1 January of the current year through
+    // today (it used to be a rolling 30 days). The range drives the API's `days`
+    // parameter, so this is a much bigger candle fetch than a month was.
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const yearStart = new Date(Date.UTC(now.getFullYear(), 0, 1));
+    if (oipElems.startDate) oipElems.startDate.value = yearStart.toISOString().split('T')[0];
     if (oipElems.endDate) oipElems.endDate.value = today;
     
-    oipElems.startDate?.addEventListener('change', () => oipResetReplay());
+    oipElems.startDate?.addEventListener('change', () => { oipStartDateTouched = true; oipResetReplay(); });
     oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
 
     // Dropdown Logic
@@ -1147,6 +1186,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     oipElems.interval?.addEventListener('change', (e) => {
         oipInterval = e.target.value;
+        oipUpdateReplayTfLabel();
+        oipEnsureRangeForAnchor();
         oipResetReplay();
     });
     oipElems.days?.addEventListener('change', () => oipResetReplay());
@@ -1195,23 +1236,25 @@ document.addEventListener('DOMContentLoaded', () => {
         'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
         'oipShowCpr', 'oipShowRSI',
         'oipShowVwapOI', 'oipShowVwapInt', 'oipShowPremium',
-        'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3'
+        'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
+        'oipCprShowLabels'
     ].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             oipUpdateEmaVisibility();
+            oipUpdateVwapVisibility();
             if (oipFullCandles) oipRefreshLocalView('combined', false, oipReplayIndex);
         });
     });
 
     document.getElementById('oipShow2ndCandle30s')?.addEventListener('change', () => {
         if (!oipFullCandles) return;
-        const vis = oipFullCandles.slice(0, oipReplayIndex + 1);
-        oipDraw2ndCandle30sBox(vis, oipFullCandles[oipReplayIndex]?.time ?? 0);
+        oipDraw2ndCandle30sBox(oipVisibleCandles(oipReplayIndex), oipFullCandles[oipReplayIndex]?.time ?? 0);
     });
     document.getElementById('oipShow2nd5mCandle')?.addEventListener('change', () => {
         if (!oipFullCandles) return;
-        const vis = oipFullCandles.slice(0, oipReplayIndex + 1);
-        oipDraw2nd5mCandleBox(vis, oipFullCeData.slice(0, oipReplayIndex + 1), oipFullPeData.slice(0, oipReplayIndex + 1));
+        // Second argument is the playhead TIME (it used to be handed the CE/PE
+        // arrays, so the CE/PE boxes silently never drew from this path).
+        oipDraw2nd5mCandleBox(oipVisibleCandles(oipReplayIndex), oipFullCandles[oipReplayIndex]?.time ?? 0);
     });
     document.getElementById('oipShow30mReversalLines')?.addEventListener('change', () => {
         if (oipFullCandles) oipDraw30mReversalLines(oipFullCandles.slice(0, oipReplayIndex + 1));
@@ -1231,43 +1274,63 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Toggle Replay Toolbar visibility
+    /* Replay mode, in the shape stockmojo's historical chart uses:
+       "Bar Replay" arms bar selection and the button itself says so; the
+       control pill only appears once a bar has been picked; and the pill
+       carries its own Exit. */
     const btnToggleReplay = document.getElementById('oipToggleReplayToolbar');
     const replayToolbar = document.getElementById('oipReplayToolbar');
-    if (btnToggleReplay && replayToolbar) {
-        replayToolbar.style.display = 'none';
-        
+    const btnReplayExit = document.getElementById('oipReplayExit');
+
+    function oipReplayArm() {
+        window.oipSelectionMode = true;
+        btnToggleReplay?.classList.add('oip-btn--armed');
+        oipSetToggleLabel('Select Bar On Chart');
+        document.getElementById('oipJumpReplay')?.classList.add('oip-btn--armed');
+        try { oipOIChart.applyOptions({ handleScroll: false, handleScale: false }); } catch (e) {}
+        if (window.notify) notify.info('Click a bar on the chart to start Bar Replay');
+    }
+
+    // Called from the chart's click handler once a bar is chosen.
+    window.oipReplayShowControls = function () {
+        if (!replayToolbar) return;
+        replayToolbar.classList.remove('hidden');
+        replayToolbar.style.display = 'flex';
+        oipSetToggleLabel('Bar Replay');
+        btnToggleReplay?.classList.add('oip-btn--armed');
+        oipUpdateReplayTfLabel();
+    };
+
+    window.oipReplayExitMode = function () {
+        if (replayToolbar) {
+            replayToolbar.classList.add('hidden');
+            replayToolbar.style.display = 'none';
+        }
+        btnToggleReplay?.classList.remove('oip-btn--armed');
+        document.getElementById('oipJumpReplay')?.classList.remove('oip-btn--armed');
+        oipSetToggleLabel('Bar Replay');
+        window.oipSelectionMode = false;
+        document.getElementById('oipReplayPause')?.click();      // stop the timer
+        try { oipOIChart.applyOptions({ handleScroll: true, handleScale: true }); } catch (e) {}
+        // Back to the full chart
+        if (oipFullCandles && oipFullCandles.length) {
+            oipReplayIndex = oipFullCandles.length - 1;
+            const slider = document.getElementById('oipReplaySlider');
+            if (slider) slider.value = oipReplayIndex;
+            oipRefreshLocalView('combined', true, oipReplayIndex);
+        }
+    };
+
+    if (btnToggleReplay) {
+        if (replayToolbar) replayToolbar.style.display = 'none';
         btnToggleReplay.onclick = () => {
-            const isHidden = replayToolbar.classList.contains('hidden') || replayToolbar.style.display === 'none';
-            if (isHidden) {
-                // Opening Replay Mode
-                replayToolbar.classList.remove('hidden');
-                replayToolbar.style.display = 'flex';
-                btnToggleReplay.style.background = '#fef08a';
-                
-                // Automatically trigger selection mode
-                window.oipSelectionMode = true;
-                const btnJump = document.getElementById('oipJumpReplay');
-                if (btnJump) btnJump.style.background = '#ef4444';
-                oipOIChart.applyOptions({ handleScroll: false, handleScale: false });
-                if (window.notify) notify.info('Click a bar on chart to start Bar Replay');
-            } else {
-                // Closing Replay Mode (Restore Full View)
-                replayToolbar.classList.add('hidden');
-                replayToolbar.style.display = 'none';
-                btnToggleReplay.style.background = '#fffbeb';
-                window.oipSelectionMode = false;
-                oipOIChart.applyOptions({ handleScroll: true, handleScale: true });
-                
-                // Reset to Full Chart view
-                if (oipFullCandles && oipFullCandles.length) {
-                    oipReplayIndex = oipFullCandles.length - 1;
-                    const slider = document.getElementById('oipReplaySlider');
-                    if (slider) slider.value = oipReplayIndex;
-                    oipRefreshLocalView('combined', true, oipReplayIndex);
-                }
-            }
+            const live = replayToolbar && replayToolbar.style.display !== 'none'
+                         && !replayToolbar.classList.contains('hidden');
+            if (live || window.oipSelectionMode) oipReplayExitMode();
+            else oipReplayArm();
         };
     }
+    btnReplayExit?.addEventListener('click', () => oipReplayExitMode());
 
     // Defer chart creation and initial data load until the panel is visible.
     // On the standalone /replay page the panel is visible immediately.
@@ -1276,9 +1339,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // and crash. dashSwitch('replay') dispatches a resize event, so we use that as
     // the trigger to initialize once the panel actually has layout.
     function oipStartCharts() {
+        // The browser restores a <select>'s value across a soft reload, so read
+        // the TF back rather than trusting oipInterval's initial value.
+        oipInterval = oipElems.interval?.value || oipInterval;
+        oipEnsureRangeForAnchor();
         oipInitCharts();
         oipInitReplay();
         oipUpdateEmaVisibility();
+        oipUpdateVwapVisibility();
         oipLoadCandles();
     }
 
@@ -1456,6 +1524,45 @@ function _oipRemoveBoxSeries(box) {
     });
 }
 
+/* Day boxes (2nd 30s / 2nd 5m) are static once their day has finished — only
+   the day under the playhead can still grow. The draw functions below used to
+   destroy and rebuild a box (3 series each) for EVERY loaded day on EVERY
+   replay step; with a year of data that is ~700 series churned per step, and
+   LightweightCharts charges ~2 ms per series created. Boxes are now cached per
+   day and rebuilt only when that day's bar count changes. */
+const _oipDayBoxCache = {};
+
+function _oipDayBoxesClear(cacheId) {
+    const cache = _oipDayBoxCache[cacheId];
+    if (!cache) return;
+    Object.keys(cache).forEach(dk => { _oipRemoveBoxSeries(cache[dk].box); delete cache[dk]; });
+}
+
+function _oipDayBoxesClearAll() { Object.keys(_oipDayBoxCache).forEach(_oipDayBoxesClear); }
+
+// specFor(dayKey, dayCandles) -> { hi, lo, from } | null
+function _oipDayBoxesRender(cacheId, chart, src, specFor, color) {
+    const cache = _oipDayBoxCache[cacheId] || (_oipDayBoxCache[cacheId] = {});
+    const map = _oipGroupByDay(src);
+    // Days that dropped out of range (reload, or the playhead jumped backwards).
+    Object.keys(cache).forEach(dk => {
+        if (!map[dk]) { _oipRemoveBoxSeries(cache[dk].box); delete cache[dk]; }
+    });
+    Object.keys(map).sort().forEach(dk => {
+        const day = map[dk];
+        const cached = cache[dk];
+        if (cached && cached.n === day.length) return;          // nothing new in this day
+        const spec = specFor(dk, day);
+        if (!spec) { if (cached) { _oipRemoveBoxSeries(cached.box); delete cache[dk]; } return; }
+        const times = day.filter(c => c.time >= spec.from).map(c => c.time);
+        if (!times.length) return;
+        if (cached) _oipRemoveBoxSeries(cached.box);
+        const box = _oipDrawCandleBox(chart, spec.hi, spec.lo, times, color);
+        if (box) cache[dk] = { box, n: day.length };
+    });
+    return Object.keys(cache).map(dk => cache[dk].box);
+}
+
 function _oipGroupByDay(candles) {
     if (!candles || !candles.length) return {};
     const dayMap = {};
@@ -1478,13 +1585,14 @@ let oip30sSecondCandle = { oi: [], ce: [], pe: [] };
 let oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
 
 function oipDraw2ndCandle30sBox(candles, maxTime) {
-    oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
-    oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
-    oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
-
     const _30s_allowed = ['30second', 'minute'];
-    if (!_30s_allowed.includes(oipInterval) || !candles || !candles.length) return;
-    if (!document.getElementById('oipShow2ndCandle30s')?.checked) return;
+    const on = _30s_allowed.includes(oipInterval) && candles && candles.length &&
+               document.getElementById('oipShow2ndCandle30s')?.checked;
+    if (!on) {
+        ['30s:oi', '30s:ce', '30s:pe'].forEach(_oipDayBoxesClear);
+        oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
+        return;
+    }
 
     function _build30sMap(arr) {
         const m = {};
@@ -1495,48 +1603,33 @@ function oipDraw2ndCandle30sBox(candles, maxTime) {
         });
         return m;
     }
+    const specWith = (map30s) => (dk, day) => {
+        const c2 = (map30s && map30s[dk]) || (day.length >= 2 ? day[1] : null);
+        if (!c2) return null;
+        const hi = _oipH(c2), lo = _oipL(c2);
+        if (!isFinite(hi) || !isFinite(lo) || hi === lo) return null;
+        return { hi, lo, from: c2.time };
+    };
 
-    function _draw30sAllDays(chart, src, map30s) {
-        const boxes = [];
-        const srcMap = _oipGroupByDay(src);
-        Object.keys(srcMap).sort().forEach(dk => {
-            const day = srcMap[dk];
-            let c2;
-            if (map30s && map30s[dk]) {
-                c2 = map30s[dk];
-            } else if (day.length >= 2) {
-                c2 = day[1];
-            } else {
-                return;
-            }
-            const hi = _oipH(c2), lo = _oipL(c2);
-            if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
-            const times = day.filter(c => c.time >= c2.time).map(c => c.time);
-            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#FFC800'));
-        });
-        return boxes;
-    }
-
-    const _oi30sMap = _build30sMap(oip30sSecondCandle.oi);
     if (oipOIChart)
-        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles, _oi30sMap);
+        oip2ndCandle30sBox.oi = _oipDayBoxesRender('30s:oi', oipOIChart, candles, specWith(_build30sMap(oip30sSecondCandle.oi)), '#FFC800');
+
+    // CE/PE only exist where the Option Premium charts do — skip the filtering
+    // entirely on the dashboard's Replay tab, which has none.
+    if (!oipCEChart?.chart && !oipPEChart?.chart) return;
 
     // Defer CE/PE draws — addBaselineSeries triggers LC's async render RAF.
     // Use raw oipOptionData (actual trades only, no alignment gaps) filtered to
     // current replay time — same source as oi_profile.js.
     requestAnimationFrame(() => {
         try {
-            oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
-            oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
-            const _ce30sMap = _build30sMap(oip30sSecondCandle.ce);
-            const _pe30sMap = _build30sMap(oip30sSecondCandle.pe);
             const raw = oipOptionData || [];
             const ceSource = raw.filter(c => c.type === 'CE' && (!maxTime || c.time <= maxTime));
             const peSource = raw.filter(c => c.type === 'PE' && (!maxTime || c.time <= maxTime));
             if (oipCEChart?.chart && ceSource.length)
-                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, ceSource, _ce30sMap);
+                oip2ndCandle30sBox.ce = _oipDayBoxesRender('30s:ce', oipCEChart.chart, ceSource, specWith(_build30sMap(oip30sSecondCandle.ce)), '#FFC800');
             if (oipPEChart?.chart && peSource.length)
-                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, peSource, _pe30sMap);
+                oip2ndCandle30sBox.pe = _oipDayBoxesRender('30s:pe', oipPEChart.chart, peSource, specWith(_build30sMap(oip30sSecondCandle.pe)), '#FFC800');
         } catch(e) {}
     });
 }
@@ -1545,49 +1638,41 @@ function oipDraw2ndCandle30sBox(candles, maxTime) {
 let oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
 
 function oipDraw2nd5mCandleBox(candles, maxTime) {
-    oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
-    oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
-    oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
-
     const allowedIntervals = ['minute', '2minute', '3minute', '5minute'];
-    if (!allowedIntervals.includes(oipInterval) || !candles || !candles.length) return;
-    if (!document.getElementById('oipShow2nd5mCandle')?.checked) return;
-
-    function _draw5mAllDays(chart, src) {
-        const boxes = [];
-        const map = _oipGroupByDay(src);
-        Object.keys(map).sort().forEach(dk => {
-            const day = map[dk];
-            const w = day.filter(c => {
-                const d = new Date(c.time * 1000);
-                return d.getUTCHours() === 9 && d.getUTCMinutes() >= 20 && d.getUTCMinutes() < 25;
-            });
-            if (!w.length) return;
-            const hi = Math.max(...w.map(_oipH));
-            const lo = Math.min(...w.map(_oipL));
-            if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
-            const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
-            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#00D2FF'));
-        });
-        return boxes;
+    const on = allowedIntervals.includes(oipInterval) && candles && candles.length &&
+               document.getElementById('oipShow2nd5mCandle')?.checked;
+    if (!on) {
+        ['5m:oi', '5m:ce', '5m:pe'].forEach(_oipDayBoxesClear);
+        oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
+        return;
     }
 
-    if (oipOIChart)
-        oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
+    const spec = (dk, day) => {
+        const w = day.filter(c => {
+            const d = new Date(c.time * 1000);
+            return d.getUTCHours() === 9 && d.getUTCMinutes() >= 20 && d.getUTCMinutes() < 25;
+        });
+        if (!w.length) return null;
+        const hi = Math.max(...w.map(_oipH));
+        const lo = Math.min(...w.map(_oipL));
+        if (!isFinite(hi) || !isFinite(lo) || hi === lo) return null;
+        return { hi, lo, from: w[0].time };
+    };
 
-    // Defer CE/PE draws — same rationale as 30s box: use raw oipOptionData
-    // filtered to current replay time, not the alignment-padded arrays.
+    if (oipOIChart)
+        oip2nd5mCandleBox.oi = _oipDayBoxesRender('5m:oi', oipOIChart, candles, spec, '#00D2FF');
+
+    if (!oipCEChart?.chart && !oipPEChart?.chart) return;
+
     requestAnimationFrame(() => {
         try {
-            oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
-            oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
             const raw = oipOptionData || [];
             const ceSource = raw.filter(c => c.type === 'CE' && (!maxTime || c.time <= maxTime));
             const peSource = raw.filter(c => c.type === 'PE' && (!maxTime || c.time <= maxTime));
             if (oipCEChart?.chart && ceSource.length)
-                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, ceSource);
+                oip2nd5mCandleBox.ce = _oipDayBoxesRender('5m:ce', oipCEChart.chart, ceSource, spec, '#00D2FF');
             if (oipPEChart?.chart && peSource.length)
-                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, peSource);
+                oip2nd5mCandleBox.pe = _oipDayBoxesRender('5m:pe', oipPEChart.chart, peSource, spec, '#00D2FF');
         } catch(e) {}
     });
 }

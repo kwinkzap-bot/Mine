@@ -25,6 +25,7 @@ let oipRSIMarkers = [];
 const _OIP_IND_IDS = [
     'oipShowOIBars', 'oipShowVolume', 'oipShowBnfVolume', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
+    'oipCprShowLabels',
     'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
     'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowMondayBox', 'oipShowPremium',
@@ -77,7 +78,7 @@ function _oipSaveLineStyles() {
 // Default Solid (0) for any key with no saved preference yet.
 // Preserves each indicator's pre-existing hardcoded look (e.g. Max Pain and
 // the 9:18 ATM CE OI lines were already dashed) until the user picks a style.
-const _OIP_LINE_STYLE_DEFAULTS = { maxPain: 2, atmCeOi: 2 };
+const _OIP_LINE_STYLE_DEFAULTS = { maxPain: 2, atmCeOi: 2, cprPrevHL: 2 };
 function oipGetLineStyle(key) {
     if (key in oipLineStyles) return oipLineStyles[key];
     return _OIP_LINE_STYLE_DEFAULTS[key] ?? 0;
@@ -97,8 +98,8 @@ let oipLineWidths = {};
 const _OIP_LINE_DEFAULTS = {
     cvwap: { color: '#3b82f6', width: 2 }, pvwap: { color: '#fdba74', width: 2 }, avg3vwap: { color: '#ef4444', width: 2 },
     ceAvg: { color: '#16a34a', width: 1 }, peAvg: { color: '#7c3aed', width: 1 }, cepeAvg: { color: '#000000', width: 1 },
-    cprPrevHL: { color: '#ef07f9', width: 1 }, cprBand: { color: '#00008B', width: 1 },
-    cprResistance: { color: '#006400', width: 1 }, cprSupport: { color: '#ff0000', width: 1 }, cprCumR3S3: { color: '#a020f0', width: 2 },
+    cprPrevHL: { color: '#ef07f9', width: 1 }, cprBand: { color: '#3f51b5', width: 1 },
+    cprResistance: { color: '#006400', width: 1 }, cprSupport: { color: '#ff0000', width: 1 }, cprCumR3S3: { color: '#7b1fa2', width: 2 },
     multiCpr15m: { color: '#f97316', width: 1 }, multiCpr30m: { color: '#06b6d4', width: 1 }, multiCpr1h: { color: '#9c28b0', width: 1 },
     ema9: { color: '#22c55e', width: 1 }, ema20: { color: '#f97316', width: 1 }, ema50: { color: '#ef4444', width: 1 },
     ema100: { color: '#3b82f6', width: 1 }, ema200: { color: '#888888', width: 1 },
@@ -142,6 +143,20 @@ function _oipLoadLineColorsWidths() {
     try { oipLineColors = JSON.parse(localStorage.getItem(_OIP_LINE_COLOR_STORAGE_KEY) || '{}') || {}; } catch(e) { oipLineColors = {}; }
     try { oipLineWidths = JSON.parse(localStorage.getItem(_OIP_LINE_WIDTH_STORAGE_KEY) || '{}') || {}; } catch(e) { oipLineWidths = {}; }
 }
+// One-off: drop a stale saved width/colour for the Camarilla R3/S3 pair so the
+// 2px violet default below actually applies. Runs once per browser — after that
+// the popup's own width/colour pickers own the value again, as for every other
+// line. Delete this block (and the flag) once it has been out for a while.
+const _OIP_CAMARILLA_RESET_FLAG = 'oip-camarilla-reset-v1';
+function _oipResetCamarillaOverrides() {
+    try {
+        if (localStorage.getItem(_OIP_CAMARILLA_RESET_FLAG)) return;
+        localStorage.setItem(_OIP_CAMARILLA_RESET_FLAG, '1');
+        if (oipLineWidths.cprCumR3S3 != null) { delete oipLineWidths.cprCumR3S3; _oipSaveLineWidths(); }
+        if (oipLineColors.cprCumR3S3 != null) { delete oipLineColors.cprCumR3S3; _oipSaveLineColors(); }
+    } catch(e) {}
+}
+
 function _oipSaveLineColors() { try { localStorage.setItem(_OIP_LINE_COLOR_STORAGE_KEY, JSON.stringify(oipLineColors)); } catch(e) {} }
 function _oipSaveLineWidths() { try { localStorage.setItem(_OIP_LINE_WIDTH_STORAGE_KEY, JSON.stringify(oipLineWidths)); } catch(e) {} }
 // A default may be a plain hex or a function (re-resolved per read, for the
@@ -541,6 +556,7 @@ function _oipBuildLinePropsGroup(key) {
 function oipInjectLineStyleSelectors() {
     _oipLoadLineStyles();
     _oipLoadLineColorsWidths();
+    _oipResetCamarillaOverrides();
     _oipLoadLineOpacities();
     _OIP_LINE_STYLE_ITEMS.forEach(({ key, checkboxId }) => {
         const cb = document.getElementById(checkboxId);
@@ -852,14 +868,16 @@ function oipCalculate3EMAs(data) {
     return { ema9: emas[0], ema20: emas[1], ema50: emas[2] };
 }
 
+// Anchored VWAP: the cumulation restarts at the top of each anchor period, so
+// 30s–30m give the session VWAP, 1h a weekly one, 1D monthly, 1W/1M yearly —
+// the same periods CPR uses (see oipAnchorPeriod).
 function oipCalculateVWAP(candles) {
     if (!candles || candles.length === 0) return [];
+    const anchor = oipAnchorPeriod();
     let cumPV = 0, cumV = 0, lastDate = null;
     const result = [];
     candles.forEach(c => {
-        const d = new Date(c.time * 1000);
-        // Use UTC methods to match the 'Fake IST Epoch' from server
-        const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        const date = _oipPeriodKey(c.time, anchor);
         if (date !== lastDate) { cumPV = 0; cumV = 0; lastDate = date; }
         const vol = c.volume || 0;
         if (vol <= 0) return;
@@ -873,8 +891,9 @@ function oipCalculateVWAP(candles) {
     return result;
 }
 
-// CVWAP — alias for the current-session VWAP (resets each trading day).
-// Kept as a thin wrapper so the indicator wiring reads CVWAP/PVWAP symmetrically.
+// CVWAP — alias for the current-period VWAP (the trading day on an intraday
+// timeframe; see oipCalculateVWAP). Kept as a thin wrapper so the indicator
+// wiring reads CVWAP/PVWAP symmetrically.
 function oipCalculateCVWAP(candles) {
     return oipCalculateVWAP(candles);
 }
@@ -885,11 +904,10 @@ function oipCalculateCVWAP(candles) {
 // "Current & Previous VWAP Strategy" Pine script.
 function oipCalculatePVWAP(candles) {
     if (!candles || candles.length === 0) return [];
-    const dateOf = (t) => {
-        const d = new Date(t * 1000);
-        // UTC methods match the 'Fake IST Epoch' the server emits.
-        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-    };
+    // "Previous session" is the previous ANCHOR period — the trading day on an
+    // intraday timeframe, the previous week/month/year on the higher ones.
+    const anchor = oipAnchorPeriod();
+    const dateOf = (t) => _oipPeriodKey(t, anchor);
 
     // Pass 1 — final VWAP per day, preserving day order.
     const finalVwap = {};
@@ -931,10 +949,9 @@ function oipCalculatePVWAP(candles) {
 // and the "Avg 3 VWAP" column / Pine CPR script's Avg 3 VWAP plot).
 function oipCalculateAvg3VWAP(candles) {
     if (!candles || candles.length === 0) return [];
-    const dateOf = (t) => {
-        const d = new Date(t * 1000);
-        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-    };
+    // Three previous ANCHOR periods, matching PVWAP above.
+    const anchor = oipAnchorPeriod();
+    const dateOf = (t) => _oipPeriodKey(t, anchor);
 
     // Pass 1 — final VWAP per day, preserving day order (mirrors PVWAP's pass 1).
     const finalVwap = {};
@@ -1072,29 +1089,98 @@ function oipCalculateDynamicEMA(candles, interval) {
     });
 }
 
+/* ── Anchor period ────────────────────────────────────────────────────────
+   Which period the timeframe-anchored indicators reset on. CPR computes its
+   pivots from the PREVIOUS period; VWAP restarts its cumulation at the start
+   of each one:
+
+     30s … 30m  →  daily    (yesterday's H/L/C)
+     1h         →  weekly   (last week's)
+     1D         →  monthly  (last month's)
+     1W, 1M     →  yearly   (last year's)
+
+   CPR therefore needs at least one completed prior period in the chart for any
+   levels to exist: on 1W/1M that means the date range must reach back into the
+   previous calendar year. VWAP has no such requirement — it just anchors to the
+   start of whatever period a candle falls in. */
+const _OIP_ANCHOR_BY_INTERVAL = {
+    '30second': 'day', 'minute': 'day', '2minute': 'day', '3minute': 'day',
+    '5minute': 'day', '15minute': 'day', '30minute': 'day',
+    '60minute': 'week',
+    'day': 'month',
+    'week': 'year', 'month': 'year'
+};
+const _OIP_ANCHOR_LABELS = { day: 'Daily', week: 'Weekly', month: 'Monthly', year: 'Yearly' };
+
+// The <select> is the source of truth; oipInterval (declared per page in
+// oi_profile.js / oi_replay.js) is the fallback for pages without one.
+function _oipActiveInterval() {
+    const fromDom = document.getElementById('oipInterval')?.value;
+    if (fromDom) return fromDom;
+    try { return oipInterval; } catch (e) { return 'minute'; }
+}
+
+function oipAnchorPeriod(interval) {
+    return _OIP_ANCHOR_BY_INTERVAL[interval ?? _oipActiveInterval()] || 'day';
+}
+
+// Period key for one candle. UTC methods throughout, to match the server's
+// 'Fake IST Epoch'. Weeks are Monday-anchored (keyed by that Monday's date).
+function _oipPeriodKey(time, anchor) {
+    const d = new Date(time * 1000);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    if (anchor === 'year')  return `${y}`;
+    if (anchor === 'month') return `${y}-${m}`;
+    if (anchor === 'week') {
+        const monday = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate()));
+        // getUTCDay: 0=Sun … 6=Sat — shift Sunday back six days, not forward one.
+        monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+        return monday.toISOString().split('T')[0];
+    }
+    return `${y}-${m}-${day}`;
+}
+
+// Keeps the popup's "CPR Levels" row naming the period actually being drawn,
+// so a 1h chart showing week pivots does not read as a broken daily CPR.
+function _oipUpdateCprAnchorLabel(anchor) {
+    const el = document.querySelector('label[for="oipShowCpr"]');
+    if (el) el.textContent = `CPR Levels · ${_OIP_ANCHOR_LABELS[anchor] || 'Daily'}`;
+}
+
 function oipCalculateDynamicCPR(candles) {
     if (!candles || !candles.length) return null;
-    const days = []; let currentDay = null;
+    const anchor = oipAnchorPeriod();
+    _oipUpdateCprAnchorLabel(anchor);
+
+    const periods = []; let current = null;
     candles.forEach(c => {
-        const d = new Date(c.time * 1000);
-        // Use UTC methods to match the 'Fake IST Epoch' from server
-        const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        if (!currentDay || currentDay.date !== ds) {
-            if (currentDay) days.push(currentDay);
-            currentDay = { date: ds, isoDate: ds, high: c.high, low: c.low, close: c.close, times: [], closes: [] };
+        const key = _oipPeriodKey(c.time, anchor);
+        if (!current || current.key !== key) {
+            if (current) periods.push(current);
+            // isoDate is the period's FIRST calendar day — only meaningful for
+            // the daily anchor, where it keys into the server's daily_ohlc.
+            current = { key, isoDate: _oipPeriodKey(c.time, 'day'), high: c.high, low: c.low, close: c.close, times: [], closes: [] };
         }
-        currentDay.high = Math.max(currentDay.high, c.high);
-        currentDay.low = Math.min(currentDay.low, c.low);
-        currentDay.close = c.close;
-        currentDay.times.push(c.time);
-        currentDay.closes.push(c.close);
+        current.high = Math.max(current.high, c.high);
+        current.low = Math.min(current.low, c.low);
+        current.close = c.close;
+        current.times.push(c.time);
+        current.closes.push(c.close);
     });
-    if (currentDay) days.push(currentDay);
+    if (current) periods.push(current);
+
     let daysData = [];
-    for (let i = 1; i < days.length; i++) {
-        const prev = days[i - 1], curr = days[i];
+    for (let i = 1; i < periods.length; i++) {
+        const prev = periods[i - 1], curr = periods[i];
         let oH = prev.high, oL = prev.low, oC = prev.close;
-        if (oipOIData?.daily_ohlc?.[prev.isoDate]) { const t = oipOIData.daily_ohlc[prev.isoDate]; oH = t.high; oL = t.low; oC = t.close; }
+        // The server's true daily OHLC beats bars aggregated from an intraday
+        // feed that may not cover the whole session. It is per-DAY data, so it
+        // only stands in for the daily anchor.
+        if (anchor === 'day' && oipOIData?.daily_ohlc?.[prev.isoDate]) {
+            const t = oipOIData.daily_ohlc[prev.isoDate]; oH = t.high; oL = t.low; oC = t.close;
+        }
         const pp = (oH + oL + oC) / 3;
         const bc = (oH + oL) / 2;
         const tc = (pp - bc) + pp;
@@ -1229,109 +1315,297 @@ function oipUpdateAllMarkers() {
     lwSetMarkers(oipOISeries, combined);
 }
 
+/* ── CPR level labels & hierarchy ─────────────────────────────────────────
+   A day of pivots is 15 lines, and they are redrawn per day segment. Two
+   things make that readable: a name on each level, and a fade on the outer
+   pivots so R1/S1 stay the ones the eye lands on.
+
+   The label rides on the series' `title` — LightweightCharts only draws that
+   where `lastValueVisible` is on, so it goes on the most recent day's segment
+   alone; putting it on every day would stack one label per day down the axis.
+   The fade multiplies the group's chosen colour rather than replacing it, so
+   a user-picked colour still drives the hue. */
+const _OIP_CPR_LABELS = {
+    prevH: 'PH', prevL: 'PL', pp: 'PP', bc: 'BC', tc: 'TC',
+    r1: 'R1', r2: 'R2', r3: 'R3', r4: 'R4',
+    s1: 'S1', s2: 'S2', s3: 'S3', s4: 'S4',
+    cr3: 'CR3', cs3: 'CS3'
+};
+const _OIP_CPR_LEVEL_ALPHA = { r2: 0.8, r3: 0.62, r4: 0.45, s2: 0.8, s3: 0.62, s4: 0.45 };
+
+// Labels are a Replay feature by default: the checkbox exists in the Indicators
+// popup on the dashboard and OI Profile, and the compact /replay toolbar has no
+// popup to carry it, so there it falls back to on.
+function _oipCprLabelsOn() {
+    const el = document.getElementById('oipCprShowLabels');
+    return el ? el.checked : !!window.oipReplayMode;
+}
+
+function _oipCprFade(color, alpha) {
+    if (typeof color !== 'string') return color;
+    if (color.startsWith('#') && color.length >= 7) {
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        return `rgba(${r},${g},${b},${alpha})`;
+    }
+    const m = color.match(/[\d.]+/g);
+    if (m && m.length >= 3) return `rgba(${m[0]},${m[1]},${m[2]},${alpha})`;
+    return color;
+}
+
+// The options every CPR level line gets — shared by the full redraw here and by
+// the replay renderer in oi_replay.js, so both look the same.
+function oipCprLineOptions(key, styleKey, labelled) {
+    const alpha = _OIP_CPR_LEVEL_ALPHA[key];
+    const color = oipGetLineColor(styleKey);
+    const label = labelled ? (_OIP_CPR_LABELS[key] || '') : '';
+    return {
+        color: alpha ? _oipCprFade(color, alpha) : color,
+        lineWidth: oipGetLineWidth(styleKey),
+        lineStyle: oipGetLineStyle(styleKey),
+        title: label,
+        lastValueVisible: !!label
+    };
+}
+
+/* ── CPR renderer ─────────────────────────────────────────────────────────
+   ONE line series per level for the whole chart — not one per level per
+   period. A level is flat inside its period, so the period only contributes
+   three points to that level's series: its first bar, its last-but-one bar,
+   and a whitespace point on the closing bar that breaks the line before the
+   next period's level starts.
+
+   The old shape was `line_<level>_<periodIndex>`, i.e. 15 series per period.
+   Over a year of 5m bars that is ~3,800 series on one chart, every one of them
+   cleared and refilled on every replay step — measured at 765 ms per step with
+   only 60 days loaded, and it wedged the renderer outright at a year. The
+   compact form is ~1 ms per step.
+
+   The TC/BC band still needs a series per period: a BaselineSeries carries one
+   baseValue and BC moves period to period. Those are created once and only the
+   period under the playhead is rewritten as replay advances (_oipCprState). */
+const _OIP_CPR_LEVEL_KEYS = ['prevH', 'prevL', 'pp', 'tc', 'bc', 'r1', 'r2', 'r3', 'r4', 's1', 's2', 's3', 's4', 'cr3', 'cs3'];
+
+const _OIP_CPR_STYLE_KEY = {
+    prevH: 'cprPrevHL', prevL: 'cprPrevHL',
+    pp: 'cprBand', bc: 'cprBand', tc: 'cprBand',
+    r1: 'cprResistance', r2: 'cprResistance', r3: 'cprResistance', r4: 'cprResistance',
+    s1: 'cprSupport', s2: 'cprSupport', s3: 'cprSupport', s4: 'cprSupport',
+    cr3: 'cprCumR3S3', cs3: 'cprCumR3S3'
+};
+const _OIP_CPR_CHECKBOX = {
+    prevH: 'oipCprShowPrevHL', prevL: 'oipCprShowPrevHL',
+    pp: 'oipCprShowBand', bc: 'oipCprShowBand', tc: 'oipCprShowBand',
+    r1: 'oipCprShowResistance', r2: 'oipCprShowResistance', r3: 'oipCprShowResistance', r4: 'oipCprShowResistance',
+    s1: 'oipCprShowSupport', s2: 'oipCprShowSupport', s3: 'oipCprShowSupport', s4: 'oipCprShowSupport',
+    cr3: 'oipCprShowCumR3S3', cs3: 'oipCprShowCumR3S3'
+};
+
+// Tracks what is already on the chart, so a replay step can extend the live
+// period instead of rebuilding every series.
+let _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {} };
+
+function _oipCprSubChecked(id) { return document.getElementById(id)?.checked !== false; }
+
+// Identifies the loaded dataset: a new symbol/timeframe/date range invalidates
+// every cached series, a replay step does not.
+function _oipCprSignature(daysData) {
+    if (!daysData || !daysData.length) return 'empty';
+    const f = daysData[0].times, l = daysData[daysData.length - 1].times;
+    return `${daysData.length}|${f[0]}|${l[l.length - 1]}|${_oipActiveInterval()}`;
+}
+
+function _oipCprLineSeries(key) {
+    const k = `line_${key}`;
+    if (!oipCprSeriesMap[k]) {
+        oipCprSeriesMap[k] = oipOIChart.addSeries(LightweightCharts.LineSeries, {
+            lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null
+        });
+    }
+    return oipCprSeriesMap[k];
+}
+
+function _oipCprBoxSeries(idx, fill) {
+    const k = `box_${idx}`;
+    if (!oipCprSeriesMap[k]) {
+        oipCprSeriesMap[k] = oipOIChart.addSeries(LightweightCharts.BaselineSeries, {
+            topFillColor1: fill, topFillColor2: fill, topLineColor: 'transparent',
+            bottomFillColor1: fill, bottomFillColor2: fill, bottomLineColor: 'transparent',
+            lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null
+        });
+    }
+    return oipCprSeriesMap[k];
+}
+
+// Drops every cached CPR series off the chart. Called when the dataset changes
+// — leaving stale period boxes behind would draw bands from the old range.
+function oipClearCprSeries() {
+    Object.keys(oipCprSeriesMap).forEach(k => {
+        try { oipOIChart.removeSeries(oipCprSeriesMap[k]); } catch (e) {}
+        delete oipCprSeriesMap[k];
+    });
+    _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {} };
+}
+
+function _oipCprBlank() {
+    Object.keys(oipCprSeriesMap).forEach(k => { try { oipCprSeriesMap[k].setData([]); } catch (e) {} });
+    _oipCprState.liveIdx = -1; _oipCprState.maxTime = -1; _oipCprState.boxCount = {};
+}
+
+// How many of a period's bars are at or before the playhead.
+function _oipVisibleCount(times, maxTime) {
+    if (maxTime == null || maxTime === Infinity) return times.length;
+    if (times[0] > maxTime) return 0;
+    if (times[times.length - 1] <= maxTime) return times.length;
+    let lo = 0, hi = times.length;                 // first index past maxTime
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (times[mid] <= maxTime) lo = mid + 1; else hi = mid; }
+    return lo;
+}
+
+/* Full redraw. maxTime clips to the replay playhead (Infinity = whole chart).
+   Finished periods keep their band fill untouched — re-setting all of them was
+   2.3 s per slider drag on a year of 5m bars, since each BaselineSeries reindexes
+   its data and the whole stack then gets reordered. */
+function oipRenderCprLevels(daysData, maxTime = Infinity) {
+    if (!oipOIChart || !oipOISeries) return;
+    const show = oipElems.showCpr?.checked;
+    if (!show || !daysData || !daysData.length) { _oipCprBlank(); return; }
+
+    const sig = _oipCprSignature(daysData);
+    if (sig !== _oipCprState.sig) oipClearCprSeries();
+
+    const labelled = _oipCprLabelsOn();
+    const bandOn = _oipCprSubChecked('oipCprShowBand');
+    const fill = _oipCprFade(oipGetLineColor('cprBand'), 0.14);
+    const prev = _oipCprState;
+    const keepBoxes = prev.sig === sig && prev.fill === fill && prev.bandOn === bandOn;
+    const lineData = {}; _OIP_CPR_LEVEL_KEYS.forEach(k => lineData[k] = []);
+    const boxCount = {};
+    let liveIdx = -1, created = sig !== prev.sig;
+
+    daysData.forEach((day, di) => {
+        const times = day.times;
+        const n = _oipVisibleCount(times, maxTime);
+        if (!n) return;
+        const complete = n === times.length;
+        if (!complete) liveIdx = di;
+
+        _OIP_CPR_LEVEL_KEYS.forEach(k => {
+            const v = day.levels[k];
+            if (v == null || isNaN(v)) return;
+            const arr = lineData[k];
+            arr.push({ time: times[0], value: v });
+            if (complete) {
+                // Whitespace on the closing bar breaks the line, so the next
+                // period's level does not get joined to this one by a diagonal.
+                if (n >= 3) arr.push({ time: times[n - 2], value: v });
+                if (n >= 2) arr.push({ time: times[n - 1] });
+            } else if (n >= 2) {
+                arr.push({ time: times[n - 1], value: v });
+            }
+        });
+
+        const box = day.boxes && day.boxes[0];
+        if (!box) return;
+        boxCount[di] = n;
+        if (!bandOn) { if (oipCprSeriesMap[`box_${di}`]) oipCprSeriesMap[`box_${di}`].setData([]); return; }
+        if (keepBoxes && prev.boxCount[di] === n && oipCprSeriesMap[`box_${di}`]) return;   // unchanged
+        if (!oipCprSeriesMap[`box_${di}`]) created = true;
+        const s = _oipCprBoxSeries(di, fill);
+        s.applyOptions({
+            baseValue: { type: 'price', price: box.min },
+            topFillColor1: fill, topFillColor2: fill, bottomFillColor1: fill, bottomFillColor2: fill
+        });
+        s.setData(times.slice(0, n).map(t => ({ time: t, value: box.max })));
+    });
+
+    // Periods that fell past the playhead (a jump backwards) must not keep
+    // showing their band.
+    Object.keys(oipCprSeriesMap).forEach(k => {
+        if (!k.startsWith('box_')) return;
+        if (!(k.slice(4) in boxCount)) { try { oipCprSeriesMap[k].setData([]); } catch (e) {} }
+    });
+
+    _OIP_CPR_LEVEL_KEYS.forEach(k => {
+        if (!oipCprSeriesMap[`line_${k}`]) created = true;
+        const s = _oipCprLineSeries(k);
+        s.applyOptions(oipCprLineOptions(k, _OIP_CPR_STYLE_KEY[k], labelled));
+        s.setData(_oipCprSubChecked(_OIP_CPR_CHECKBOX[k]) ? lineData[k] : []);
+    });
+
+    _oipCprState = { sig, liveIdx, maxTime, boxCount, fill, bandOn };
+    // Ordering only matters when the series stack itself changed.
+    if (created) oipApplyZOrder();
+}
+
+/* Replay step. Extends the period under the playhead — and, when the playhead
+   crosses into the next one, closes the old period off and opens the new one —
+   without touching any finished period. Returns false when the caller has to
+   fall back to a full redraw (new dataset, a jump backwards, or a jump of more
+   than one period). */
+function oipAdvanceCprLevels(daysData, maxTime) {
+    if (!oipOIChart || !daysData || !daysData.length) return false;
+    if (!oipElems.showCpr?.checked) return false;
+    const st = _oipCprState;
+    if (st.sig !== _oipCprSignature(daysData) || st.liveIdx < 0 || maxTime <= st.maxTime) return false;
+
+    const visible = k => _oipCprSubChecked(_OIP_CPR_CHECKBOX[k]);
+    let idx = st.liveIdx;
+    const live = daysData[idx];
+    if (!live) return false;
+
+    let created = false;
+    if (maxTime > live.times[live.times.length - 1]) {
+        const next = daysData[idx + 1];
+        // Only a step INTO the next period is cheap; anything further redraws.
+        if (!next || maxTime < next.times[0] || maxTime > next.times[next.times.length - 1]) return false;
+        // Whitespace on the finished period's closing bar breaks its line before
+        // the new period's level starts (update() with an existing timestamp
+        // replaces that point).
+        const lastBar = live.times[live.times.length - 1];
+        _OIP_CPR_LEVEL_KEYS.forEach(k => {
+            if (!visible(k) || live.levels[k] == null) return;
+            try { _oipCprLineSeries(k).update({ time: lastBar }); } catch (e) {}
+        });
+        idx += 1;
+        if (!oipCprSeriesMap[`box_${idx}`]) created = true;
+    }
+
+    const day = daysData[idx];
+    _OIP_CPR_LEVEL_KEYS.forEach(k => {
+        const v = day.levels[k];
+        if (v == null || isNaN(v) || !visible(k)) return;
+        try { _oipCprLineSeries(k).update({ time: maxTime, value: v }); } catch (e) {}
+    });
+
+    const box = day.boxes && day.boxes[0];
+    if (box && _oipCprSubChecked('oipCprShowBand')) {
+        const n = _oipVisibleCount(day.times, maxTime);
+        const s = _oipCprBoxSeries(idx, st.fill || _oipCprFade(oipGetLineColor('cprBand'), 0.14));
+        try {
+            if (created) {
+                s.applyOptions({ baseValue: { type: 'price', price: box.min } });
+                s.setData(day.times.slice(0, n).map(t => ({ time: t, value: box.max })));
+            } else {
+                s.update({ time: maxTime, value: box.max });
+            }
+        } catch (e) { return false; }
+        st.boxCount[idx] = n;
+    }
+
+    st.liveIdx = idx;
+    st.maxTime = maxTime;
+    if (created) oipApplyZOrder();
+    return true;
+}
+
 function oipDrawCpr(candles) {
     if (!oipOIChart || !oipOISeries) return;
-
-    const show = oipElems.showCpr?.checked;
-    Object.values(oipCprSeriesMap).forEach(s => s.setData([]));
-    if (!show || !candles || !candles.length) return;
-
-    const daysData = oipCalculateDynamicCPR(candles);
-    if (!daysData) return;
-
-    const lineStyles = {
-        prevH: { color: '#ef07f9', lineWidth: 1 },
-        prevL: { color: '#ef07f9', lineWidth: 1 },
-        pp:    { color: '#00008B', lineWidth: 1 },
-        bc:    { color: '#00008B', lineWidth: 1 },
-        tc:    { color: '#00008B', lineWidth: 1 },
-        r1:    { color: '#006400', lineWidth: 1 },
-        r2:    { color: '#006400', lineWidth: 1 },
-        r3:    { color: '#006400', lineWidth: 1 },
-        r4:    { color: '#006400', lineWidth: 1 },
-        s1:    { color: '#ff0000', lineWidth: 1 },
-        s2:    { color: '#ff0000', lineWidth: 1 },
-        s3:    { color: '#ff0000', lineWidth: 1 },
-        s4:    { color: '#ff0000', lineWidth: 1 },
-        cr3:   { color: '#a020f0', lineWidth: 2 },
-        cs3:   { color: '#a020f0', lineWidth: 2 }
-    };
-
-    const boxColors = {
-        'cpr':   'rgba(51, 102, 255, 0.2)',   // #3366ff @ 20%
-        'r1_r2': 'rgba(0, 204, 102, 0.02)',
-        'r2_r3': 'rgba(0, 204, 102, 0.02)',
-        'r3_r4': 'rgba(0, 204, 102, 0.02)',
-        's1_s2': 'rgba(255, 0, 0, 0.02)',
-        's2_s3': 'rgba(255, 0, 0, 0.02)',
-        's3_s4': 'rgba(255, 0, 0, 0.02)'
-    };
-
-    const keyGroup = {
-        prevH: 'oipCprShowPrevHL', prevL: 'oipCprShowPrevHL',
-        pp: 'oipCprShowBand',      bc: 'oipCprShowBand',    tc: 'oipCprShowBand',
-        r1: 'oipCprShowResistance', r2: 'oipCprShowResistance', r3: 'oipCprShowResistance', r4: 'oipCprShowResistance',
-        s1: 'oipCprShowSupport',   s2: 'oipCprShowSupport', s3: 'oipCprShowSupport', s4: 'oipCprShowSupport',
-        cr3: 'oipCprShowCumR3S3',  cs3: 'oipCprShowCumR3S3'
-    };
-    // Same grouping, mapped to line-style keys (one dropdown per checkbox group).
-    const styleKeyGroup = {
-        prevH: 'cprPrevHL', prevL: 'cprPrevHL',
-        pp: 'cprBand', bc: 'cprBand', tc: 'cprBand',
-        r1: 'cprResistance', r2: 'cprResistance', r3: 'cprResistance', r4: 'cprResistance',
-        s1: 'cprSupport', s2: 'cprSupport', s3: 'cprSupport', s4: 'cprSupport',
-        cr3: 'cprCumR3S3', cs3: 'cprCumR3S3'
-    };
-    const boxGroup = {
-        'cpr':   'oipCprShowBand',
-        'r1_r2': 'oipCprShowResistance', 'r2_r3': 'oipCprShowResistance', 'r3_r4': 'oipCprShowResistance',
-        's1_s2': 'oipCprShowSupport',    's2_s3': 'oipCprShowSupport',    's3_s4': 'oipCprShowSupport'
-    };
-    const subChecked = id => document.getElementById(id)?.checked !== false;
-
-    daysData.forEach((day, dayIdx) => {
-        // Draw the box fills FIRST so the pivot lines (PP/BC/TC, R/S) render on
-        // top of them — otherwise an opaque band fill hides the lines.
-        day.boxes.forEach((box, boxIdx) => {
-            const seriesKey = `box_${box.type}_${dayIdx}_${boxIdx}`;
-            let series = oipCprSeriesMap[seriesKey];
-            if (!series) {
-                const col = boxColors[box.type];
-                series = oipOIChart.addSeries(LightweightCharts.BaselineSeries, {
-                    baseValue: { type: 'price', price: box.min },
-                    topFillColor1: col, topFillColor2: col, topLineColor: 'transparent',
-                    bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent',
-                    lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-                    autoscaleInfoProvider: () => null
-                });
-                oipCprSeriesMap[seriesKey] = series;
-            }
-            if (!subChecked(boxGroup[box.type])) { series.setData([]); return; }
-            series.applyOptions({ baseValue: { type: 'price', price: box.min } });
-            series.setData(day.times.map(t => ({ time: t, value: box.max })));
-        });
-
-        Object.keys(day.levels).forEach(key => {
-            const seriesKey = `line_${key}_${dayIdx}`;
-            let series = oipCprSeriesMap[seriesKey];
-            if (!series) {
-                series = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-                    ...lineStyles[key],
-                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
-                    autoscaleInfoProvider: () => null
-                });
-                oipCprSeriesMap[seriesKey] = series;
-            }
-            // Series are cached and reused across redraws — always re-apply the
-            // current color/width/style choice, not just at first creation.
-            const sk = styleKeyGroup[key];
-            series.applyOptions({ lineStyle: oipGetLineStyle(sk), color: oipGetLineColor(sk), lineWidth: oipGetLineWidth(sk) });
-            const val = day.levels[key];
-            const visible = subChecked(keyGroup[key]);
-            series.setData(visible && val != null && !isNaN(val) ? day.times.map(t => ({ time: t, value: val })) : []);
-        });
-    });
-    oipApplyZOrder();
+    if (!oipElems.showCpr?.checked || !candles || !candles.length) { _oipCprBlank(); return; }
+    oipRenderCprLevels(oipCalculateDynamicCPR(candles));
 }
 
 /* ── Multi CPR ────────────────────────────────────────────── */

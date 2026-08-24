@@ -99,6 +99,11 @@ function _hoiRenderAll(records) {
                   cellClass: (_, r) => cls(futOf(r)),
                   format: (_, r) => { const f = futOf(r); return f == null ? '—' : (f > 0 ? '+' : '') + f.toFixed(0) + ' Cr'; } },
                 { label: 'Open',  align: 'right',
+                  thTitle: 'Cell tint: this session\u2019s Open vs. the PREVIOUS session\u2019s '
+                         + 'Avg 3 VWAP (the value one row below in the Avg 3 VWAP column).\n'
+                         + 'Green = Open above it (upside), red = at or below (downside).\n'
+                         + 'No tint when the row has no OHLC yet, or the 3 prior sessions\u2019 '
+                         + 'VWAPs aren\u2019t all available.',
                   cellClass: (_, r, i) => {
                       if (!hasOHLC(r)) return '';
                       const pa = prevAvg3VwapOf(i);

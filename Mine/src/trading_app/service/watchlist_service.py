@@ -95,6 +95,52 @@ INDEX_YF: Dict[str, str] = {
     'BSE:SENSEX-INDEX':           '^BSESN',
 }
 
+# TradingView's own symbology for the indices, alongside INDEX_YF above so
+# the three namings of the same instrument (Fyers / Yahoo / TradingView) sit
+# together. Equities need no table — TradingView takes NSE:<ticker> as-is.
+INDEX_TV: Dict[str, str] = {
+    'NSE:NIFTY50-INDEX':          'NSE:NIFTY',
+    'NSE:NIFTYBANK-INDEX':        'NSE:BANKNIFTY',
+    'NSE:FINNIFTY-INDEX':         'NSE:CNXFINANCE',
+    'NSE:MIDCPNIFTY-INDEX':       'NSE:NIFTYMIDSELECT',
+    'NSE:NIFTYMIDCAP150-INDEX':   'NSE:NIFTYMIDCAP150',
+    'NSE:INDIAVIX-INDEX':         'NSE:INDIAVIX',
+    'NSE:NIFTYIT-INDEX':          'NSE:CNXIT',
+    'NSE:NIFTYAUTO-INDEX':        'NSE:CNXAUTO',
+    'NSE:NIFTYPHARMA-INDEX':      'NSE:CNXPHARMA',
+    'NSE:NIFTYFMCG-INDEX':        'NSE:CNXFMCG',
+    'NSE:NIFTYMETAL-INDEX':       'NSE:CNXMETAL',
+    'NSE:NIFTYPSUBANK-INDEX':     'NSE:NIFTYPSUBANK',
+    'NSE:NIFTY500-INDEX':         'NSE:CNX500',
+    'BSE:SENSEX-INDEX':           'BSE:SENSEX',
+}
+
+# Chart timeframes offered by the candle popup.
+#
+#   yf       Yahoo's interval.
+#   period   How much history to pull. Yahoo caps intraday hard — 1m to the
+#            last 7 days, 5m/15m/30m to the last 60 — and answers a wider
+#            window with an error rather than a truncation, so these sit
+#            inside the caps deliberately.
+#   cpr      The timeframe the CPR/Camarilla levels are computed from, one
+#            step up from the candles as every CPR indicator does it:
+#            intraday reads against the day, hourly against the week, daily
+#            against the month, weekly and monthly against the year.
+#   intraday Whether a bar needs a time as well as a date.
+#
+# 3m and 4h are absent because Yahoo has neither; its intraday set is
+# 1m/2m/5m/15m/30m/60m/90m.
+INTERVALS: Dict[str, Dict[str, Any]] = {
+    '1m':  {'yf': '1m',   'period': '5d',   'cpr': ('D',),        'cpr_label': 'Daily',   'intraday': True},
+    '5m':  {'yf': '5m',   'period': '1mo',  'cpr': ('D',),        'cpr_label': 'Daily',   'intraday': True},
+    '15m': {'yf': '15m',  'period': '1mo',  'cpr': ('D',),        'cpr_label': 'Daily',   'intraday': True},
+    '30m': {'yf': '30m',  'period': '1mo',  'cpr': ('D',),        'cpr_label': 'Daily',   'intraday': True},
+    '1h':  {'yf': '1h',   'period': '6mo',  'cpr': ('W',),        'cpr_label': 'Weekly',  'intraday': True},
+    '1d':  {'yf': '1d',   'period': '1y',   'cpr': ('ME', 'M'),   'cpr_label': 'Monthly', 'intraday': False},
+    '1wk': {'yf': '1wk',  'period': '5y',   'cpr': ('YE', 'A'),   'cpr_label': 'Yearly',  'intraday': False},
+    '1mo': {'yf': '1mo',  'period': '10y',  'cpr': ('YE', 'A'),   'cpr_label': 'Yearly',  'intraday': False},
+}
+
 # Chart ranges offered by the drilldown, mapped to a Yahoo period.
 HISTORY_RANGES: Dict[str, str] = {
     '1m': '1mo', '6m': '6mo', '1y': '1y', '3y': '3y', '5y': '5y',
@@ -162,6 +208,7 @@ def _ensure_schema() -> None:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS ix_wl_tab_user_name
                     ON watchlist_tabs (username, name COLLATE NOCASE);
+                -- broker_instance is added below for tables that predate it.
 
                 CREATE TABLE IF NOT EXISTS watchlist_items (
                     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +242,14 @@ def _ensure_schema() -> None:
                     fetched_at  REAL NOT NULL
                 );
             """)
+        # Added after the table shipped, so it is an ALTER rather than part
+        # of the CREATE above. Naming a tab after an account was the first
+        # way to link the two, and it cannot express "Saran" when both
+        # Saranya (Kite) and Saranya (Dhan) exist — this binding can.
+        with _connect() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(watchlist_tabs)")}
+            if 'broker_instance' not in columns:
+                conn.execute("ALTER TABLE watchlist_tabs ADD COLUMN broker_instance INTEGER")
         _schema_ready = True
 
 
@@ -206,6 +261,19 @@ def _yf_for(fy_symbol: str, root: str, kind: str) -> Optional[str]:
     # Yahoo uses the plain NSE ticker with a .NS suffix. `root` is the master's
     # underlying column, which is already the bare ticker ("RELIANCE", "M&M").
     return f'{root}.NS' if root else None
+
+
+def _tv_symbol(fy_symbol: str, symbol: str, kind: str) -> str:
+    """The TradingView symbol for a row, e.g. 'NSE:RELIANCE'.
+
+    Unmapped indices fall through to NSE:<root>, which is right often enough
+    to be worth trying — TradingView says "invalid symbol" on the few it
+    isn't, which is a clearer answer than refusing to open the chart.
+    """
+    if kind == 'INDEX':
+        return INDEX_TV.get(fy_symbol) or f'NSE:{symbol}'
+    exchange = fy_symbol.split(':')[0] if ':' in fy_symbol else 'NSE'
+    return f'{exchange}:{symbol}'
 
 
 def _load_universe() -> List[Dict[str, str]]:
@@ -299,22 +367,99 @@ def _resolve(symbol: str) -> Optional[Dict[str, str]]:
     return None
 
 
+# ── broker-owned tabs ────────────────────────────────────────────────────
+#
+# A tab named for a configured broker ("Devanai Kite" against the broker
+# "Devanai (Kite)") is that account's list, not a hand-made one. It is filled
+# from the account's holdings, so deleting a row would only mean it comes
+# back on the next refresh — and deleting the tab would throw away the link
+# to the account. Both are refused here rather than merely hidden in the UI,
+# so the rule holds however the endpoint is reached.
+
+def broker_slots(username: str) -> List[Dict[str, Any]]:
+    """Configured, active broker slots: instance, type and display name."""
+    from trading_app.app.utils.user_env import UserEnvManager
+    out: List[Dict[str, Any]] = []
+    for i in range(1, 11):
+        def env(field: str, default: str = '') -> str:
+            return (UserEnvManager.get_user_var(username, f'BROKER_{i}_{field}',
+                                                default) or '').strip()
+        if env('ACTIVE', 'false').lower() != 'true':
+            continue
+        broker_type = env('TYPE').lower()
+        if not broker_type:
+            continue
+        out.append({'instance': i, 'type': broker_type,
+                    'name': env('NAME') or broker_type.title()})
+    return out
+
+
+def _squash(text: Any) -> str:
+    """Letters and digits only — "Devanai Kite" and "Devanai (Kite)" are the
+    same name written two ways."""
+    return ''.join(c for c in str(text or '').lower() if c.isalnum())
+
+
+def broker_for_tab(username: str, tab_name: str,
+                   slots: Optional[List[Dict[str, Any]]] = None,
+                   instance: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """The broker a tab follows, or None.
+
+    An explicit binding (``instance``) always wins: it is the user saying
+    which account this list is, and it is the only thing that can express
+    "Saran" when both Saranya (Kite) and Saranya (Dhan) are configured.
+
+    Failing that the name is read — exact match first, then a partial match
+    but only when exactly one broker matches. An ambiguous name belongs to
+    no account rather than to a guessed one; this page places orders, and
+    guessing the account is the one outcome worth designing against.
+    """
+    slots = broker_slots(username) if slots is None else slots
+    if instance:
+        bound = [b for b in slots if b['instance'] == instance]
+        if bound:
+            return bound[0]
+
+    wanted = _squash(tab_name)
+    if not wanted:
+        return None
+
+    exact = [b for b in slots if _squash(b['name']) == wanted]
+    if len(exact) == 1:
+        return exact[0]
+
+    partial = [b for b in slots
+               if _squash(b['name']) in wanted or wanted in _squash(b['name'])]
+    return partial[0] if len(partial) == 1 else None
+
+
 # ── tabs ─────────────────────────────────────────────────────────────────
 
 def list_tabs(username: str) -> List[Dict[str, Any]]:
     _ensure_schema()
     with _connect() as conn:
         rows = conn.execute("""
-            SELECT t.id, t.name, t.position,
+            SELECT t.id, t.name, t.position, t.broker_instance,
                    (SELECT COUNT(*) FROM watchlist_items i WHERE i.tab_id = t.id) AS count
             FROM watchlist_tabs t
             WHERE t.username = ?
             ORDER BY t.position, t.id
         """, (username,)).fetchall()
-    return [dict(r) for r in rows]
+
+    # Resolved once for the whole list: broker_for_tab re-reads the env
+    # otherwise, and this runs on every poll.
+    slots = broker_slots(username)
+    tabs = []
+    for row in rows:
+        tab = dict(row)
+        tab['broker'] = broker_for_tab(username, tab['name'], slots,
+                                       tab.pop('broker_instance', None))
+        tabs.append(tab)
+    return tabs
 
 
-def create_tab(username: str, name: str) -> Dict[str, Any]:
+def create_tab(username: str, name: str,
+               broker_instance: Optional[int] = None) -> Dict[str, Any]:
     _ensure_schema()
     name = (name or '').strip()
     if not name:
@@ -331,13 +476,15 @@ def create_tab(username: str, name: str) -> Dict[str, Any]:
                            "WHERE username = ?", (username,)).fetchone()[0]
         try:
             cur = conn.execute(
-                "INSERT INTO watchlist_tabs (username, name, position, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (username, name, pos, datetime.now().isoformat(timespec='seconds')))
+                "INSERT INTO watchlist_tabs (username, name, position, created_at, "
+                "broker_instance) VALUES (?, ?, ?, ?, ?)",
+                (username, name, pos, datetime.now().isoformat(timespec='seconds'),
+                 broker_instance))
         except sqlite3.IntegrityError:
             return {'success': False, 'error': f'A tab named "{name}" already exists'}
-        return {'success': True, 'tab': {'id': cur.lastrowid, 'name': name,
-                                         'position': pos, 'count': 0}}
+        return {'success': True,
+                'tab': {'id': cur.lastrowid, 'name': name, 'position': pos, 'count': 0,
+                        'broker': broker_for_tab(username, name, None, broker_instance)}}
 
 
 def rename_tab(username: str, tab_id: int, name: str) -> Dict[str, Any]:
@@ -358,16 +505,37 @@ def rename_tab(username: str, tab_id: int, name: str) -> Dict[str, Any]:
     return {'success': True, 'tab': {'id': tab_id, 'name': name}}
 
 
+def set_tab_broker(username: str, tab_id: int,
+                   instance: Optional[int]) -> Dict[str, Any]:
+    """Bind a tab to a broker account, or pass None to unbind it."""
+    _ensure_schema()
+    if instance is not None:
+        if not any(b['instance'] == instance for b in broker_slots(username)):
+            return {'success': False, 'error': 'That broker is not active'}
+    with _connect() as conn:
+        cur = conn.execute("UPDATE watchlist_tabs SET broker_instance = ? "
+                           "WHERE id = ? AND username = ?", (instance, tab_id, username))
+        if not cur.rowcount:
+            return {'success': False, 'error': 'Tab not found'}
+    return {'success': True, 'broker': broker_for_tab(username, '', None, instance)}
+
+
 def delete_tab(username: str, tab_id: int) -> Dict[str, Any]:
     _ensure_schema()
     with _connect() as conn:
         # The FK carries ON DELETE CASCADE, but sqlite only honours it with
         # foreign_keys pragma on per-connection. Deleting both explicitly is
         # one line and doesn't depend on a pragma being set.
-        owned = conn.execute("SELECT 1 FROM watchlist_tabs WHERE id = ? AND username = ?",
+        owned = conn.execute("SELECT name, broker_instance FROM watchlist_tabs "
+                             "WHERE id = ? AND username = ?",
                              (tab_id, username)).fetchone()
         if not owned:
             return {'success': False, 'error': 'Tab not found'}
+        broker = broker_for_tab(username, owned['name'], None, owned['broker_instance'])
+        if broker:
+            return {'success': False,
+                    'error': f"\"{owned['name']}\" belongs to {broker['name']} — "
+                             f"rename it first if you want to delete it"}
         conn.execute("DELETE FROM watchlist_items WHERE tab_id = ?", (tab_id,))
         conn.execute("DELETE FROM watchlist_tabs WHERE id = ?", (tab_id,))
     return {'success': True}
@@ -413,16 +581,52 @@ def add_item(username: str, tab_id: int, symbol: str) -> Dict[str, Any]:
                          'company': row['company'], 'kind': row['kind']}}
 
 
+def add_items(username: str, tab_id: int, symbols: List[str]) -> Dict[str, Any]:
+    """Add many symbols at once, reporting what happened to each.
+
+    Additive only: symbols already in the tab are counted, never re-added,
+    and nothing already there is removed. Importing a broker's holdings into
+    a list somebody has been curating must not quietly delete the rest of it.
+    """
+    _ensure_schema()
+    added: List[str] = []
+    already: List[str] = []
+    skipped: List[Dict[str, str]] = []
+
+    for symbol in symbols or []:
+        result = add_item(username, tab_id, symbol)
+        if result.get('success'):
+            added.append(result['item']['symbol'])
+            continue
+        error = result.get('error') or 'could not be added'
+        if 'already in this tab' in error:
+            already.append((symbol or '').upper())
+        else:
+            skipped.append({'symbol': (symbol or '').upper(), 'error': error})
+            # A tab that has hit its ceiling will reject every remaining
+            # symbol for the same reason; say it once and stop.
+            if 'At most' in error:
+                break
+
+    return {'success': True, 'added': added, 'already': already, 'skipped': skipped}
+
+
 def remove_item(username: str, item_id: int) -> Dict[str, Any]:
     _ensure_schema()
     with _connect() as conn:
         row = conn.execute("""
-            SELECT i.id FROM watchlist_items i
+            SELECT i.id, i.symbol, t.name AS tab_name, t.broker_instance
+            FROM watchlist_items i
             JOIN watchlist_tabs t ON t.id = i.tab_id
             WHERE i.id = ? AND t.username = ?
         """, (item_id, username)).fetchone()
         if not row:
             return {'success': False, 'error': 'Symbol not found'}
+        broker = broker_for_tab(username, row['tab_name'], None, row['broker_instance'])
+        if broker:
+            return {'success': False,
+                    'error': f"{row['symbol']} is held at {broker['name']} — "
+                             f"this tab follows that account"}
         conn.execute("DELETE FROM watchlist_items WHERE id = ?", (item_id,))
     return {'success': True}
 
@@ -644,6 +848,7 @@ def rows(username: str, tab_id: int, refresh: bool = False) -> Dict[str, Any]:
             'fy_symbol':   item['fy_symbol'],
             'yf_symbol':   item['yf_symbol'],
             'kind':        item['kind'],
+            'tv_symbol':   _tv_symbol(item['fy_symbol'], item['symbol'], item['kind']),
             'company':     f.get('company') or item['company'] or item['symbol'],
             'sector':      f.get('sector'),
             'ltp':         ltp,
@@ -750,6 +955,161 @@ def _eps_steps(ticker, current_eps: Optional[float]) -> List[Tuple[datetime, flo
     return steps
 
 
+# Camarilla's R3/S3 multiplier. The third level is the one that matters for
+# the reversal read the CPR filter already looks for — see
+# CPRFilterService.detect_camarilla_cpr_reversal.
+_CAMARILLA_R3 = 1.1 / 4.0
+
+
+def _period_levels(frame, freq, stamp=None) -> List[Dict[str, Any]]:
+    """CPR (TC/P/BC) and Camarilla R3/S3 per period, from the PREVIOUS
+    period's OHLC — which is what makes them levels to trade against rather
+    than a restatement of the bar they sit on.
+
+    `freq` is a pandas offset alias, or a tuple of aliases to try in order —
+    month-end is 'M' before pandas 2.2 and 'ME' after, and this app is not
+    pinned to either. Higher
+    timeframe than the daily candles the chart draws, deliberately: a daily
+    CPR on a daily chart is one band per candle, which is noise. This mirrors
+    what every CPR indicator does — the levels come from one timeframe up.
+    """
+    from trading_app.service.cpr_service import CPRService
+
+    if frame is None or getattr(frame, 'empty', True):
+        return []
+    aliases = (freq,) if isinstance(freq, str) else tuple(freq)
+    grouped = spans = None
+    for alias in aliases:
+        try:
+            grouped = frame.resample(alias).agg(
+                {'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+            spans = frame.resample(alias)
+            break
+        except ValueError:
+            continue          # this pandas does not know that alias
+    if grouped is None or len(grouped) < 2:
+        return []
+
+    # Which days each period covers, so the client can hold a level flat
+    # across its period instead of interpolating between two of them.
+    starts = {period: group.index[0] for period, group in spans if len(group)}
+    key = stamp or (lambda when: when.strftime('%Y-%m-%d'))
+
+    out: List[Dict[str, Any]] = []
+    periods = list(grouped.index)
+    for i in range(1, len(periods)):
+        prev = grouped.loc[periods[i - 1]]
+        high, low, close = (_finite(prev['High']), _finite(prev['Low']), _finite(prev['Close']))
+        if None in (high, low, close):
+            continue
+        pp, bc, tc = CPRService.calculate_cpr(high, low, close)
+        span = high - low
+        first_day = starts.get(periods[i])
+        if first_day is None:
+            continue
+        out.append({
+            'from': key(first_day),
+            'p':    round(pp, 2),
+            'bc':   round(bc, 2),
+            'tc':   round(tc, 2),
+            'r3':   round(close + span * _CAMARILLA_R3, 2),
+            's3':   round(close - span * _CAMARILLA_R3, 2),
+        })
+    return out
+
+
+# symbol|interval -> (fetched_at, payload). Separate from the history cache
+# because the candle popup and the drilldown ask different questions of the
+# same symbol; an intraday series also goes stale far sooner than a daily one.
+_candle_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_candle_lock = threading.Lock()
+
+# Intraday moves within the session, so its cache is short. Daily and above
+# only change once a day, and the drilldown's TTL already covers that.
+_CANDLE_TTL_INTRADAY = 60.0
+_CANDLE_TTL_DAILY = 900.0
+
+
+def candles(symbol: str, interval: str = '1d') -> Dict[str, Any]:
+    """OHLCV bars at one timeframe, with the CPR/Camarilla levels that
+    timeframe reads against.
+
+    The CPR period is derived, never chosen: see INTERVALS. Levels a trader
+    reads against come from one timeframe up, and picking it by hand is how
+    a 5-minute chart ends up carrying yearly pivots.
+    """
+    _ensure_schema()
+    spec = INTERVALS.get((interval or '1d').lower())
+    if not spec:
+        return {'success': False, 'error': f'Unsupported timeframe "{interval}"'}
+
+    row = _resolve(symbol)
+    yf_symbol = (row or {}).get('yf_symbol')
+    if not yf_symbol:
+        return {'success': False, 'error': f'No price history source mapped for {symbol}'}
+
+    cache_key = f'{yf_symbol}|{interval}'
+    ttl = _CANDLE_TTL_INTRADAY if spec['intraday'] else _CANDLE_TTL_DAILY
+    with _candle_lock:
+        hit = _candle_cache.get(cache_key)
+        if hit and (time.time() - hit[0]) < ttl:
+            return hit[1]
+
+    try:
+        import yfinance as yf
+        frame = yf.Ticker(yf_symbol).history(period=spec['period'], interval=spec['yf'],
+                                             auto_adjust=False)
+    except Exception as e:
+        logger.error(f"[Watchlist] candles failed for {yf_symbol} {interval}: {e}")
+        return {'success': False, 'error': f'Chart data unavailable for {symbol}'}
+
+    if frame is None or frame.empty:
+        return {'success': False, 'error': f'No {interval} candles for {symbol}'}
+
+    # Lightweight Charts wants epoch seconds for an intraday series and a
+    # plain date for anything daily or wider; mixing them silently drops bars.
+    if spec['intraday']:
+        def stamp(when):
+            return int(when.timestamp())
+    else:
+        def stamp(when):
+            return when.strftime('%Y-%m-%d')
+
+    points = []
+    for ts, close in frame['Close'].items():
+        close = _finite(close)
+        if close is None:
+            continue
+        bar = {'t': stamp(ts), 'c': round(close, 2)}
+        for name, key in (('Open', 'o'), ('High', 'h'), ('Low', 'l')):
+            value = _finite(frame[name].get(ts)) if name in frame.columns else None
+            bar[key] = round(value, 2) if value is not None else None
+        volume = _finite(frame['Volume'].get(ts)) if 'Volume' in frame.columns else None
+        bar['v'] = int(volume) if volume is not None else None
+        points.append(bar)
+
+    try:
+        levels = _period_levels(frame, spec['cpr'], stamp)
+    except Exception as e:
+        logger.warning(f"[Watchlist] CPR levels failed for {yf_symbol} {interval}: {e}")
+        levels = []
+
+    payload = {
+        'success':    True,
+        'symbol':     row['symbol'],
+        'company':    row['company'],
+        'kind':       row['kind'],
+        'interval':   interval,
+        'intraday':   spec['intraday'],
+        'cpr_period': spec['cpr_label'],
+        'points':     points,
+        'levels':     levels,
+    }
+    with _candle_lock:
+        _candle_cache[cache_key] = (time.time(), payload)
+    return payload
+
+
 def history(symbol: str, rng: str = '1y') -> Dict[str, Any]:
     """Daily closes plus a derived price-to-earnings line for the chart."""
     _ensure_schema()  # reached directly by URL, not only after rows()
@@ -812,6 +1172,12 @@ def history(symbol: str, rng: str = '1y') -> Dict[str, Any]:
             return current_eps if eps_basis == 'current' else None
         return chosen
 
+    # Full OHLC + volume, not just the close: the same payload feeds the
+    # line chart in the docked drilldown and the candlesticks in the chart
+    # popup, so opening one after the other costs nothing. The drilldown
+    # simply ignores the fields it does not plot.
+    columns = {name: frame[name] for name in ('Open', 'High', 'Low', 'Volume')
+               if name in frame.columns}
     points = []
     for ts, close in frame['Close'].items():
         close = _finite(close)
@@ -819,14 +1185,32 @@ def history(symbol: str, rng: str = '1y') -> Dict[str, Any]:
             continue
         when = ts.to_pydatetime() if hasattr(ts, 'to_pydatetime') else ts
         eps = eps_at(when)
+        candle = {}
+        for name, key in (('Open', 'o'), ('High', 'h'), ('Low', 'l')):
+            value = _finite(columns[name].get(ts)) if name in columns else None
+            candle[key] = round(value, 2) if value is not None else None
+        volume = _finite(columns['Volume'].get(ts)) if 'Volume' in columns else None
         points.append({
             'ts':    when.strftime('%Y-%m-%d'),
             'close': round(close, 2),
             'pe':    round(close / eps, 2) if (eps and eps > 0) else None,
+            **candle,
+            'v':     int(volume) if volume is not None else None,
         })
+
+    # Both timeframes, computed once from the same daily frame: switching
+    # W/M in the chart is then a redraw rather than another request.
+    levels = {}
+    for key, freq in (('w', ('W',)), ('m', ('ME', 'M'))):
+        try:
+            levels[key] = _period_levels(frame, freq)
+        except Exception as e:
+            logger.warning(f"[Watchlist] {key} CPR levels failed for {yf_symbol}: {e}")
+            levels[key] = []
 
     payload = {
         'success':   True,
+        'levels':    levels,
         'symbol':    row['symbol'],
         'company':   row['company'],
         'kind':      row['kind'],

@@ -37,6 +37,12 @@ body,
     --oip-ring: color-mix(in srgb, var(--oip-accent) 18%, transparent);
     --oip-ctl-bg: var(--oip-header-bg);
     --oip-ctl-bg-hover: color-mix(in srgb, var(--oip-accent) 7%, var(--oip-header-bg));
+    /* Bar Replay's amber accent. Mixed against the card background rather than
+       hard-coded (#fffbeb / #fef08a / #854d0e were inline in the templates), so
+       the replay controls stay legible on the dark and forest themes too. */
+    --oip-replay-accent: #d97706;
+    --oip-replay-tint: color-mix(in srgb, var(--oip-replay-accent) 12%, var(--oip-card-bg));
+    --oip-replay-line: color-mix(in srgb, var(--oip-replay-accent) 45%, var(--oip-border));
 }
 
 /* Theme variables on body — cascade to ALL .oip-* children regardless of .oip-page */
@@ -1948,3 +1954,172 @@ body.dark-theme .oip-oo-cancel-all,
 .oip-oo-btn.cancel { background: #ef4444; }
 .oip-oo-btn:hover  { filter: brightness(1.12); }
 .oip-oo-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Bar Replay controls ──────────────────────────────────────────────────
+   The dashboard's Replay tab used to stack a second sticky "Replay Controls"
+   bar under the main toolbar; the controls now ride in the same row, tinted
+   so replay mode still reads as a distinct state. oi_replay.js toggles the
+   group's display and the buttons' .oip-btn--armed class — the colours live
+   here rather than in inline styles so the dark themes get them too. */
+.oip-replay-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 4px;
+    /* The group is one flex item in a flex-end toolbar: without a cap it would
+       overflow past the toolbar's LEFT edge on a narrow window (the side
+       flex-end pushes from) instead of wrapping. */
+    max-width: 100%;
+    min-width: 0;
+    padding: 3px 7px;
+    border: 1px solid var(--oip-replay-line);
+    border-radius: 7px;
+    background: var(--oip-replay-tint);
+}
+
+/* Slider + clock take whatever room is left after the buttons. */
+.oip-replay-controls .oip-prem-group:last-child {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.oip-replay-controls .oip-prem-sep {
+    background: var(--oip-replay-line);
+    height: 16px;
+}
+
+.oip-replay-controls .oip-label {
+    color: var(--oip-replay-accent);
+}
+
+.oip-replay-slider {
+    flex: 1 1 120px;
+    min-width: 80px;
+    max-width: 200px;
+    height: 4px;
+    cursor: pointer;
+    accent-color: var(--oip-replay-accent);
+}
+
+.oip-replay-clock {
+    min-width: 72px;
+    text-align: right;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: var(--oip-replay-accent);
+}
+
+/* Replay's own button skins. .oip-btn--armed (defined above) is the shared
+   "this control is waiting for a click" state; these two rules re-assert it
+   past the tinted defaults, since they are declared later in the file. */
+.oip-btn--replay {
+    background: var(--oip-replay-tint);
+    border-color: var(--oip-replay-line);
+    color: var(--oip-replay-accent);
+}
+
+.oip-btn--replay:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--oip-replay-accent) 20%, var(--oip-card-bg));
+    border-color: var(--oip-replay-accent);
+}
+
+.oip-btn--replay-primary {
+    min-width: 58px;
+    justify-content: center;
+    background: var(--oip-replay-accent);
+    border-color: var(--oip-replay-accent);
+    color: #ffffff;
+}
+
+.oip-btn--replay-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--oip-replay-accent) 82%, #000);
+    border-color: color-mix(in srgb, var(--oip-replay-accent) 82%, #000);
+}
+
+/* Solid ink button — mixed from the theme's own text colour so it inverts on
+   the dark cards instead of disappearing into them (it was a flat #1e293b). */
+.oip-btn--jump {
+    background: color-mix(in srgb, var(--oip-text) 88%, var(--oip-card-bg));
+    border-color: color-mix(in srgb, var(--oip-text) 88%, var(--oip-card-bg));
+    color: var(--oip-card-bg);
+}
+
+.oip-btn--jump:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--oip-text) 70%, var(--oip-card-bg));
+    border-color: color-mix(in srgb, var(--oip-text) 70%, var(--oip-card-bg));
+}
+
+.oip-btn--replay.oip-btn--armed {
+    background: var(--oip-replay-accent);
+    border-color: var(--oip-replay-accent);
+    color: #ffffff;
+}
+
+/* Jump stays red while armed — it is the one control that takes over the
+   chart's click handling, so it reads as a mode, not a highlight. */
+.oip-btn--jump.oip-btn--armed {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: #ffffff;
+}
+
+/* Replay's title pill — amber twin of the green live badge, minus the pulse:
+   nothing is streaming in replay, so the dot holds still. */
+.oip-title-badge--replay::before {
+    animation: none;
+}
+
+.oip-title-badge--replay {
+    background: var(--oip-replay-tint);
+    color: var(--oip-replay-accent);
+    border-color: var(--oip-replay-line);
+}
+
+.oip-input--replay {
+    width: 112px;
+    border-color: var(--oip-replay-line);
+}
+
+/* ── Replay status pill ───────────────────────────────────────────────────
+   "● Replay Mode (5m)" at the head of the replay controls — names the mode and
+   the timeframe being replayed, the way the reference chart does. */
+.oip-replay-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    color: var(--oip-replay-accent);
+}
+
+.oip-replay-status .oip-replay-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--oip-replay-accent);
+    animation: oip-live-pulse 1.4s ease-in-out infinite;
+}
+
+/* Speeds read "1x · 1 bar/sec", so the select needs a little more room than
+   the other toolbar dropdowns. */
+.oip-replay-speed {
+    max-width: 130px;
+}
+
+.oip-btn--replay-exit {
+    background: transparent;
+    border-color: var(--oip-replay-line);
+    color: var(--oip-replay-accent);
+}
+
+.oip-btn--replay-exit:hover:not(:disabled) {
+    background: color-mix(in srgb, #ef4444 12%, var(--oip-card-bg));
+    border-color: #ef4444;
+    color: #ef4444;
+}

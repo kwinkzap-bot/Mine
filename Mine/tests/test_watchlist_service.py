@@ -322,3 +322,285 @@ def test_annual_and_quarterly_steps_are_merged_to_span_a_long_chart():
     # Ascending, because eps_at() walks the list and stops at the first step
     # dated after the day it is pricing.
     assert dated == sorted(dated)
+
+
+# ── CPR + Camarilla overlay ──────────────────────────────────────────────
+
+def _daily_frame(rows):
+    """A daily OHLC frame indexed by date, as yfinance hands one back."""
+    index = pd.DatetimeIndex([pd.Timestamp(d) for d, *_ in rows])
+    return pd.DataFrame(
+        {'High':  [r[1] for r in rows],
+         'Low':   [r[2] for r in rows],
+         'Close': [r[3] for r in rows]},
+        index=index)
+
+
+def test_levels_come_from_the_previous_period_not_the_current_one():
+    """A level you can trade against has to be knowable before the period
+    starts, which means it is derived from the period before it."""
+    frame = _daily_frame([
+        # Week 1 (Mon-Wed): high 120, low 80, last close 100.
+        ('2026-01-05', 110, 90, 95), ('2026-01-06', 120, 80, 105), ('2026-01-07', 115, 95, 100),
+        # Week 2 — its levels must come from week 1's numbers above.
+        ('2026-01-12', 200, 150, 180), ('2026-01-13', 210, 160, 190),
+    ])
+    levels = wl._period_levels(frame, 'W')
+
+    # Only the second week gets levels; the first has nothing before it.
+    assert len(levels) == 1
+    got = levels[0]
+    assert got['from'] == '2026-01-12', 'levels apply from the first day of their period'
+
+    high, low, close = 120, 80, 100
+    pivot = (high + low + close) / 3          # 100.0
+    bc = (high + low) / 2                     # 100.0
+    tc = 2 * pivot - bc                       # 100.0
+    assert got['p'] == pytest.approx(round(pivot, 2))
+    assert got['bc'] == pytest.approx(round(min(bc, tc), 2))
+    assert got['tc'] == pytest.approx(round(max(bc, tc), 2))
+    # Camarilla's third level: close ± (high - low) x 1.1/4.
+    assert got['r3'] == pytest.approx(round(close + (high - low) * 1.1 / 4, 2))
+    assert got['s3'] == pytest.approx(round(close - (high - low) * 1.1 / 4, 2))
+
+
+def test_tc_and_bc_are_returned_high_side_first():
+    """The raw formulas can put TC below BC. Whichever way round they come
+    out, TC has to be the upper edge of the band or the chart draws it
+    inside out."""
+    frame = _daily_frame([
+        ('2026-02-02', 100, 50, 95),      # close near the high -> TC above BC
+        ('2026-02-09', 120, 110, 115),
+        ('2026-02-16', 100, 50, 55),      # close near the low  -> raw TC below BC
+        ('2026-02-23', 120, 110, 115),
+    ])
+    for got in wl._period_levels(frame, 'W'):
+        assert got['tc'] >= got['bc']
+        assert got['s3'] <= got['r3']
+
+
+def test_a_single_period_yields_no_levels():
+    frame = _daily_frame([('2026-03-02', 100, 90, 95), ('2026-03-03', 101, 91, 96)])
+    assert wl._period_levels(frame, 'W') == []
+    assert wl._period_levels(None, 'W') == []
+
+
+def test_month_alias_works_on_either_pandas():
+    """Month-end is 'M' before pandas 2.2 and 'ME' after; this app pins
+    neither, so the caller passes both and the first one that parses wins."""
+    frame = _daily_frame([
+        ('2026-01-05', 110, 90, 100), ('2026-01-20', 120, 80, 105),
+        ('2026-02-03', 130, 100, 120), ('2026-02-17', 140, 110, 130),
+        ('2026-03-03', 150, 120, 140),
+    ])
+    levels = wl._period_levels(frame, ('ME', 'M'))
+    assert [r['from'] for r in levels] == ['2026-02-03', '2026-03-03']
+
+
+# ── timeframe -> CPR period ──────────────────────────────────────────────
+
+def test_each_timeframe_reads_against_the_one_above_it():
+    """The rule the chart is built on: intraday reads against the day,
+    hourly against the week, daily against the month, weekly and monthly
+    against the year. Derived, never picked — a hand-picked period is how a
+    5-minute chart ends up carrying yearly pivots.
+    """
+    expected = {
+        '1m': 'Daily', '5m': 'Daily', '15m': 'Daily', '30m': 'Daily',
+        '1h': 'Weekly',
+        '1d': 'Monthly',
+        '1wk': 'Yearly', '1mo': 'Yearly',
+    }
+    assert {tf: spec['cpr_label'] for tf, spec in wl.INTERVALS.items()} == expected
+
+
+def test_intraday_timeframes_stay_inside_yahoos_history_caps():
+    """Yahoo answers a too-wide intraday window with an error, not a
+    truncation: 1m is capped at the last 7 days and 5m/15m/30m at 60, and
+    asking 30m for '2mo' returns nothing at all rather than 60 days of bars.
+    """
+    caps = {'1m': 7, '5m': 60, '15m': 60, '30m': 60}
+    days = {'5d': 5, '1mo': 31, '2mo': 62, '6mo': 183}
+    for tf, cap in caps.items():
+        requested = days[wl.INTERVALS[tf]['period']]
+        assert requested <= cap, f'{tf} asks for {requested}d against a {cap}d cap'
+
+    # Only the intraday timeframes carry a time on each bar.
+    assert [tf for tf, s in wl.INTERVALS.items() if s['intraday']] == \
+           ['1m', '5m', '15m', '30m', '1h']
+
+
+def test_an_unknown_timeframe_is_refused_without_a_fetch(monkeypatch):
+    monkeypatch.setattr(wl, '_resolve',
+                        lambda s: pytest.fail('resolved a symbol for a bad timeframe'))
+    result = wl.candles('RELIANCE', '4h')     # Yahoo has no 4h
+    assert result['success'] is False
+    assert 'Unsupported timeframe' in result['error']
+
+
+def test_yearly_levels_come_from_the_previous_year():
+    frame = _daily_frame([
+        ('2024-06-03', 100, 60, 80), ('2024-11-01', 120, 50, 90),
+        ('2025-06-02', 200, 150, 180),
+        ('2026-06-01', 300, 250, 280),
+    ])
+    levels = wl._period_levels(frame, ('YE', 'A'))
+    assert [r['from'] for r in levels] == ['2025-06-02', '2026-06-01']
+
+    # 2025's levels are built from 2024's high 120 / low 50 / close 90.
+    got = levels[0]
+    assert got['p'] == pytest.approx(round((120 + 50 + 90) / 3, 2))
+    assert got['r3'] == pytest.approx(round(90 + (120 - 50) * 1.1 / 4, 2))
+
+
+# ── bulk add (the holdings import) ───────────────────────────────────────
+
+def test_bulk_add_reports_each_symbol_and_never_removes():
+    """The import is additive. A watchlist is not a position report — a
+    symbol added by hand, or one since sold, must survive an import.
+    """
+    tab = wl.create_tab('Mine', 'Devanai Kite')['tab']['id']
+    wl.add_item('Mine', tab, 'NIFTY')          # added by hand, not a holding
+    wl.add_item('Mine', tab, 'RELIANCE')       # already held
+
+    result = wl.add_items('Mine', tab, ['RELIANCE', 'RELIGARE', 'NOTALISTEDCO'])
+
+    assert result['added'] == ['RELIGARE']
+    assert result['already'] == ['RELIANCE']
+    assert [s['symbol'] for s in result['skipped']] == ['NOTALISTEDCO']
+
+    # Nothing was dropped, including the hand-added index.
+    _fundamentals(**{'^NSEI': {'yf_price': 24000.0}, 'RELIANCE.NS': {'yf_price': 1300.0},
+                     'RELIGARE.NS': {'yf_price': 250.0}})
+    assert {r['symbol'] for r in wl.rows('Mine', tab)['rows']} == \
+           {'NIFTY', 'RELIANCE', 'RELIGARE'}
+
+
+def test_bulk_add_stops_once_the_tab_is_full(monkeypatch):
+    """A full tab rejects every remaining symbol for the same reason, so it
+    is reported once rather than forty times."""
+    monkeypatch.setattr(wl, 'MAX_ITEMS_PER_TAB', 2)
+    tab = wl.create_tab('Mine', 'Core')['tab']['id']
+
+    result = wl.add_items('Mine', tab, ['RELIANCE', 'RELIGARE', 'NIFTY', 'NIFTYBEES'])
+
+    assert result['added'] == ['RELIANCE', 'RELIGARE']
+    assert len(result['skipped']) == 1
+    assert 'At most' in result['skipped'][0]['error']
+
+
+def test_bulk_add_is_scoped_to_the_owner():
+    tab = wl.create_tab('Mine', 'Core')['tab']['id']
+    result = wl.add_items('Kavin', tab, ['RELIANCE'])
+    assert result['added'] == []
+    assert result['skipped'][0]['error'] == 'Tab not found'
+
+
+# ── broker-owned tabs ────────────────────────────────────────────────────
+
+BROKER_ENV = {
+    'BROKER_1_ACTIVE': 'true', 'BROKER_1_TYPE': 'zerodha', 'BROKER_1_NAME': 'Saranya (Kite)',
+    'BROKER_2_ACTIVE': 'true', 'BROKER_2_TYPE': 'zerodha', 'BROKER_2_NAME': 'Devanai (Kite)',
+    'BROKER_4_ACTIVE': 'false', 'BROKER_4_TYPE': 'kotak', 'BROKER_4_NAME': 'Kavin (Kotak Neo)',
+}
+
+
+@pytest.fixture
+def brokers(monkeypatch):
+    monkeypatch.setattr(
+        'trading_app.app.utils.user_env.UserEnvManager.get_user_var',
+        staticmethod(lambda username, var, default='': BROKER_ENV.get(var, default)))
+
+
+def test_a_tab_named_for_a_broker_is_recognised(brokers):
+    for name, expected in [('Devanai Kite', 'Devanai (Kite)'),
+                           ('Saranya Kite', 'Saranya (Kite)'),
+                           ('devanai kite', 'Devanai (Kite)'),   # case and spacing
+                           ('Devanai', 'Devanai (Kite)')]:       # unique partial
+        match = wl.broker_for_tab('Mine', name)
+        assert match and match['name'] == expected, name
+
+    # Names that belong to no one account.
+    assert wl.broker_for_tab('Mine', 'BEES') is None
+    assert wl.broker_for_tab('Mine', 'Kite') is None       # matches two — ambiguous
+    assert wl.broker_for_tab('Mine', '') is None
+    # An inactive slot is not a broker as far as this is concerned.
+    assert wl.broker_for_tab('Mine', 'Kavin Kotak Neo') is None
+
+
+def test_a_broker_tab_and_its_rows_cannot_be_deleted(brokers):
+    tab = wl.create_tab('Mine', 'Devanai Kite')['tab']['id']
+    item = wl.add_item('Mine', tab, 'RELIANCE')['item']['id']
+
+    dropped = wl.remove_item('Mine', item)
+    assert dropped['success'] is False
+    assert 'Devanai (Kite)' in dropped['error']
+
+    deleted = wl.delete_tab('Mine', tab)
+    assert deleted['success'] is False
+    assert 'rename it first' in deleted['error']
+
+    # Both are still there.
+    assert wl.list_tabs('Mine')[0]['count'] == 1
+
+
+def test_renaming_away_from_the_broker_makes_a_tab_deletable_again(brokers):
+    """The link is the name, so renaming is the deliberate way out — the
+    alternative is a tab nobody can ever remove."""
+    tab = wl.create_tab('Mine', 'Devanai Kite')['tab']['id']
+    wl.add_item('Mine', tab, 'RELIANCE')
+    assert wl.delete_tab('Mine', tab)['success'] is False
+
+    wl.rename_tab('Mine', tab, 'Old positions')
+    assert wl.delete_tab('Mine', tab)['success'] is True
+
+
+def test_manual_tabs_stay_deletable(brokers):
+    tab = wl.create_tab('Mine', 'BEES')['tab']['id']
+    item = wl.add_item('Mine', tab, 'NIFTYBEES')['item']['id']
+    assert wl.remove_item('Mine', item)['success'] is True
+    assert wl.delete_tab('Mine', tab)['success'] is True
+
+
+def test_list_tabs_says_which_broker_each_tab_follows(brokers):
+    wl.create_tab('Mine', 'Devanai Kite')
+    wl.create_tab('Mine', 'BEES')
+    by_name = {t['name']: t['broker'] for t in wl.list_tabs('Mine')}
+
+    assert by_name['Devanai Kite']['name'] == 'Devanai (Kite)'
+    assert by_name['Devanai Kite']['instance'] == 2
+    assert by_name['BEES'] is None
+
+
+def test_an_explicit_binding_beats_an_ambiguous_name(brokers):
+    """"Saran" matches both Saranya (Kite) and Saranya (Dhan), so the name
+    alone names neither. Saying which account outright is the way out."""
+    ambiguous = {**BROKER_ENV,
+                 'BROKER_5_ACTIVE': 'true', 'BROKER_5_TYPE': 'dhan',
+                 'BROKER_5_NAME': 'Saranya (Dhan)'}
+    import trading_app.app.utils.user_env as ue
+    ue.UserEnvManager.get_user_var = staticmethod(
+        lambda username, var, default='': ambiguous.get(var, default))
+
+    tab = wl.create_tab('Mine', 'Saran')['tab']['id']
+    assert wl.list_tabs('Mine')[0]['broker'] is None      # cannot be guessed
+
+    assert wl.set_tab_broker('Mine', tab, 1)['success'] is True
+    bound = wl.list_tabs('Mine')[0]['broker']
+    assert bound['name'] == 'Saranya (Kite)' and bound['instance'] == 1
+
+    # And a bound tab is protected exactly like a name-matched one.
+    item = wl.add_item('Mine', tab, 'RELIANCE')['item']['id']
+    assert wl.remove_item('Mine', item)['success'] is False
+    assert wl.delete_tab('Mine', tab)['success'] is False
+
+    # Unbinding hands it back.
+    assert wl.set_tab_broker('Mine', tab, None)['success'] is True
+    assert wl.list_tabs('Mine')[0]['broker'] is None
+    assert wl.remove_item('Mine', item)['success'] is True
+
+
+def test_binding_to_an_inactive_broker_is_refused(brokers):
+    tab = wl.create_tab('Mine', 'Whatever')['tab']['id']
+    result = wl.set_tab_broker('Mine', tab, 9)
+    assert result['success'] is False and 'not active' in result['error']

@@ -537,7 +537,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById(id)?.addEventListener('change', () => oipUpdateOptEmaVisibility());
     });
 
-    ['oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3'].forEach(id => {
+    ['oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
+     'oipCprShowLabels'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             if (oipOIData?.candles) oipDrawCpr(oipOIData.candles);
         });

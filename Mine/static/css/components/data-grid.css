@@ -138,6 +138,48 @@ body {
 /* main.css gives every th a hover fill — meaningless when nothing sorts. */
 .dg-table .dg-th:hover { background: var(--dg-bg) !important; }
 
+/* Headers carrying a `thTitle`. The dotted underline is the affordance —
+   without it there's nothing to tell you an explanation is a hover away. */
+.dg-table .dg-th--tip {
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--dg-border);
+}
+
+/* The tooltip itself — one node on <body>, positioned by data-grid.js.
+   Fixed rather than absolute because .dg-th is sticky inside .dg-scroll's
+   `overflow-x: auto`, which clips descendants that reach past the cell. */
+.dg-tip {
+    position: fixed;
+    z-index: 9999;
+    /* max-content + a fixed px cap. Both halves matter: without an
+       explicit width a fixed element shrink-to-fits against the space
+       left beside it, and without the cap a sentence sets one very long
+       line. A vw-based cap is deliberately avoided — where the layout
+       viewport resolves to 0 (embedded/headless panes) it collapses the
+       tooltip to a one-character column. JS narrows it further on
+       genuinely small screens. */
+    width: max-content;
+    max-width: 340px;
+    padding: 8px 10px;
+    background: var(--dg-surface);
+    color: var(--dg-text);
+    border: 1px solid var(--dg-border);
+    border-radius: 6px;
+    box-shadow: var(--dg-shadow-card);
+    /* Reset the header's own type treatment — this is prose, not a label. */
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.45;
+    letter-spacing: normal;
+    text-transform: none;
+    text-align: left;
+    white-space: pre-line;   /* honours the newlines in the tip text */
+    pointer-events: none;    /* never let the tooltip eat the hover it needs */
+}
+.dg-tip[hidden] { display: none; }
+
 .dg-table .dg-td {
     font-size: 10px;
     padding: 7px 8px;

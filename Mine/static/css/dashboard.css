@@ -39,6 +39,31 @@
 .dash-panel { display: none; }
 .dash-panel.active { display: block; }
 
+/* ── Replay tab — chart size ─────────────────────────────────────────────
+   .oip-chart-wrap is a fixed 575px on /oi-profile, where several charts stack
+   under each other. The Replay tab has one chart, so it sets its own height
+   here — one knob, and the card shrinks to match because the page and the
+   container are back to sizing themselves off their content. oi_replay.js
+   sizes the LightweightCharts canvas off this wrapper, so the two stay in
+   step; nudge --oip-replay-chart-h to make the block taller or shorter. */
+#dash-replay-panel {
+    --oip-replay-chart-h: clamp(360px, 62vh, 620px);
+}
+
+#dash-replay-panel .oip-page {
+    height: auto;
+    min-height: 0;
+}
+
+#dash-replay-panel .oip-container {
+    flex: 0 0 auto;
+}
+
+#dash-replay-panel #oipChartWrap {
+    flex: 0 0 auto;
+    height: var(--oip-replay-chart-h);
+}
+
 /* ════════════════════════════════════════════════════════════════
    BACKTEST — two-column equal split, full-width grid below
    ════════════════════════════════════════════════════════════════ */

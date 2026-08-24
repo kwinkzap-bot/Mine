@@ -43,7 +43,8 @@ def list_tabs():
 def create_tab():
     payload = request.get_json(silent=True) or {}
     try:
-        result = svc.create_tab(_user(), payload.get('name', ''))
+        result = svc.create_tab(_user(), payload.get('name', ''),
+                                payload.get('broker') or None)
         return jsonify(result), (200 if result.get('success') else 400)
     except Exception as e:
         return _fail(e, 'create_tab')
@@ -58,6 +59,30 @@ def rename_tab(tab_id: int):
         return jsonify(result), (200 if result.get('success') else 400)
     except Exception as e:
         return _fail(e, 'rename_tab')
+
+
+@watchlist_bp.route('/tabs/<int:tab_id>/broker', methods=['PUT'])
+@require_user_auth
+def set_tab_broker(tab_id: int):
+    """Bind a tab to a broker account, or send null to unbind it.
+
+    Explicit because a name cannot always say it: with both Saranya (Kite)
+    and Saranya (Dhan) configured, a tab called "Saran" names neither.
+    """
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get('broker')
+    if raw in (None, '', 0, '0'):
+        instance = None
+    else:
+        try:
+            instance = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'broker must be a number'}), 400
+    try:
+        result = svc.set_tab_broker(_user(), tab_id, instance)
+        return jsonify(result), (200 if result.get('success') else 400)
+    except Exception as e:
+        return _fail(e, 'set_tab_broker')
 
 
 @watchlist_bp.route('/tabs/<int:tab_id>', methods=['DELETE'])
@@ -81,6 +106,28 @@ def add_item(tab_id: int):
         return jsonify(result), (200 if result.get('success') else 400)
     except Exception as e:
         return _fail(e, 'add_item')
+
+
+@watchlist_bp.route('/tabs/<int:tab_id>/items/bulk', methods=['POST'])
+@require_user_auth
+def add_items(tab_id: int):
+    """Add many symbols to a tab in one call — the holdings import.
+
+    The holdings themselves are read by the client from /portfolio/all,
+    which already speaks every broker this app supports; this end only has
+    to put the symbols away, so there is no second copy of that broker code
+    to keep in step with the first.
+    """
+    payload = request.get_json(silent=True) or {}
+    symbols = payload.get('symbols')
+    if not isinstance(symbols, list) or not symbols:
+        return jsonify({'success': False, 'error': 'symbols must be a non-empty list'}), 400
+    if len(symbols) > 200:
+        return jsonify({'success': False, 'error': 'at most 200 symbols per request'}), 400
+    try:
+        return jsonify(svc.add_items(_user(), tab_id, [str(s) for s in symbols]))
+    except Exception as e:
+        return _fail(e, 'add_items')
 
 
 @watchlist_bp.route('/items/<int:item_id>', methods=['DELETE'])
@@ -160,20 +207,8 @@ def search():
 @require_user_auth
 def brokers():
     """The configured brokers the order ticket can send to."""
-    from trading_app.app.utils.user_env import UserEnvManager
-    user = _user()
-    out = []
-    for i in range(1, 11):
-        def env(field, default=''):
-            return (UserEnvManager.get_user_var(user, f'BROKER_{i}_{field}', default) or '').strip()
-        if env('ACTIVE', 'false').lower() != 'true':
-            continue
-        broker_type = env('TYPE').lower()
-        if not broker_type:
-            continue
-        out.append({'instance': i, 'type': broker_type,
-                    'name': env('NAME') or broker_type.title()})
-    return jsonify({'success': True, 'brokers': out})
+    # One reader of the broker slots, shared with the tab -> broker rule.
+    return jsonify({'success': True, 'brokers': svc.broker_slots(_user())})
 
 
 @watchlist_bp.route('/order', methods=['POST'])
@@ -273,6 +308,21 @@ def place_order():
     return jsonify({'success': True, 'order_id': str(order_id), 'broker': broker_name,
                     'symbol': symbol, 'side': side, 'qty': qty,
                     'order_type': order_type, 'product': product})
+
+
+@watchlist_bp.route('/candles', methods=['GET'])
+@require_user_auth
+def candles():
+    """OHLCV bars at one timeframe, plus the CPR/Camarilla levels derived
+    from the timeframe above it."""
+    symbol = (request.args.get('symbol') or '').strip()
+    if not symbol:
+        return jsonify({'success': False, 'error': 'symbol is required'}), 400
+    try:
+        result = svc.candles(symbol, request.args.get('interval', '1d'))
+        return jsonify(result), (200 if result.get('success') else 404)
+    except Exception as e:
+        return _fail(e, 'candles')
 
 
 @watchlist_bp.route('/history', methods=['GET'])

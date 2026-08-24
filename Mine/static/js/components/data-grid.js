@@ -43,6 +43,13 @@
      thClass  Extra class(es) on this column's <th> — for a page accenting
               one header (a "LAST price" column, say). Static string only:
               headers render once per grid, not per row.
+     thTitle  Tooltip on this column's <th> — for explaining what a column
+              means or why its cells are coloured. Rendered as a styled
+              popover, not a native `title`: the native one is a single
+              unwrapped line that the window clips off-screen for anything
+              longer than a few words, and it ignores newlines. Plain text;
+              "\n" starts a new line. Static string only, same reason as
+              thClass.
 
    Grid options
      columns  Column config array (required).
@@ -244,14 +251,20 @@
             if (c.thClass)            cls.push(c.thClass);
 
             let attrs = '';
+            if (c.thTitle) {
+                cls.push('dg-th--tip');
+                attrs += ` data-dg-tip="${escape(c.thTitle)}"`;
+            }
             if (isSortable(c)) {
                 const id = sortIdOf(c, idx);
                 cls.push('dg-th--sortable');
-                attrs = ` data-sort-key="${escape(id)}" role="button" tabindex="0"`;
+                attrs += ` data-sort-key="${escape(id)}" role="button" tabindex="0"`;
                 if (sortState.key === id) {
                     cls.push('dg-th--sort-' + sortState.dir);
                     attrs += ` aria-sort="${sortState.dir === 'asc' ? 'ascending' : 'descending'}"`;
                 }
+            } else if (c.thTitle) {
+                attrs += ' tabindex="0"';
             }
             return `<th class="${cls.join(' ')}"${attrs}>${escape(c.label ?? '')}</th>`;
         }).join('');
@@ -400,6 +413,109 @@
         const opts = el && _lastOpts.get(el);
         if (opts) mountSortable(el, opts);
         return el;
+    }
+
+    /* ── Header tooltips ──────────────────────────────────────────────
+       A column's `thTitle` shows as a styled popover rather than a native
+       `title`. Two reasons it can't be the native one: the browser draws
+       that as a single unwrapped line, so a sentence-long explanation runs
+       past the window edge and gets clipped, and it drops the newlines.
+
+       The element is a single `position: fixed` node on <body>, not a child
+       of the header — .dg-th is sticky inside .dg-scroll's `overflow-x:
+       auto`, which clips any descendant that reaches outside the cell.
+       Listeners are delegated from document and installed once, so grids
+       that re-render on a data refresh keep working without re-binding.
+       ---------------------------------------------------------------- */
+    // Mirrors .dg-tip's max-width in css/components/data-grid.css — JS only
+    // reads it to decide whether a narrow screen needs a tighter cap.
+    const TIP_MAX_W = 340;
+
+    let _tipEl = null;
+    let _tipFor = null;
+
+    function tipNode() {
+        if (!_tipEl) {
+            _tipEl = document.createElement('div');
+            _tipEl.className = 'dg-tip';
+            _tipEl.id = 'dg-tip';
+            _tipEl.setAttribute('role', 'tooltip');
+            _tipEl.hidden = true;
+            document.body.appendChild(_tipEl);
+        }
+        return _tipEl;
+    }
+
+    function showTip(th) {
+        const text = th.dataset.dgTip;
+        if (!text) return;
+        const tip = tipNode();
+        tip.textContent = text;          // plain text; CSS honours the newlines
+        tip.hidden = false;
+        _tipFor = th;
+        th.setAttribute('aria-describedby', 'dg-tip');
+
+        const pad = 8;
+        const vw  = window.innerWidth  || document.documentElement.clientWidth  || 0;
+        const vh  = window.innerHeight || document.documentElement.clientHeight || 0;
+
+        // On a screen narrower than the stylesheet's cap, shrink to fit before
+        // measuring — otherwise the clamp below can only push a too-wide
+        // tooltip off one edge or the other. Narrows only: setting this
+        // unconditionally would override .dg-tip's max-width and let the
+        // tooltip stretch to the full width of a desktop window.
+        const avail = vw ? vw - pad * 2 : 0;
+        tip.style.maxWidth = (avail && avail < TIP_MAX_W) ? Math.max(160, avail) + 'px' : '';
+
+        // Measure after unhiding, then clamp into the viewport: below the
+        // header normally, above it when the page bottom is closer than the
+        // tooltip is tall.
+        const a = th.getBoundingClientRect();
+        const t = tip.getBoundingClientRect();
+        let top  = a.bottom + 6;
+        let left = a.left;
+        if (vh && top + t.height > vh - pad) {
+            const above = a.top - t.height - 6;
+            top = above >= pad ? above : Math.max(pad, vh - t.height - pad);
+        }
+        if (vw) left = Math.min(Math.max(a.left, pad), Math.max(pad, vw - t.width - pad));
+        tip.style.top  = Math.round(top) + 'px';
+        tip.style.left = Math.round(left) + 'px';
+    }
+
+    function hideTip() {
+        if (_tipFor) _tipFor.removeAttribute('aria-describedby');
+        _tipFor = null;
+        if (_tipEl) _tipEl.hidden = true;
+    }
+
+    function installTips() {
+        const anchorOf = e => e.target.closest && e.target.closest('.dg-th[data-dg-tip]');
+        document.addEventListener('pointerover', e => {
+            const th = anchorOf(e);
+            if (th) showTip(th);
+            else if (_tipFor && !_tipEl.contains(e.target)) hideTip();
+        });
+        document.addEventListener('pointerout', e => {
+            // Touch fires pointerout the moment the finger lifts, which would
+            // dismiss a tapped tooltip before it could be read. Those are
+            // dismissed by the next tap elsewhere (handled above) or a scroll.
+            if (e.pointerType === 'touch') return;
+            if (anchorOf(e)) hideTip();
+        });
+        document.addEventListener('focusin',  e => { const th = anchorOf(e); if (th) showTip(th); });
+        document.addEventListener('focusout', e => { if (anchorOf(e)) hideTip(); });
+        document.addEventListener('keydown',  e => { if (e.key === 'Escape') hideTip(); });
+        // Fixed positioning doesn't follow a scrolling anchor, and a re-render
+        // can drop the header out from under an open tooltip.
+        document.addEventListener('scroll', () => { if (_tipFor) hideTip(); }, true);
+        window.addEventListener('resize', hideTip);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', installTips, { once: true });
+    } else {
+        installTips();
     }
 
     global.DataGrid = {
