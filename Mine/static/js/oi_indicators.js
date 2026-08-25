@@ -110,12 +110,17 @@ const _OIP_LINE_DEFAULTS = {
     fixedCeAvg: { color: '#16a34a', width: 1 }, fixedPeAvg: { color: '#7c3aed', width: 1 }, fixedCePeAvg: { color: '#000000', width: 1 },
     fiveMClose: { color: '#fbbf24', width: 1 }, fiveMCloseOpt: { color: '#fbbf24', width: 1 },
     volUp: { color: '#1b9981' }, volDn: { color: '#f23645' },
+    // The single colour every bar falls back to with Vol Direction Color off
+    // (see the flag below) — a neutral grey, so a flat histogram reads as
+    // size only and never as a direction the candles don't agree with.
+    volFlat: { color: '#8a8f98' },
     // Banknifty's overlay defaults to the PE chart's candle colours (violet up,
     // dark down), which also keeps it clear of the green/red pair above — the
     // two histograms share a price scale and overlap. PE's down colour is
     // theme-dependent, so this default is a function: it re-resolves per read,
     // and a user-picked colour still overrides it outright.
     bnfVolUp: { color: '#8b5cf6' }, bnfVolDn: { color: () => _oipPeDownColor() },
+    bnfVolFlat: { color: '#8a8f98' },
 };
 
 // The PE candle series' down colour — black on light themes, grey on dark.
@@ -197,16 +202,38 @@ function oipGetLineOpacity(key) { return oipLineOpacities[key] ?? _OIP_LINE_DEFA
    other overlay — stay readable through them. */
 const _OIP_VOL_BAR_ALPHA = '80';
 const _OIP_VOL_COLOR_KEYS = {
-    nifty:     ['volUp', 'volDn'],
-    banknifty: ['bnfVolUp', 'bnfVolDn'],
+    nifty:     ['volUp', 'volDn', 'volFlat'],
+    banknifty: ['bnfVolUp', 'bnfVolDn', 'bnfVolFlat'],
 };
 const _OIP_VOL_COLOR_KEY_SET = new Set(Object.values(_OIP_VOL_COLOR_KEYS).flat());
-// The overlay's up/down hues, WITHOUT an alpha suffix — the painter appends
-// that, since it is per-bar once intensity shading is on.
+// The overlay's up/down/flat hues, WITHOUT an alpha suffix — the painter
+// appends that, since it is per-bar once intensity shading is on.
 function oipVolumeBarColors(kind) {
-    const [upKey, dnKey] = _OIP_VOL_COLOR_KEYS[kind] || _OIP_VOL_COLOR_KEYS.nifty;
-    return { up: oipGetLineColor(upKey), down: oipGetLineColor(dnKey) };
+    const [upKey, dnKey, flatKey] = _OIP_VOL_COLOR_KEYS[kind] || _OIP_VOL_COLOR_KEYS.nifty;
+    return { up: oipGetLineColor(upKey), down: oipGetLineColor(dnKey), flat: oipGetLineColor(flatKey) };
 }
+
+/* Vol Direction Color — ONE page-wide flag, mirrored as a checkbox in every
+   Indicator popup, same "one control, every chart" rule the colour swatches
+   above follow. On (the default, and how the bars have always looked) each bar
+   takes the direction of the candle it sits under. Off, every bar on every
+   chart paints its overlay's flat colour instead, so the histogram carries
+   size only and direction is left to the candles.
+
+   Intensity shading is a separate knob and is unaffected either way: it moves
+   the ALPHA, never the hue, so a flat row still darkens on its spikes.
+
+   Read straight from localStorage at load rather than in the popup's init,
+   because charts paint their first bars before oipInitIndicatorsPopup runs —
+   the ordering issue oipApplyAllLineStyles exists to paper over for lines. */
+const _OIP_VOL_DIR_COLOR_STORAGE_KEY = 'oip-vol-dir-color';
+let _oipVolDirColor = true;
+function _oipLoadVolDirColor() {
+    try { _oipVolDirColor = localStorage.getItem(_OIP_VOL_DIR_COLOR_STORAGE_KEY) !== '0'; }
+    catch (e) { _oipVolDirColor = true; }
+}
+_oipLoadVolDirColor();
+function oipVolDirColorOn() { return _oipVolDirColor; }
 
 /* Volume-weighted shading — opt-in per call site via oipSetVolumeBars'
    `intensity`, on for the Round Strike block. Squeezed into a 20%-tall band,
@@ -319,14 +346,15 @@ const _oipVolBarCache = new Map();
 const _oipInvertedVolSeries = new WeakSet();
 
 function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
-    const { up, down } = oipVolumeBarColors(kind);
+    const { up, down, flat } = oipVolumeBarColors(kind);
+    const byDirection = oipVolDirColorOn();
     const alphas = intensity ? _oipVolIntensityAlphas(bars) : null;
     const sign = _oipInvertedVolSeries.has(series) ? -1 : 1;
     try {
         series.setData(bars.map((b, i) => ({
             time: b.time,
             value: sign * b.value,
-            color: (b.up ? up : down) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
+            color: (byDirection ? (b.up ? up : down) : flat) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
         })));
     } catch (e) {}
 }
@@ -465,6 +493,23 @@ function _oipWireColorInput(inp) {
     });
 }
 
+// Wires an ALREADY-IN-THE-DOM <input type="checkbox" class="oip-vol-dircolor-cb">.
+// Each Indicator popup carries one and they are all the SAME setting, so a
+// change persists the flag, syncs the other copies and repaints every
+// histogram from its cache — no refetch, nothing else on the chart touched.
+function _oipWireVolDirColorCheckbox(cb) {
+    if (cb.dataset.wired) return;
+    cb.dataset.wired = '1';
+    cb.checked = oipVolDirColorOn();
+    cb.addEventListener('change', () => {
+        _oipVolDirColor = cb.checked;
+        try { localStorage.setItem(_OIP_VOL_DIR_COLOR_STORAGE_KEY, _oipVolDirColor ? '1' : '0'); } catch (e) {}
+        document.querySelectorAll('.oip-vol-dircolor-cb')
+            .forEach(other => { if (other !== cb) other.checked = _oipVolDirColor; });
+        oipRepaintAllVolumeBars();
+    });
+}
+
 function _oipBuildColorInput(key) {
     const inp = document.createElement('input');
     inp.type = 'color';
@@ -595,6 +640,7 @@ function oipInjectLineStyleSelectors() {
     document.querySelectorAll('.oip-line-color-inp').forEach(_oipWireColorInput);
     document.querySelectorAll('.oip-line-width-sel').forEach(_oipWireWidthSelect);
     document.querySelectorAll('.oip-line-opacity-sel').forEach(_oipWireOpacitySelect);
+    document.querySelectorAll('.oip-vol-dircolor-cb').forEach(_oipWireVolDirColorCheckbox);
 }
 
 // key -> array of persistent series objects (addSeries-based, reused via

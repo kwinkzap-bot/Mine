@@ -68,6 +68,8 @@
                                             title="Volume bar color on an up candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volDn"
                                             title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
                                     </span>
                                 </label>
                                 <!-- Hangs from its own band at the top of this pane and reuses the
@@ -75,6 +77,13 @@
                                 <label class="oip-ind-item"
                                     title="BANKNIFTY current-expiry future volume, in its own band at the top of the pane">
                                     <input type="checkbox" id="oipRSShowBnfVolume"><span>Banknifty Vol Fut</span>
+                                </label>
+                                <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
+                                     every Indicator popup. Off, the volume overlays drop the up/down split
+                                     and every bar paints the flat swatch above. -->
+                                <label class="oip-ind-item"
+                                    title="Tint volume bars by the candle's direction. Off: every bar uses the flat color swatch">
+                                    <input type="checkbox" class="oip-vol-dircolor-cb" checked><span>Vol Direction Color</span>
                                 </label>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipRSShow5mClose" checked><span>5m Close Border</span>
@@ -607,6 +616,8 @@
                                                 title="Volume bar color on an up candle">
                                             <input type="color" class="oip-line-color-inp" data-color-key="volDn"
                                                 title="Volume bar color on a down candle">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
+                                                title="Volume bar color when Vol Direction Color is off">
                                         </span>
                                     </label>
                                     <label class="oip-ind-item"
@@ -617,7 +628,16 @@
                                                 title="Volume bar color on an up candle">
                                             <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
                                                 title="Volume bar color on a down candle">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="bnfVolFlat"
+                                                title="Volume bar color when Vol Direction Color is off">
                                         </span>
+                                    </label>
+                                    <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
+                                         every Indicator popup. Off, the volume overlays drop the up/down split
+                                         and every bar paints the flat swatch above. -->
+                                    <label class="oip-ind-item"
+                                        title="Tint volume bars by the candle's direction. Off: every bar uses the flat color swatch">
+                                        <input type="checkbox" class="oip-vol-dircolor-cb" checked><span>Vol Direction Color</span>
                                     </label>
                                     <label class="oip-ind-item"
                                         title="Recolors the border of the candle that closes each 5-minute block on the Combined / CE Only / PE Only charts — 1m / 30s timeframes only">
@@ -887,6 +907,8 @@
                                             title="Volume bar color on an up candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volDn"
                                             title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
                                     </span>
                                 </label>
                                 <label class="oip-ind-item"
@@ -897,7 +919,16 @@
                                             title="Volume bar color on an up candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
                                             title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
                                     </span>
+                                </label>
+                                <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
+                                     every Indicator popup. Off, the volume overlays drop the up/down split
+                                     and every bar paints the flat swatch above. -->
+                                <label class="oip-ind-item"
+                                    title="Tint volume bars by the candle's direction. Off: every bar uses the flat color swatch">
+                                    <input type="checkbox" class="oip-vol-dircolor-cb" checked><span>Vol Direction Color</span>
                                 </label>
                                 <label class="oip-ind-item"
                                     title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
