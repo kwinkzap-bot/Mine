@@ -1,0 +1,193 @@
+/* ================================================================
+   Candle chart popup (templates/_candle_modal.html).
+
+   Own class prefix (cm-) and own variables rather than the watchlist's
+   wl- ones: the popup is mounted on the Scanner page too, which does not
+   load watchlist.css. Everything here resolves against the app-wide
+   --color-* tokens so it themes with whatever page it lands on.
+   ================================================================ */
+
+.cm-back[hidden] { display: none; }
+.cm-back {
+    position: fixed;
+    inset: 0;
+    z-index: 65;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, .55);
+}
+
+/* Nearly the whole viewport: a candle chart in a small box is not worth
+   opening. Capped so it still reads as a panel over the list, not a page. */
+.cm {
+    display: flex;
+    flex-direction: column;
+    width: min(1280px, 96vw);
+    height: min(820px, 92vh);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .35);
+    overflow: hidden;
+}
+
+.cm-hdr {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.cm-sym {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text);
+}
+.cm-co {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-3);
+}
+
+/* Stand-in for a company logo — a lettered chip is honest, a broken image
+   is not. Same device the watchlist drilldown uses. */
+.cm-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 700;
+    color: #fff;
+    background: var(--color-accent);
+    border-radius: 50%;
+}
+
+.cm-tf {
+    margin-left: auto;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    outline: none;
+    cursor: pointer;
+}
+.cm-tf:focus { border-color: var(--color-accent); }
+
+/* The CPR button names the period it is drawing, because that period is
+   derived from the timeframe rather than chosen — without it the rule is
+   invisible and the levels look arbitrary. */
+.cm-cpr {
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-2);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.cm-cpr span { color: var(--color-text-3); }
+.cm-cpr.active {
+    color: #fff;
+    background: #7c3aed;
+    border-color: #7c3aed;
+}
+.cm-cpr.active span { color: rgba(255, 255, 255, .75); }
+
+.cm-out {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-accent);
+    text-decoration: none;
+}
+.cm-out:hover { text-decoration: underline; }
+
+.cm-nav {
+    display: inline-flex;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.cm-nav button {
+    padding: 2px 10px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--color-text-2);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.cm-nav button + button { border-left: 1px solid var(--color-border); }
+.cm-nav button:disabled { opacity: .3; cursor: default; }
+
+.cm-close {
+    font-size: 12px;
+    color: var(--color-text-3);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+/* The two panes split the popup evenly and each owns its own chart. */
+.cm-panes {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+}
+
+/* Positioning context for the caption that names each pane's timeframe. */
+.cm-pane {
+    position: relative;
+    min-height: 0;
+    border-top: 1px solid var(--color-border);
+}
+.cm-pane:first-child { border-top: 0; }
+
+.cm-cap {
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    z-index: 2;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .03em;
+    color: var(--color-text-2);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 5px;
+    pointer-events: none;
+}
+
+.cm-body { width: 100%; height: 100%; min-height: 0; }
+
+/* Lightweight Charts sizes itself to this box, so it needs a real one. */
+.cm-body > div { width: 100%; height: 100%; }
+
+.cm-empty {
+    padding: 28px 0;
+    font-size: 12px;
+    color: var(--color-text-3);
+    text-align: center;
+}
+
+.cm-loading .cm-panes { opacity: .5; transition: opacity .12s ease; }
+
+@media (max-width: 768px) {
+    .cm-back { padding: 8px; }
+    .cm { width: 100%; height: 94vh; }
+}

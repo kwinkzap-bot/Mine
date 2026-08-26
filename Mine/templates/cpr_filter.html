@@ -4,6 +4,8 @@
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cpr_filter.css') }}?v={{ sv('css/cpr_filter.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}?v={{ sv('css/ema_rsi_filter.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/candle-modal.css') }}?v={{ sv('css/components/candle-modal.css') }}">
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 {% endblock %}
 {% block content %}
 <!-- Premium Unified Scanner Header Utility Row -->
@@ -11,7 +13,7 @@
     <!-- Left side: Segmented tab buttons -->
     <div class="scanner-tabs">
         <button class="scanner-tab-btn active" data-tab="cpr" onclick="switchScannerTab('cpr')">
-            <span class="tab-icon">🔍</span> IV & Expiry High/Low
+            <span class="tab-icon">🔍</span> IV & Camarilla CPR
         </button>
         <!-- <button class="scanner-tab-btn" data-tab="ema" onclick="switchScannerTab('ema')">
             <span class="tab-icon">📊</span> EMA & RSI Touch
@@ -37,12 +39,13 @@
         <button id="highIvRefreshBtn" class="refresh-btn" title="Refresh High IV Scanner">
             <span class="refresh-icon">🔥</span> High IV Scan
         </button>
-        <select id="expiryHlTimeframe" class="date-picker tf-picker" title="Timeframe for Expiry High/Low breakout">
-            <option value="60minute" selected>1 Hour</option>
-            <option value="day">1 Day</option>
+        <select id="camarillaMode" class="date-picker tf-picker"
+                title="Candle judged, and the CPR/Camarilla timeframe it is judged against">
+            <option value="daily" selected>Daily candle · Monthly CPR</option>
+            <option value="weekly">Weekly candle · Yearly CPR</option>
         </select>
-        <button id="expiryHlRefreshBtn" class="refresh-btn" title="Refresh Expiry High/Low Breakout Scanner">
-            <span class="refresh-icon">📐</span> Expiry H/L Scan
+        <button id="camarillaRefreshBtn" class="refresh-btn" title="Refresh Camarilla inside CPR Scanner">
+            <span class="refresh-icon">📌</span> Camarilla Scan
         </button>
     </div>
 
@@ -135,23 +138,27 @@
             </div>
         </div>
     </div>
+    <!-- Camarilla inside CPR — the gate (S3/R3 between BC and TC) picks the
+         side, the touch (Pivot or that same Camarilla line) is the trigger.
+         Touch only: a wick through the level counts, no close condition.
+         See filters/cpr_camarilla_scanner.py. -->
     <div class="results-row">
-        <div id="expiryHlBuyResults" class="results results-hidden results-block">
+        <div id="camarillaBuyResults" class="results results-hidden results-block">
             <div class="dg-card">
                 <div class="dg-card-hdr">
-                    <span class="dg-card-title">🟢 Expiry High/Low Breakout — BUY</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="expiryHlBuyCount">(0)</span>
+                    <span class="dg-card-title">🟢 Camarilla S3 inside CPR — BUY</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="camarillaBuyCount">(0)</span>
                 </div>
-                <div id="expiryHlBuyGrid"></div>
+                <div id="camarillaBuyGrid"></div>
             </div>
         </div>
-        <div id="expiryHlSellResults" class="results results-hidden results-block">
+        <div id="camarillaSellResults" class="results results-hidden results-block">
             <div class="dg-card">
                 <div class="dg-card-hdr">
-                    <span class="dg-card-title">🔴 Expiry High/Low Breakout — SELL</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="expiryHlSellCount">(0)</span>
+                    <span class="dg-card-title">🔴 Camarilla R3 inside CPR — SELL</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="camarillaSellCount">(0)</span>
                 </div>
-                <div id="expiryHlSellGrid"></div>
+                <div id="camarillaSellGrid"></div>
             </div>
         </div>
     </div>
@@ -415,9 +422,13 @@
             selected timeframe.</div>
     </div>
 </div>
+{# Candle chart popup, opened by clicking a Camarilla scanner row. Same
+   component the Watchlist grid opens — see templates/_candle_modal.html. #}
+{% include "_candle_modal.html" %}
 {% endblock %}
 {% block scripts %}
 {{ super() }}
+<script src="{{ url_for('static', filename='js/components/candle-modal.js') }}?v={{ sv('js/components/candle-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/cpr_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_narrow_filter.js') }}"></script>

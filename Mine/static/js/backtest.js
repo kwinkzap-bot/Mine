@@ -951,9 +951,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // ── Monthly Expiry Breakout — FILTER mode ───────────────────────────
     // No symbol/dates/SL/Target: scans every F&O stock's 1-hour candles
     // from Jan 1 (this year) to today for a touch-then-close-beyond the
-    // stock's current monthly-expiry High/Low — same rule as the live
-    // Expiry H/L scanner (/api/cpr-filter/expiry-hl-breakout), applied
-    // across the whole range instead of just the latest candle.
+    // stock's current monthly-expiry High/Low — same rule as
+    // filters/expiry_hl_scanner.py, applied across the whole range
+    // instead of just the latest candle.
     async function runExpiryScan() {
         const expiryResultsArea = document.getElementById('expiryScanResultsArea');
         const btPlaceholder     = document.getElementById('btRightPlaceholder');

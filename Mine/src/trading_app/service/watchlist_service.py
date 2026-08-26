@@ -136,7 +136,7 @@ INTERVALS: Dict[str, Dict[str, Any]] = {
     '15m': {'yf': '15m',  'period': '1mo',  'cpr': ('D',),        'cpr_label': 'Daily',   'intraday': True},
     '30m': {'yf': '30m',  'period': '1mo',  'cpr': ('D',),        'cpr_label': 'Daily',   'intraday': True},
     '1h':  {'yf': '1h',   'period': '6mo',  'cpr': ('W',),        'cpr_label': 'Weekly',  'intraday': True},
-    '1d':  {'yf': '1d',   'period': '1y',   'cpr': ('ME', 'M'),   'cpr_label': 'Monthly', 'intraday': False},
+    '1d':  {'yf': '1d',   'period': '5y',   'cpr': ('ME', 'M'),   'cpr_label': 'Monthly', 'intraday': False},
     '1wk': {'yf': '1wk',  'period': '5y',   'cpr': ('YE', 'A'),   'cpr_label': 'Yearly',  'intraday': False},
     '1mo': {'yf': '1mo',  'period': '10y',  'cpr': ('YE', 'A'),   'cpr_label': 'Yearly',  'intraday': False},
 }
@@ -144,6 +144,18 @@ INTERVALS: Dict[str, Dict[str, Any]] = {
 # Chart ranges offered by the drilldown, mapped to a Yahoo period.
 HISTORY_RANGES: Dict[str, str] = {
     '1m': '1mo', '6m': '6mo', '1y': '1y', '3y': '3y', '5y': '5y',
+}
+
+# The derivatives-side name for each index, which is what the F&O scanners
+# emit (Kite's NFO instrument `name`), against the cash master's root. The
+# two segments disagree — the master calls it NIFTYBANK and the futures
+# call it BANKNIFTY — and _resolve is an exact match, so without this a
+# scanner row for an index cannot open a chart at all.
+INDEX_ALIASES: Dict[str, Tuple[str, ...]] = {
+    'NIFTY':      ('NIFTY50', 'NIFTY 50'),
+    'BANKNIFTY':  ('NIFTYBANK', 'NIFTY BANK'),
+    'MIDCPNIFTY': ('NIFTYMIDCAP100', 'NIFTY MIDCAP 100', 'MIDCPNIFTY'),
+    'NIFTYNXT50': ('NIFTYNEXT50', 'NIFTY NEXT 50'),
 }
 
 MAX_TABS = 20
@@ -357,13 +369,19 @@ def search(query: str, limit: int = 25) -> List[Dict[str, str]]:
 
 
 def _resolve(symbol: str) -> Optional[Dict[str, str]]:
-    """Exact universe row for a symbol, accepting either form the UI holds."""
+    """Exact universe row for a symbol, accepting either form the UI holds,
+    then the derivatives name for an index (see INDEX_ALIASES)."""
     key = (symbol or '').strip().upper()
     if not key:
         return None
-    for row in _load_universe():
+    universe = _load_universe()
+    for row in universe:
         if key in (row['symbol'], row['fy_symbol'].upper()):
             return row
+    for alias in INDEX_ALIASES.get(key, ()):
+        for row in universe:
+            if row['symbol'] == alias:
+                return row
     return None
 
 
@@ -609,6 +627,54 @@ def add_items(username: str, tab_id: int, symbols: List[str]) -> Dict[str, Any]:
                 break
 
     return {'success': True, 'added': added, 'already': already, 'skipped': skipped}
+
+
+def sync_tab_symbols(username: str, tab_id: int, symbols: List[str]) -> Dict[str, Any]:
+    """Make a broker tab match the account exactly: add what is held and
+    drop what is not.
+
+    Only for a tab bound to a broker. Such a tab *is* the account — its rows
+    cannot be added or removed by hand, so everything in it came from an
+    import, and leaving a sold position behind means a row that can never
+    show a quantity again. A manual watchlist is never touched this way;
+    add_items stays additive for those.
+    """
+    _ensure_schema()
+    with _connect() as conn:
+        tab = conn.execute("SELECT name, broker_instance FROM watchlist_tabs "
+                           "WHERE id = ? AND username = ?", (tab_id, username)).fetchone()
+        if not tab:
+            return {'success': False, 'error': 'Tab not found'}
+        broker = broker_for_tab(username, tab['name'], None, tab['broker_instance'])
+        if not broker:
+            return {'success': False,
+                    'error': 'That tab does not follow a broker account'}
+        existing = {r['symbol']: r['id'] for r in conn.execute(
+            "SELECT id, symbol FROM watchlist_items WHERE tab_id = ?", (tab_id,))}
+
+    wanted = {(s or '').upper().strip() for s in symbols or []}
+    wanted.discard('')
+
+    # Resolved first: a symbol the master does not know cannot be added, and
+    # must not be counted as a reason to drop anything either.
+    resolved = {s for s in wanted if _resolve(s)}
+    stale = [sym for sym in existing if sym not in resolved]
+
+    # Reported rather than dropped quietly. The account holding something
+    # the symbol master has never heard of is worth seeing — a scrip renamed
+    # or newly listed shows up exactly this way.
+    unknown = [{'symbol': s, 'error': f'Unknown symbol "{s}"'}
+               for s in sorted(wanted - resolved)]
+
+    added = add_items(username, tab_id, sorted(resolved - set(existing)))
+    if stale:
+        with _connect() as conn:
+            conn.executemany("DELETE FROM watchlist_items WHERE id = ?",
+                             [(existing[sym],) for sym in stale])
+
+    return {'success': True, 'added': added['added'], 'removed': sorted(stale),
+            'kept': sorted(resolved & set(existing)),
+            'skipped': added['skipped'] + unknown}
 
 
 def remove_item(username: str, item_id: int) -> Dict[str, Any]:

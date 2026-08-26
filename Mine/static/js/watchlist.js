@@ -59,20 +59,6 @@
         // symbol -> the broker's holding row, for a broker tab only.
         positions: null,
         positionsError: null,
-        // The symbol whose candle chart is open, its range, and the live
-        // chart handle (disposed on close — Lightweight Charts holds a
-        // canvas and a resize observer).
-        tvSymbol: null,
-        tvInterval: '1d',
-        // One entry per pane: {chart, bars}. Disposed together on close —
-        // Lightweight Charts holds a canvas and a resize observer each.
-        tvPanes: [],
-        // The CPR period is derived from the timeframe, so this is only
-        // whether the overlay is drawn at all.
-        cprOn: true,
-        // symbol|interval -> payload, and in-flight requests for the same.
-        candles: new Map(),
-        candlesInflight: new Map(),
     };
 
     // ── formatting ───────────────────────────────────────────────────
@@ -192,7 +178,7 @@
         if (id === state.activeTab) return;
         state.activeTab = id;
         localStorage.setItem(LAST_TAB_KEY, String(id));
-        closeTradingView();
+        if (global.CandleModal) global.CandleModal.close();
         closeDrill();
         renderTabs();
         loadRows();
@@ -318,476 +304,14 @@
 
     // ── Candle chart popup ───────────────────────────────────────────
     //
-    // Opened from the symbol link. Drawn with Lightweight Charts off our own
-    // history payload rather than embedded from TradingView: their widget
-    // answers "This symbol is only available on TradingView" for every NSE
-    // symbol on an anonymous embed (verified on both the widgetembed
-    // endpoint and the tv.js Advanced Chart widget, with and without a
-    // sandbox and a referrer — it is their exchange-data licence, not
-    // something this end configures). The header keeps a link out to the
-    // real chart, where the viewer's own TradingView session applies.
-    //
-    // Daily candles, same payload and same client cache as the docked
-    // drilldown — so opening one after the other draws instantly.
-
-    const INTERVAL_LABELS = {
-        '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m',
-        '1h': '1h', '1d': '1D', '1wk': '1W', '1mo': '1M',
-    };
-
-    const CANDLE_THEMES = {
-        light:  { bg: '#ffffff', text: '#475569', grid: '#f1f5f9' },
-        dark:   { bg: '#111827', text: '#94a3b8', grid: 'rgba(255,255,255,.06)' },
-        forest: { bg: '#0a1410', text: '#6ba88f', grid: 'rgba(16,185,129,.06)' },
-        cream:  { bg: '#fdf6e9', text: '#7c7267', grid: 'rgba(180,83,9,.05)' },
-        ocean:  { bg: '#ffffff', text: '#475569', grid: 'rgba(2,132,199,.05)' },
-    };
-
-    // TradingView's own candle colours, which is what the reference chart is
-    // showing — not this app's --color-pos/neg, which are tuned for text in
-    // a grid and read far heavier as a wall of candle bodies.
-    const UP = '#089981';
-    const DOWN = '#f23645';
-
-    // Same shape as fetchHistory: cached per symbol+timeframe, deduped while
-    // in flight, so stepping with ‹ › and flicking between timeframes both
-    // come back instantly once seen.
-    function fetchCandles(symbol, interval) {
-        const key = `${symbol}|${interval}`;
-        const hit = state.candles.get(key);
-        if (hit) return Promise.resolve(hit);
-        const pending = state.candlesInflight.get(key);
-        if (pending) return pending;
-
-        const request = getJSON(
-            `${API}/candles?symbol=${encodeURIComponent(symbol)}&interval=${interval}`)
-            .then((data) => {
-                if (data && data.success) {
-                    if (state.candles.size >= HISTORY_CACHE_MAX) {
-                        state.candles.delete(state.candles.keys().next().value);
-                    }
-                    state.candles.set(key, data);
-                }
-                return data;
-            })
-            .finally(() => state.candlesInflight.delete(key));
-
-        state.candlesInflight.set(key, request);
-        return request;
-    }
-
-    function syncTvNav() {
-        const i = state.rows.findIndex((r) => r.symbol === state.tvSymbol);
-        $('wlTvPrev').disabled = i <= 0;
-        $('wlTvNext').disabled = i < 0 || i >= state.rows.length - 1;
-        $('wlTvInterval').value = state.tvInterval;
-        $('wlTvCpr').classList.toggle('active', state.cprOn);
-    }
-
-    function disposeCandles() {
-        for (const pane of state.tvPanes) {
-            try { pane.chart.remove(); } catch (e) { /* already gone */ }
-        }
-        state.tvPanes = [];
-        $('wlTvBody').innerHTML = '';
-        $('wlTvBodyWeekly').innerHTML = '';
-    }
-
-    // Candles the library will accept: it wants every bar to carry all four
-    // prices, and a day Yahoo only closed (no OHLC) would otherwise throw and
-    // take the whole chart down.
-    const toCandles = (points) => (points || [])
-        .filter((p) => p.o != null && p.h != null && p.l != null && p.c != null)
-        .map((p) => ({ time: p.t, open: p.o, high: p.h, low: p.l, close: p.c }));
-
-    // CPR (TC / P / BC) with Camarilla R3 / S3, drawn as one canvas
-    // primitive attached to the candle series rather than as line series.
-    //
-    // Two things a line series cannot do, and both of them are the point:
-    //  - the band between TC and BC is FILLED, and Lightweight Charts has no
-    //    band series;
-    //  - each period's levels are separate horizontal shelves. A line series
-    //    joins its points, so every period boundary grew a vertical
-    //    connector that the reference chart does not have.
-    const CPR_STYLE = {
-        fill:  'rgba(159, 168, 218, 0.35)',
-        edge:  '#3949ab',    // TC and BC — the band's own edges
-        pivot: '#1a237e',    // P, darkest: it is the line being read
-        cam:   '#8e24aa',    // Camarilla R3 and S3, heavier so the two
-                             // indicators stay tellable apart at a glance
-        edgeWidth: 1.5,
-        pivotWidth: 1.5,
-        camWidth: 2,
-    };
-
-    // Consecutive bars sharing a period, so the renderer draws one shelf per
-    // period rather than one segment per bar.
-    function periodRuns(points, periods) {
-        if (!periods || !periods.length) return [];
-        const runs = [];
-        let i = -1;
-        let current = null;
-        for (const p of points) {
-            while (i + 1 < periods.length && periods[i + 1].from <= p.t) {
-                i++;
-                current = null;              // a new period starts a new shelf
-            }
-            if (i < 0) continue;             // before the first period
-            if (!current) {
-                current = { levels: periods[i], from: p.t, to: p.t };
-                runs.push(current);
-            } else {
-                current.to = p.t;
-            }
-        }
-        return runs;
-    }
-
-    function makeCprPrimitive(runs) {
-        let series = null;
-        let chart = null;
-
-        const renderer = {
-            draw(target) {
-                if (!series || !chart || !runs.length) return;
-                const timeScale = chart.timeScale();
-                target.useBitmapCoordinateSpace((scope) => {
-                    const ctx = scope.context;
-                    const hr = scope.horizontalPixelRatio;
-                    const vr = scope.verticalPixelRatio;
-                    ctx.save();
-
-                    const lastRun = runs[runs.length - 1];
-                    for (const run of runs) {
-                        const x1 = timeScale.timeToCoordinate(run.from);
-                        const x2 = timeScale.timeToCoordinate(run.to);
-                        if (x1 === null || x2 === null) continue;
-
-                        // Half a bar of overhang each side, so a shelf spans
-                        // its whole period instead of stopping at the centre
-                        // of its first and last candle.
-                        const pad = Math.max(1, (timeScale.options().barSpacing || 6) / 2);
-                        const left = (x1 - pad) * hr;
-                        // The period in progress runs to the right edge: its
-                        // levels are the ones still being traded against, and
-                        // stopping them at the last candle hides exactly the
-                        // part a reader is looking for.
-                        const right = run === lastRun
-                            ? scope.bitmapSize.width
-                            : (x2 + pad) * hr;
-
-                        const y = (price) => {
-                            if (price == null) return null;
-                            const c = series.priceToCoordinate(price);
-                            return c === null ? null : c * vr;
-                        };
-                        const tc = y(run.levels.tc);
-                        const bc = y(run.levels.bc);
-
-                        if (tc !== null && bc !== null) {
-                            ctx.fillStyle = CPR_STYLE.fill;
-                            ctx.fillRect(left, tc, right - left, bc - tc);
-                        }
-
-                        const line = (yy, color, width) => {
-                            if (yy === null) return;
-                            ctx.beginPath();
-                            ctx.strokeStyle = color;
-                            ctx.lineWidth = width * vr;
-                            ctx.moveTo(left, yy);
-                            ctx.lineTo(right, yy);
-                            ctx.stroke();
-                        };
-                        line(tc, CPR_STYLE.edge, CPR_STYLE.edgeWidth);
-                        line(bc, CPR_STYLE.edge, CPR_STYLE.edgeWidth);
-                        line(y(run.levels.p), CPR_STYLE.pivot, CPR_STYLE.pivotWidth);
-                        line(y(run.levels.r3), CPR_STYLE.cam, CPR_STYLE.camWidth);
-                        line(y(run.levels.s3), CPR_STYLE.cam, CPR_STYLE.camWidth);
-                    }
-                    ctx.restore();
-                });
-            },
-        };
-
-        const paneView = {
-            renderer: () => renderer,
-            // Under the candles: the levels are context to read price
-            // against and must not sit on top of the bar being read.
-            zOrder: () => 'bottom',
-            update: () => {},
-        };
-
-        return {
-            attached(param) { series = param.series; chart = param.chart; },
-            detached() { series = null; chart = null; },
-            updateAllViews() {},
-            paneViews: () => [paneView],
-            // Without this an R3 well above the bars falls off the top of
-            // the pane, because the scale only knows about the candles.
-            autoscaleInfo() {
-                let min = Infinity;
-                let max = -Infinity;
-                for (const run of runs) {
-                    for (const key of ['tc', 'bc', 'p', 'r3', 's3']) {
-                        const value = run.levels[key];
-                        if (value == null) continue;
-                        min = Math.min(min, value);
-                        max = Math.max(max, value);
-                    }
-                }
-                return Number.isFinite(min)
-                    ? { priceRange: { minValue: min, maxValue: max } } : null;
-            },
-        };
-    }
-
-    function drawCprOverlay(candleSeries, payload) {
-        if (!state.cprOn) return;
-        const runs = periodRuns(payload.points || [], payload.levels || []);
-        if (!runs.length) return;
-        candleSeries.attachPrimitive(makeCprPrimitive(runs));
-    }
-
-    // A bar's time as a Date. Intraday bars are epoch seconds and daily and
-    // wider are 'YYYY-MM-DD'; Lightweight Charts also hands back a
-    // {year, month, day} object from crosshair events on a business-day
-    // series, so all three shapes have to be understood.
-    function toDate(time) {
-        if (time == null) return null;
-        if (typeof time === 'number') return new Date(time * 1000);
-        if (typeof time === 'string') return new Date(time + 'T00:00:00');
-        if (typeof time === 'object' && time.year) {
-            return new Date(time.year, (time.month || 1) - 1, time.day || 1);
-        }
-        return null;
-    }
-
-    // The bar of `pane` covering `when` — the last one that had started by
-    // then. Hovering 10:30 on a 30-minute chart should light up the week
-    // that contains it on the weekly pane, not the nearest week boundary.
-    //
-    // Null when `when` falls outside this pane's data. The two panes rarely
-    // cover the same span — the daily one holds a year against the weekly
-    // one's five — and clamping to the nearest end instead would park the
-    // crosshair on the first bar with a price label attached, reading as if
-    // April 2023 and August 2025 were the same moment.
-    function barAt(pane, when) {
-        const times = pane.times;
-        if (!times || !times.length || !when) return null;
-        if (when < times[0].at) return null;
-        let lo = 0;
-        let hi = times.length - 1;
-        while (lo < hi) {
-            const mid = Math.ceil((lo + hi) / 2);
-            if (times[mid].at <= when) lo = mid;
-            else hi = mid - 1;
-        }
-        return times[lo];
-    }
-
-    // Crosshair sync. Hovering either pane moves the other to the same
-    // moment, which is the whole point of showing two timeframes at once —
-    // reading them independently means eyeballing which weekly bar the
-    // intraday move sits in.
-    function linkCrosshairs(panes) {
-        const live = panes.filter((p) => p && p.chart && p.series);
-        if (live.length < 2) return;
-        let syncing = false;
-
-        live.forEach((pane, index) => {
-            pane.chart.subscribeCrosshairMove((param) => {
-                // Setting the crosshair on the other pane fires its own move
-                // event; without this guard the two charts drive each other.
-                if (syncing) return;
-                syncing = true;
-                try {
-                    const others = live.filter((_, i) => i !== index);
-                    const when = toDate(param.time);
-                    for (const other of others) {
-                        const bar = when && barAt(other, when);
-                        if (!bar) {
-                            other.chart.clearCrosshairPosition();
-                            continue;
-                        }
-                        // Priced at that bar's close, so the horizontal arm
-                        // lands on the candle rather than wherever the
-                        // pointer happened to be in the other pane's scale.
-                        other.chart.setCrosshairPosition(bar.close, bar.time, other.series);
-                    }
-                } finally {
-                    syncing = false;
-                }
-            });
-        });
-    }
-
-    // Bars of empty space left after the last candle. fitContent() fits the
-    // data to the pane exactly, which pins the newest bar against the price
-    // scale — the levels projected forward then have nowhere to show, and
-    // the last close label sits on top of its own candle.
-    const RIGHT_PAD_BARS = 8;
-
-    function fitWithRightPad(chart, barCount) {
-        if (!chart || !barCount) return;
-        // Half a bar on the left so the oldest candle isn't clipped either.
-        chart.timeScale().setVisibleLogicalRange({
-            from: -0.5,
-            to: barCount - 0.5 + RIGHT_PAD_BARS,
-        });
-    }
-
-    function drawPane(containerId, payload) {
-        const container = $(containerId);
-        container.innerHTML = '';
-        const candles = toCandles(payload.points);
-        if (!candles.length) {
-            container.innerHTML =
-                '<div class="wl-drill-empty">No candles at this timeframe.</div>';
-            return null;
-        }
-
-        const theme = CANDLE_THEMES[(global.AppTheme && global.AppTheme.getActiveTheme())
-            || 'light'] || CANDLE_THEMES.light;
-        const chart = LightweightCharts.createChart(container, {
-            layout: { textColor: theme.text, background: { type: 'solid', color: theme.bg } },
-            grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
-            rightPriceScale: {
-                borderVisible: false,
-                // Price gets ~86% of the pane. The generous margins this
-                // carried before left the candles in the middle 60% of the
-                // height, which flattens every move — and the headroom they
-                // were buying is unnecessary now the CPR primitive reports
-                // its own levels to the autoscaler, so an R3 near the top
-                // can no longer be drawn on the frame anyway.
-                scaleMargins: { top: 0.06, bottom: 0.20 },
-            },
-            // An intraday bar is only identifiable with its time on the axis.
-            timeScale: { borderVisible: false, timeVisible: !!payload.intraday,
-                         secondsVisible: false },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            autoSize: true,
-        });
-        const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
-            upColor: UP, downColor: DOWN,
-            borderUpColor: UP, borderDownColor: DOWN,
-            wickUpColor: UP, wickDownColor: DOWN,
-        });
-        series.setData(candles);
-
-        // Volume in its own scale at the foot of the pane — the standard
-        // reading, and it costs nothing since the payload already carries it.
-        const volumes = (payload.points || [])
-            .filter((p) => p.v != null && p.o != null)
-            .map((p) => ({ time: p.t, value: p.v,
-                           color: p.c >= p.o ? UP + '4d' : DOWN + '4d' }));
-        if (volumes.length) {
-            const vol = chart.addSeries(LightweightCharts.HistogramSeries, {
-                priceFormat: { type: 'volume' }, priceScaleId: 'vol',
-            });
-            // Volume in the bottom sixth, out of the price series' way.
-            chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-            vol.setData(volumes);
-        }
-
-        drawCprOverlay(series, payload);
-        fitWithRightPad(chart, candles.length);
-        return {
-            chart,
-            series,
-            bars: candles.length,
-            // Kept for the crosshair link: the two panes are on different
-            // timeframes, so a hovered bar has to be mapped onto whichever
-            // bar of the other pane contains the same moment.
-            times: candles.map((c) => ({ time: c.time, at: toDate(c.time), close: c.close })),
-        };
-    }
-
-    // The bottom pane is always weekly. It is the reference frame the top
-    // pane is read against, so it does not follow the dropdown — otherwise
-    // both panes show the same thing and the split buys nothing.
-    const WEEKLY = '1wk';
-
-    async function loadCandles(symbol) {
-        const row = state.rows.find((r) => r.symbol === symbol);
-        if (!row) return;
-        const interval = state.tvInterval;
-        $('wlTvBack').classList.add('wl-tv-loading');
-
-        // Both panes in flight together — they are two independent requests
-        // and waiting for them in turn doubles the wait for no reason.
-        let top, weekly;
-        try {
-            [top, weekly] = await Promise.all([
-                fetchCandles(symbol, interval),
-                fetchCandles(symbol, WEEKLY),
-            ]);
-        } catch (e) {
-            top = { success: false, error: e.message };
-            weekly = top;
-        }
-        // Stepped away, or switched timeframe, while this was loading.
-        if (state.tvSymbol !== symbol || state.tvInterval !== interval) return;
-        $('wlTvBack').classList.remove('wl-tv-loading');
-        disposeCandles();
-
-        const paint = (containerId, capId, payload, label) => {
-            $(capId).textContent = payload && payload.cpr_period
-                ? `${label} · CPR ${payload.cpr_period}` : label;
-            if (!payload || !payload.success) {
-                $(containerId).innerHTML = `<div class="wl-drill-empty">${DataGrid.escape(
-                    (payload && payload.error) || 'No chart data available')}</div>`;
-                return null;
-            }
-            return drawPane(containerId, payload);
-        };
-
-        state.tvPanes = [
-            paint('wlTvBody', 'wlTvCapTop', top, INTERVAL_LABELS[interval] || interval),
-            paint('wlTvBodyWeekly', 'wlTvCapBottom', weekly, INTERVAL_LABELS[WEEKLY]),
-        ].filter(Boolean);
-        linkCrosshairs(state.tvPanes);
-
-        // The header button names the timeframe being driven, which is the
-        // top pane's; each pane's own caption carries its period too.
-        if (top && top.cpr_period) $('wlTvCprPeriod').textContent = top.cpr_period;
-    }
+    // Lives in components/candle-modal.js and templates/_candle_modal.html,
+    // shared with the Scanner's Camarilla results. This page only says which
+    // symbol to open and which list ‹ › should walk — the grid's own order,
+    // so stepping follows what is on screen.
 
     function openTradingView(symbol) {
-        const row = state.rows.find((r) => r.symbol === symbol);
-        if (!row) return;
-        state.tvSymbol = symbol;
-        const tvSymbol = row.tv_symbol || `NSE:${row.symbol}`;
-
-        $('wlTvTitle').innerHTML =
-            `<i class="wl-avatar">${DataGrid.escape(symbol.slice(0, 1))}</i>` +
-            DataGrid.escape(symbol) +
-            `<span class="wl-drill-co">${DataGrid.escape(row.company || '')}</span>`;
-        $('wlTvOut').href =
-            `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol)}`;
-
-        $('wlTvBack').hidden = false;
-        syncTvNav();
-        loadCandles(symbol);
-        // Prime ‹ › at the timeframe on screen.
-        const i = state.rows.findIndex((r) => r.symbol === symbol);
-        [state.rows[i - 1], state.rows[i + 1]].filter(Boolean).forEach((neighbour) => {
-            fetchCandles(neighbour.symbol, state.tvInterval).catch(() => {});
-            if (state.tvInterval !== WEEKLY) {
-                fetchCandles(neighbour.symbol, WEEKLY).catch(() => {});
-            }
-        });
-    }
-
-    function stepTradingView(delta) {
-        const i = state.rows.findIndex((r) => r.symbol === state.tvSymbol);
-        const next = state.rows[i + delta];
-        if (next) openTradingView(next.symbol);
-    }
-
-    function closeTradingView() {
-        state.tvSymbol = null;
-        $('wlTvBack').hidden = true;
-        disposeCandles();
+        if (!global.CandleModal) return;
+        global.CandleModal.open(symbol, { rows: state.rows });
     }
 
     // ── order ticket ─────────────────────────────────────────────────
@@ -1078,22 +602,33 @@
                 return;
             }
 
+            // A bound tab mirrors the account, so this both adds what is
+            // held and drops what is not: a symbol the account no longer
+            // holds can never show a quantity again, and its row cannot be
+            // removed by hand here either.
             const result = await sendJSON(
-                `${API}/tabs/${state.activeTab}/items/bulk`, 'POST', { symbols });
+                `${API}/tabs/${state.activeTab}/items/sync`, 'POST', { symbols });
             if (!result.success) {
-                if (!silent) toast(result.error || 'Could not import holdings', false);
+                if (!silent) toast(result.error || 'Could not read holdings', false);
                 return;
             }
 
-            const added = result.added.length;
-            const parts = [`${added} added`];
-            if (result.already.length) parts.push(`${result.already.length} already there`);
-            if (result.skipped.length) parts.push(`${result.skipped.length} skipped`);
-            if (!silent || added) toast(`${broker.name} holdings — ${parts.join(', ')}`, true);
-            if (result.skipped.length) {
-                console.warn('[watchlist] holdings not imported:', result.skipped);
+            const changed = result.added.length + result.removed.length;
+            const parts = [];
+            if (result.added.length) parts.push(`${result.added.length} added`);
+            if (result.removed.length) {
+                parts.push(`${result.removed.length} no longer held`);
             }
-            if (added) await loadTabs(state.activeTab);
+            if (result.skipped.length) parts.push(`${result.skipped.length} skipped`);
+            if (!parts.length) parts.push(`${result.kept.length} in step`);
+            if (!silent || changed) toast(`${broker.name} — ${parts.join(', ')}`, true);
+            if (result.removed.length) {
+                console.info('[watchlist] dropped, no longer held:', result.removed);
+            }
+            if (result.skipped.length) {
+                console.warn('[watchlist] could not be added:', result.skipped);
+            }
+            if (changed) await loadTabs(state.activeTab);
         } finally {
             btn.classList.remove('wl-refreshing');
         }
@@ -1951,32 +1486,6 @@
             if (e.target === $('wlModalBack')) closeModal();
         });
 
-        // TradingView popup
-        $('wlTvClose').addEventListener('click', closeTradingView);
-        $('wlTvPrev').addEventListener('click', () => stepTradingView(-1));
-        $('wlTvNext').addEventListener('click', () => stepTradingView(1));
-        $('wlTvBack').addEventListener('click', (e) => {
-            if (e.target === $('wlTvBack')) closeTradingView();
-        });
-        $('wlTvCpr').addEventListener('click', () => {
-            state.cprOn = !state.cprOn;
-            syncTvNav();
-            // The payload is already in hand — this is a redraw, not a fetch.
-            if (state.tvSymbol) loadCandles(state.tvSymbol);
-        });
-        $('wlTvInterval').addEventListener('change', () => {
-            state.tvInterval = $('wlTvInterval').value;
-            if (state.tvSymbol) loadCandles(state.tvSymbol);
-        });
-        // The chart takes its palette at creation, so a theme switch redraws.
-        window.addEventListener('themechanged', () => {
-            if (state.tvSymbol) loadCandles(state.tvSymbol);
-        });
-        // Lightweight Charts sizes to its container; the popup is a viewport
-        // percentage, so a window resize has to be passed on.
-        window.addEventListener('resize', () => {
-            for (const pane of state.tvPanes) fitWithRightPad(pane.chart, pane.bars);
-        });
 
         // Order ticket. The confirm button is the only path to /order.
         $('wlTicketSend').addEventListener('click', sendOrder);
@@ -2018,12 +1527,9 @@
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && $('wlMoveMenu')) { closeMoveMenu(); return; }
-            if (!$('wlTvBack').hidden) {
-                if (e.key === 'Escape') closeTradingView();
-                if (e.key === 'ArrowLeft') stepTradingView(-1);
-                if (e.key === 'ArrowRight') stepTradingView(1);
-                return;
-            }
+            // The candle popup owns Escape and the arrows while it is open;
+            // it binds on the capture phase, so by here it has had them.
+            if (global.CandleModal && global.CandleModal.isOpen()) return;
             // Escape backs out of the order, not out of the panel behind it —
             // and never places one, whatever has focus.
             if (!$('wlTicketBack').hidden) {
@@ -2074,7 +1580,7 @@
         document.body.appendChild($('wlDrill'));
         document.body.appendChild($('wlModalBack'));
         document.body.appendChild($('wlTicketBack'));
-        document.body.appendChild($('wlTvBack'));
+        if (global.CandleModal) global.CandleModal.mount();
         bind();
         loadBrokers();
         loadTabs();

@@ -604,3 +604,49 @@ def test_binding_to_an_inactive_broker_is_refused(brokers):
     tab = wl.create_tab('Mine', 'Whatever')['tab']['id']
     result = wl.set_tab_broker('Mine', tab, 9)
     assert result['success'] is False and 'not active' in result['error']
+
+
+# ── syncing a broker tab to its account ──────────────────────────────────
+
+def test_sync_adds_what_is_held_and_drops_what_is_not(brokers):
+    """A bound tab mirrors the account. A symbol it no longer holds can
+    never show a quantity again, and cannot be removed by hand either —
+    leaving it there is a permanently blank row.
+    """
+    tab = wl.create_tab('Mine', 'Devanai Kite')['tab']['id']
+    for symbol in ('RELIANCE', 'RELIGARE'):          # RELIGARE has since been sold
+        wl.add_item('Mine', tab, symbol)
+
+    result = wl.sync_tab_symbols('Mine', tab, ['RELIANCE', 'NIFTYBEES'])
+
+    assert result['added'] == ['NIFTYBEES']
+    assert result['removed'] == ['RELIGARE']
+    assert result['kept'] == ['RELIANCE']
+
+    _fundamentals(**{'RELIANCE.NS': {'yf_price': 1300.0},
+                     'NIFTYBEES.NS': {'yf_price': 280.0}})
+    assert {r['symbol'] for r in wl.rows('Mine', tab)['rows']} == {'RELIANCE', 'NIFTYBEES'}
+
+
+def test_sync_leaves_a_symbol_the_master_does_not_know_alone(brokers):
+    """An unknown symbol cannot be added, and must not be read as a reason
+    to drop anything either — otherwise a bad symbol master empties the tab.
+    """
+    tab = wl.create_tab('Mine', 'Devanai Kite')['tab']['id']
+    wl.add_item('Mine', tab, 'RELIANCE')
+
+    result = wl.sync_tab_symbols('Mine', tab, ['RELIANCE', 'DELISTEDCO'])
+    assert result['removed'] == []
+    assert [s['symbol'] for s in result['skipped']] == ['DELISTEDCO']
+
+
+def test_sync_is_refused_for_a_manual_tab(brokers):
+    """add_items stays additive for a hand-made list; only an account tab
+    is allowed to delete rows on a refresh."""
+    tab = wl.create_tab('Mine', 'BEES')['tab']['id']
+    wl.add_item('Mine', tab, 'NIFTYBEES')
+
+    result = wl.sync_tab_symbols('Mine', tab, ['RELIANCE'])
+    assert result['success'] is False
+    assert 'does not follow a broker account' in result['error']
+    assert wl.list_tabs('Mine')[0]['count'] == 1

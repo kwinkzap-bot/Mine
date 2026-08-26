@@ -26,16 +26,16 @@ window.addEventListener('load', function () {
     cprElems.highIvResults = document.getElementById('highIvResults');
     cprElems.highIvCount = document.getElementById('highIvCount');
     cprElems.controls    = document.getElementById('controls');
-    cprElems.expiryHlTimeframe  = document.getElementById('expiryHlTimeframe');
-    cprElems.expiryHlRefreshBtn = document.getElementById('expiryHlRefreshBtn');
+    cprElems.camarillaMode       = document.getElementById('camarillaMode');
+    cprElems.camarillaRefreshBtn = document.getElementById('camarillaRefreshBtn');
 
     const scheduler = window.CPRFilterScheduler;
     const schedulerActive = scheduler && typeof scheduler.isActive === 'function' && scheduler.isActive();
     const schedulerMarketOpen = scheduler && typeof scheduler.isMarketOpen === 'function' && scheduler.isMarketOpen();
 
     // Initialize date picker with today's date
-    // NOTE: cprElems.datePicker itself is still used (loadHighIVData / loadExpiryHlBreakoutData
-    // read its .value), only the change listener below is dead since it exclusively
+    // NOTE: cprElems.datePicker itself is still used (loadHighIVData reads its
+    // .value), only the change listener below is dead since it exclusively
     // triggered the now-disabled loadCPRData.
     if (cprElems.datePicker) {
         const today = new Date().toISOString().split('T')[0];
@@ -63,16 +63,37 @@ window.addEventListener('load', function () {
         });
     }
 
-    // Initialize Expiry High/Low Breakout timeframe + refresh
-    if (cprElems.expiryHlRefreshBtn) {
-        cprElems.expiryHlRefreshBtn.addEventListener('click', () => {
-            const timeframe = cprElems.expiryHlTimeframe ? cprElems.expiryHlTimeframe.value : '60minute';
-            loadExpiryHlBreakoutData(timeframe, true);
+    // Clicking a scanner symbol opens the shared candle popup rather than
+    // leaving for TradingView. Delegated, because DataGrid rebuilds every
+    // row on each sort and a per-row listener would not survive it.
+    ['camarillaBuy', 'camarillaSell'].forEach((gridType) => {
+        const grid = document.getElementById(`${gridType}Grid`);
+        if (!grid) return;
+        grid.addEventListener('click', (e) => {
+            const link = e.target.closest('[data-candle]');
+            // Let ctrl/cmd/middle-click through to TradingView.
+            if (!link || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+            e.preventDefault();
+            _openCandleModal(link.dataset.candle, gridType);
+        });
+    });
+
+    // Camarilla-inside-CPR: mode picker + refresh. The date picker feeds this
+    // too — the scan judges the candle ON that date, so changing the date has
+    // to re-run it rather than re-filter what is already on screen.
+    if (cprElems.camarillaRefreshBtn) {
+        cprElems.camarillaRefreshBtn.addEventListener('click', () => {
+            loadCamarillaCprData(_camarillaMode(), true);
         });
     }
-    if (cprElems.expiryHlTimeframe) {
-        cprElems.expiryHlTimeframe.addEventListener('change', () => {
-            loadExpiryHlBreakoutData(cprElems.expiryHlTimeframe.value, true);
+    if (cprElems.camarillaMode) {
+        cprElems.camarillaMode.addEventListener('change', () => {
+            loadCamarillaCprData(_camarillaMode(), true);
+        });
+    }
+    if (cprElems.datePicker) {
+        cprElems.datePicker.addEventListener('change', () => {
+            loadCamarillaCprData(_camarillaMode(), true);
         });
     }
 
@@ -84,7 +105,7 @@ window.addEventListener('load', function () {
         loadCPRData(false);
         const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
         loadHighIVData(selectedDate, false);
-        loadExpiryHlBreakoutData(cprElems.expiryHlTimeframe ? cprElems.expiryHlTimeframe.value : '60minute', false);
+        loadCamarillaCprData(_camarillaMode(), false);
     }
 
     // Set interval for controlled refresh - only if scheduler is not already running
@@ -175,29 +196,46 @@ async function loadHighIVData(selectedDate, refresh = false) {
     }
 }
 
-/**
- * Fetches the Expiry High/Low breakout scan (BUY/SELL) for the selected timeframe.
- */
-async function loadExpiryHlBreakoutData(timeframe, refresh = false) {
-    timeframe = timeframe === 'day' ? 'day' : '60minute';
+// The rows behind each Camarilla grid, kept so the popup's ‹ › can step
+// through what is on screen. Only the fields CandleModal reads.
+const _camarillaRows = { camarillaBuy: [], camarillaSell: [] };
 
-    const buyGrid  = document.getElementById('expiryHlBuyGrid');
-    const buyDiv   = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_RESULTS);
-    const buyCount = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_COUNT);
-    const sellGrid  = document.getElementById('expiryHlSellGrid');
-    const sellDiv   = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_RESULTS);
-    const sellCount = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_COUNT);
+function _openCandleModal(symbol, gridType) {
+    if (!window.CandleModal) return;
+    window.CandleModal.open(symbol, { rows: _camarillaRows[gridType] || [] });
+}
+
+function _camarillaMode() {
+    return cprElems.camarillaMode && cprElems.camarillaMode.value === 'weekly' ? 'weekly' : 'daily';
+}
+
+/**
+ * Fetches the Camarilla-inside-CPR touch scan (BUY/SELL) for the selected
+ * mode. 'daily' judges the daily candle against Monthly CPR + Camarilla,
+ * 'weekly' the weekly candle against Yearly. Universe is futures stocks
+ * plus the indices.
+ */
+async function loadCamarillaCprData(mode, refresh = false) {
+    mode = mode === 'weekly' ? 'weekly' : 'daily';
+
+    const buyGrid   = document.getElementById('camarillaBuyGrid');
+    const buyDiv    = document.getElementById('camarillaBuyResults');
+    const buyCount  = document.getElementById('camarillaBuyCount');
+    const sellGrid  = document.getElementById('camarillaSellGrid');
+    const sellDiv   = document.getElementById('camarillaSellResults');
+    const sellCount = document.getElementById('camarillaSellCount');
 
     if (!buyGrid || !sellGrid) return;
 
-    const refreshBtn = cprElems.expiryHlRefreshBtn;
+    const refreshBtn = cprElems.camarillaRefreshBtn;
     if (refreshBtn) {
         refreshBtn.classList.add('loading');
         refreshBtn.disabled = true;
     }
 
     const loadingHtml = _gridLoadingHtml(
-        `Scanning Expiry High/Low breakouts (${timeframe === 'day' ? '1 Day' : '1 Hour'})...`);
+        `Scanning Camarilla inside CPR (${mode === 'weekly' ? 'weekly candle / yearly levels'
+                                                           : 'daily candle / monthly levels'})...`);
     if (buyDiv) buyDiv.classList.remove('results-hidden');
     if (sellDiv) sellDiv.classList.remove('results-hidden');
     if (buyCount) buyCount.textContent = '(...)';
@@ -207,23 +245,23 @@ async function loadExpiryHlBreakoutData(timeframe, refresh = false) {
 
     try {
         const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
-        let url = `/api/cpr-filter/expiry-hl-breakout?timeframe=${timeframe}`;
+        let url = `/api/cpr-filter/camarilla-cpr?mode=${mode}`;
         if (selectedDate) url += `&date=${selectedDate}`;
         if (refresh) url += '&refresh=true';
 
         const response = await fetchJson(url);
         if (response && response.success) {
-            displayResults('expiryHlBuy', response.buy || []);
-            displayResults('expiryHlSell', response.sell || []);
+            displayResults('camarillaBuy', response.buy || []);
+            displayResults('camarillaSell', response.sell || []);
         } else {
-            const errorHtml = _gridErrorHtml('Failed to load Expiry High/Low breakout data.');
+            const errorHtml = _gridErrorHtml('Failed to load Camarilla inside CPR data.');
             buyGrid.innerHTML = errorHtml;
             sellGrid.innerHTML = errorHtml;
             if (buyCount) buyCount.textContent = '(0)';
             if (sellCount) sellCount.textContent = '(0)';
         }
     } catch (error) {
-        console.error('Error fetching Expiry High/Low breakout data:', error);
+        console.error('Error fetching Camarilla inside CPR data:', error);
         const errorHtml = _gridErrorHtml('Error: ' + error.message);
         buyGrid.innerHTML = errorHtml;
         sellGrid.innerHTML = errorHtml;
@@ -443,23 +481,51 @@ const _SCANNER_COLUMNS = {
         { key: 'max_pain', label: 'Max Pain', sortable: true, align: 'right',
           format: v => Number(v || 0).toFixed(0) },
     ],
-    // Expiry High/Low breakout — Buy and Sell are the same shape; only the
-    // Price column's tone differs (every row in Buy reads as up, Sell as down).
-    expiryHl: (isBuy) => [
-        _symbolColumn(),
-        { key: 'current_price', label: 'Price', sortable: true, align: 'right', strong: true,
+    // Camarilla inside CPR — Buy (S3) and Sell (R3) are the same shape; only
+    // the Close column's tone differs. `touched` says which line the candle
+    // actually hit: the Pivot, the Camarilla level, or both.
+    camarilla: (isBuy) => [
+        {
+            key: 'symbol', label: 'Symbol', sortable: true, strong: true,
+            // data-candle is what the grid's click handler below looks for.
+            // Still an <a> to TradingView underneath, so ctrl/middle-click
+            // opens the real chart there — a plain click is intercepted and
+            // opens the in-app popup instead.
+            render: (symbol, row) => {
+                const link = `<a href="https://in.tradingview.com/chart/?symbol=NSE:` +
+                    `${encodeURIComponent(symbol)}" target="_blank" rel="noopener noreferrer" ` +
+                    `class="symbol-link" data-candle="${DataGrid.escape(symbol)}"` +
+                    `>${DataGrid.escape(symbol)}</a>`;
+                return row && row.is_index
+                    ? `${link} <span class="dg-badge dg-badge--neutral">IDX</span>` : link;
+            },
+        },
+        { key: 'current_price', label: 'Close', sortable: true, align: 'right', strong: true,
           format: v => Number(v || 0).toFixed(2), tone: isBuy ? 'pos' : 'neg' },
-        { key: 'expiry_high', label: 'Expiry High', sortable: true, align: 'right',
+        { key: 'candle_low', label: 'Low', sortable: true, align: 'right',
           format: v => Number(v || 0).toFixed(2) },
-        { key: 'expiry_low', label: 'Expiry Low', sortable: true, align: 'right',
+        { key: 'candle_high', label: 'High', sortable: true, align: 'right',
           format: v => Number(v || 0).toFixed(2) },
-        { key: 'expiry_date', label: 'Expiry Date', sortable: true },
+        { key: 'cpr_bc', label: 'BC', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'pivot', label: 'Pivot', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'cpr_tc', label: 'TC', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'camarilla', label: isBuy ? 'Cam S3' : 'Cam R3', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'touched', label: 'Touched', sortable: true },
+        { key: 'level_timeframe', label: 'Levels', sortable: true },
+        { key: 'candle_date', label: 'Candle', sortable: true,
+          render: (v, row) => DataGrid.escape(v || '') + (row && row.partial_candle
+              ? ' <span class="dg-badge dg-badge--neutral" title="Candle still forming">live</span>'
+              : '') },
     ],
 };
 
 /**
  * Populates a scanner grid with data.
- * @param {string} type - The grid type identifier ('highIv', 'expiryHlBuy', 'expiryHlSell').
+ * @param {string} type - The grid type identifier ('highIv', 'camarillaBuy', 'camarillaSell').
  * @param {Array<Object>} results - The list of stock objects.
  */
 function displayResults(type, results) {
@@ -474,6 +540,10 @@ function displayResults(type, results) {
         results = [];
     }
 
+    if (type in _camarillaRows) {
+        _camarillaRows[type] = results.map((r) => ({ symbol: r.symbol }));
+    }
+
     if (results.length === 0) {
         grid.innerHTML = '';
         container.classList.add('results-hidden');
@@ -482,8 +552,8 @@ function displayResults(type, results) {
     }
 
     const columns = type === 'highIv' ? _SCANNER_COLUMNS.highIv()
-        : type === 'expiryHlBuy'  ? _SCANNER_COLUMNS.expiryHl(true)
-        : type === 'expiryHlSell' ? _SCANNER_COLUMNS.expiryHl(false)
+        : type === 'camarillaBuy'  ? _SCANNER_COLUMNS.camarilla(true)
+        : type === 'camarillaSell' ? _SCANNER_COLUMNS.camarilla(false)
         : null;
     if (!columns) return;
 

@@ -75,4 +75,4 @@ def test_route_counts_per_blueprint():
         prefix = rule.endpoint.split(".")[0]
         counts[prefix] = counts.get(prefix, 0) + 1
     assert counts == {"api": 168, "pages": 23, "auth": 13, "oi_crossover": 10,
-                      "watchlist": 15, "static": 1}
+                      "watchlist": 16, "static": 1}

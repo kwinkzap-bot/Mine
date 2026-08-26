@@ -130,6 +130,24 @@ def add_items(tab_id: int):
         return _fail(e, 'add_items')
 
 
+@watchlist_bp.route('/tabs/<int:tab_id>/items/sync', methods=['POST'])
+@require_user_auth
+def sync_items(tab_id: int):
+    """Make a broker tab match its account: add what is held, drop what is
+    not. Refused for a tab that follows no account."""
+    payload = request.get_json(silent=True) or {}
+    symbols = payload.get('symbols')
+    if not isinstance(symbols, list):
+        return jsonify({'success': False, 'error': 'symbols must be a list'}), 400
+    if len(symbols) > 200:
+        return jsonify({'success': False, 'error': 'at most 200 symbols per request'}), 400
+    try:
+        result = svc.sync_tab_symbols(_user(), tab_id, [str(s) for s in symbols])
+        return jsonify(result), (200 if result.get('success') else 400)
+    except Exception as e:
+        return _fail(e, 'sync_items')
+
+
 @watchlist_bp.route('/items/<int:item_id>', methods=['DELETE'])
 @require_user_auth
 def remove_item(item_id: int):

@@ -5,6 +5,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/watchlist.css') }}?v={{ sv('css/watchlist.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/candle-modal.css') }}?v={{ sv('css/components/candle-modal.css') }}">
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 {% endblock %}
 
@@ -74,57 +75,9 @@
     <div class="wl-drill-body" id="wlDrillBody"></div>
   </div>
 
-  <!-- Candlestick chart, opened from the symbol link.
-       Drawn here rather than embedded from TradingView: their widget will
-       not serve NSE data to an anonymous embed — every Indian symbol comes
-       back "This symbol is only available on TradingView" (checked on both
-       the widgetembed endpoint and the tv.js Advanced Chart widget, with
-       and without a sandbox and a referrer). The link out still opens the
-       real thing on their site, where the viewer's own session applies. -->
-  <div class="wl-tv-back" id="wlTvBack" hidden>
-    <div class="wl-tv" role="dialog" aria-modal="true" aria-labelledby="wlTvTitle">
-      <div class="wl-tv-hdr">
-        <span class="wl-drill-sym" id="wlTvTitle"></span>
-        <!-- Timeframe. The CPR period follows from it rather than being
-             picked separately — one step up, always. -->
-        <select class="wl-tf" id="wlTvInterval" title="Chart timeframe">
-          <option value="1m">1m</option>
-          <option value="5m">5m</option>
-          <option value="15m">15m</option>
-          <option value="30m">30m</option>
-          <option value="1h">1h</option>
-          <option value="1d" selected>1D</option>
-          <option value="1wk">1W</option>
-          <option value="1mo">1M</option>
-        </select>
-        <button class="wl-cpr-toggle active" id="wlTvCpr"
-                title="Central Pivot Range (TC/P/BC) with Camarilla R3 and S3, from the previous period">
-          CPR <span id="wlTvCprPeriod">Monthly</span>
-        </button>
-        <a class="wl-tv-out" id="wlTvOut" target="_blank" rel="noopener noreferrer"
-           title="Open this chart on tradingview.com">Open on TradingView ↗</a>
-        <div class="wl-drill-nav">
-          <button id="wlTvPrev" title="Previous symbol (←)">‹</button>
-          <button id="wlTvNext" title="Next symbol (→)">›</button>
-        </div>
-        <button class="wl-drill-close" id="wlTvClose" title="Close (Esc)">✕</button>
-      </div>
-      <!-- Two panes, because the question "is this a buy" is asked at two
-           timeframes at once: the top one follows the dropdown, the bottom
-           is pinned to weekly so the higher-timeframe structure is always
-           on screen next to whatever is being examined above it. -->
-      <div class="wl-tv-panes">
-        <div class="wl-tv-pane">
-          <span class="wl-tv-cap" id="wlTvCapTop">1D</span>
-          <div class="wl-tv-body" id="wlTvBody"></div>
-        </div>
-        <div class="wl-tv-pane">
-          <span class="wl-tv-cap" id="wlTvCapBottom">1W</span>
-          <div class="wl-tv-body" id="wlTvBodyWeekly"></div>
-        </div>
-      </div>
-    </div>
-  </div>
+  {# Candle chart popup, opened from the symbol link. Shared with the
+     Scanner page — see templates/_candle_modal.html. #}
+  {% include "_candle_modal.html" %}
 
   <!-- Order ticket. Nothing on this page reaches a broker without passing
        through here: the grid's B/S buttons only ever open it, and the confirm
@@ -175,6 +128,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/components/candle-modal.js') }}?v={{ sv('js/components/candle-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/watchlist.js') }}?v={{ sv('js/watchlist.js') }}"></script>
 <script>watchlistInit();</script>
 {% endblock %}

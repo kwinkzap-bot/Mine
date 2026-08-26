@@ -2231,14 +2231,18 @@ def get_cpr_high_iv_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'High IV filter error: {str(e)}'}), 500
 
 
-@api_bp.route('/cpr-filter/expiry-hl-breakout', methods=['GET'])
+
+@api_bp.route('/cpr-filter/camarilla-cpr', methods=['GET'])
 @limiter.exempt
-def get_expiry_hl_breakout_results() -> EndpointResponse:
-    """Scan F&O stocks for a monthly-expiry-cycle High/Low breakout on the
-    selected timeframe (60minute default, or day) — same rule as the
-    Monthly Expiry Breakout filter (touch-then-close-beyond the expiry
-    level, close beyond every EMA 20/50/100/200, and touching at least
-    one of them)."""
+def get_camarilla_cpr_touch_results() -> EndpointResponse:
+    """Scan futures stocks + indices for a Camarilla level sitting INSIDE the
+    CPR band that the selected date's candle then touched.
+
+    mode='daily'  -> daily candle judged against MONTHLY CPR + Camarilla
+    mode='weekly' -> weekly candle judged against YEARLY  CPR + Camarilla
+
+    Touch only (candle range straddles the level) — no close condition. See
+    filters/cpr_camarilla_scanner.py."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -2255,14 +2259,15 @@ def get_expiry_hl_breakout_results() -> EndpointResponse:
         except ValueError:
             return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
 
-    timeframe = request.args.get('timeframe', '60minute')
-    if timeframe not in ('60minute', 'day'):
-        timeframe = '60minute'
+    from trading_app.filters.cpr_camarilla_scanner import MODES, filter_cpr_camarilla_touch
+    mode = request.args.get('mode', 'daily')
+    if mode not in MODES:
+        mode = 'daily'
 
     from trading_app.app.utils.cache import cpr_filter_cache
     cache_user = session.get('username', 'anonymous')
     cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
-    cache_key = f"cpr_filter_expiry_hl:{cache_user}:{cache_date}:{timeframe}"
+    cache_key = f"cpr_filter_camarilla:{cache_user}:{cache_date}:{mode}"
 
     refresh = request.args.get('refresh', 'false').lower() == 'true'
     if not refresh:
@@ -2274,29 +2279,28 @@ def get_expiry_hl_breakout_results() -> EndpointResponse:
 
     try:
         if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
-            logger.warning("Expiry H/L breakout request: KiteConnect instance has no access token")
+            logger.warning("Camarilla-CPR request: KiteConnect instance has no access token")
             return jsonify({
                 'success': False,
                 'error': 'No valid access token on KiteConnect instance. Please login again.',
                 'auth_error': True
             }), 401
 
-        from trading_app.filters.expiry_hl_scanner import filter_expiry_hl_breakout
         cpr_service = _get_cpr_service(current_kite)
-        results = filter_expiry_hl_breakout(cpr_service, root_date=target_date, timeframe=timeframe)
+        results = filter_cpr_camarilla_touch(cpr_service, root_date=target_date, mode=mode)
 
         payload = {
             'success': True,
             'buy': results.get('buy', []),
             'sell': results.get('sell', []),
-            'timeframe': timeframe,
+            'mode': mode,
             'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
         }
 
         cpr_filter_cache.set(cache_key, payload, timeout=120)  # cache for 2 minutes
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"Error in Expiry H/L breakout scanner: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(f"Error in Camarilla-CPR touch scanner: {type(e).__name__}: {e}", exc_info=True)
         error_str = str(e).lower()
         if 'access_token' in error_str or 'unauthorized' in error_str or 'invalid' in error_str:
             return jsonify({
@@ -2304,8 +2308,7 @@ def get_expiry_hl_breakout_results() -> EndpointResponse:
                 'error': 'Authentication failed. Please login again.',
                 'auth_error': True
             }), 401
-        return jsonify({'success': False, 'error': f'Expiry H/L breakout error: {str(e)}'}), 500
-
+        return jsonify({'success': False, 'error': f'Camarilla-CPR scanner error: {str(e)}'}), 500
 
 # ====================== NOTIFICATIONS ======================
 
@@ -4983,8 +4986,8 @@ def run_expiry_breakout_levels_api():
 @require_user_auth
 def run_expiry_breakout_scan_api():
     """Monthly Expiry Breakout — FILTER mode. Not a single-symbol backtest:
-    scans every F&O stock (same universe as the live Expiry H/L scanner,
-    /api/cpr-filter/expiry-hl-breakout) for every candle on the selected
+    scans every F&O stock (same universe as filters/expiry_hl_scanner.py)
+    for every candle on the selected
     timeframe in [start_date, end_date] that touched-then-closed beyond
     that stock's current monthly-expiry-cycle High (BUY) or Low (SELL)
     AND whose close also clears every EMA 20/50/100/200 on the same

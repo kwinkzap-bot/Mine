@@ -1,0 +1,54 @@
+{# Candle chart popup — shared by the Watchlist grid and the Scanner's
+   Camarilla results. Include once per page, then drive it from JS with
+   CandleModal.open(symbol, {rows}).
+
+   Drawn here rather than embedded from TradingView: their widget will not
+   serve NSE data to an anonymous embed — every Indian symbol comes back
+   "This symbol is only available on TradingView" (checked on both the
+   widgetembed endpoint and the tv.js Advanced Chart widget, with and
+   without a sandbox and a referrer). The link out still opens the real
+   thing on their site, where the viewer's own session applies. #}
+<div class="cm-back" id="cmBack" hidden>
+  <div class="cm" role="dialog" aria-modal="true" aria-labelledby="cmTitle">
+    <div class="cm-hdr">
+      <span class="cm-sym" id="cmTitle"></span>
+      {# Timeframe. The CPR period follows from it rather than being picked
+         separately — one step up, always. #}
+      <select class="cm-tf" id="cmInterval" title="Chart timeframe">
+        <option value="1m">1m</option>
+        <option value="5m">5m</option>
+        <option value="15m">15m</option>
+        <option value="30m">30m</option>
+        <option value="1h">1h</option>
+        <option value="1d" selected>1D</option>
+        <option value="1wk">1W</option>
+        <option value="1mo">1M</option>
+      </select>
+      <button class="cm-cpr active" id="cmCpr"
+              title="Central Pivot Range (TC/P/BC) with Camarilla R3 and S3, from the previous period">
+        CPR <span id="cmCprPeriod">Monthly</span>
+      </button>
+      <a class="cm-out" id="cmOut" target="_blank" rel="noopener noreferrer"
+         title="Open this chart on tradingview.com">Open on TradingView ↗</a>
+      <div class="cm-nav">
+        <button id="cmPrev" title="Previous symbol (←)">‹</button>
+        <button id="cmNext" title="Next symbol (→)">›</button>
+      </div>
+      <button class="cm-close" id="cmClose" title="Close (Esc)">✕</button>
+    </div>
+    {# Two panes, because the question "is this a buy" is asked at two
+       timeframes at once: the top one follows the dropdown, the bottom is
+       pinned to weekly so the higher-timeframe structure is always on
+       screen next to whatever is being examined above it. #}
+    <div class="cm-panes">
+      <div class="cm-pane">
+        <span class="cm-cap" id="cmCapTop">1D</span>
+        <div class="cm-body" id="cmBodyTop"></div>
+      </div>
+      <div class="cm-pane">
+        <span class="cm-cap" id="cmCapBottom">1W</span>
+        <div class="cm-body" id="cmBodyWeekly"></div>
+      </div>
+    </div>
+  </div>
+</div>
