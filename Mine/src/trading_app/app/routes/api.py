@@ -6567,7 +6567,20 @@ def exit_all_orders() -> EndpointResponse:
 
 @api_bp.route('/order/place-sl', methods=['POST'])
 def place_sl_order() -> EndpointResponse:
-    """Place SL-Market order for a single option leg across all active brokers."""
+    """Place an SL-Market order for a single option leg across all active brokers.
+
+    Both directions of a stop live here, because they are the same order:
+
+    * ``action='SELL'`` (the default) is the exit stop — the SL CE / SL PE
+      buttons, capping the loss on a position already held.
+    * ``action='BUY'`` is a stop *entry* — "the premium is 150, put me in if it
+      trades up to 160". A LIMIT cannot express that: a BUY LIMIT above the
+      market is marketable and fills at once, so a limit can only ever wait for
+      a fall. Waiting for a rise needs a trigger, which is this order.
+
+    The default is SELL so that every existing caller keeps its behaviour
+    without passing anything.
+    """
     try:
         _username = session.get('username', 'Mine')
         data = request.get_json() or {}
@@ -6575,16 +6588,22 @@ def place_sl_order() -> EndpointResponse:
         strike        = int(data.get('strike', 0))
         option_type   = (data.get('option_type') or '').strip().upper()
         trigger_price = float(data.get('trigger_price', 0))
+        action        = (data.get('action') or 'SELL').strip().upper()
 
         if option_type not in ('CE', 'PE') or strike <= 0 or trigger_price <= 0:
             return jsonify({'success': False, 'error': 'Invalid parameters: need option_type CE/PE, strike > 0, trigger_price > 0'}), 400
+        # Anything other than BUY/SELL would reach the broker as the SELL
+        # default, i.e. a typo'd side would silently sell instead of buying.
+        if action not in ('BUY', 'SELL'):
+            return jsonify({'success': False, 'error': f'Invalid action {action!r}: need BUY or SELL'}), 400
 
         from trading_app.app.utils.user_env import UserEnvManager
         from trading_app.service.kite_order_services import KiteService
 
-        # An SL is the leg that caps the loss, so a guessed quantity is worse
-        # than no order at all: too small leaves the position part-naked, too
-        # large flips it short on trigger. Refuse rather than fall back.
+        # A guessed quantity is worse than no order at all, in either
+        # direction: on a SELL stop too small leaves the position part-naked and
+        # too large flips it short on trigger; on a BUY stop entry it is simply
+        # the wrong position size, bought at market. Refuse rather than fall back.
         standard_lot = resolve_standard_lot(symbol)
         if not standard_lot:
             return jsonify({'success': False,
@@ -6598,12 +6617,13 @@ def place_sl_order() -> EndpointResponse:
             if not b_type or not is_broker_active(_username, i):
                 continue
 
-            # The SL must land on exactly the accounts the entry landed on. The
-            # entry comes from this same panel as strategy='intrinsic', which
-            # _dispatch_order_to_brokers gates on BROKER_N_INTRINSIC_ACTIVE — so
-            # gate identically. Without this the SL sprays to every active
-            # broker, and an SL-M SELL on an account holding no position opens a
-            # naked short the moment it triggers.
+            # The stop must land on exactly the accounts the entry landed on.
+            # The entry comes from this same panel as strategy='intrinsic',
+            # which _dispatch_order_to_brokers gates on BROKER_N_INTRINSIC_ACTIVE
+            # — so gate identically. Without this the stop sprays to every active
+            # broker: an SL-M SELL on an account holding no position opens a
+            # naked short the moment it triggers, and a stop entry buys into
+            # accounts that never opted in to this panel at all.
             if UserEnvManager.get_user_var(_username, f'BROKER_{i}_INTRINSIC_ACTIVE', 'false').strip().lower() \
                     not in ('true', '1', 'yes'):
                 logger.info(f'[place-sl] Skipping broker {i} ({b_type}): INTRINSIC_ACTIVE not enabled')
@@ -6625,7 +6645,7 @@ def place_sl_order() -> EndpointResponse:
                     r = svc.place_stoploss_order(tradingsymbol=tradingsymbol,
                                                   trigger_price=trigger_price,
                                                   quantity=lot_qty,
-                                                  transaction_type='SELL')
+                                                  transaction_type=action)
                     results.append({'broker': 'zerodha', 'instance': i, 'quantity': lot_qty, **r})
                 except Exception as e:
                     logger.error(f'[place-sl] zerodha_{i} error: {e}')
@@ -6647,7 +6667,7 @@ def place_sl_order() -> EndpointResponse:
                         results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'Symbol resolution failed'})
                         continue
                     r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
-                                                        quantity=lot_qty, transaction_type='SELL')
+                                                        quantity=lot_qty, transaction_type=action)
                     results.append({'broker': 'fyers', 'instance': i, 'quantity': lot_qty, **r})
                 except Exception as e:
                     logger.error(f'[place-sl] fyers_{i} error: {e}')
@@ -6666,7 +6686,13 @@ def place_sl_order() -> EndpointResponse:
         #
         # 'price' carries the trigger because every screen reads 'price'; the
         # edit path keys off order_type 'SL-M' to send the new value to the
-        # broker as a trigger rather than as a limit.
+        # broker as a trigger rather than as a limit. That path reads the stored
+        # order_type only, never the side, so it moves a BUY stop's trigger
+        # exactly as it moves a SELL one's.
+        #
+        # 'action' is the real side, not a constant: the screens tell a stop
+        # entry from an exit stop by it, and calling a resting BUY a "stop-loss"
+        # would read as protection on a position that does not exist yet.
         placed = [r for r in results if r.get('success')]
         from trading_app.app.utils.mine_order_store import MineOrderStore
         record = MineOrderStore.add_order({
@@ -6674,7 +6700,7 @@ def place_sl_order() -> EndpointResponse:
             'symbol': symbol,
             'strike': strike,
             'option_type': option_type,
-            'action': 'SELL',
+            'action': action,
             'strategy': 'intrinsic',
             'order_type': 'SL-M',
             'type': 'SL-M',

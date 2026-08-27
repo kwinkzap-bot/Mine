@@ -90,8 +90,14 @@ const _SVG = {
 
 let _historyMode = false;
 
-/** True for a resting stop-loss — its editable number is a trigger, not a limit. */
+/** True for a resting stop — its editable number is a trigger, not a limit. */
 const _isStop = o => String(o.order_type || o.type || '').toUpperCase().startsWith('SL');
+
+// A SELL stop is a stop-LOSS (guards a position held); a BUY stop is a stop-
+// ENTRY (nothing held yet — it buys in if the premium rises to the trigger).
+// The Action column already prints the side, but the button tooltips would
+// otherwise call a resting BUY a "stop-loss".
+const _stopWhat = o => (o.action === 'BUY' ? 'stop entry' : 'stop-loss');
 
 // Unfilled orders — the ones whose price can still be changed. OPEN is a LIMIT
 // order resting at the brokers; PENDING/EXECUTING are Mine orders the backend
@@ -157,8 +163,8 @@ async function renderOrdersGrid() {
             } },
             { label: 'Type', render: (_, o) => {
                 const t = (o.type || 'MARKET').toUpperCase();
-                // A stop gets its own tone: on a grid of entries it is the one
-                // row that closes a position rather than opening one.
+                // A stop gets its own tone: it is the one row still waiting on
+                // a trigger rather than working the book.
                 const tone = t.startsWith('SL') ? 'warn' : (t === 'LIMIT' ? 'special' : 'neutral');
                 return DataGrid.badge(o.type || 'MARKET', tone);
             } },
@@ -166,7 +172,7 @@ async function renderOrdersGrid() {
               render: (_, o) => esc(`${o.symbol} ${o.strike} ${o.option_type}`) },
             { label: 'Action', render: (_, o) => DataGrid.badge(o.action,
                 o.action === 'BUY' ? 'pos' : 'neg') },
-            // On an SL row this column is the stop's trigger, not a limit price.
+            // On a stop row this column is the trigger, not a limit price.
             // The input is the same one either way — the server reads the order
             // type and sends the number to the broker as whichever it is.
             { label: 'Price', cellClass: 'ord-td-price', render: (_, o) => {
@@ -180,7 +186,7 @@ async function renderOrdersGrid() {
             { label: '', cellClass: 'ord-td-actions', render: (_, o) =>
                 _EDITABLE.includes(o.status)
                     ? `<button class="ord-btn save-price" title="Update ${_isStop(o) ? 'trigger' : 'price'}">${_SVG.save}</button>` +
-                      `<button class="ord-btn cancel-order" title="Cancel ${_isStop(o) ? 'stop-loss' : 'order'}">${_SVG.cancel}</button>`
+                      `<button class="ord-btn cancel-order" title="Cancel ${_isStop(o) ? _stopWhat(o) : 'order'}">${_SVG.cancel}</button>`
                     : `<button class="ord-btn delete-order" title="Remove">${_SVG.trash}</button>` },
         ],
     });

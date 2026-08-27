@@ -386,8 +386,13 @@
                             <option value="broker" selected>Broker</option>
                             <option value="mine">Mine</option>
                         </select>
+                        <select id="oipRSOrderType" class="oip-select oip-select--xs" title="Order Type">
+                            <option value="MARKET" selected>MKT</option>
+                            <option value="LIMIT">LMT</option>
+                            <option value="STOP">STOP</option>
+                        </select>
                         <input type="number" id="oipRSLimitPrice" class="oip-input oip-input--price"
-                            placeholder="Price ₹" step="0.05" title="Limit / SL Trigger Price">
+                            placeholder="Price ₹" step="0.05" title="Limit / trigger price">
                         <div class="oip-order-side-group oip-order-side-group--ce">
                             <button class="oip-rs-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
                                 CE</button>
@@ -799,8 +804,17 @@
                             <option value="broker" selected>Broker</option>
                             <option value="mine">Mine</option>
                         </select>
+                        <!-- MKT / LMT / STOP is explicit rather than inferred from whether
+                             the price box is filled. STOP is the order that waits for the
+                             premium to RISE to the price (a BUY limit above the market is
+                             marketable and fills instantly, so a limit cannot express it). -->
+                        <select id="oipOrderType" class="oip-select oip-select--xs" title="Order Type">
+                            <option value="MARKET" selected>MKT</option>
+                            <option value="LIMIT">LMT</option>
+                            <option value="STOP">STOP</option>
+                        </select>
                         <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Price ₹"
-                            step="0.05" title="Limit / SL Trigger Price">
+                            step="0.05" title="Limit / trigger price">
                         <div class="oip-order-side-group oip-order-side-group--ce">
                             <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
                                 CE</button>

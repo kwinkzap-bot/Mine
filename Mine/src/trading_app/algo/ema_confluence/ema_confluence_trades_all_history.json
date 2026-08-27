@@ -1,5 +1,22 @@
 [
   {
+    "symbol": "BHARTIARTL",
+    "direction": "BUY",
+    "mode": "paper",
+    "qty": 475,
+    "lot_size": 475,
+    "entry_price": 1957.0,
+    "exit_price": 1901.3,
+    "sl_price": 1901.3,
+    "target_price": 2161.5,
+    "pnl": -26457.5,
+    "reason": "SL",
+    "signal_date": "2026-08-12",
+    "entry_time": "2026-08-20T12:00:02.183134",
+    "exit_time": "2026-08-27T13:18:28.077922",
+    "date": "2026-08-27"
+  },
+  {
     "symbol": "ULTRACEMCO",
     "direction": "SELL",
     "mode": "paper",

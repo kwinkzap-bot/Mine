@@ -141,6 +141,14 @@ let oipFullOptionData = null;
 let oipCurrentCEStrike = null;
 let oipCurrentPEStrike = null;
 
+// Last traded premium of each leg, parked from the chart feed. A stop is the
+// one order whose side has to be checked against the current price before it is
+// sent — a BUY stop placed BELOW the market triggers the instant it reaches the
+// exchange, which is a market order the user did not ask for — and the order
+// panel has no other source for the premium.
+let oipLastCeClose = null;
+let oipLastPeClose = null;
+
 // Premium Strike (Prem. Str.) mode state
 let oipPremiumStrikeData = null;           // Cached result from /api/oi-profile/premium-strikes
 const oipPremStrikeLines = { ce: [], pe: [], intCe: [], intPe: [] }; // Price-line handles for cleanup
@@ -1900,6 +1908,10 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         const ceRaw = optionData.filter(c => c.type === 'CE');
         const peRaw = optionData.filter(c => c.type === 'PE');
 
+        // Park the newest close for the order panel's stop-direction check.
+        if (ceRaw.length) oipLastCeClose = ceRaw[ceRaw.length - 1].close;
+        if (peRaw.length) oipLastPeClose = peRaw[peRaw.length - 1].close;
+
         // --- MASTER TIMELINE ALIGNMENT ---
         // Map all option data EXACTLY to the main chart's timeline (which already includes whitespace).
         const alignToMaster = (rawData) => {
@@ -2483,6 +2495,67 @@ async function oipPlaceSLOrders(btn, side = null) {
     // Stay disabled — user must re-enter/change price to re-fire (prevents accidental double placement)
 }
 
+/**
+ * Why a stop entry needs a direction check the other order types don't.
+ *
+ * A stop rests inactive until the price TOUCHES its trigger, then goes to
+ * market. Which means a BUY stop only waits if its trigger is ABOVE the current
+ * premium, and a SELL stop only waits if its trigger is BELOW it. Get it the
+ * wrong way round and the trigger is already satisfied the moment the order
+ * reaches the exchange: it fires immediately, at market, for the full position
+ * size — the exact thing the user was trying to avoid by not pressing MARKET.
+ *
+ * The broker will not refuse it (a triggered stop is a legitimate order), so
+ * this is the only place it can be caught. Returns an error string, or null.
+ *
+ * lastPrice may legitimately be unknown — the chart feed can be empty on a
+ * fresh load or after a data-provider hiccup. Unknown means no check: refusing
+ * to place because we cannot see a price would be worse than placing, and the
+ * broker still enforces its own tick and range rules.
+ */
+function oipStopDirectionError(action, trigger, lastPrice) {
+    if (!(lastPrice > 0)) return null;
+    if (action === 'BUY' && trigger <= lastPrice) {
+        return `A BUY stop must sit ABOVE the market — ₹${trigger} is at or below the last price of ₹${lastPrice}, `
+             + `so it would trigger instantly. Use MKT to buy now, or raise the trigger.`;
+    }
+    if (action === 'SELL' && trigger >= lastPrice) {
+        return `A SELL stop must sit BELOW the market — ₹${trigger} is at or above the last price of ₹${lastPrice}, `
+             + `so it would trigger instantly. Use MKT to sell now, or lower the trigger.`;
+    }
+    return null;
+}
+
+/**
+ * Place one resting stop order at every broker enabled for this panel.
+ *
+ * Shared by both order toolbars (Opt Prem and Round Strike) — same endpoint the
+ * SL CE / SL PE buttons use, which now carries a side. The order rests at the
+ * exchange rather than in this app, so it still triggers with the browser shut
+ * and the Flask process down.
+ *
+ * Returns the parsed response so the caller can word its own notification.
+ */
+async function oipPlaceStopOrder({ symbol, strike, side, action, trigger }) {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+    const res = await fetch('/api/order/place-sl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+        body: JSON.stringify({
+            symbol: symbol, strike: strike, option_type: side,
+            trigger_price: trigger, action: action
+        })
+    });
+    return res.json();
+}
+
+/** Per-broker failure lines out of a /api/order/place-sl response. */
+function oipStopErrorText(r) {
+    const legs = (r?.results || []).filter(b => !b.success)
+        .map(b => `${b.broker || '?'}${b.instance ? ' ' + b.instance : ''}: ${b.error || b.message || 'Unknown error'}`);
+    return legs.length ? legs.join(', ') : (r?.error || r?.message || 'Unknown error');
+}
+
 async function oipPlaceOrder(side, action, btn) {
     const strike = (side === 'CE') ? oipCurrentCEStrike : oipCurrentPEStrike;
     if (!strike) { showNotification(`No ${side} strike available.`, 'error'); return; }
@@ -2491,8 +2564,47 @@ async function oipPlaceOrder(side, action, btn) {
     const limitPriceInput = document.getElementById('oipLimitPrice');
     const rawLimit = limitPriceInput ? parseFloat(limitPriceInput.value) : null;
     const limitPrice = rawLimit && !isNaN(rawLimit) && rawLimit > 0 ? rawLimit : null;
-    const orderType = limitPrice ? 'LIMIT' : 'MARKET';
+    // Explicit, from the dropdown — not inferred from whether the price box
+    // happens to be filled. MARKET now ignores a stray price rather than
+    // silently becoming a limit order because a number was left in the box.
+    const orderType = document.getElementById('oipOrderType')?.value || 'MARKET';
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+
+    if (orderType !== 'MARKET' && !limitPrice) {
+        showNotification(`Enter a ${orderType === 'STOP' ? 'trigger' : 'limit'} price first.`, 'error');
+        return;
+    }
+
+    if (orderType === 'STOP') {
+        // The app-side monitor only fires a BUY on ltp <= price, so Mine mode
+        // cannot express "wait for a rise" at all. Say so rather than fall
+        // through and quietly place something else.
+        if (mode === 'mine') {
+            showNotification('STOP is broker-only — a Mine order cannot wait for a rise. Switch mode to Broker.', 'error');
+            return;
+        }
+        const dirErr = oipStopDirectionError(action, limitPrice, side === 'CE' ? oipLastCeClose : oipLastPeClose);
+        if (dirErr) { showNotification(dirErr, 'error'); return; }
+
+        btn.disabled = true; const t = btn.title; btn.title = 'Placing...';
+        try {
+            const r = await oipPlaceStopOrder({ symbol: oipSymbol, strike, side, action, trigger: limitPrice });
+            if (r.success) {
+                showNotification(`Stop ${action} ${side} ${strike} resting at ₹${limitPrice} — triggers when the premium touches it.`, 'success');
+            } else {
+                showNotification(`Stop failed: ${oipStopErrorText(r)}`, 'error');
+            }
+        } catch (e) {
+            showNotification(`Stop error: ${e.message}`, 'error');
+        } finally {
+            btn.disabled = false; btn.title = t;
+        }
+        return;
+    }
+
+    // MARKET means market: a number left over in the price box from an earlier
+    // limit must not turn this into one.
+    const sendPrice = orderType === 'LIMIT' ? limitPrice : null;
 
     btn.disabled = true; const ot = btn.title; btn.title = 'Placing...';
     try {
@@ -2508,8 +2620,8 @@ async function oipPlaceOrder(side, action, btn) {
                     action: action,
                     strategy: 'intrinsic',
                     order_type: orderType,
-                    limit_price: limitPrice,
-                    price: limitPrice || 0
+                    limit_price: sendPrice,
+                    price: sendPrice || 0
                 })
             });
             const r = await res.json();
@@ -2537,7 +2649,7 @@ async function oipPlaceOrder(side, action, btn) {
                 action: action,
                 strategy: 'intrinsic',
                 order_type: orderType,
-                limit_price: limitPrice
+                limit_price: sendPrice
             })
         });
         const r = await res.json();

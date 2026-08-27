@@ -93,25 +93,45 @@ function _oipOOIsStop(o) {
     return String(o.order_type || o.type || '').toUpperCase().startsWith('SL');
 }
 
+/**
+ * Both directions of a stop rest here and they are opposite things, so the pill
+ * has to say which:
+ *
+ *   SELL stop → a stop-LOSS. It guards a position already held.
+ *   BUY  stop → a stop-ENTRY. Nothing is held yet; it buys in if the premium
+ *               rises to the trigger.
+ *
+ * Labelling a resting BUY "stop-loss" would read as protection on a position
+ * that does not exist — the one misreading that could talk someone out of
+ * placing the actual stop-loss.
+ */
+function _oipOOIsStopEntry(o) {
+    return _oipOOIsStop(o) && o.action === 'BUY';
+}
+
 function _oipOOPill(o) {
     const legs = _oipOOLegCount(o);
     const where = o.mode === 'mine' ? 'app' : `${legs} broker${legs === 1 ? '' : 's'}`;
     const isBuy = o.action === 'BUY';
-    // A stop reads as neither a buy nor a sell pill: it is the exit guarding a
-    // position, and colouring it like a live SELL order would have it read as
-    // something already working the book.
+    // A stop reads as neither a buy nor a sell pill: it is waiting on a trigger,
+    // and colouring it like a live BUY or SELL would have it read as something
+    // already working the book.
     const stop = _oipOOIsStop(o);
+    const entry = _oipOOIsStopEntry(o);
     const cls = stop ? 'stop' : (isBuy ? 'buy' : 'sell');
-    const badge = stop ? 'SL' : (isBuy ? 'B' : 'S');
-    const badgeTitle = stop ? `Stop-loss — trigger, live at ${where}`
-                            : `${o.action} — live at ${where}`;
+    const badge = stop ? (entry ? 'ST' : 'SL') : (isBuy ? 'B' : 'S');
+    const what = entry ? 'stop entry' : 'stop-loss';
+    const badgeTitle = stop
+        ? `${entry ? 'Stop entry — buys in when the premium rises to the trigger'
+                   : 'Stop-loss — sells out when the premium falls to the trigger'}, live at ${where}`
+        : `${o.action} — live at ${where}`;
     return `
         <span class="oip-oo-pill ${cls}" data-id="${_oipOOEsc(o.id)}">
             <span class="oip-oo-side" title="${_oipOOEsc(badgeTitle)}">${badge}</span>
             <input type="number" class="oip-oo-price" step="0.05" min="0" value="${_oipOOEsc(o.price || 0)}"
                 title="New ${stop ? 'trigger' : 'limit'} price — applied to all ${_oipOOEsc(where)}">
             <button class="oip-oo-btn save" title="Update ${stop ? 'trigger' : 'price'} at all brokers">&#10003;</button>
-            <button class="oip-oo-btn cancel" title="Cancel this ${stop ? 'stop-loss' : 'order'} at all brokers">&times;</button>
+            <button class="oip-oo-btn cancel" title="Cancel this ${_oipOOEsc(stop ? what : 'order')} at all brokers">&times;</button>
         </span>`;
 }
 
@@ -158,6 +178,11 @@ async function _oipOOSubmit(row, isCancel) {
     const price = parseFloat(input?.value);
     const stop = row.classList.contains('stop');
     const what = stop ? 'trigger' : 'price';
+    // Both stop directions carry the 'stop' class; only the badge tells a stop
+    // ENTRY (ST) from a stop-LOSS (SL), and the cancel message must not call
+    // one the other.
+    const stopLabel = row.querySelector('.oip-oo-side')?.textContent.trim() === 'ST'
+        ? 'Stop entry' : 'Stop-loss';
 
     if (!isCancel && (isNaN(price) || price <= 0)) {
         _oipOONotify(`Enter a valid ${what}`, 'error');
@@ -173,7 +198,7 @@ async function _oipOOSubmit(row, isCancel) {
         });
         const r = await res.json();
         if (r.success) {
-            _oipOONotify(isCancel ? `${stop ? 'Stop-loss' : 'Order'} cancelled${_oipOOBrokerLines(r)}`
+            _oipOONotify(isCancel ? `${stop ? stopLabel : 'Order'} cancelled${_oipOOBrokerLines(r)}`
                                   : `${stop ? 'Trigger' : 'Price'} → ₹${price}${_oipOOBrokerLines(r)}`, 'success');
         } else if (r.gone) {
             // The order finished at the broker while it was still on the strip.

@@ -1549,6 +1549,12 @@ function oipRSSyncSLButtons() {
     });
 }
 
+/** Newest parked close for a leg — the stop-direction check's view of the market. */
+function oipRSLastClose(side) {
+    const rows = (side === 'CE') ? oipRSLastCeData : oipRSLastPeData;
+    return rows?.length ? rows[rows.length - 1].close : null;
+}
+
 async function oipRSPlaceOrder(side, action, btn) {
     const strike = (side === 'CE') ? oipRSCurrentCEStrike : oipRSCurrentPEStrike;
     if (!strike) { showNotification(`No ${side} strike available.`, 'error'); return; }
@@ -1556,8 +1562,49 @@ async function oipRSPlaceOrder(side, action, btn) {
     const mode = document.getElementById('oipRSOrderMode')?.value || 'broker';
     const rawLimit = parseFloat(document.getElementById('oipRSLimitPrice')?.value);
     const limitPrice = rawLimit && !isNaN(rawLimit) && rawLimit > 0 ? rawLimit : null;
-    const orderType = limitPrice ? 'LIMIT' : 'MARKET';
+    // From the dropdown, not inferred from the price box being filled — see the
+    // same change in oipPlaceOrder (oi_profile.js).
+    const orderType = document.getElementById('oipRSOrderType')?.value || 'MARKET';
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+
+    if (orderType !== 'MARKET' && !limitPrice) {
+        showNotification(`Enter a ${orderType === 'STOP' ? 'trigger' : 'limit'} price first.`, 'error');
+        return;
+    }
+
+    // Stop entries go through the shared helpers in oi_profile.js, which loads
+    // before this file — one endpoint, one direction check, one wording for
+    // both toolbars.
+    if (orderType === 'STOP') {
+        if (mode === 'mine') {
+            showNotification('STOP is broker-only — a Mine order cannot wait for a rise. Switch mode to Broker.', 'error');
+            return;
+        }
+        const dirErr = oipStopDirectionError(action, limitPrice, oipRSLastClose(side));
+        if (dirErr) { showNotification(dirErr, 'error'); return; }
+
+        btn.disabled = true;
+        const t = btn.title;
+        btn.title = 'Placing...';
+        try {
+            const r = await oipPlaceStopOrder({ symbol: oipSymbol, strike, side, action, trigger: limitPrice });
+            if (r.success) {
+                showNotification(`Stop ${action} ${side} ${strike} resting at ₹${limitPrice} — triggers when the premium touches it.`, 'success');
+            } else {
+                showNotification(`Stop failed: ${oipStopErrorText(r)}`, 'error');
+            }
+        } catch (e) {
+            showNotification(`Stop error: ${e.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.title = t;
+        }
+        return;
+    }
+
+    // MARKET means market — a leftover number in the price box must not turn it
+    // into a limit order.
+    const sendPrice = orderType === 'LIMIT' ? limitPrice : null;
 
     btn.disabled = true;
     const ot = btn.title;
@@ -1566,9 +1613,9 @@ async function oipRSPlaceOrder(side, action, btn) {
         const endpoint = mode === 'mine' ? '/api/mine-orders' : '/api/orders/place';
         const body = {
             symbol: oipSymbol, strike: strike, option_type: side, action: action,
-            strategy: 'intrinsic', order_type: orderType, limit_price: limitPrice
+            strategy: 'intrinsic', order_type: orderType, limit_price: sendPrice
         };
-        if (mode === 'mine') body.price = limitPrice || 0;
+        if (mode === 'mine') body.price = sendPrice || 0;
 
         const res = await fetch(endpoint, {
             method: 'POST',
