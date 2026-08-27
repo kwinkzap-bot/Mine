@@ -1,19 +1,19 @@
 [
   {
-    "symbol": "HDFCAMC",
+    "symbol": "ULTRACEMCO",
     "direction": "SELL",
     "mode": "paper",
-    "qty": 300,
-    "lot_size": 300,
-    "entry_price": 2604.1,
-    "exit_price": 2644.8,
-    "sl_price": 2644.8,
-    "target_price": 2459.62,
-    "pnl": -12210.0,
+    "qty": 50,
+    "lot_size": 50,
+    "entry_price": 11587.0,
+    "exit_price": 11905.0,
+    "sl_price": 11905.0,
+    "target_price": 10639.8,
+    "pnl": -15900.0,
     "reason": "SL",
-    "signal_date": "2026-08-03",
-    "entry_time": "2026-08-20T12:00:02.184860",
-    "exit_time": "2026-08-25T09:32:48.572093",
-    "date": "2026-08-25"
+    "signal_date": "2026-08-13",
+    "entry_time": "2026-08-20T12:00:02.188479",
+    "exit_time": "2026-08-26T14:52:43.555392",
+    "date": "2026-08-26"
   }
 ]
