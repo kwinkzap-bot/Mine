@@ -10,10 +10,23 @@ underlying's own continuous daily history (index/equity — futures contracts
 roll monthly and don't carry enough history for a 200-day EMA); the paper
 ORDER itself is filled and marked-to-market on that symbol's own FUTURES
 contract, per this task's requirement to trade the future, not the equity.
-Known approximation: the trigger/SL/Target price levels are computed on the
-equity/index scale and compared directly against the future's LTP — no
-equity/future basis adjustment is applied (mirrors the approximations already
-accepted elsewhere in this codebase, e.g. TMF_EQUITY_LEVERAGE).
+
+The two price scales are kept strictly apart, and this is the single most
+important thing about this module. EVERY strategy decision — the trigger cross
+that opens a trade, the SL and the Target that close it — is judged on the
+UNDERLYING's live price, the same scale the signal candle's High/Low came from,
+so the live algo reads the market exactly as the backtest that validated it
+does. The FUTURE supplies only the money: which contract, the lot size, the
+fill price the P&L is computed from, and the mark-to-market. Each tick
+therefore carries TWO prices per symbol — `spot_ltp` for decisions, `ltp` for
+money — and one is never substituted for the other (see _decision_price).
+
+This replaces the earlier behaviour, where equity-scale levels were compared
+directly against the future's LTP with no basis adjustment. The basis runs
+~0.5% on a typical name in this universe, which on a 3% target is a fifth of
+the whole trade; it filled longs late and stopped shorts out early, and every
+monthly roll re-derived the Target off the new contract's price, compounding
+the drift (OIL was left holding a 4.65% target configured as 8%).
 
 A monthly future dies but a multi-day swing doesn't, so the position is CARRIED
 FORWARD: three trading days before the held contract's expiry, at 12:00, the
@@ -136,11 +149,12 @@ _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
 # switches which contract it quotes against.
 _ROLL_SESSIONS_BEFORE_EXPIRY = 3     # trading days; EMA_CONFLUENCE_ROLL_DAYS overrides
 _ROLL_HOUR, _ROLL_MINUTE = 12, 0     # 12:00, server-local like every other clock here
-# The rolled leg keeps the SL/Target it was armed with: both come from the
-# signal candle on the UNDERLYING, so they carry across contracts untouched.
-# Re-deriving the target off each far-month entry would shift it by the roll
-# spread every month, compounding. Flip to True to re-price instead.
-_ROLL_REPRICE_TARGET = False
+# The rolled leg keeps the SL/Target it was armed with — not as a choice but by
+# construction: both live on the UNDERLYING's price scale, which has no
+# contracts and therefore nothing to roll. Only the futures fill price is
+# re-stamped. (This used to be a _ROLL_REPRICE_TARGET flag, because the Target
+# was derived from the future's entry price and so every roll shifted it by the
+# roll spread. With the Target on the spot scale the question disappears.)
 # ~3.3 calendar years (≈820 trading bars). Must match the backtest's warm-up
 # (_EMA_BT_WARMUP_DAYS in routes/api.py): a 200-day EMA keeps drifting toward
 # its true value for hundreds of bars, so a shorter run-up here would have live
@@ -321,9 +335,52 @@ class EmaConfluenceAlgo:
                                   f"{state['stocks'][sym]['phase']} — keeping until it closes")
                     continue
                 state['stocks'].pop(sym)
+            # Guarded separately: a migration failure must degrade to "state
+            # loaded unmigrated", never to the bare `except` below, which would
+            # hand back a FRESH state and silently abandon every open position.
+            try:
+                self._migrate_levels_to_spot_scale(state)
+            except Exception as e:
+                self.log.error(f"spot-scale migration failed, state left as-is: {e}")
             return state
         except Exception:
             return self._fresh_state()
+
+    def _migrate_levels_to_spot_scale(self, state: Dict[str, Any]) -> None:
+        """One-time repair for positions opened before the Target moved onto
+        the underlying's price scale.
+
+        Those were entered at the FUTURE's LTP and had their Target derived from
+        it, so the level is off by the basis — and a ROLLED position is off by
+        every roll spread since, which is how OIL came to hold a 4.65% target
+        that was configured as 8%. Nothing recorded what the underlying was
+        quoting at the fill, but `trigger_level` IS that price on the spot
+        scale: the backtest fills a breakout at its trigger unless the bar gaps
+        through it, so this is the same reconstruction the engine itself makes.
+
+        SL needs no repair — it always came off the signal candle. Neither does
+        entry_price: the futures fill is real, and the P&L still runs off it.
+        Idempotent — a position that already has spot_entry_price is skipped.
+        """
+        for symbol, s in state.get('stocks', {}).items():
+            if s.get('phase') != 'in_position' or s.get('spot_entry_price') is not None:
+                continue
+            trigger = s.get('trigger_level')
+            if trigger is None:
+                self.log.warning(f"{symbol}: open position has no trigger_level to rebuild a spot "
+                                 f"entry from — Target left on the futures scale, review it by hand")
+                continue
+            pct = float(s.get('target_pct', 5.0))
+            spot_entry = round(float(trigger), 2)
+            was = s.get('target_level')
+            s['spot_entry_price'] = spot_entry
+            s['target_level'] = round(spot_entry * (1 + pct / 100), 2) if s.get('direction') == 'Long' \
+                else round(spot_entry * (1 - pct / 100), 2)
+            self.log.info(
+                f"{symbol}: migrated to spot-scale levels — spot entry {spot_entry} (rebuilt from "
+                f"its trigger), target {was} -> {s['target_level']} ({pct}% of the spot entry). "
+                f"Futures fill {s.get('entry_price')} untouched; it still carries the P&L."
+            )
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         with self._state_lock:
@@ -481,14 +538,17 @@ class EmaConfluenceAlgo:
         s['future_resolved_on'] = today_str
         return target['symbol']
 
-    def _get_future_ltp_batch(self, provider: Any, tokens: Dict[str, Any]) -> Dict[str, float]:
+    def _get_ltp_batch(self, provider: Any, tokens: Dict[str, Any]) -> Dict[str, float]:
+        """One quote request for every instrument this tick needs — futures
+        contracts AND their underlyings, keyed by whatever the caller called
+        them. Deduped, so a symbol quoted under two keys costs one token."""
         uniq_tokens = list({t for t in tokens.values() if t})
         if not uniq_tokens:
             return {}
         try:
             data = provider.ltp(uniq_tokens) or {}
         except Exception as e:
-            self.log.warning(f"batch future LTP fetch failed: {e}")
+            self.log.warning(f"batch LTP fetch failed: {e}")
             return {}
         result: Dict[str, float] = {}
         for symbol, token in tokens.items():
@@ -710,25 +770,39 @@ class EmaConfluenceAlgo:
 
     # ── Paper trade lifecycle ───────────────────────────────────────────
 
-    def _fire_paper_entry(self, symbol: str, s: Dict[str, Any], ltp: float, lots: int) -> None:
+    def _fire_paper_entry(self, symbol: str, s: Dict[str, Any], spot: float,
+                          fut_ltp: float, lots: int) -> None:
+        """The trigger broke on the UNDERLYING at `spot`; the paper order fills
+        on the FUTURE at `fut_ltp`.
+
+        Both are stored because they do different jobs for the rest of the
+        trade's life. The Target is derived from the SPOT fill — exactly as the
+        backtest derives it from the equity entry price, which is what makes a
+        target_pct swept in the backtest mean the same thing here. The P&L is
+        derived from the FUTURES fill, because that is the instrument held.
+        """
         direction   = s['direction']
         target_pct  = float(s.get('target_pct', 5.0))
-        entry_price = round(float(ltp), 2)
-        target_level = round(entry_price * (1 + target_pct / 100), 2) if direction == 'Long' \
-            else round(entry_price * (1 - target_pct / 100), 2)
+        spot_entry  = round(float(spot), 2)
+        entry_price = round(float(fut_ltp), 2)
+        target_level = round(spot_entry * (1 + target_pct / 100), 2) if direction == 'Long' \
+            else round(spot_entry * (1 - target_pct / 100), 2)
         lot_size = int(s.get('lot_size', 1) or 1)
         qty = max(1, lots) * lot_size
 
+        s['spot_entry_price'] = spot_entry
         s['entry_price']  = entry_price
         s['target_level'] = target_level
         s['qty']           = qty
         s['entry_time']    = datetime.now().isoformat()
         s['phase']         = 'in_position'
         s['ltp']            = entry_price   # marked to market from the next tick on
+        s['spot_ltp']       = spot_entry
         s['unrealized_pnl'] = 0.0
         self.log.info(
-            f"[PAPER] {symbol}: ENTERED {direction.upper()} future @ {entry_price} "
-            f"sl={s['sl_level']} tgt={target_level} qty={qty}"
+            f"[PAPER] {symbol}: ENTERED {direction.upper()} — trigger {s['trigger_level']} broke at "
+            f"spot {spot_entry}; filled {s.get('future_month') or 'FUT'} @ {entry_price}. "
+            f"sl={s['sl_level']} tgt={target_level} (both spot-scale) qty={qty}"
         )
         self._notify_new_entry(symbol, s, lots)
 
@@ -745,6 +819,7 @@ class EmaConfluenceAlgo:
                 'symbol':        symbol,
                 'direction':     'BUY' if s['direction'] == 'Long' else 'SELL',
                 'entry_price':   s['entry_price'],
+                'spot_entry_price': s.get('spot_entry_price'),
                 'sl_price':      s.get('sl_level'),
                 'target_price':  s.get('target_level'),
                 'target_pct':    s.get('target_pct'),
@@ -808,7 +883,8 @@ class EmaConfluenceAlgo:
         message = '\n'.join([
             f"📈 EMA Confluence — NEW ENTRY",
             f"{symbol} · {payload['direction']} · {payload.get('future_month') or 'FUT'}",
-            f"Entry  ₹{payload['entry_price']}",
+            f"Entry  ₹{payload['entry_price']} (fut)",
+            f"Spot   ₹{payload.get('spot_entry_price')} — SL/Target are on this scale",
             f"SL     ₹{payload['sl_price']}",
             f"Target ₹{payload['target_price']}" + (f" ({tgt_pct}%)" if tgt_pct else ''),
             f"Qty    {payload['qty']} ({payload['lots']} lot)",
@@ -903,8 +979,11 @@ class EmaConfluenceAlgo:
             message = '\n'.join([
                 f"{emoji} EMA Confluence — {headline}",
                 f"{symbol} · {record['direction']} · {s.get('future_month') or 'FUT'}",
-                f"Entry  ₹{record['entry_price']}",
-                f"Exit   ₹{record['exit_price']}",
+                f"Entry  ₹{record['entry_price']} (fut)",
+                f"Exit   ₹{record['exit_price']} (fut)",
+                (f"Hit    spot ₹{record['spot_exit_price']} vs "
+                 f"{'SL' if reason == 'SL' else 'target'} ₹"
+                 f"{record['sl_price'] if reason == 'SL' else record['target_price']}"),
                 f"P&L    {'+' if won else ''}₹{pnl}",
                 f"Qty    {record['qty']}",
                 f"Signal {record.get('signal_date') or '-'} · exited {exited or '-'}",
@@ -952,7 +1031,7 @@ class EmaConfluenceAlgo:
                 f"{symbol} · {payload['direction']} · {payload.get('future_month') or 'FUT'}",
                 f"Trigger ₹{payload['trigger_level']}",
                 f"SL      ₹{payload['sl_price']}",
-                (f"Target  {tgt_pct}% from entry" if tgt_pct else "Target  -"),
+                (f"Target  {tgt_pct}% from the spot entry" if tgt_pct else "Target  -"),
                 f"Signal candle {payload['signal_date']}"
                 + (f" ({age_days}d old)" if age_days else ""),
                 "(no order yet — waiting for the trigger)",
@@ -961,7 +1040,18 @@ class EmaConfluenceAlgo:
         except Exception as e:
             self.log.error(f"{symbol}: signal Telegram alert failed to build: {e}")
 
-    def _record_exit(self, symbol: str, s: Dict[str, Any], exit_price: float, reason: str) -> None:
+    def _record_exit(self, symbol: str, s: Dict[str, Any], exit_price: float, reason: str,
+                     spot_price: Optional[float] = None) -> None:
+        """Book the paper trade out. `exit_price` is always a FUTURES price —
+        the contract is what's held, so it is what the P&L comes off.
+
+        `spot_price` is the underlying quote that actually TRIGGERED the exit,
+        recorded alongside so a closed trade can be audited on the scale it was
+        decided on: `sl_price`/`target_price` are spot-scale levels, and without
+        this the history would show them next to a futures fill with no way to
+        tell whether the level really broke. None for a ROLL, which no level
+        triggered.
+        """
         direction   = s['direction']
         entry_price = s['entry_price']
         qty         = s['qty']
@@ -970,6 +1060,8 @@ class EmaConfluenceAlgo:
             'symbol': symbol, 'direction': 'BUY' if direction == 'Long' else 'SELL',
             'mode': 'paper', 'qty': qty, 'lot_size': s.get('lot_size'),
             'entry_price': entry_price, 'exit_price': round(exit_price, 2),
+            'spot_entry_price': s.get('spot_entry_price'),
+            'spot_exit_price': round(float(spot_price), 2) if spot_price is not None else None,
             'sl_price': s.get('sl_level'), 'target_price': s.get('target_level'),
             'pnl': round(pnl, 2), 'reason': reason,
             'signal_date': s.get('signal_date'),
@@ -981,11 +1073,15 @@ class EmaConfluenceAlgo:
         # symbol that has already been in and out.
         s['last_entry_time']  = s.get('entry_time')
         s['last_entry_price'] = entry_price
+        s['last_spot_entry_price'] = record['spot_entry_price']
+        s['last_spot_exit_price']  = record['spot_exit_price']
         s['last_exit_time']   = record['exit_time']
         s['last_exit_price']  = record['exit_price']
         s['last_exit_reason'] = reason
         s['last_pnl']         = record['pnl']
-        self.log.info(f"[PAPER] {symbol}: EXIT ({reason}) @ {exit_price}, P&L ₹{record['pnl']}")
+        spot_note = f" (spot {record['spot_exit_price']} vs level)" if spot_price is not None else ''
+        self.log.info(f"[PAPER] {symbol}: EXIT ({reason}) @ {exit_price}{spot_note}, "
+                      f"P&L ₹{record['pnl']}")
         # ROLL is excluded — _notify_roll covers it with the right wording.
         # Guarded so a notification failure can never lose the exit itself: the
         # history record and state above are already written by this point.
@@ -1005,6 +1101,7 @@ class EmaConfluenceAlgo:
         'future_expiry',
         'last_entry_time', 'last_entry_price', 'last_exit_time',
         'last_exit_price', 'last_exit_reason', 'last_pnl',
+        'last_spot_entry_price', 'last_spot_exit_price',
     )
 
     def _roll_position(self, symbol: str, s: Dict[str, Any],
@@ -1017,10 +1114,14 @@ class EmaConfluenceAlgo:
         actually is — two round trips, two sets of costs, and possibly two
         different lot sizes. What makes them read as ONE setup is that
         everything describing the setup is written in place and left alone:
-        direction, trigger_level, sl_level, target_level, target_pct and
-        signal_date all carry over untouched. In particular this must never
-        call _reset_for_next_scan, which would send the symbol back to
-        pending_scan and let tomorrow's scan arm a completely different setup.
+        direction, trigger_level, sl_level, target_level, spot_entry_price,
+        target_pct and signal_date all carry over untouched. They can, because
+        every one of them lives on the UNDERLYING's scale, and the underlying
+        does not roll — only entry_price/qty/lot_size/future_* are re-stamped,
+        and those are exactly the futures-side facts that DID change. In
+        particular this must never call _reset_for_next_scan, which would send
+        the symbol back to pending_scan and let tomorrow's scan arm a
+        completely different setup.
 
         Returns True when the roll happened.
         """
@@ -1074,10 +1175,7 @@ class EmaConfluenceAlgo:
         s['rolled_from']    = old_month
         s['rolled_at']      = s['entry_time']
         s['roll_count']     = int(s.get('roll_count', 0)) + 1
-        if _ROLL_REPRICE_TARGET:
-            pct = float(s.get('target_pct', 5.0))
-            s['target_level'] = round(entry_price * (1 + pct / 100), 2) if s['direction'] == 'Long' \
-                else round(entry_price * (1 - pct / 100), 2)
+        # target_level and spot_entry_price are deliberately NOT touched here.
 
         self.log.info(
             f"[PAPER] {symbol}: ROLLED {s['direction'].upper()} {old_month} -> {s['future_month']} "
@@ -1103,13 +1201,12 @@ class EmaConfluenceAlgo:
         starting early).
 
         Outside the session a quote request still returns a price — the LAST
-        traded one — which is indistinguishable from a live tick here. That is
-        not a theoretical risk for this algo: trigger/SL levels are computed on
-        the equity/index scale but compared against the FUTURE's LTP (see the
-        module docstring), and the futures basis alone can leave yesterday's
-        close already beyond a trigger the morning scan has just armed. Without
+        traded one — which is indistinguishable from a live tick here. Without
         this gate the 08:30 tick would fire a paper entry at a price that never
-        traded today — and exit an open position on the same stale quote.
+        traded today, and exit an open position on the same stale quote: the
+        morning scan arms its trigger off yesterday's CLOSED candle, so any
+        setup that closed beyond its own trigger would "break out" the instant
+        the thread came up, hours before the market opened.
 
         Holidays are the same hazard: the scheduler's start job is only
         weekday-gated, so on a mid-week holiday the thread comes up and every
@@ -1123,6 +1220,29 @@ class EmaConfluenceAlgo:
             return False
         now_mins = now.hour * 60 + now.minute
         return _MARKET_OPEN_MIN <= now_mins < _HARD_STOP_MIN
+
+    def _decision_price(self, symbol: str, s: Dict[str, Any],
+                        ltps: Dict[str, float]) -> Optional[float]:
+        """The UNDERLYING's live price — the only thing a trigger, an SL or a
+        Target is ever compared against.
+
+        Returns None when the underlying didn't quote on this tick, and the
+        caller then does nothing at all for that symbol. It must NEVER fall back
+        to the future's LTP: that substitution IS the bug this split exists to
+        remove, and on a strategy that holds for weeks a skipped 15s tick costs
+        nothing while a silent ~0.5% basis error costs a fifth of a 3% target.
+        """
+        spot = ltps.get(f'{symbol}@spot')
+        if spot is not None:
+            s.pop('spot_gap_on', None)
+            return float(spot)
+        # Once per day, not once per 15s poll.
+        today_str = date.today().isoformat()
+        if s.get('spot_gap_on') != today_str:
+            s['spot_gap_on'] = today_str
+            self.log.warning(f"{symbol}: no underlying quote — trigger/SL/Target left "
+                             f"unevaluated (never judged on the future's price)")
+        return None
 
     def _tick(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
               algo_active: bool, lots: int, now: Optional[datetime] = None) -> None:
@@ -1157,21 +1277,35 @@ class EmaConfluenceAlgo:
             token = self._ensure_future_token(provider, is_fyers, symbol, s, now)
             if token:
                 tokens[symbol] = token
-        # A position due to roll needs BOTH contracts priced on the same tick —
-        # one to book the near leg out, one to open the far leg. The synthetic
-        # key keeps it a single batched ltp() call ('@' can't occur in an NSE
-        # root), so the roll costs no extra request against the 8 req/s budget.
+        # Two prices per symbol, on the same tick and in the same request:
+        #   {symbol}       — the FUTURE the paper order sits on (the money)
+        #   {symbol}@spot  — the UNDERLYING every level is judged on (the logic)
+        # A position due to roll adds a third, the far contract, so the near leg
+        # can be booked and the far one opened without a second round trip.
+        # The synthetic suffixes keep this ONE batched ltp() call ('@' can't
+        # occur in an NSE root), so neither the spot quote nor the roll costs an
+        # extra request against the app-wide 8 req/s budget.
         quote_map = dict(tokens)
+        for symbol in {**watching, **inpos}:
+            spot_token = self._underlying_token(symbol, is_fyers)
+            if spot_token:
+                quote_map[f'{symbol}@spot'] = spot_token
         for symbol, s in inpos.items():
             if s.get('roll_to_token'):
                 quote_map[f'{symbol}@roll'] = s['roll_to_token']
 
-        ltps = self._get_future_ltp_batch(provider, quote_map)
+        ltps = self._get_ltp_batch(provider, quote_map)
 
         # Mark every armed/open symbol to market before acting on it, so the
         # status page can show the future's current value and — for an open
         # paper position — its running P&L, exactly like a live trade would.
+        # `spot_ltp` rides along so the page can show how far the underlying is
+        # from a trigger/SL/Target that is quoted on the underlying's scale;
+        # reading distance-to-trigger off the future's value was misleading.
         for symbol, s in {**watching, **inpos}.items():
+            spot = ltps.get(f'{symbol}@spot')
+            if spot is not None:
+                s['spot_ltp'] = round(float(spot), 2)
             ltp = ltps.get(symbol)
             if ltp is None:
                 continue
@@ -1182,41 +1316,64 @@ class EmaConfluenceAlgo:
                 s['unrealized_pnl'] = round(move * s['qty'], 2)
 
         for symbol, s in watching.items():
-            ltp = ltps.get(symbol)
-            if ltp is None:
+            spot = self._decision_price(symbol, s, ltps)
+            if spot is None:
                 continue
             direction = s['direction']
             trigger = s['trigger_level']
-            crossed = (direction == 'Long' and ltp >= trigger) or (direction == 'Short' and ltp <= trigger)
+            crossed = (direction == 'Long' and spot >= trigger) or (direction == 'Short' and spot <= trigger)
             if not crossed:
                 continue
+            fut_ltp = ltps.get(symbol)
+            if fut_ltp is None:
+                # The level broke on the underlying, but the contract we would
+                # fill on has no price this tick. Booking the fill at a stale
+                # mark would invent a trade at a price that never traded, so
+                # leave the trigger armed — the next tick, 15s later, retries.
+                self.log.warning(f"{symbol}: {direction.upper()} trigger hit at spot {spot} but "
+                                 f"{s.get('future_token')} did not quote — entry deferred a tick")
+                continue
             if algo_active:
-                self._fire_paper_entry(symbol, s, ltp, lots)
+                self._fire_paper_entry(symbol, s, spot, fut_ltp, lots)
             else:
-                self.log.info(f"{symbol}: {direction.upper()} trigger hit @ {ltp} — "
+                self.log.info(f"{symbol}: {direction.upper()} trigger hit @ spot {spot} — "
                                f"no paper entry (EMA_CONFLUENCE_ACTIVE off)")
                 self._reset_for_next_scan(s)
 
         for symbol, s in inpos.items():
-            ltp = ltps.get(symbol)
-            if ltp is None:
+            spot = self._decision_price(symbol, s, ltps)
+            if spot is None:
                 continue
             direction = s['direction']
             sl, tgt = s['sl_level'], s['target_level']
-            exit_reason = exit_price = None
+            exit_reason = None
             if direction == 'Long':
-                if ltp <= sl:
-                    exit_reason, exit_price = 'SL', sl
-                elif ltp >= tgt:
-                    exit_reason, exit_price = 'TARGET', tgt
+                if spot <= sl:
+                    exit_reason = 'SL'
+                elif spot >= tgt:
+                    exit_reason = 'TARGET'
             else:
-                if ltp >= sl:
-                    exit_reason, exit_price = 'SL', sl
-                elif ltp <= tgt:
-                    exit_reason, exit_price = 'TARGET', tgt
-            if exit_reason is not None:
-                self._record_exit(symbol, s, exit_price, exit_reason)
-                self._reset_for_next_scan(s)
+                if spot >= sl:
+                    exit_reason = 'SL'
+                elif spot <= tgt:
+                    exit_reason = 'TARGET'
+            if exit_reason is None:
+                continue
+            # DECIDED on the underlying, BOOKED on the contract. The old code
+            # booked at the SL/Target level itself, which only worked while the
+            # levels were being (wrongly) compared to futures prices; a spot
+            # level is not a price this contract can fill at. So the fill is the
+            # future's own quote at the moment the level broke.
+            # Unlike an entry, a missing quote cannot defer this — the strategy
+            # has said the trade is over — so fall back to the last known mark
+            # rather than carry a position whose exit has already triggered.
+            exit_price = ltps.get(symbol, s.get('ltp'))
+            if exit_price is None:
+                self.log.warning(f"{symbol}: {exit_reason} hit at spot {spot} but the contract has "
+                                 f"neither a quote nor a last mark — exit deferred a tick")
+                continue
+            self._record_exit(symbol, s, float(exit_price), exit_reason, spot_price=spot)
+            self._reset_for_next_scan(s)
 
         # Roll LAST. If SL or Target hit on the near leg this same tick, that
         # is the strategy's own exit and it wins — the trade is over and there

@@ -162,6 +162,12 @@ function _emacRenderStocks() {
             entry_time_disp:  s.entry_time || (showLast ? s.last_entry_time : null),
             exit_time_disp:   open ? null : (showLast ? s.last_exit_time : null),
             entry_price_disp: s.entry_price ?? (showLast ? s.last_entry_price : null),
+            // The underlying's price at the fill. Shown as the Entry cell's
+            // tooltip: Trigger/SL/Target are quoted on this scale, so without
+            // it the Entry column looks like it missed its own trigger by the
+            // basis (~0.5%) on every single row.
+            spot_entry_disp: s.spot_entry_price ?? (showLast ? s.last_spot_entry_price : null),
+            spot_now_disp: s.spot_ltp ?? (showLast ? s.last_spot_exit_price : null),
             // Live mark while the future is being tracked; on a finished row,
             // the price the trade was closed at — so entry, value and P&L
             // there still reconcile with each other.
@@ -216,9 +222,19 @@ function _emacRenderStocks() {
                   : (r.future_expiry ? `expires ${r.future_expiry}` : undefined) },
             { key: 'trigger_level', label: 'Trigger', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'sl_level', label: 'SL', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
-            { key: 'entry_price_disp', label: 'Entry', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'target_level', label: 'Target', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
-            { key: 'value_disp', label: 'Current Value', align: 'right',
+            // Trigger / SL / Target / Spot are one block, all on the UNDERLYING's
+            // price scale — that is what the algo compares. Entry and Value are
+            // the FUTURE, because that is what the paper order is held in and
+            // what the P&L comes off. Labelled so the two are never read as one
+            // series: they differ by the basis, ~0.5% on a typical name here.
+            { key: 'spot_now_disp', label: 'Spot', align: 'right',
+              format: v => v == null ? '—' : '₹' + Number(v).toFixed(2),
+              title: () => 'the underlying — Trigger, SL and Target are all judged on this price' },
+            { key: 'entry_price_disp', label: 'Entry (Fut)', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2),
+              title: (_, r) => r.spot_entry_disp == null ? undefined
+                  : `filled on the future; the underlying was ₹${Number(r.spot_entry_disp).toFixed(2)}, and the Target is ${r.target_pct ?? '—'}% of that` },
+            { key: 'value_disp', label: 'Value (Fut)', align: 'right',
               format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'live_pnl', label: 'Current P&L', align: 'right', strong: true,
               format: v => v == null ? '—' : DataGrid.inr(v), tone: DataGrid.sign },
@@ -838,7 +854,7 @@ function emacShowLogic() {
                 <div class="rtp-duo-row">Fills whenever the future's LTP trades &le; that Low, any day after</div>
             </div>
         </div>
-        <div class="rtp-mode-note">The daily scan runs once each morning off the most recently <b>completed</b> daily candle (index/equity — futures don't carry enough history for a 200-day EMA). The armed trigger/SL stay on the equity/index price scale and are compared directly against the future's live LTP — a known approximation, same spirit as other approximations already used across this app.</div>
+        <div class="rtp-mode-note">The daily scan runs once each morning off the most recently <b>completed</b> daily candle (index/equity — futures don't carry enough history for a 200-day EMA). Every decision is then judged on that same <b>underlying</b>: the trigger cross that opens the trade, and the SL and Target that close it. The <b>future</b> is only what the order is held in — it sets the contract, the lot size, the fill price and the P&amp;L. That is why each row shows both a Spot and an Entry&nbsp;(Fut) price; they differ by the basis, around 0.5% on a typical name here.</div>
 
         <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
         <div class="rtp-chips">

@@ -21,6 +21,9 @@ AUG = {'symbol': 'NSE:NHPC26AUGFUT', 'expiry': date(2026, 8, 25), 'lot_size': 54
 SEP = {'symbol': 'NSE:NHPC26SEPFUT', 'expiry': date(2026, 9, 29), 'lot_size': 5400}
 OCT = {'symbol': 'NSE:NHPC26OCTFUT', 'expiry': date(2026, 10, 27), 'lot_size': 6000}
 CHAIN = [AUG, SEP, OCT]
+# The UNDERLYING. Every trigger/SL/Target decision is judged on this, never on a
+# contract above — so it has to be quoted on any tick that is expected to act.
+SPOT = 'NSE:NHPC-EQ'
 
 
 # ── the pure rule ────────────────────────────────────────────────────────
@@ -114,7 +117,8 @@ def _open_position(**over):
         'phase': 'in_position', 'direction': 'Long',
         'trigger_level': 77.0, 'sl_level': 71.5, 'target_level': 84.5,
         'target_pct': 5.0, 'signal_date': '2026-08-05',
-        'entry_price': 77.5, 'entry_time': '2026-08-06T10:15:00', 'qty': 5400,
+        'entry_price': 77.5, 'spot_entry_price': 77.0,
+        'entry_time': '2026-08-06T10:15:00', 'qty': 5400,
         'ltp': 79.0, 'future_token': AUG['symbol'], 'future_month': 'AUG 2026',
         'future_expiry': '2026-08-25', 'lot_size': 5400,
     }
@@ -140,7 +144,7 @@ BEFORE   = datetime(2026, 8, 20, 11, 59)
 
 def test_open_position_rolls_to_the_next_month(algo):
     s = _open_position()
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
 
     hist = _history(algo)
@@ -162,23 +166,26 @@ def test_open_position_rolls_to_the_next_month(algo):
 def test_the_rolled_leg_keeps_the_setup_it_was_armed_with(algo):
     s = _open_position()
     before = {k: s[k] for k in
-              ('direction', 'sl_level', 'target_level', 'target_pct', 'signal_date', 'trigger_level')}
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+              ('direction', 'sl_level', 'target_level', 'target_pct', 'signal_date',
+               'trigger_level', 'spot_entry_price')}
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
     assert {k: s[k] for k in before} == before
 
 
-def test_both_legs_are_priced_in_one_batched_quote_call(algo):
+def test_both_legs_and_the_underlying_are_priced_in_one_batched_quote_call(algo):
+    """Three instruments, one request — the app-wide budget is 8 req/s and this
+    algo sweeps ~145 symbols, so the spot quote must not cost a round trip."""
     s = _open_position()
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
     assert len(provider.ltp_calls) == 1
-    assert set(provider.ltp_calls[0]) == {AUG['symbol'], SEP['symbol']}
+    assert set(provider.ltp_calls[0]) == {AUG['symbol'], SEP['symbol'], SPOT}
 
 
 def test_no_far_month_price_means_no_roll_and_no_flat_position(algo):
     s = _open_position()
-    provider = FakeProvider(prices={AUG['symbol']: 80.0})      # far month missing
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SPOT: 79.6})   # far month missing
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
 
     assert _history(algo) == []
@@ -190,19 +197,22 @@ def test_no_far_month_price_means_no_roll_and_no_flat_position(algo):
 
 def test_nothing_happens_before_the_roll_moment(algo):
     s = _open_position()
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, BEFORE)
 
     assert _history(algo) == []
     assert s['future_token'] == AUG['symbol']
     assert 'roll_to_token' not in s
-    assert provider.ltp_calls == [[AUG['symbol']]]             # far leg not quoted
+    # The held contract and its underlying, and nothing else — the far leg is
+    # not quoted until there is actually a roll to price.
+    assert set(provider.ltp_calls[0]) == {AUG['symbol'], SPOT}
+    assert len(provider.ltp_calls) == 1
 
 
 def test_a_position_already_on_the_far_month_is_left_alone(algo):
     s = _open_position(future_token=SEP['symbol'], future_month='SEP 2026',
                        future_expiry='2026-09-29')
-    provider = FakeProvider(prices={SEP['symbol']: 80.9, OCT['symbol']: 81.5})
+    provider = FakeProvider(prices={SEP['symbol']: 80.9, OCT['symbol']: 81.5, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
 
     assert _history(algo) == []
@@ -214,11 +224,15 @@ def test_strategy_exit_wins_over_a_roll_on_the_same_tick(algo):
     """SL hit on the near leg at the roll moment: the trade is over, so it is
     booked as SL and NOT carried into the next month."""
     s = _open_position()
-    provider = FakeProvider(prices={AUG['symbol']: 70.0, SEP['symbol']: 70.9})
+    # The SPOT is what breaks the 71.5 SL. The future is quoted below it too,
+    # but that is not what decides — see test_an_sl_is_judged_on_spot_alone.
+    provider = FakeProvider(prices={AUG['symbol']: 70.0, SEP['symbol']: 70.9, SPOT: 69.8})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
 
     hist = _history(algo)
     assert [h['reason'] for h in hist] == ['SL']
+    assert hist[0]['exit_price'] == 70.0        # booked on the CONTRACT it is held in
+    assert hist[0]['spot_exit_price'] == 69.8   # decided on the UNDERLYING
     assert s['phase'] == 'pending_scan'
 
 
@@ -227,7 +241,7 @@ def test_watching_symbol_switches_contract_without_a_trade(algo):
          'sl_level': 71.5, 'target_pct': 5.0, 'signal_date': '2026-08-05',
          'future_token': AUG['symbol'], 'future_month': 'AUG 2026',
          'future_expiry': '2026-08-25', 'lot_size': 5400}
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
 
     assert _history(algo) == []
@@ -241,7 +255,7 @@ def test_position_with_no_stored_expiry_is_backfilled_then_rolled(algo):
     must not stay pinned forever."""
     s = _open_position()
     s.pop('future_expiry')
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, BEFORE)
     assert s['future_expiry'] == '2026-08-25'                  # backfilled, not rolled
     assert s['future_token'] == AUG['symbol']
@@ -256,7 +270,7 @@ def test_delisted_contract_is_booked_out_at_its_last_mark(algo):
     s = _open_position(future_token='NSE:NHPC26JULFUT', future_month='JUL 2026',
                        ltp=79.25)
     s.pop('future_expiry')
-    provider = FakeProvider(prices={SEP['symbol']: 80.9})       # only the far leg quotes
+    provider = FakeProvider(prices={SEP['symbol']: 80.9, SPOT: 79.6})  # near leg gone
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, ROLL_NOW)
 
     hist = _history(algo)
@@ -268,7 +282,7 @@ def test_delisted_contract_is_booked_out_at_its_last_mark(algo):
 
 def test_holiday_tick_does_nothing_at_all(algo):
     s = _open_position()
-    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
+    provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9, SPOT: 79.6})
     # 2026-09-14 is Ganesh Chaturthi — a Monday the market is shut.
     algo._tick(provider, True, _state({'NHPC': s}), True, 1, datetime(2026, 9, 14, 12, 0))
 
