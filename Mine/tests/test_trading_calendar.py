@@ -16,8 +16,15 @@ _JS_PATH = os.path.join(os.path.dirname(__file__), '..', 'static', 'js', 'common
 
 
 def test_listed_holiday_is_not_a_trading_day():
-    assert tc.is_holiday(date(2026, 8, 28))            # Ganesh Chaturthi, a Friday
-    assert not tc.is_trading_day(date(2026, 8, 28))
+    assert tc.is_holiday(date(2026, 9, 14))            # Ganesh Chaturthi, a Monday
+    assert not tc.is_trading_day(date(2026, 9, 14))
+
+
+def test_a_weekday_the_nse_actually_trades_is_not_a_holiday():
+    # Regression: this Friday was wrongly listed as Ganesh Chaturthi (that
+    # festival is 2026-09-14), which froze EMA Confluence for a whole session.
+    assert not tc.is_holiday(date(2026, 8, 28))
+    assert tc.is_trading_day(date(2026, 8, 28))
 
 
 def test_weekend_is_not_a_trading_day_but_is_not_a_holiday():
@@ -29,14 +36,16 @@ def test_ordinary_weekday_is_a_trading_day():
     assert tc.is_trading_day(date(2026, 8, 25))        # Tuesday, AUG 2026 expiry
 
 
-def test_next_trading_day_skips_the_diwali_cluster():
-    # 2026-11-11 (Wed) and -12 (Thu) are holidays, -13 is a normal Friday.
-    assert tc.next_trading_day(date(2026, 11, 10)) == date(2026, 11, 13)
+def test_next_trading_day_skips_a_holiday_and_the_weekend_behind_it():
+    # 2026-04-03 is Good Friday, then Sat/Sun — the next session is Mon the 6th.
+    assert tc.next_trading_day(date(2026, 4, 2)) == date(2026, 4, 6)
 
 
 def test_next_trading_day_inclusive_keeps_a_session_but_moves_a_holiday():
-    assert tc.next_trading_day_inclusive(date(2026, 11, 13)) == date(2026, 11, 13)
-    # -14 is both a Saturday and a listed holiday; the next session is Monday.
+    assert tc.next_trading_day_inclusive(date(2026, 11, 9)) == date(2026, 11, 9)
+    # -10 is Diwali Balipratipada; the next session is Wed the 11th.
+    assert tc.next_trading_day_inclusive(date(2026, 11, 10)) == date(2026, 11, 11)
+    # -14 is a Saturday; the next session is Monday.
     assert tc.next_trading_day_inclusive(date(2026, 11, 14)) == date(2026, 11, 16)
 
 
@@ -47,9 +56,9 @@ def test_trading_days_before_the_aug_2026_expiry():
 
 
 def test_trading_days_before_skips_a_holiday_not_just_weekends():
-    # From Mon 31 Aug 2026: Thu 27 (Fri 28 is Ganesh Chaturthi), Wed 26, Tue 25.
-    # A weekend-only rule would have answered Wed 26.
-    assert tc.trading_days_before(date(2026, 8, 31), 3) == date(2026, 8, 25)
+    # From Mon 6 Apr 2026: Thu 2 (Fri 3 is Good Friday), Wed 1, Mon 30 Mar
+    # (Tue 31 is Mahavir Jayanti). A weekend-only rule would have answered Wed 1.
+    assert tc.trading_days_before(date(2026, 4, 6), 3) == date(2026, 3, 30)
 
 
 def test_unknown_year_fails_open_and_warns_once(caplog):

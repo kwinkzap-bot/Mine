@@ -30,9 +30,9 @@ def test_roll_moment_is_noon_three_sessions_before_expiry():
 
 
 def test_roll_moment_counts_sessions_not_calendar_days():
-    # Aug 31 expiry: Thu 27 (Fri 28 is Ganesh Chaturthi), Wed 26, Tue 25.
-    # Calendar-day counting would have said Fri 28 — a day the market is shut.
-    assert roll_due_at(date(2026, 8, 31)) == datetime(2026, 8, 25, 12, 0)
+    # Apr 8 expiry: Tue 7, Mon 6, then Thu 2 (Fri 3 is Good Friday, then the
+    # weekend). Calendar-day counting would have said Sun 5 — not a session.
+    assert roll_due_at(date(2026, 4, 8)) == datetime(2026, 4, 2, 12, 0)
 
 
 def test_roll_moment_never_lands_after_expiry():
@@ -269,8 +269,8 @@ def test_delisted_contract_is_booked_out_at_its_last_mark(algo):
 def test_holiday_tick_does_nothing_at_all(algo):
     s = _open_position()
     provider = FakeProvider(prices={AUG['symbol']: 80.0, SEP['symbol']: 80.9})
-    # 2026-08-28 is Ganesh Chaturthi — a Friday the market is shut.
-    algo._tick(provider, True, _state({'NHPC': s}), True, 1, datetime(2026, 8, 28, 12, 0))
+    # 2026-09-14 is Ganesh Chaturthi — a Monday the market is shut.
+    algo._tick(provider, True, _state({'NHPC': s}), True, 1, datetime(2026, 9, 14, 12, 0))
 
     assert _history(algo) == []
     assert provider.ltp_calls == []
