@@ -6565,6 +6565,101 @@ def exit_all_orders() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def dispatch_stop_to_brokers(symbol, strike, option_type, trigger_price, action,
+                             username, session_data, standard_lot,
+                             gate, lots_for, log_tag='place-sl'):
+    """Place one SL-M leg at every broker ``gate`` admits, and report each.
+
+    Shared by the OI Profile stop buttons and the Order Placement pad so both
+    reach a broker through one tested path; what differs between them is only
+    which accounts are in scope and how each is sized, which is what ``gate``
+    and ``lots_for`` carry:
+
+        gate(instance, broker_type) -> bool     # this panel's per-broker flag
+        lots_for(instance) -> int               # lots for that account
+
+    ``standard_lot`` is the exchange lot for the symbol, resolved by the caller
+    so a failure to resolve it refuses the order before any broker is touched —
+    a guessed quantity on a stop is worse than no stop at all.
+
+    Returns the per-broker result list. It never raises for one broker's sake:
+    a leg that fails is a row saying so, so a stop that landed at two accounts
+    out of three is visible as exactly that.
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    from trading_app.service.kite_order_services import KiteService
+
+    results = []
+
+    for i in range(1, 21):
+        b_type = UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower()
+        if not b_type or not is_broker_active(username, i):
+            continue
+
+        # The stop must land on exactly the accounts the entry landed on,
+        # so the caller supplies the same gate its entries route on. Without
+        # one, a stop sprays to every active broker: an SL-M SELL on an
+        # account holding no position opens a naked short the moment it
+        # triggers, and a stop entry buys into accounts that never opted in
+        # to that panel at all.
+        if not gate(i, b_type):
+            logger.info(f'[{log_tag}] Skipping broker {i} ({b_type}): not enabled for this panel')
+            continue
+
+        if b_type in ('kite', 'zerodha'):
+            kite = get_kite(instance=i)
+            if not kite:
+                results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': 'Kite init failed'})
+                continue
+            try:
+                svc = KiteService(kite_instance=kite)
+                lot_qty = lots_for(i) * standard_lot
+                tradingsymbol = svc.get_option_symbol(symbol, strike, option_type)
+                if not tradingsymbol:
+                    results.append({'broker': 'zerodha', 'instance': i, 'success': False,
+                                    'error': f'Could not resolve tradingsymbol for {symbol} {strike} {option_type}'})
+                    continue
+                r = svc.place_stoploss_order(tradingsymbol=tradingsymbol,
+                                              trigger_price=trigger_price,
+                                              quantity=lot_qty,
+                                              transaction_type=action)
+                results.append({'broker': 'zerodha', 'instance': i, 'quantity': lot_qty, **r})
+            except Exception as e:
+                logger.error(f'[{log_tag}] zerodha_{i} error: {e}')
+                results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': str(e)})
+
+        elif b_type == 'fyers':
+            try:
+                from trading_app.service.fyers_order_services import FyersOrderService
+                fyers_at = session_data.get(f'fyers_{i}_access_token') or \
+                           UserEnvManager.get_user_var(username, f'BROKER_{i}_ACCESS_TOKEN')
+                fyers_id = UserEnvManager.get_user_var(username, f'BROKER_{i}_APP_ID')
+                if not fyers_at:
+                    results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'No access token'})
+                    continue
+                fyers_svc = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
+                lot_qty = lots_for(i) * standard_lot
+                fyers_sym = fyers_svc.get_option_symbol(symbol, strike, option_type) if hasattr(fyers_svc, 'get_option_symbol') else None
+                if not fyers_sym:
+                    results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'Symbol resolution failed'})
+                    continue
+                r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
+                                                    quantity=lot_qty, transaction_type=action)
+                results.append({'broker': 'fyers', 'instance': i, 'quantity': lot_qty, **r})
+            except Exception as e:
+                logger.error(f'[{log_tag}] fyers_{i} error: {e}')
+                results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': str(e)})
+
+        else:
+            # No SL-M branch exists for this broker type. Skipping it
+            # quietly would read as "protected everywhere" on a screen that
+            # only lists what it heard back, so it is reported as the
+            # failure it is.
+            results.append({'broker': b_type, 'instance': i, 'success': False,
+                            'error': f'Stop orders are not supported for {b_type} yet'})
+    return results
+
+
 @api_bp.route('/order/place-sl', methods=['POST'])
 def place_sl_order() -> EndpointResponse:
     """Place an SL-Market order for a single option leg across all active brokers.
@@ -6598,7 +6693,6 @@ def place_sl_order() -> EndpointResponse:
             return jsonify({'success': False, 'error': f'Invalid action {action!r}: need BUY or SELL'}), 400
 
         from trading_app.app.utils.user_env import UserEnvManager
-        from trading_app.service.kite_order_services import KiteService
 
         # A guessed quantity is worse than no order at all, in either
         # direction: on a SELL stop too small leaves the position part-naked and
@@ -6610,68 +6704,16 @@ def place_sl_order() -> EndpointResponse:
                             'error': f'Could not resolve lot size for {symbol} — broker instrument list unavailable. '
                                      f'Reconnect the data provider and retry.'}), 400
 
-        results = []
-
-        for i in range(1, 21):
-            b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
-            if not b_type or not is_broker_active(_username, i):
-                continue
-
-            # The stop must land on exactly the accounts the entry landed on.
-            # The entry comes from this same panel as strategy='intrinsic',
-            # which _dispatch_order_to_brokers gates on BROKER_N_INTRINSIC_ACTIVE
-            # — so gate identically. Without this the stop sprays to every active
-            # broker: an SL-M SELL on an account holding no position opens a
-            # naked short the moment it triggers, and a stop entry buys into
-            # accounts that never opted in to this panel at all.
-            if UserEnvManager.get_user_var(_username, f'BROKER_{i}_INTRINSIC_ACTIVE', 'false').strip().lower() \
-                    not in ('true', '1', 'yes'):
-                logger.info(f'[place-sl] Skipping broker {i} ({b_type}): INTRINSIC_ACTIVE not enabled')
-                continue
-
-            if b_type in ('kite', 'zerodha'):
-                kite = get_kite(instance=i)
-                if not kite:
-                    results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': 'Kite init failed'})
-                    continue
-                try:
-                    svc = KiteService(kite_instance=kite)
-                    lot_qty = intrinsic_order_lots(_username, i, symbol) * standard_lot
-                    tradingsymbol = svc.get_option_symbol(symbol, strike, option_type)
-                    if not tradingsymbol:
-                        results.append({'broker': 'zerodha', 'instance': i, 'success': False,
-                                        'error': f'Could not resolve tradingsymbol for {symbol} {strike} {option_type}'})
-                        continue
-                    r = svc.place_stoploss_order(tradingsymbol=tradingsymbol,
-                                                  trigger_price=trigger_price,
-                                                  quantity=lot_qty,
-                                                  transaction_type=action)
-                    results.append({'broker': 'zerodha', 'instance': i, 'quantity': lot_qty, **r})
-                except Exception as e:
-                    logger.error(f'[place-sl] zerodha_{i} error: {e}')
-                    results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': str(e)})
-
-            elif b_type == 'fyers':
-                try:
-                    from trading_app.service.fyers_order_services import FyersOrderService
-                    fyers_at = session.get(f'fyers_{i}_access_token') or \
-                               UserEnvManager.get_user_var(_username, f'BROKER_{i}_ACCESS_TOKEN')
-                    fyers_id = UserEnvManager.get_user_var(_username, f'BROKER_{i}_APP_ID')
-                    if not fyers_at:
-                        results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'No access token'})
-                        continue
-                    fyers_svc = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
-                    lot_qty = intrinsic_order_lots(_username, i, symbol) * standard_lot
-                    fyers_sym = fyers_svc.get_option_symbol(symbol, strike, option_type) if hasattr(fyers_svc, 'get_option_symbol') else None
-                    if not fyers_sym:
-                        results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'Symbol resolution failed'})
-                        continue
-                    r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
-                                                        quantity=lot_qty, transaction_type=action)
-                    results.append({'broker': 'fyers', 'instance': i, 'quantity': lot_qty, **r})
-                except Exception as e:
-                    logger.error(f'[place-sl] fyers_{i} error: {e}')
-                    results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': str(e)})
+        results = dispatch_stop_to_brokers(
+            symbol=symbol, strike=strike, option_type=option_type,
+            trigger_price=trigger_price, action=action,
+            username=_username, session_data=dict(session),
+            standard_lot=standard_lot,
+            gate=lambda i, b_type: UserEnvManager.get_user_var(
+                _username, f'BROKER_{i}_INTRINSIC_ACTIVE', 'false').strip().lower()
+                in ('true', '1', 'yes'),
+            lots_for=lambda i: intrinsic_order_lots(_username, i, symbol),
+        )
 
         if not results:
             return jsonify({'success': False, 'error': 'No active brokers found'}), 400
@@ -7471,10 +7513,12 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     ).strip().lower() in ('true', '1', 'yes')
 
     # The automatic stop below is a flat "entry - 20", which only makes sense
-    # for the index premiums the algos trade. Hand-fired orders — OI Profile
-    # and the OI Crossover grid — opt out: 20 rupees under a stock option
-    # trading at 30 is either an instant exit or a rejected trigger price.
-    _auto_sl = strategy not in ('intrinsic', 'oix')
+    # for the index premiums the algos trade. Hand-fired orders — OI Profile,
+    # the OI Crossover grid and the Order Placement pad — opt out: 20 rupees
+    # under a stock option trading at 30 is either an instant exit or a
+    # rejected trigger price. 'op' is placement only by design: that page
+    # attaches nothing to an order and starts no monitor over it.
+    _auto_sl = strategy not in ('intrinsic', 'oix', 'op')
 
     # A manual SELL closes the position — kill any running auto-exit monitors for this
     # strike so an orphaned monitor can't fire another SELL later.
@@ -7506,6 +7550,16 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): OIX_ACTIVE not enabled")
                 continue
 
+        # The Order Placement pad (/orderplacement) is the same story again,
+        # under its own flag: BROKER_N_OP_ACTIVE opts one account in to that
+        # page and to nothing else, and opting in there never follows from
+        # having opted in to OI Profile or to the scanner.
+        if strategy == 'op':
+            raw_active = UserEnvManager.get_user_var(username, f'BROKER_{i}_OP_ACTIVE', 'false').strip().lower()
+            if raw_active not in ('true', '1', 'yes'):
+                logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): OP_ACTIVE not enabled")
+                continue
+
         if b_type == 'zerodha':
             targets.append({'type': f'zerodha_{i}', 'instance': i})
         elif b_type in ['kotak', 'kotak_neo']:
@@ -7522,6 +7576,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             return {'success': False, 'error': 'No Intrinsic-enabled broker found. Set BROKER_N_INTRINSIC_ACTIVE=true in .env'}
         elif strategy == 'oix':
             return {'success': False, 'error': 'No OI-Crossover-enabled broker found. Set BROKER_N_OIX_ACTIVE=true in .env'}
+        elif strategy == 'op':
+            return {'success': False, 'error': 'No broker is enabled for the Order Placement page. Set BROKER_N_OP_ACTIVE=true in .env'}
         else:
             return {'success': False, 'error': 'No active broker found. Set BROKER_N_ACTIVE=true in .env'}
 
@@ -7548,12 +7604,20 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[OIX] Skipping broker {_active_instance} ({broker}) because BROKER_N_OIX_ACTIVE is FALSE")
                 return {'success': False, 'error': f'OI Crossover orders for {broker} are DISABLED in config'}, 403
 
+        if strategy == 'op':
+            op_active = UserEnvManager.get_user_var(username, f'BROKER_{_active_instance}_OP_ACTIVE', 'false').lower().strip() in ('true', '1', 'yes')
+            if not op_active:
+                logger.info(f"[OP] Skipping broker {_active_instance} ({broker}) because BROKER_N_OP_ACTIVE is FALSE")
+                return {'success': False, 'error': f'Order Placement orders for {broker} are DISABLED in config'}, 403
+
         order_lots = quantity
 
-        if strategy == 'oix' and not order_lots:
+        if strategy in ('oix', 'op') and not order_lots:
             # Same precedence the intrinsic path uses: per-broker size first,
-            # then one app-wide default.
-            for var in (f'BROKER_{_active_instance}_OIX_LOTS', 'OIX_ORDER_LOTS'):
+            # then one app-wide default. Both hand-fired panels read their own
+            # pair of variables — OIX_* and OP_* — from the strategy key.
+            _pfx = strategy.upper()
+            for var in (f'BROKER_{_active_instance}_{_pfx}_LOTS', f'{_pfx}_ORDER_LOTS'):
                 raw = UserEnvManager.get_user_var(username, var)
                 if raw:
                     try:

@@ -1,0 +1,762 @@
+/* ================================================================
+   Order Placement (/orderplacement).
+
+   Every colour resolves through the shared --color-* tokens in
+   theme.css, so the page follows the theme switcher without a
+   per-theme block of its own.
+
+   The layout is two cards — the pad and this page's own order book —
+   side by side where there is room and stacked where there is not.
+   The book is never behind a dialog or a scroll: an order placed here
+   has to stay in sight until it fills.
+   ================================================================ */
+
+.op-page {
+    padding-bottom: 24px;
+}
+
+/* ── topbar ───────────────────────────────────────────────────── */
+
+.op-topbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 0 14px;
+}
+
+.op-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--color-text);
+}
+
+/* ── the ⓘ beside the title ───────────────────────────────────── */
+
+.op-info-wrap {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+}
+
+.op-info {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 12px;
+    font-style: italic;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text-3);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 50%;
+    cursor: help;
+}
+.op-info:hover,
+.op-info[aria-expanded="true"] {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+/* Hidden by visibility rather than display: it stays in the accessibility
+   tree as the button's described-by target, and it can fade. */
+.op-tip {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: -6px;
+    z-index: 40;
+    /* Never wider than the screen it is read on — this text is four lines on
+       a phone and one paragraph on a desktop. */
+    width: max-content;
+    max-width: min(340px, calc(100vw - 28px));
+    padding: 9px 11px;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.55;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--color-text-2);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-card);
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity .12s ease;
+}
+/* Hover and keyboard focus on a desktop; the is-open class is the tap path,
+   because a phone has no hover to leave. */
+.op-info-wrap:hover .op-tip,
+.op-info:focus-visible + .op-tip,
+.op-info-wrap.is-open .op-tip {
+    visibility: visible;
+    opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+    .op-tip { transition: none; }
+}
+
+/* The broker list takes the free space so Refresh and the dot stay at
+   the right edge whatever it holds — including nothing. */
+.op-brokers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.op-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-2);
+    background: var(--color-accent-dim);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.op-chip em {
+    font-style: normal;
+    font-weight: 700;
+    color: var(--color-accent);
+}
+.op-chip-off {
+    color: var(--color-warning);
+    background: transparent;
+    border-color: var(--color-warning);
+    white-space: normal;
+}
+.op-chip code,
+.op-note code,
+.op-hint code {
+    font-size: 11px;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--color-border-sub);
+    color: var(--color-text-2);
+}
+
+/* Phone-only control: on a wide screen there is nothing to reclaim, and a
+   button that hides the app's nav on a desktop would only ever be pressed by
+   accident. Shown by the 600px block at the end of this file. */
+.op-chrome {
+    display: none;
+    margin-left: auto;
+    width: 30px;
+    height: 28px;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1;
+}
+
+.op-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--color-text-3);
+    flex: 0 0 auto;
+}
+.op-dot-ok  { background: var(--color-pos); }
+.op-dot-err { background: var(--color-neg); }
+
+/* ── layout ───────────────────────────────────────────────────── */
+
+.op-layout {
+    display: grid;
+    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.op-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: var(--shadow-card);
+    padding: 14px 16px 16px;
+}
+
+.op-card-hd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--color-border-sub);
+    margin-bottom: 12px;
+}
+.op-card-hd-sub {
+    margin-top: 18px;
+}
+.op-card-sub {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-2);
+    text-align: right;
+}
+.op-count {
+    min-width: 20px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-2);
+    background: var(--color-border-sub);
+    border-radius: 999px;
+    text-align: center;
+}
+
+/* ── the pad ──────────────────────────────────────────────────── */
+
+.op-field {
+    margin-bottom: 12px;
+}
+.op-field > label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .3px;
+    text-transform: uppercase;
+    color: var(--color-text-3);
+    margin-bottom: 5px;
+}
+
+.op-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.op-input {
+    flex: 1 1 120px;
+    min-width: 0;
+    padding: 7px 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    outline: none;
+}
+.op-input:focus {
+    border-color: var(--color-accent);
+}
+
+.op-meta {
+    font-size: 11px;
+    color: var(--color-text-3);
+    white-space: nowrap;
+}
+
+.op-rupee {
+    font-size: 13px;
+    color: var(--color-text-3);
+}
+
+/* The ± buttons are big enough to be a thumb target on a phone, where
+   typing a five-digit strike is the slower path. */
+.op-step {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text-2);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    cursor: pointer;
+}
+.op-step:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+.op-strike-row .op-input {
+    flex: 1 1 90px;
+    text-align: center;
+}
+
+/* Segmented controls: both halves identical in size and weight, so
+   nothing is easier to press than its opposite. */
+.op-seg {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    overflow: hidden;
+}
+.op-seg button {
+    flex: 1 1 0;
+    padding: 8px 4px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .4px;
+    color: var(--color-text-2);
+    background: var(--color-bg);
+    border: none;
+    cursor: pointer;
+}
+.op-seg button + button {
+    border-left: 1px solid var(--color-border);
+}
+.op-seg button.active {
+    color: #fff;
+    background: var(--color-accent);
+}
+.op-seg-side button[data-value="BUY"].active  { background: var(--color-pos); }
+.op-seg-side button[data-value="SELL"].active { background: var(--color-neg); }
+
+/* A stop is not a live order yet — it waits on a trigger — so the selected
+   STOP reads amber rather than in either side's colour. */
+.op-seg button[data-value="SL-M"].active { background: var(--color-warning); }
+
+/* One column by default: the pair reads exactly as two fields did. It becomes
+   two columns only where the width is worth spending on it. */
+.op-pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.op-hint,
+.op-note {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--color-text-3);
+    margin: 6px 0 0;
+}
+.op-note {
+    padding: 8px 10px;
+    background: var(--color-accent-dim);
+    border-radius: 7px;
+    margin: 14px 0 12px;
+}
+
+.op-actions {
+    display: flex;
+}
+
+.op-btn {
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-2);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.op-btn:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+.op-btn:disabled {
+    opacity: .55;
+    cursor: default;
+}
+.op-btn-ghost {
+    padding: 6px 10px;
+    font-size: 11px;
+}
+.op-btn-sm {
+    margin-left: auto;
+    padding: 4px 9px;
+    font-size: 11px;
+}
+.op-btn-primary {
+    flex: 1 1 auto;
+    padding: 11px;
+    font-size: 14px;
+    color: #fff;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+}
+.op-btn-primary:hover:not(:disabled) {
+    color: #fff;
+    filter: brightness(1.08);
+}
+.op-btn-danger {
+    color: var(--color-neg);
+    border-color: var(--color-neg);
+}
+.op-btn-danger:hover:not(:disabled) {
+    color: #fff;
+    background: var(--color-neg);
+    border-color: var(--color-neg);
+}
+
+/* The review bar. It is the only thing between the pad and a broker, so
+   it is loud on purpose and it repeats the order in full. */
+.op-confirm {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid var(--color-warning);
+    border-radius: 8px;
+    background: var(--color-bg);
+}
+.op-confirm-text {
+    margin: 0 0 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--color-text);
+}
+.op-confirm-where {
+    font-size: 11px;
+    color: var(--color-text-2);
+}
+.op-confirm-actions {
+    display: flex;
+    gap: 8px;
+}
+.op-confirm-actions .op-btn {
+    flex: 1 1 0;
+    padding: 9px;
+    font-size: 13px;
+}
+
+.op-buy  { color: var(--color-pos); }
+.op-sell { color: var(--color-neg); }
+.op-ok   { color: var(--color-pos); }
+.op-err  { color: var(--color-neg); }
+.op-mute { color: var(--color-text-3); }
+
+/* The pad's own message line: what is wrong with the ticket, and what
+   happened to the one just placed. It carries text only some of the time,
+   and reserving a line for it left a permanent gap under the button — so it
+   collapses when there is nothing to say rather than holding space open. */
+.op-msg {
+    margin: 10px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-2);
+}
+.op-msg:empty {
+    display: none;
+}
+.op-msg-ok  { color: var(--color-pos); }
+.op-msg-err { color: var(--color-neg); }
+
+/* ── pending orders ───────────────────────────────────────────── */
+
+.op-pending,
+.op-done {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.op-po {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-left-width: 3px;
+    border-radius: 8px;
+    background: var(--color-bg);
+}
+.op-po.buy  { border-left-color: var(--color-pos); }
+.op-po.sell { border-left-color: var(--color-neg); }
+.op-po.stop { border-left-color: var(--color-warning); }
+.op-po--gone { opacity: .45; }
+
+.op-po-side {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 800;
+    color: #fff;
+    border-radius: 6px;
+    background: var(--color-text-3);
+}
+.op-po.buy  .op-po-side { background: var(--color-pos); }
+.op-po.sell .op-po-side { background: var(--color-neg); }
+/* SL / ST need the room two letters take. */
+.op-po.stop .op-po-side { background: var(--color-warning); width: 30px; }
+
+.op-po-inst {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.op-po-inst b {
+    font-size: 13px;
+    color: var(--color-text);
+}
+.op-po-inst small {
+    font-size: 11px;
+    color: var(--color-text-3);
+}
+
+.op-po-edit {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.op-po-price {
+    width: 86px;
+    padding: 6px 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    outline: none;
+}
+.op-po-price:focus {
+    border-color: var(--color-accent);
+}
+.op-po-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+    line-height: 1;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.op-po-btn.save   { background: var(--color-info); }
+.op-po-btn.cancel { background: var(--color-neg); }
+.op-po-btn:hover:not(:disabled) { filter: brightness(1.12); }
+.op-po-btn:disabled { opacity: .5; cursor: default; }
+
+/* ── today's finished orders ──────────────────────────────────── */
+
+.op-done-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.6fr) auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--color-border-sub);
+}
+.op-done-inst {
+    font-weight: 700;
+    color: var(--color-text);
+}
+.op-done-meta,
+.op-done-time {
+    font-size: 11px;
+    color: var(--color-text-3);
+}
+.op-done-status {
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.op-empty {
+    margin: 0;
+    padding: 12px 2px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-3);
+}
+
+/* ── responsive ───────────────────────────────────────────────── */
+
+/* Tablet and below: one column, pad first — the thing you came to do is
+   above the thing you came to watch. Two 300px-plus cards side by side stop
+   fitting well before the 768 breakpoint, so this one collapses at 1024. */
+@media (max-width: 1024px) {
+    .op-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* Below 600 the pad is a phone ticket: everything that can share a line
+   does, the labels shrink to captions, and the vertical rhythm tightens so
+   the whole order — underlying through to the button — is one thumb-reach
+   rather than two screens of scrolling. Only spacing and pairing change;
+   no control is smaller to hit than it is on a desktop. */
+@media (max-width: 600px) {
+    .op-chrome {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* Two things go, because on a phone neither is worth its width:
+       Refresh — the book already re-reads itself every few seconds, and
+       the only thing it adds is a re-read of the broker list; and the
+       broker chips — which broker gets the order, and at what size, is
+       spelled out in full in the review bar before anything is placed.
+       The chips stay when they carry the warning: that is the one message
+       on this bar that explains why Review order is dead. */
+    /* Anchored to the whole bar rather than to the icon: 340px hung off an
+       icon two thirds of the way across a 390px screen runs off the right
+       edge. Static wrap + relative bar makes the bar the containing block,
+       so the panel spans it and cannot overflow either side. */
+    .op-topbar {
+        position: relative;
+    }
+    .op-info-wrap {
+        position: static;
+    }
+    .op-tip {
+        top: calc(100% - 6px);
+        left: 0;
+        right: 0;
+        width: auto;
+        max-width: none;
+    }
+
+    .op-topbar #opReload,
+    .op-brokers:not(.op-brokers--warn) {
+        display: none;
+    }
+
+    /* Folded away: the app nav and the page title. Everything that does
+       something — the broker chips, Refresh, this toggle, the status dot —
+       stays, so the only thing lost is the part that was only telling you
+       where you are. Scoped inside this block on purpose: the same class on
+       <body> does nothing above 600px, so a phone preference can never take
+       the nav bar away on a desktop. */
+    body.op-bare .navigation-bar,
+    body.op-bare .op-title {
+        display: none;
+    }
+    body.op-bare .op-page {
+        padding-top: 2px;
+    }
+    body.op-bare .op-topbar {
+        padding-top: 4px;
+    }
+
+    .op-topbar {
+        gap: 6px;
+        padding: 8px 0 10px;
+    }
+    .op-title {
+        font-size: 15px;
+    }
+    /* Title and status share the first line; the broker chips take the second
+       and are allowed to wrap, because their count is what varies. */
+    .op-brokers {
+        order: 3;
+        width: 100%;
+        flex: 1 1 100%;
+    }
+    .op-chip {
+        padding: 2px 7px;
+        font-size: 10px;
+    }
+    .op-layout {
+        gap: 10px;
+    }
+    .op-card {
+        padding: 10px 10px 12px;
+        border-radius: 8px;
+    }
+    .op-card-hd {
+        font-size: 12px;
+        padding-bottom: 8px;
+        margin-bottom: 9px;
+    }
+    .op-card-hd-sub {
+        margin-top: 12px;
+    }
+
+    .op-field {
+        margin-bottom: 8px;
+    }
+    .op-field > label {
+        font-size: 10px;
+        margin-bottom: 3px;
+    }
+    .op-pair {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+    .op-seg button {
+        padding: 9px 2px;
+        font-size: 11px;
+        letter-spacing: 0;
+    }
+    .op-hint,
+    .op-note {
+        font-size: 10px;
+        line-height: 1.45;
+    }
+    .op-note {
+        padding: 6px 8px;
+        margin: 10px 0 8px;
+    }
+    /* The underlying's step / lot / expiry line wraps under the dropdown
+       instead of squeezing it to nothing. */
+    .op-meta {
+        flex: 1 1 100%;
+        white-space: normal;
+    }
+    .op-btn-primary {
+        padding: 12px;
+    }
+    .op-confirm {
+        padding: 10px;
+    }
+    .op-confirm-text {
+        font-size: 12px;
+        margin-bottom: 8px;
+    }
+
+    /* iOS zooms the page in on any input under 16px on focus, and it does
+       not zoom back out — on a page with a price box that is worse than a
+       slightly large font. */
+    .op-input,
+    .op-po-price {
+        font-size: 16px;
+    }
+
+    /* The price editor drops to its own full-width line rather than
+       squeezing the contract name into nothing. */
+    .op-po {
+        grid-template-columns: 26px minmax(0, 1fr);
+        gap: 8px;
+        padding: 7px 8px;
+    }
+    .op-po-inst b     { font-size: 12px; }
+    .op-po-inst small { font-size: 10px; }
+    .op-po-edit {
+        grid-column: 1 / -1;
+    }
+    .op-po-price {
+        flex: 1 1 auto;
+        width: auto;
+    }
+    .op-po-btn {
+        width: 40px;
+        height: 36px;
+    }
+
+    /* Two lines per finished order: what it was, then how it ended. */
+    .op-done-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        row-gap: 1px;
+        padding: 5px 6px;
+        font-size: 11px;
+    }
+    .op-done-meta {
+        order: 3;
+    }
+    .op-done-time {
+        order: 4;
+        text-align: right;
+    }
+}

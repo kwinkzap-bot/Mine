@@ -104,6 +104,18 @@ def oi_crossover():
     """
     return redirect(url_for('pages.algo') + '#oi-crossover')
 
+@pages_bp.route('/orderplacement')
+@require_user_auth
+@login_required
+def order_placement():
+    """Order Placement — hand-fired option orders to the OP-enabled brokers.
+
+    Its own page rather than another panel on OI Profile: the orders it places
+    route on their own flag (BROKER_N_OP_ACTIVE), and the page they are placed
+    from is where they stay visible and editable until they fill.
+    """
+    return render_template('order_placement.html')
+
 @pages_bp.route('/ema-rsi-filter')
 @require_user_auth
 @login_required

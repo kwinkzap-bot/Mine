@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block title %}Order Placement{% endblock %}
+
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/order_placement.css') }}?v={{ sv('css/order_placement.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="op-page">
+
+  <div class="op-topbar">
+    <span class="op-title">🧾 Order Placement</span>
+
+    <!-- What this page does with an order, one hover away instead of a
+         paragraph sitting above the button forever. Hover shows it on a
+         desktop; a tap toggles it on a phone, where hover does not exist. -->
+    <span class="op-info-wrap">
+      <button class="op-info" id="opInfo" type="button"
+              aria-expanded="false" aria-controls="opInfoTip"
+              aria-label="What this page does with an order">i</button>
+      <span class="op-tip" id="opInfoTip" role="tooltip">
+        Goes to every broker with <code>BROKER_N_OP_ACTIVE=true</code>, each
+        sized by its own <code>BROKER_N_OP_LOTS</code>.
+        Placement only — nothing is attached to an order and nothing auto-exits
+        it; a stop is one you place here yourself.
+      </span>
+    </span>
+
+    <!-- Where an order from this page would go, spelled out before one is
+         placed rather than discovered from the result. Empty means the page
+         cannot place anything, and says so. -->
+    <div class="op-brokers" id="opBrokers" title="Brokers with BROKER_N_OP_ACTIVE=true"></div>
+
+    <button class="op-btn" id="opReload" title="Re-read the enabled brokers and the order book">
+      ↻ Refresh
+    </button>
+
+    <!-- Phone only (see the 600px block in the stylesheet): folds the app nav
+         and this page's title away so the ticket starts at the top of the
+         screen. It is a view preference, not a mode — nothing about the order
+         changes — so it is remembered per browser and never sent anywhere.
+         The button itself always stays, or there would be no way back. -->
+    <button class="op-btn op-chrome" id="opChrome" type="button"
+            aria-pressed="false" aria-label="Hide the nav bar and title"
+            title="Hide the nav bar and title on this screen">▴</button>
+    <span class="op-dot" id="opDot" title="Order book poll"></span>
+  </div>
+
+  <div class="op-layout">
+
+    <!-- ── the pad ────────────────────────────────────────────────────
+         One contract, one side, one order type. Every field is on screen at
+         once: this is the whole ticket, not a dialog over something else. -->
+    <section class="op-card op-pad">
+      <header class="op-card-hd">
+        <span>New order</span>
+        <span class="op-card-sub" id="opContract">—</span>
+      </header>
+
+      <div class="op-field">
+        <label for="opSymbol">Underlying</label>
+        <div class="op-row">
+          <select id="opSymbol" class="op-input"></select>
+          <span class="op-meta" id="opSpot">—</span>
+        </div>
+      </div>
+
+      <div class="op-field">
+        <label for="opStrike">Strike</label>
+        <div class="op-row op-strike-row">
+          <button class="op-step" id="opStrikeDown" type="button" title="One strike down">−</button>
+          <input type="number" id="opStrike" class="op-input" inputmode="numeric"
+                 step="1" min="0" autocomplete="off" placeholder="e.g. 24850">
+          <button class="op-step" id="opStrikeUp" type="button" title="One strike up">+</button>
+          <button class="op-btn op-btn-ghost" id="opAtm" type="button"
+                  title="Snap to the at-the-money strike">ATM</button>
+        </div>
+      </div>
+
+      <!-- Option and Side pair up into one row on a narrow screen; on a wide
+           one .op-pair is a single column and they read as they always did. -->
+      <div class="op-pair">
+        <div class="op-field">
+          <label>Option</label>
+          <div class="op-seg" id="opOptionType" role="group" aria-label="Option type">
+            <button type="button" data-value="CE" class="active">CE</button>
+            <button type="button" data-value="PE">PE</button>
+          </div>
+        </div>
+
+        <div class="op-field">
+          <label>Side</label>
+          <!-- BUY is preselected and SELL is deliberately the same size and
+               weight: nothing here should be easier to press than the other. -->
+          <div class="op-seg op-seg-side" id="opAction" role="group" aria-label="Buy or sell">
+            <button type="button" data-value="BUY" class="active">BUY</button>
+            <button type="button" data-value="SELL">SELL</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="op-field">
+        <label>Order type</label>
+        <!-- STOP is an SL-M: it rests on a trigger rather than on a price.
+             SELL STOP is the exit stop that caps a loss; BUY STOP is a stop
+             entry, which a LIMIT cannot express — a BUY LIMIT above the market
+             fills at once, so a limit can only ever wait for a fall. -->
+        <!-- STOP is the default. It is also the only one of the three that
+             cannot go out by accident: it needs a trigger typed in, and a
+             trigger on the wrong side of the market is refused before the
+             review bar appears. -->
+        <div class="op-seg" id="opOrderType" role="group" aria-label="Order type">
+          <button type="button" data-value="MARKET">MARKET</button>
+          <button type="button" data-value="LIMIT">LIMIT</button>
+          <button type="button" data-value="SL-M" class="active">STOP</button>
+        </div>
+      </div>
+
+      <!-- One price box for both: a LIMIT rests at it, a STOP triggers on it.
+           The label and the hint below say which, so the number on screen is
+           never the wrong kind of number without saying so. -->
+      <div class="op-field" id="opPriceField" hidden>
+        <label for="opLimitPrice" id="opPriceLabel">Limit price</label>
+        <div class="op-row">
+          <span class="op-rupee">₹</span>
+          <input type="number" id="opLimitPrice" class="op-input" step="0.05" min="0"
+                 inputmode="decimal" autocomplete="off" placeholder="0.00">
+          <button class="op-btn op-btn-ghost" id="opLtp" type="button"
+                  title="Fill with this contract's last traded price">LTP</button>
+        </div>
+        <p class="op-hint" id="opLtpHint"></p>
+        <p class="op-hint" id="opStopHint" hidden></p>
+      </div>
+
+      <!-- The note that used to sit here — where the order goes, how it is
+           sized, and that nothing is attached to it — is now the ⓘ beside the
+           title. It is the same words, read once and then in the way of the
+           button every time after; the review bar still names each broker and
+           its lots before anything is placed.
+
+           No size field either, deliberately: one number typed here would go
+           to every broker alike, and these accounts are not sized alike. -->
+
+      <!-- Two presses, always. The pad lives on the page rather than behind a
+           dialog, so the first press must not be the one that reaches a
+           broker — it only shows what is about to be sent. -->
+      <div class="op-actions">
+        <button class="op-btn op-btn-primary" id="opPlace" type="button">Review order</button>
+      </div>
+
+      <div class="op-confirm" id="opConfirm" hidden>
+        <p class="op-confirm-text" id="opConfirmText"></p>
+        <div class="op-confirm-actions">
+          <button class="op-btn" id="opConfirmCancel" type="button">Back</button>
+          <button class="op-btn op-btn-danger" id="opConfirmSend" type="button">Place order</button>
+        </div>
+      </div>
+
+      <p class="op-msg" id="opMsg"></p>
+    </section>
+
+    <!-- ── this page's own book ───────────────────────────────────────
+         The orders stay here, on the page that placed them, until they fill
+         or are cancelled: the price box and the ✕ are the only things that
+         can move them, and they are never more than a glance away. -->
+    <section class="op-card op-book">
+      <header class="op-card-hd">
+        <span>Pending orders</span>
+        <span class="op-count" id="opPendingCount">0</span>
+        <button class="op-btn op-btn-danger op-btn-sm" id="opCancelAll" type="button" hidden
+                title="Cancel every resting order from this page, at every broker">
+          Cancel all
+        </button>
+      </header>
+      <div class="op-pending" id="opPending"></div>
+
+      <header class="op-card-hd op-card-hd-sub">
+        <span>Today</span>
+        <span class="op-count" id="opDoneCount">0</span>
+      </header>
+      <div class="op-done" id="opDone"></div>
+    </section>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/order_placement.js') }}?v={{ sv('js/order_placement.js') }}"></script>
+{% endblock %}

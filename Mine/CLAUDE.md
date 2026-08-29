@@ -36,6 +36,37 @@ for f in env/Mine.env .users.json; do git show prerefactor-2026-08-18:Mine/$f > 
 `env/Mine.env` holds the broker credentials — losing it means the app cannot
 place orders on its next restart.
 
+## Running the server
+
+The app is not started by hand — the **`com.mine.livealgo` LaunchAgent** owns
+it (`~/Library/LaunchAgents/com.mine.livealgo.plist`), starting it at login and
+respawning it within ~15s if it dies. `start_live.sh` runs the same command in
+the foreground and is only for driving it manually; running both at once
+fights over port 5000.
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.mine.livealgo   # restart
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mine.livealgo.plist
+launchctl bootout gui/$(id -u)/com.mine.livealgo        # stop
+```
+
+`launchctl stop` does **not** stop it: `KeepAlive` is true, so it comes back a
+few seconds later. Booting it out is the real stop, and `bootstrap` puts it
+back.
+
+A restart takes ~8s to serve again and re-runs `init_scheduler`, so it
+re-registers the 24 cron jobs and **restarts the live algos** — the same reason
+`create_app()` is dangerous. Verify afterwards:
+
+```bash
+launchctl list | grep com.mine.livealgo    # PID, and last exit status
+lsof -nP -iTCP:5000 -sTCP:LISTEN           # actually listening
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/   # 302 = healthy
+tail -n 30 logs/launchd_live.log
+```
+
+`302` is the normal answer at `/` — it redirects to `/auth/user-login`.
+
 ## Tests
 
 ```bash

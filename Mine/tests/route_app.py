@@ -6,7 +6,7 @@ eight live algos (`app/__init__.py:27` -> `extensions.py:83` ->
 `scheduler.py:1186`). Importing this module during market hours would place
 real orders.
 
-A bare `Flask()` with the four blueprints registered at their real prefixes
+A bare `Flask()` with the five blueprints registered at their real prefixes
 produces an identical URL map, plus the `before_request` hooks and blueprint
 error handlers, and starts no threads. It mirrors
 `trading_app/app/routes/__init__.py:register_blueprints` — keep the two in
@@ -21,6 +21,7 @@ def build_route_app():
     from trading_app.app.routes.api import api_bp
     from trading_app.app.routes.auth import auth_bp
     from trading_app.app.routes.oi_crossover_api import oi_crossover_bp
+    from trading_app.app.routes.order_placement_api import order_placement_bp
     from trading_app.app.routes.pages import pages_bp
     from trading_app.app.routes.watchlist_api import watchlist_bp
 
@@ -29,6 +30,7 @@ def build_route_app():
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(oi_crossover_bp, url_prefix="/api/oi-crossover")
+    app.register_blueprint(order_placement_bp, url_prefix="/api/order-placement")
     app.register_blueprint(watchlist_bp, url_prefix="/api/watchlist")
     return app
 
