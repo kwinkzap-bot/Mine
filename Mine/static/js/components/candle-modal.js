@@ -300,6 +300,49 @@
         return null;
     }
 
+    // ── IST time labels ──────────────────────────────────────────────
+    //
+    // Intraday bars are true epoch seconds, and Lightweight Charts renders
+    // times in UTC — which puts NSE's 09:15 open on the axis as 03:45 and
+    // the 13:15 bar as 07:45. The session is 09:15–15:30 IST, so every
+    // intraday label is formatted in Asia/Kolkata instead.
+    //
+    // Formatted, not shifted: `toDate` and the crosshair link below compare
+    // bar times as real instants, and faking the epoch to move the labels
+    // would quietly break that. Day boundaries still land correctly because
+    // the whole session sits inside one UTC day (03:45–10:00 UTC).
+    const IST = 'Asia/Kolkata';
+    const istFmt = (opts) => new Intl.DateTimeFormat('en-GB', { timeZone: IST, ...opts });
+    const IST_TIME  = istFmt({ hour: '2-digit', minute: '2-digit', hour12: false });
+    const IST_DAY   = istFmt({ day: 'numeric' });
+    const IST_MONTH = istFmt({ month: 'short' });
+    const IST_YEAR  = istFmt({ year: 'numeric' });
+    const IST_STAMP = istFmt({ day: '2-digit', month: 'short', year: '2-digit',
+                              hour: '2-digit', minute: '2-digit', hour12: false });
+
+    // Axis tick marks. The library picks the granularity and hands it over
+    // as a TickMarkType; only the rendering of it changes here.
+    function istTickMark(time, tickMarkType) {
+        const at = toDate(time);
+        if (!at) return '';
+        const T = (global.LightweightCharts && global.LightweightCharts.TickMarkType)
+            || { Year: 0, Month: 1, DayOfMonth: 2 };
+        if (tickMarkType === T.Year) return IST_YEAR.format(at);
+        if (tickMarkType === T.Month) return IST_MONTH.format(at);
+        if (tickMarkType === T.DayOfMonth) return IST_DAY.format(at);
+        return IST_TIME.format(at);
+    }
+
+    // The crosshair's time label, in the library's own "18 Aug '26 13:15"
+    // shape so only the timezone changes.
+    function istStamp(time) {
+        const at = toDate(time);
+        if (!at) return '';
+        const part = {};
+        for (const piece of IST_STAMP.formatToParts(at)) part[piece.type] = piece.value;
+        return `${part.day} ${part.month} '${part.year} ${part.hour}:${part.minute}`;
+    }
+
     // The bar of `pane` covering `when` — the last one that had started by
     // then. Hovering 10:30 on a 30-minute chart should light up the week
     // that contains it on the weekly pane, not the nearest week boundary.
@@ -420,9 +463,13 @@
                 // autoscaler.
                 scaleMargins: { top: 0.06, bottom: 0.20 },
             },
-            // An intraday bar is only identifiable with its time on the axis.
+            // An intraday bar is only identifiable with its time on the axis,
+            // and that time has to read in IST — see istTickMark.
             timeScale: { borderVisible: false, timeVisible: !!payload.intraday,
-                         secondsVisible: false },
+                         secondsVisible: false,
+                         tickMarkFormatter: payload.intraday ? istTickMark : undefined },
+            localization: payload.intraday ? { locale: 'en-IN', timeFormatter: istStamp }
+                                           : { locale: 'en-IN' },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
             autoSize: true,
         });

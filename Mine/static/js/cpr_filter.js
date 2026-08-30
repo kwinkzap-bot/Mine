@@ -28,6 +28,9 @@ window.addEventListener('load', function () {
     cprElems.controls    = document.getElementById('controls');
     cprElems.camarillaMode       = document.getElementById('camarillaMode');
     cprElems.camarillaRefreshBtn = document.getElementById('camarillaRefreshBtn');
+    cprElems.narrowCprTimeframe  = document.getElementById('narrowCprTimeframe');
+    cprElems.narrowCprRatio      = document.getElementById('narrowCprRatio');
+    cprElems.narrowCprRefreshBtn = document.getElementById('narrowCprRefreshBtn');
 
     const scheduler = window.CPRFilterScheduler;
     const schedulerActive = scheduler && typeof scheduler.isActive === 'function' && scheduler.isActive();
@@ -66,7 +69,7 @@ window.addEventListener('load', function () {
     // Clicking a scanner symbol opens the shared candle popup rather than
     // leaving for TradingView. Delegated, because DataGrid rebuilds every
     // row on each sort and a per-row listener would not survive it.
-    ['camarillaBuy', 'camarillaSell'].forEach((gridType) => {
+    ['camarillaBuy', 'camarillaSell', 'narrowCpr'].forEach((gridType) => {
         const grid = document.getElementById(`${gridType}Grid`);
         if (!grid) return;
         grid.addEventListener('click', (e) => {
@@ -94,8 +97,24 @@ window.addEventListener('load', function () {
     if (cprElems.datePicker) {
         cprElems.datePicker.addEventListener('change', () => {
             loadCamarillaCprData(_camarillaMode(), true);
+            // Not a forced refresh: the narrow scan is cached per date, so a
+            // date it has not seen scans anyway and one it has is instant.
+            loadNarrowCprData(_narrowCprTf(), false);
         });
     }
+
+    // Narrow CPR: the scan itself does not depend on the timeframe picker —
+    // it reads weekly AND monthly for every symbol — so changing the picker
+    // only re-filters what the server already has cached.
+    if (cprElems.narrowCprRefreshBtn) {
+        cprElems.narrowCprRefreshBtn.addEventListener('click', () => {
+            loadNarrowCprData(_narrowCprTf(), true);
+        });
+    }
+    // Both pickers re-filter the same cached scan — neither re-reads history.
+    [cprElems.narrowCprTimeframe, cprElems.narrowCprRatio].forEach((el) => {
+        if (el) el.addEventListener('change', () => loadNarrowCprData(_narrowCprTf(), false));
+    });
 
     // Avoid double-triggering the API when the scheduler is already running during market hours
     if (schedulerActive && schedulerMarketOpen) {
@@ -106,6 +125,7 @@ window.addEventListener('load', function () {
         const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
         loadHighIVData(selectedDate, false);
         loadCamarillaCprData(_camarillaMode(), false);
+        loadNarrowCprData(_narrowCprTf(), false);
     }
 
     // Set interval for controlled refresh - only if scheduler is not already running
@@ -198,7 +218,7 @@ async function loadHighIVData(selectedDate, refresh = false) {
 
 // The rows behind each Camarilla grid, kept so the popup's ‹ › can step
 // through what is on screen. Only the fields CandleModal reads.
-const _camarillaRows = { camarillaBuy: [], camarillaSell: [] };
+const _camarillaRows = { camarillaBuy: [], camarillaSell: [], narrowCpr: [] };
 
 function _openCandleModal(symbol, gridType) {
     if (!window.CandleModal) return;
@@ -265,6 +285,88 @@ async function loadCamarillaCprData(mode, refresh = false) {
         const errorHtml = _gridErrorHtml('Error: ' + error.message);
         buyGrid.innerHTML = errorHtml;
         sellGrid.innerHTML = errorHtml;
+    } finally {
+        if (refreshBtn) {
+            refreshBtn.classList.remove('loading');
+            refreshBtn.disabled = false;
+        }
+    }
+}
+
+const _NARROW_TF_LABEL = {
+    both:    'Weekly + Monthly',
+    weekly:  'Weekly',
+    monthly: 'Monthly',
+};
+
+function _narrowCprTf() {
+    const v = cprElems.narrowCprTimeframe ? cprElems.narrowCprTimeframe.value : 'both';
+    return v in _NARROW_TF_LABEL ? v : 'both';
+}
+
+// How far below its own normal the CPR has to sit. The server owns the list of
+// accepted values and falls back to its default for anything else.
+function _narrowCprRatio() {
+    return cprElems.narrowCprRatio ? cprElems.narrowCprRatio.value : '0.3';
+}
+
+/**
+ * Fetches the Narrow CPR scan. The CPR read is the CURRENT one — built from
+ * the week / month being traded now, still forming mid-period — and "narrow"
+ * means narrow against that symbol's own recent CPR widths, not a fixed
+ * percentage. `tf` only says which of the two readings has to be Narrow for a
+ * row to show.
+ */
+async function loadNarrowCprData(tf, refresh = false) {
+    tf = tf in _NARROW_TF_LABEL ? tf : 'both';
+
+    const grid     = document.getElementById('narrowCprGrid');
+    const container = document.getElementById('narrowCprResults');
+    const countSpan = document.getElementById('narrowCprCount');
+    const titleSpan = document.getElementById('narrowCprTitle');
+    const footnote  = document.getElementById('narrowCprFootnote');
+    if (!grid || !container) return;
+
+    const ratio = _narrowCprRatio();
+    if (titleSpan) titleSpan.textContent =
+        `📏 Narrow CPR — ${_NARROW_TF_LABEL[tf]} ≤ ${ratio}× normal`;
+
+    const refreshBtn = cprElems.narrowCprRefreshBtn;
+    if (refreshBtn) {
+        refreshBtn.classList.add('loading');
+        refreshBtn.disabled = true;
+    }
+
+    container.classList.remove('results-hidden');
+    if (countSpan) countSpan.textContent = '(...)';
+    if (footnote) footnote.textContent = '';
+    grid.innerHTML = _gridLoadingHtml(
+        `Reading the current weekly and monthly CPR widths `
+        + `(${_NARROW_TF_LABEL[tf]} at or under ${ratio}x its own normal)...`);
+
+    try {
+        const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
+        let url = `/api/cpr-filter/narrow-cpr?tf=${tf}&ratio=${encodeURIComponent(ratio)}`;
+        if (selectedDate) url += `&date=${selectedDate}`;
+        if (refresh) url += '&refresh=true';
+
+        const response = await fetchJson(url);
+        if (response && response.success) {
+            const rows = response.rows || [];
+            displayResults('narrowCpr', rows);
+            if (footnote) {
+                footnote.textContent = `${rows.length} of ${response.scanned || 0} symbols read`
+                    + ` · CPR at or under ${response.ratio}x its own normal`
+                    + (response.skipped ? ` · ${response.skipped} skipped (no usable history)` : '');
+            }
+        } else {
+            grid.innerHTML = _gridErrorHtml('Failed to load Narrow CPR data.');
+            if (countSpan) countSpan.textContent = '(0)';
+        }
+    } catch (error) {
+        console.error('Error fetching Narrow CPR data:', error);
+        grid.innerHTML = _gridErrorHtml('Error: ' + error.message);
+        if (countSpan) countSpan.textContent = '(0)';
     } finally {
         if (refreshBtn) {
             refreshBtn.classList.remove('loading');
@@ -454,6 +556,24 @@ function _symbolColumn() {
             `class="symbol-link">${DataGrid.escape(symbol)}</a>`,
     };
 }
+// Symbol column for the grids whose rows open the in-app candle popup.
+// data-candle is what the delegated grid click handler looks for. Still an
+// <a> to TradingView underneath, so ctrl/middle-click opens the real chart
+// there — a plain click is intercepted and opens the popup instead.
+function _candleSymbolColumn() {
+    return {
+        key: 'symbol', label: 'Symbol', sortable: true, strong: true,
+        render: (symbol, row) => {
+            const link = `<a href="https://in.tradingview.com/chart/?symbol=NSE:` +
+                `${encodeURIComponent(symbol)}" target="_blank" rel="noopener noreferrer" ` +
+                `class="symbol-link" data-candle="${DataGrid.escape(symbol)}"` +
+                `>${DataGrid.escape(symbol)}</a>`;
+            return row && row.is_index
+                ? `${link} <span class="dg-badge dg-badge--neutral">IDX</span>` : link;
+        },
+    };
+}
+
 // gap-up/gap-down are this page's own theme-aware up/down colours (kept as
 // page CSS, not the grid's dg-pos/dg-neg, so nothing here drifts from the
 // rest of the scanner's palette).
@@ -485,21 +605,7 @@ const _SCANNER_COLUMNS = {
     // the Close column's tone differs. `touched` says which line the candle
     // actually hit: the Pivot, the Camarilla level, or both.
     camarilla: (isBuy) => [
-        {
-            key: 'symbol', label: 'Symbol', sortable: true, strong: true,
-            // data-candle is what the grid's click handler below looks for.
-            // Still an <a> to TradingView underneath, so ctrl/middle-click
-            // opens the real chart there — a plain click is intercepted and
-            // opens the in-app popup instead.
-            render: (symbol, row) => {
-                const link = `<a href="https://in.tradingview.com/chart/?symbol=NSE:` +
-                    `${encodeURIComponent(symbol)}" target="_blank" rel="noopener noreferrer" ` +
-                    `class="symbol-link" data-candle="${DataGrid.escape(symbol)}"` +
-                    `>${DataGrid.escape(symbol)}</a>`;
-                return row && row.is_index
-                    ? `${link} <span class="dg-badge dg-badge--neutral">IDX</span>` : link;
-            },
-        },
+        _candleSymbolColumn(),
         { key: 'current_price', label: 'Close', sortable: true, align: 'right', strong: true,
           format: v => Number(v || 0).toFixed(2), tone: isBuy ? 'pos' : 'neg' },
         { key: 'candle_low', label: 'Low', sortable: true, align: 'right',
@@ -521,7 +627,53 @@ const _SCANNER_COLUMNS = {
               ? ' <span class="dg-badge dg-badge--neutral" title="Candle still forming">live</span>'
               : '') },
     ],
+    // Narrow CPR — both readings are on every row whatever the dropdown says,
+    // so a row narrow on one timeframe still shows what the other is doing.
+    narrowCpr: () => [
+        _candleSymbolColumn(),
+        { key: 'current_price', label: 'Close', sortable: true, align: 'right', strong: true,
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'narrow_on', label: 'Narrow', sortable: true,
+          badge: v => v === 'Weekly + Monthly' ? 'pos' : 'warn' },
+        ..._narrowTfColumns('weekly', 'W'),
+        ..._narrowTfColumns('monthly', 'M'),
+    ],
 };
+
+// The five columns each timeframe contributes to the Narrow CPR grid.
+// Width is |TC - BC| / close * 100 for the CURRENT week / month; ×avg is that
+// width over the symbol's own average across the periods before it, which is
+// what actually decides Narrow — under 0.80x. "—" means too little history to
+// average, and the label then came from the absolute fallback scale.
+//
+// A period still forming carries a "live" badge: its OHLC, and so its width,
+// moves until it closes. Its context is measured over the same number of
+// sessions (see _width_of_first in the scanner), so an early-month reading is
+// compared against equally young months rather than finished ones.
+function _narrowTfColumns(tf, prefix) {
+    const periodTitle = (_v, row) => `CPR from ${row[`${tf}_period`]}`
+        + ` · ${row[`${tf}_bars`]} sessions${row[`${tf}_forming`] ? ', still forming' : ', closed'}`
+        + ` · ${row[`${tf}_context`]} periods of context`;
+    return [
+        { key: `${tf}_width_pct`, label: `${prefix} Width %`, sortable: true, align: 'right',
+          render: (v, row) => `${Number(v || 0).toFixed(3)}%` + (row[`${tf}_forming`]
+              ? ' <span class="dg-badge dg-badge--neutral">live</span>' : ''),
+          title: periodTitle },
+        { key: `${tf}_ratio`, label: `${prefix} ×avg`, sortable: true, align: 'right', strong: true,
+          format: v => v == null ? '—' : Number(v).toFixed(2) + '×',
+          tone: (_v, row) => row[`narrow_${tf}`] ? 'pos'
+              : row[`${tf}_type`] === 'Wide' ? 'neg' : 'muted',
+          title: (_v, row) => `${row[`${tf}_type`]} — ${Number(row[`${tf}_width_pct`]).toFixed(3)}%`
+              + ` vs an average ${row[`${tf}_avg_width_pct`] == null ? 'n/a'
+                  : Number(row[`${tf}_avg_width_pct`]).toFixed(3) + '%'}` },
+        { key: `${tf}_bc`, label: `${prefix} BC`, sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: `${tf}_pp`, label: `${prefix} Pivot`, sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: `${tf}_tc`, label: `${prefix} TC`, sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+    ];
+}
 
 /**
  * Populates a scanner grid with data.
@@ -554,6 +706,7 @@ function displayResults(type, results) {
     const columns = type === 'highIv' ? _SCANNER_COLUMNS.highIv()
         : type === 'camarillaBuy'  ? _SCANNER_COLUMNS.camarilla(true)
         : type === 'camarillaSell' ? _SCANNER_COLUMNS.camarilla(false)
+        : type === 'narrowCpr'     ? _SCANNER_COLUMNS.narrowCpr()
         : null;
     if (!columns) return;
 

@@ -102,6 +102,7 @@
 /api/cpr-filter	api.get_cpr_filter_results	GET,HEAD,OPTIONS	True
 /api/cpr-filter/camarilla-cpr	api.get_camarilla_cpr_touch_results	GET,HEAD,OPTIONS	True
 /api/cpr-filter/high-iv	api.get_cpr_high_iv_results	GET,HEAD,OPTIONS	True
+/api/cpr-filter/narrow-cpr	api.get_narrow_cpr_results	GET,HEAD,OPTIONS	True
 /api/debug-symbol	api.debug_symbol	GET,HEAD,OPTIONS	True
 /api/debug/token-status	api.debug_token_status	GET,HEAD,OPTIONS	True
 /api/ema-narrow-filter	api.get_ema_narrow_filter_results	GET,HEAD,OPTIONS	True

@@ -223,7 +223,9 @@ def _get_request_lock(key: Any) -> threading.Lock:
 from trading_app.service.fyers_data_service import FyersDataServiceAdapter
 from trading_app.service.fyers_order_services import FyersOrderService
 from trading_app.service.kite_order_services import KiteService, apply_kite_proxy
-from trading_app.service.cpr_service import CPRService
+from trading_app.service.cpr_service import (
+    CPR_WIDTH_MEDIUM_MAX, CPR_WIDTH_NARROW_MAX, CPR_WIDTH_NARROW_RATIO,
+    CPR_WIDTH_WIDE_RATIO, CPRService, classify_cpr_width, cpr_width_pct)
 
 # Index instrument tokens for CPR-width lookups (mirrors NSE_INDEX_TOKENS
 # inside oi_profile_candles — kept separate/module-level since that one is
@@ -2309,6 +2311,104 @@ def get_camarilla_cpr_touch_results() -> EndpointResponse:
                 'auth_error': True
             }), 401
         return jsonify({'success': False, 'error': f'Camarilla-CPR scanner error: {str(e)}'}), 500
+
+@api_bp.route('/cpr-filter/narrow-cpr', methods=['GET'])
+@limiter.exempt
+def get_narrow_cpr_results() -> EndpointResponse:
+    """Scan futures stocks + indices for a NARROW weekly and/or monthly CPR.
+
+    tf='weekly'  -> narrow weekly CPR
+    tf='monthly' -> narrow monthly CPR
+    tf='both'    -> narrow on both (default)
+
+    ratio is how far below its own normal the CPR has to sit (0.3 by default);
+    a smaller number is a shorter, tighter list.
+
+    The CPR read is the CURRENT one — built from the week / month being traded
+    now, flagged `forming` while that period can still move — and "narrow" is
+    relative to that symbol's own recent CPR widths, never an absolute
+    percentage. See filters/narrow_cpr_scanner.py.
+
+    The scan itself is independent of both, and cached as such, so moving
+    either dropdown re-filters the cached rows instead of re-scanning 180
+    symbols."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
+
+    date_str = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    from trading_app.filters.narrow_cpr_scanner import (
+        DEFAULT_NARROW_RATIO, NARROW_RATIO_CHOICES, TIMEFRAMES,
+        filter_narrow_cpr, select_narrow)
+    tf = request.args.get('tf', 'both')
+    if tf not in TIMEFRAMES:
+        tf = 'both'
+
+    try:
+        max_ratio = round(float(request.args.get('ratio', DEFAULT_NARROW_RATIO)), 2)
+    except (TypeError, ValueError):
+        max_ratio = DEFAULT_NARROW_RATIO
+    if max_ratio not in NARROW_RATIO_CHOICES:
+        max_ratio = DEFAULT_NARROW_RATIO
+
+    from trading_app.app.utils.cache import cpr_filter_cache
+    cache_user = session.get('username', 'anonymous')
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key = f"cpr_filter_narrow:{cache_user}:{cache_date}"
+
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    results = None
+    if not refresh:
+        results = cpr_filter_cache.get(cache_key)
+    else:
+        cpr_filter_cache.delete(cache_key)
+
+    try:
+        if results is None:
+            if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
+                logger.warning("Narrow-CPR request: KiteConnect instance has no access token")
+                return jsonify({
+                    'success': False,
+                    'error': 'No valid access token on KiteConnect instance. Please login again.',
+                    'auth_error': True
+                }), 401
+
+            cpr_service = _get_cpr_service(current_kite)
+            results = filter_narrow_cpr(cpr_service, root_date=target_date)
+            cpr_filter_cache.set(cache_key, results, timeout=600)  # 10 minutes
+
+        rows = select_narrow(results.get('rows', []), tf, max_ratio)
+        return jsonify({
+            'success': True,
+            'rows': rows,
+            'tf': tf,
+            'ratio': max_ratio,
+            'scanned': results.get('scanned', 0),
+            'skipped': results.get('skipped', 0),
+            'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
+        })
+    except Exception as e:
+        logger.error(f"Error in Narrow-CPR scanner: {type(e).__name__}: {e}", exc_info=True)
+        error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str or 'invalid' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': f'Narrow-CPR scanner error: {str(e)}'}), 500
+
 
 # ====================== NOTIFICATIONS ======================
 
@@ -10739,45 +10839,17 @@ def _cpr_cache_put(key, value):
 # own normal.
 _CPR_WIDTH_HISTORY_DAYS = 10   # sessions of context to average against
 _CPR_WIDTH_MIN_HISTORY  = 4    # below this, fall back to the absolute scale
-_CPR_WIDTH_NARROW_RATIO = 0.8  # < 0.8x its own average -> Narrow
-_CPR_WIDTH_WIDE_RATIO   = 1.2  # > 1.2x -> Wide; between -> Medium
 
-# Absolute fallback, used only when there is too little history to average — a
-# newly listed contract, or a provider returning a short series. Deliberately
-# scaled to what the metric can actually reach (see the ceiling above) rather
-# than the stock-sized numbers this replaced.
-_CPR_WIDTH_NARROW_MAX = 0.15  # < 0.15% -> Narrow
-_CPR_WIDTH_MEDIUM_MAX = 0.30  # 0.15-0.30% -> Medium; >= 0.30% -> Wide
-
-
-def _cpr_width_pct(high: float, low: float, close: float) -> Optional[float]:
-    """CPR width as a percentage of the close, for one daily bar."""
-    if not close:
-        return None
-    _pp, bc, tc = CPRService.calculate_cpr(high, low, close)
-    return abs(tc - bc) / close * 100
-
-
-def _classify_cpr_width(width_pct: float, avg_width_pct: Optional[float] = None) -> str:
-    """Narrow / Medium / Wide for one CPR width.
-
-    With `avg_width_pct` (the instrument's own recent average) the call is
-    relative — the only reading that means anything across instruments whose CPR
-    widths differ by an order of magnitude. Without it, falls back to the
-    absolute scale, which only happens when history is too short to average.
-    """
-    if avg_width_pct and avg_width_pct > 0:
-        ratio = width_pct / avg_width_pct
-        if ratio < _CPR_WIDTH_NARROW_RATIO:
-            return 'Narrow'
-        if ratio > _CPR_WIDTH_WIDE_RATIO:
-            return 'Wide'
-        return 'Medium'
-    if width_pct < _CPR_WIDTH_NARROW_MAX:
-        return 'Narrow'
-    if width_pct < _CPR_WIDTH_MEDIUM_MAX:
-        return 'Medium'
-    return 'Wide'
+# The width metric and its Narrow/Medium/Wide classification live in
+# service/cpr_service.py — the scanners need the same reading (see
+# filters/narrow_cpr_scanner.py), and the thresholds must not fork. Aliased
+# under their old private names so this module and its tests read unchanged.
+_CPR_WIDTH_NARROW_RATIO = CPR_WIDTH_NARROW_RATIO
+_CPR_WIDTH_WIDE_RATIO   = CPR_WIDTH_WIDE_RATIO
+_CPR_WIDTH_NARROW_MAX   = CPR_WIDTH_NARROW_MAX
+_CPR_WIDTH_MEDIUM_MAX   = CPR_WIDTH_MEDIUM_MAX
+_cpr_width_pct     = cpr_width_pct
+_classify_cpr_width = classify_cpr_width
 
 
 def _cpr_bands_from_daily(kite_service: 'KiteService', token) -> Dict[str, Any]:

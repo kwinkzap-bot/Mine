@@ -41,11 +41,27 @@
         </button>
         <select id="camarillaMode" class="date-picker tf-picker"
                 title="Candle judged, and the CPR/Camarilla timeframe it is judged against">
-            <option value="daily" selected>Daily candle · Monthly CPR</option>
-            <option value="weekly">Weekly candle · Yearly CPR</option>
+            <option value="daily" selected>Monthly CPR</option>
+            <option value="weekly">Yearly CPR</option>
         </select>
         <button id="camarillaRefreshBtn" class="refresh-btn" title="Refresh Camarilla inside CPR Scanner">
             <span class="refresh-icon">📌</span> Camarilla Scan
+        </button>
+        <select id="narrowCprTimeframe" class="date-picker tf-picker"
+                title="Which CPR must be narrow. The scan reads both either way — this only picks what the grid shows.">
+            <option value="both" selected>N CPR · W + M</option>
+            <option value="weekly">N CPR · W</option>
+            <option value="monthly">N CPR · M</option>
+        </select>
+        <select id="narrowCprRatio" class="date-picker tf-picker"
+                title="How far below its own normal the CPR must sit. Smaller is a tighter, shorter list.">
+            <option value="0.8">CPR ≤ 0.8× its normal</option>
+            <option value="0.5">CPR ≤ 0.5× its normal</option>
+            <option value="0.3" selected>CPR ≤ 0.3× its normal</option>
+            <option value="0.2">CPR ≤ 0.2× its normal</option>
+        </select>
+        <button id="narrowCprRefreshBtn" class="refresh-btn" title="Refresh Narrow CPR Scanner">
+            <span class="refresh-icon">📏</span> N CPR
         </button>
     </div>
 
@@ -162,6 +178,26 @@
             </div>
         </div>
     </div>
+    <!-- Narrow CPR — the CURRENT weekly / monthly CPR, built from the week or
+         month being traded now (mid-period it is still forming, and says so),
+         classified against that symbol's OWN recent CPR widths. An absolute
+         cut-off cannot work here: CPR width is capped at (H-L)/3C, so a fixed
+         stock-sized threshold reads Narrow on every index period. See
+         filters/narrow_cpr_scanner.py. -->
+    <div class="results-row">
+        <div id="narrowCprResults" class="results results-hidden results-block">
+            <div class="dg-card">
+                <div class="dg-card-hdr">
+                    <span class="dg-card-title" id="narrowCprTitle">📏 Narrow CPR — Weekly + Monthly</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="narrowCprCount">(0)</span>
+                </div>
+                <div id="narrowCprGrid"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Coverage note sits OUTSIDE #narrowCprResults, which is hidden when
+         nothing matches — exactly when "0 matches, N skipped" matters. -->
+    <div id="narrowCprFootnote"></div>
     <!-- Camarilla Monthly S3/R3 Reversal Scanner — commented out
     <div class="results-row">
         <div id="camarillaCprReversalBullishResults" class="results results-hidden results-block">
