@@ -4324,7 +4324,7 @@ function _smLiveBuildCard(c) {
                 <span>Exit &gt;${c.exit_rank}</span>
             </div>
         </div>
-        <span class="sm-live-inv-chip">₹${inv}</span>
+        <span class="sm-live-inv-chip" id="sm-inv-chip-${c.id}" title="Opening capital. Becomes total money in — capital + SIP − SWP — once the card has loaded.">₹${inv}</span>
         <div class="sm-live-hdr-actions">
             <button class="ag-btn ag-btn-strikes sm-live-reinit-btn" data-id="${c.id}" title="Re-initialize live entries with today's rankings">⟳ Re-init</button>
             <span class="sm-actions-divider"></span>
@@ -4333,6 +4333,8 @@ function _smLiveBuildCard(c) {
         </div>
     </div>
     <div class="sm-card-meta-row" id="sm-meta-${c.id}">
+        <span class="sm-meta-item sm-meta-inv" id="sm-meta-inv-${c.id}">Invested —</span>
+        <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item" id="sm-meta-dep-${c.id}">Deployed —</span>
         <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item sm-meta-idle" id="sm-meta-idle-${c.id}">Unused —</span>
@@ -4411,6 +4413,27 @@ function _smUpdateMetaRow(id, d) {
     if (dep) dep.textContent = 'Deployed ' + _smFmtInr(d.total_invested || 0);
     if (cur) cur.textContent = 'Current '  + _smFmtInr(d.current_port_val || 0);
 
+    // Money actually put in — opening capital plus every SIP, less every SWP.
+    // Deployed beside it is only the cost of the stock held right now, so the
+    // two separate as soon as a sale realises a gain or a loss.
+    const invEl = document.getElementById(`sm-meta-inv-${id}`);
+    if (invEl) {
+        const cap = d.configured_investment || 0;
+        const sip = d.total_sip_added || 0;
+        const swp = d.total_swp_taken || 0;
+        const inv = (d.total_investment ?? (cap + sip - swp)) || 0;
+        invEl.textContent = 'Invested ' + _smFmtInr(inv);
+        invEl.title = `${_smFmtInr(cap)} initial`
+            + (sip ? ` + ${_smFmtInr(sip)} SIP` : '')
+            + (swp ? ` − ${_smFmtInr(swp)} SWP` : '')
+            + `. Deployed (${_smFmtInr(d.total_invested || 0)}) is the cost of the stock held `
+            + `now; the gap is idle cash plus whatever past sales realised.`;
+        // The header pill starts as the opening capital (all the collapsed card
+        // knows); once the signal is in it should agree with Invested.
+        const chip = document.getElementById(`sm-inv-chip-${id}`);
+        if (chip) { chip.textContent = _smFmtInr(inv); chip.title = invEl.title; }
+    }
+
     const idleEl = document.getElementById(`sm-meta-idle-${id}`);
     if (idleEl) {
         // Idle cash the group is holding, tracked server-side. It can't be
@@ -4469,7 +4492,10 @@ function _smUpdateMetaRow(id, d) {
     // CURRENT value including idle cash, matching what the per-config XIRR
     // discounts to. Kept here so /aggregate-returns never has to re-fetch quotes.
     _smPnlByConfig[id] = {
-        today: todayAbs, total: totAbs, invested: d.total_invested || 0,
+        today: todayAbs, total: totAbs,
+        // The group row labels this "Invested", so it has to be money-in — it
+        // used to sum total_invested, i.e. Deployed under the wrong name.
+        invested: (d.total_investment ?? d.total_invested) || 0,
         mark: (d.current_port_val || 0) + (d.cash_balance || 0),
     };
     _smUpdateTotalPnl();
@@ -4561,6 +4587,9 @@ function _smLiveExpandToggle(id) {
 
 function _smApplyRankings(id, d) {
     const ranks = d.holding_ranks || {};
+    // Top-ranked names this group does not hold — the Add Stock picker suggests
+    // these rather than making the user remember what ranked well today.
+    if (_smHoldingsData[id]) _smHoldingsData[id].buyCandidates = d.buy_preview || [];
 
     // Merge the ranks in and re-paint. Re-mounting (rather than DataGrid.refresh)
     // re-points the grid at whatever holdings array is current — the SIP/SWP popup
@@ -4664,6 +4693,8 @@ function _smRenderLiveMode(id, panel, d) {
 <div class="sm-signal-section-title">
     <span class="sm-live-dot-xs"></span>
     Live Holdings &mdash; ${holdings.length} stocks &mdash; ${d.live_since || ''}
+    <button class="sm-add-stock-btn" onclick="_smOpenAddStock('${id}')"
+            title="Add a stock to this group's holdings">＋ Add Stock</button>
 </div>
 <div id="sm-holdings-grid-${id}" class="sm-holdings-grid"></div>
 
@@ -5193,6 +5224,128 @@ function _smSaveHolding(id, sym, field, val, td, orig) {
     });
 }
 
+// ── Add a stock to the holdings list ──────────────────────────────────────────
+// Two ways in, matching the rebalance: record a buy already made at the broker,
+// or tick "place the order" and let the group's broker do it. Recording is the
+// default — a real order is never sent unless it is asked for explicitly.
+
+function _smOpenAddStock(id) {
+    const data   = _smHoldingsData[id] || { holdings: [], broker: null };
+    const held   = new Set((data.holdings || []).map(h => h.symbol));
+    const cands  = (data.buyCandidates || []).filter(c => !held.has(c.symbol));
+    const broker = data.broker || null;
+    const cash   = Number(data.cashBalance) || 0;
+    const today  = new Date().toISOString().slice(0, 10);
+
+    document.getElementById('smAddStockModal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'smAddStockModal';
+    modal.className = 'sm-gl-overlay';
+    modal.innerHTML = `
+<div class="sm-gl-box sm-gl-narrow sm-flow-sip">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">＋ Add Stock</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smAddStockModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div class="sm-flow-controls">
+            <label class="sm-gl-field sm-gl-field-wide"><span>Symbol</span>
+                <input id="asSym" list="asSymList" placeholder="e.g. JINDALSAW" autocomplete="off">
+                <datalist id="asSymList">
+                    ${cands.map(c => `<option value="${DataGrid.escape(c.symbol)}">#${c.current_rank} · ₹${Number(c.price).toFixed(2)}</option>`).join('')}
+                </datalist></label>
+            <label class="sm-gl-field"><span>Quantity</span>
+                <input type="number" id="asQty" value="1" min="1" step="1"></label>
+            <label class="sm-gl-field"><span>Entry price (₹)</span>
+                <input type="number" id="asPx" min="0" step="0.05" placeholder="live price"></label>
+            <label class="sm-gl-field"><span>Entry date</span>
+                <input type="date" id="asDate" value="${today}"></label>
+        </div>
+        ${cands.length ? `<div class="sm-rb-hint">Top ranked and not held yet:
+            ${cands.slice(0, 6).map(c => `<button class="sm-as-chip" onclick="_smAddStockPick('${DataGrid.escape(c.symbol)}', ${Number(c.price) || 0})">${DataGrid.escape(c.symbol)} <span>#${c.current_rank}</span></button>`).join('')}
+        </div>` : ''}
+        <label class="sm-as-order ${broker && broker.instance ? '' : 'sm-as-order-off'}">
+            <input type="checkbox" id="asPlace" ${broker && broker.instance ? '' : 'disabled'}>
+            <span>${broker && broker.instance
+                ? `Place a real BUY order at <strong>${DataGrid.escape(broker.broker_name || broker.broker_type)}</strong>`
+                : 'No broker set for this group — records only'}</span>
+        </label>
+        <div class="sm-so-est" id="asEst"></div>
+        <div class="sm-gl-summary" id="asResult" style="display:none"></div>
+    </div>
+    <div class="sm-gl-footer">
+        <button class="sm-gl-btn sm-gl-cancel" onclick="document.getElementById('smAddStockModal').remove()">Cancel</button>
+        <button class="sm-gl-btn sm-gl-confirm" id="asConfirmBtn">Add to Holdings</button>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    const est = () => {
+        const q  = parseInt(document.getElementById('asQty').value) || 0;
+        const px = Number(document.getElementById('asPx').value) || 0;
+        const val = q * px;
+        document.getElementById('asEst').innerHTML = px
+            ? `Cost: <strong>${_smRbFmt(val)}</strong> · idle cash after: <strong>${_smRbFmt(Math.max(0, cash - val))}</strong>`
+              + (val > cash ? ' <span class="sm-as-warn">— more than the group has idle</span>' : '')
+            : 'Leave the price blank to use the live price.';
+    };
+    ['asQty', 'asPx'].forEach(f => document.getElementById(f).addEventListener('input', est));
+    document.getElementById('asSym').addEventListener('input', () => {
+        const c = cands.find(x => x.symbol === document.getElementById('asSym').value.trim().toUpperCase());
+        if (c && !document.getElementById('asPx').value) document.getElementById('asPx').value = Number(c.price).toFixed(2);
+        est();
+    });
+    document.getElementById('asConfirmBtn').onclick = () => _smSubmitAddStock(id);
+    est();
+}
+
+function _smAddStockPick(sym, price) {
+    document.getElementById('asSym').value = sym;
+    const px = document.getElementById('asPx');
+    if (price) px.value = Number(price).toFixed(2);
+    px.dispatchEvent(new Event('input'));
+}
+
+function _smSubmitAddStock(id) {
+    const symbol = (document.getElementById('asSym').value || '').trim().toUpperCase();
+    const qty    = parseInt(document.getElementById('asQty').value) || 0;
+    const price  = Number(document.getElementById('asPx').value) || 0;
+    const place  = document.getElementById('asPlace').checked;
+    if (!symbol) { window.showNotification && window.showNotification('Enter a symbol', 'error'); return; }
+    if (!(qty > 0)) { window.showNotification && window.showNotification('Enter a quantity', 'error'); return; }
+
+    const btn = document.getElementById('asConfirmBtn');
+    btn.disabled = true;
+    btn.textContent = place ? 'Buying — waiting for the fill…' : 'Adding…';
+    fetch(`/api/algo/swing-momentum/configs/${id}/holdings/add`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, qty, place_order: place,
+                               entry_price: price || undefined,
+                               entry_date: document.getElementById('asDate').value || undefined }),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) {
+            btn.disabled = false; btn.textContent = 'Add to Holdings';
+            window.showNotification && window.showNotification(d.error || 'Failed', 'error');
+            return;
+        }
+        const res = document.getElementById('asResult');
+        res.className = 'sm-gl-summary ' + (d.warning ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
+        res.style.display = 'block';
+        res.textContent = `✅ ${d.entry.symbol} ×${d.entry.qty} @ ₹${Number(d.entry.entry_price).toFixed(2)}`
+            + ` · ${_smRbFmt(d.deployed)} deployed · idle cash ${_smRbFmt(d.cash)}.`
+            + (d.warning ? ` ⚠ ${d.warning}` : '');
+        window.showNotification && window.showNotification(`${symbol} added`, 'success');
+        // A provisional entry price is the one thing worth reading before the
+        // modal disappears, so that case stays open.
+        if (d.warning) { btn.textContent = 'Done'; _smLiveLoadSignal(id); return; }
+        setTimeout(() => { document.getElementById('smAddStockModal')?.remove(); _smLiveLoadSignal(id); }, 1400);
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = 'Add to Holdings';
+        window.showNotification && window.showNotification('Request failed', 'error');
+    });
+}
+
 // ── Per-stock manual Buy/Sell (three-dot row menu) ────────────────────────────
 
 function _smRowMenu(ev, id, sym) {
@@ -5531,8 +5684,19 @@ function _smRebalPreviewHtml(d, id) {
 }
 
 
+// Two ways to rebalance, deliberately kept side by side:
+//   auto   — the server places the SELLs, waits for them to fill, then BUYs.
+//   manual — nothing is placed. The user has already traded in their broker's
+//            app and types the qty and price that actually executed; only the
+//            JSON is updated. The bookkeeping is identical either way.
+let _smRbPlan = null;    // { id, sells, buys, broker } for the open modal
+let _smRbMode = 'auto';
+
+const _smRbFmt = v => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
 function _smOpenRebalance(id) {
     document.getElementById('smRebalModal')?.remove();
+    _smRbPlan = null; _smRbMode = 'auto';
     const modal = document.createElement('div');
     modal.id = 'smRebalModal';
     modal.className = 'sm-gl-overlay';
@@ -5543,6 +5707,10 @@ function _smOpenRebalance(id) {
         <button class="sm-gl-close" onclick="document.getElementById('smRebalModal').remove()">✕</button>
     </div>
     <div class="sm-gl-body">
+        <div class="sm-rb-modes" id="rbModes" style="display:none">
+            <button class="sm-rb-mode-btn active" id="rbModeAuto" onclick="_smRbSetMode('auto')">⚡ Auto — place orders</button>
+            <button class="sm-rb-mode-btn" id="rbModeManual" onclick="_smRbSetMode('manual')">✍ Manual — already executed</button>
+        </div>
         <div id="rbBody" class="sm-signal-loading" style="padding:16px 0">Computing rebalance…</div>
         <div class="sm-gl-summary" id="rbResult" style="display:none"></div>
     </div>
@@ -5554,73 +5722,196 @@ function _smOpenRebalance(id) {
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
 
-    const fmt = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-
     fetch(`/api/algo/swing-momentum/configs/${id}/rebalance/preview`)
         .then(r => r.json()).then(d => {
             const body = document.getElementById('rbBody');
             if (!d.success) { body.innerHTML = `<div class="ag-empty">⚠ ${d.error || 'Failed'}</div>`; return; }
-            const sells = d.sells || [], buys = d.buys || [];
+            const sells = d.sells || [];
             if (!sells.length) { body.innerHTML = '<div class="ag-empty">No holdings past exit rank — nothing to rebalance.</div>'; return; }
-
-            const sellRows = sells.map(s => `<tr>
-                <td class="sm-col-sym"><strong>${s.symbol}</strong></td>
-                <td>${s.qty}</td><td>₹${Number(s.price).toFixed(2)}</td>
-                <td>${fmt(s.value)}</td><td>#${s.current_rank ?? '—'}</td></tr>`).join('');
-            const buyRows = buys.length ? buys.map(b => `<tr>
-                <td class="sm-col-sym"><strong>${b.symbol}</strong></td>
-                <td>${b.qty}</td><td>₹${Number(b.price).toFixed(2)}</td>
-                <td>${fmt(b.value)}</td><td>#${b.current_rank ?? '—'}</td></tr>`).join('')
-                : '<tr><td colspan="5" style="text-align:center;color:var(--ag-text-3)">No replacements</td></tr>';
-
-            body.innerHTML = `
-                <div class="sm-rb-tag sm-rb-tag-sell">↓ SELL ${sells.length} — proceeds ${fmt(d.proceeds)}</div>
-                <div class="sm-flow-table-wrap" style="margin-bottom:10px">
-                    <table class="sm-flow-table"><thead><tr>
-                        <th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Rank</th>
-                    </tr></thead><tbody>${sellRows}</tbody></table>
-                </div>
-                <div class="sm-rb-tag sm-rb-tag-buy">↑ BUY ${buys.length} — deploy ${fmt(d.deploy)}</div>
-                <div class="sm-flow-table-wrap">
-                    <table class="sm-flow-table"><thead><tr>
-                        <th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Rank</th>
-                    </tr></thead><tbody>${buyRows}</tbody></table>
-                </div>
-                <div class="sm-flow-summary" style="margin-top:10px">
-                    Broker: <strong>${d.broker ? (d.broker.broker_name || d.broker.broker_type) : '⚠ none set'}</strong>
-                </div>`;
-            const btn = document.getElementById('rbConfirmBtn');
-            if (d.broker && d.broker.instance) btn.disabled = false;
-            else { btn.disabled = true; btn.title = 'Assign a broker via Place Orders first'; }
-            btn.onclick = () => _smSubmitRebalance(id);
+            _smRbPlan = { id, sells, buys: d.buys || [], broker: d.broker };
+            document.getElementById('rbModes').style.display = 'flex';
+            _smRbSetMode('auto');
         })
         .catch(() => { document.getElementById('rbBody').innerHTML = '<div class="ag-empty">Request failed</div>'; });
 }
 
+function _smRbSetMode(mode) {
+    if (!_smRbPlan) return;
+    _smRbMode = mode;
+    document.getElementById('rbModeAuto').classList.toggle('active', mode === 'auto');
+    document.getElementById('rbModeManual').classList.toggle('active', mode === 'manual');
+    const res = document.getElementById('rbResult');
+    if (res) { res.style.display = 'none'; res.innerHTML = ''; }
+    (mode === 'manual' ? _smRbRenderManual : _smRbRenderAuto)();
+}
+
+function _smRbRenderAuto() {
+    const { id, sells, buys, broker } = _smRbPlan;
+    const proceeds = sells.reduce((t, s) => t + s.value, 0);
+    const deploy   = buys.reduce((t, b) => t + b.value, 0);
+    const row = r => `<tr>
+        <td class="sm-col-sym"><strong>${r.symbol}</strong></td>
+        <td>${r.qty}</td><td>₹${Number(r.price).toFixed(2)}</td>
+        <td>${_smRbFmt(r.value)}</td><td>#${r.current_rank ?? '—'}</td></tr>`;
+    const buyRows = buys.length ? buys.map(row).join('')
+        : '<tr><td colspan="5" style="text-align:center;color:var(--ag-text-3)">No replacements</td></tr>';
+
+    document.getElementById('rbBody').innerHTML = `
+        <div class="sm-rb-tag sm-rb-tag-sell">↓ SELL ${sells.length} — proceeds ${_smRbFmt(proceeds)}</div>
+        <div class="sm-flow-table-wrap" style="margin-bottom:10px">
+            <table class="sm-flow-table"><thead><tr>
+                <th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Rank</th>
+            </tr></thead><tbody>${sells.map(row).join('')}</tbody></table>
+        </div>
+        <div class="sm-rb-tag sm-rb-tag-buy">↑ BUY ${buys.length} — deploy ${_smRbFmt(deploy)}</div>
+        <div class="sm-flow-table-wrap">
+            <table class="sm-flow-table"><thead><tr>
+                <th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Rank</th>
+            </tr></thead><tbody>${buyRows}</tbody></table>
+        </div>
+        <div class="sm-rb-hint">The sells go out first; the buys follow only once they have filled.</div>
+        <div class="sm-flow-summary">
+            Broker: <strong>${broker ? (broker.broker_name || broker.broker_type) : '⚠ none set'}</strong>
+        </div>`;
+
+    const btn = document.getElementById('rbConfirmBtn');
+    btn.textContent = 'Confirm & Place Orders';
+    if (broker && broker.instance) { btn.disabled = false; btn.title = ''; }
+    else { btn.disabled = true; btn.title = 'Assign a broker via Place Orders first'; }
+    btn.onclick = () => _smSubmitRebalance(id);
+}
+
+function _smRbRenderManual() {
+    const { id, sells, buys } = _smRbPlan;
+    const today = new Date().toISOString().slice(0, 10);
+    // Qty and price are pre-filled from the plan but every one of them is meant
+    // to be overwritten with what the broker actually gave. A row left at qty 0
+    // is simply not recorded.
+    const row = r => `<tr data-sym="${r.symbol}">
+        <td class="sm-col-sym"><strong>${r.symbol}</strong></td>
+        <td><input type="number" class="sm-rb-in rb-qty" value="${r.qty}" min="0" step="1" oninput="_smRbRecalc()"></td>
+        <td><input type="number" class="sm-rb-in rb-px" value="${Number(r.price).toFixed(2)}" min="0" step="0.05" oninput="_smRbRecalc()"></td>
+        <td class="rb-val">${_smRbFmt(r.value)}</td></tr>`;
+    const head = `<thead><tr><th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>`;
+    const buyRows = buys.length ? buys.map(row).join('')
+        : '<tr><td colspan="4" style="text-align:center;color:var(--ag-text-3)">No replacements</td></tr>';
+
+    document.getElementById('rbBody').innerHTML = `
+        <div class="sm-rb-hint">No orders are placed. Enter the exit and entry prices you actually
+            got at the broker — only the group's holdings, cash and history are updated.</div>
+        <div class="sm-rb-tag sm-rb-tag-sell" id="rbSellTag">↓ SOLD — proceeds —</div>
+        <div class="sm-flow-table-wrap" style="margin-bottom:10px">
+            <table class="sm-flow-table">${head}<tbody id="rbSellBody">${sells.map(row).join('')}</tbody></table>
+        </div>
+        <div class="sm-rb-tag sm-rb-tag-buy" id="rbBuyTag">↑ BOUGHT — deployed —</div>
+        <div class="sm-flow-table-wrap">
+            <table class="sm-flow-table">${head}<tbody id="rbBuyBody">${buyRows}</tbody></table>
+        </div>
+        <label class="sm-gl-field" style="margin-top:10px;max-width:170px">
+            <span>Trade date</span>
+            <input type="date" id="rbDate" value="${today}">
+        </label>
+        <div class="sm-flow-summary" id="rbNet"></div>`;
+
+    const btn = document.getElementById('rbConfirmBtn');
+    btn.textContent = 'Confirm & Update Records';
+    btn.disabled = false; btn.title = '';   // manual needs no broker connection
+    btn.onclick = () => _smSubmitRebalanceManual(id);
+    _smRbRecalc();
+}
+
+function _smRbReadRows(tbodyId) {
+    return [...document.querySelectorAll(`#${tbodyId} tr[data-sym]`)].map(tr => ({
+        symbol: tr.dataset.sym,
+        qty:    Number(tr.querySelector('.rb-qty')?.value || 0),
+        price:  Number(tr.querySelector('.rb-px')?.value || 0),
+        row:    tr,
+    }));
+}
+
+function _smRbRecalc() {
+    const tot = id => _smRbReadRows(id).reduce((t, r) => {
+        const v = r.qty * r.price;
+        r.row.querySelector('.rb-val').textContent = _smRbFmt(v);
+        return t + v;
+    }, 0);
+    const sold   = _smRbReadRows('rbSellBody').filter(r => r.qty > 0).length;
+    const bought = _smRbReadRows('rbBuyBody').filter(r => r.qty > 0).length;
+    const proceeds = tot('rbSellBody'), deployed = tot('rbBuyBody');
+    document.getElementById('rbSellTag').textContent = `↓ SOLD ${sold} — proceeds ${_smRbFmt(proceeds)}`;
+    document.getElementById('rbBuyTag').textContent  = `↑ BOUGHT ${bought} — deployed ${_smRbFmt(deployed)}`;
+    const net = proceeds - deployed;
+    document.getElementById('rbNet').textContent =
+        `Left over to cash: ${_smRbFmt(net)}` + (net < 0 ? ' (deployed more than the sale released)' : '');
+}
+
 function _smSubmitRebalance(id) {
     const btn = document.getElementById('rbConfirmBtn');
-    btn.disabled = true; btn.textContent = 'Placing orders…';
+    // The sells go out first and the request only returns once they have filled,
+    // so this can sit for up to ~90s before the buys are even placed.
+    btn.disabled = true; btn.textContent = 'Selling — waiting for fills…';
     fetch(`/api/algo/swing-momentum/configs/${id}/rebalance`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     }).then(r => r.json()).then(d => {
-        const res = document.getElementById('rbResult');
         if (!d.success) {
             btn.disabled = false; btn.textContent = 'Confirm & Place Orders';
             window.showNotification && window.showNotification(d.error || 'Failed', 'error');
             return;
         }
         const s = d.summary || {};
-        const ok = (s.sold || s.bought);
-        res.className = 'sm-gl-summary ' + (s.failed && !ok ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
-        res.style.display = 'block';
-        res.textContent = `✅ Sold ${s.sold || 0}, bought ${s.bought || 0}`
-            + (s.failed ? ` · ⚠ ${s.failed} failed` : '') + '. Holdings updated.';
-        window.showNotification && window.showNotification('Rebalance executed', 'success');
-        setTimeout(() => { document.getElementById('smRebalModal')?.remove(); _smLiveLoadSignal(id); }, 1600);
+        _smRbShowResult(id, btn,
+            `✅ Sold ${s.sold || 0}, bought ${s.bought || 0}`
+            + (s.failed ? ` · ⚠ ${s.failed} failed` : '') + '. Holdings updated.',
+            s.errors || [], 'Rebalance executed');
     }).catch(() => {
         btn.disabled = false; btn.textContent = 'Confirm & Place Orders';
         window.showNotification && window.showNotification('Request failed', 'error');
     });
+}
+
+function _smSubmitRebalanceManual(id) {
+    const strip = r => ({ symbol: r.symbol, qty: r.qty, price: r.price });
+    const sells = _smRbReadRows('rbSellBody').filter(r => r.qty > 0 && r.price > 0).map(strip);
+    const buys  = _smRbReadRows('rbBuyBody').filter(r => r.qty > 0 && r.price > 0).map(strip);
+    if (!sells.length && !buys.length) {
+        window.showNotification && window.showNotification('Enter a qty and price for at least one row', 'error');
+        return;
+    }
+    const btn = document.getElementById('rbConfirmBtn');
+    btn.disabled = true; btn.textContent = 'Updating records…';
+    fetch(`/api/algo/swing-momentum/configs/${id}/rebalance/manual`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sells, buys, date: document.getElementById('rbDate')?.value || undefined }),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) {
+            btn.disabled = false; btn.textContent = 'Confirm & Update Records';
+            window.showNotification && window.showNotification(d.error || 'Failed', 'error');
+            return;
+        }
+        const s = d.summary || {};
+        _smRbShowResult(id, btn,
+            `✅ Recorded: sold ${s.sold || 0}, bought ${s.bought || 0}`
+            + ` · proceeds ${_smRbFmt(d.proceeds)}, deployed ${_smRbFmt(d.deployed)}`
+            + ` · cash ${_smRbFmt(d.cash)}. No orders were placed.`,
+            [], 'Rebalance recorded');
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = 'Confirm & Update Records';
+        window.showNotification && window.showNotification('Request failed', 'error');
+    });
+}
+
+function _smRbShowResult(id, btn, text, errs, toast) {
+    const res = document.getElementById('rbResult');
+    res.className = 'sm-gl-summary ' + (errs.length ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
+    res.style.display = 'block';
+    res.innerHTML = text + (errs.length
+        ? '<ul style="margin:6px 0 0;padding-left:18px">' + errs.map(e => `<li>${e}</li>`).join('') + '</ul>'
+        : '');
+    window.showNotification && window.showNotification(toast, 'success');
+    // Leave the box up when something did not go through — those lines say which
+    // order never filled, and auto-closing would hide them.
+    if (errs.length) { btn.textContent = 'Done'; _smLiveLoadSignal(id); return; }
+    setTimeout(() => { document.getElementById('smRebalModal')?.remove(); _smLiveLoadSignal(id); }, 1600);
 }
 
 function _smOpenExitHistory(id) {

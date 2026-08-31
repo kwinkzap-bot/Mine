@@ -64,6 +64,14 @@ is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip
 show_labels = input.bool(title="Show Labels", defval=false, inline="labels")
 position_labels = input.string("Left", "", options=["Left", "Right"], inline="labels")
 
+// Virgin CPR — a CPR whose BC/TC band was never touched by price during the
+// session it belongs to. Untested levels stay live support/resistance, so they
+// get their own shadow colour and are carried forward until a candle hits them.
+vcpr_show    = input.bool(true, "Highlight Virgin CPR", group="Virgin CPR", tooltip="A CPR is virgin when no candle traded into its BC-TC band during its own session. Only the shadow changes colour; the lines keep the normal CPR look.")
+vcpr_extend  = input.bool(true, "Extend until touched", group="Virgin CPR", tooltip="Virgin CPRs are extended to the right and stop at the end of the session in which price first touches the band. Still-untouched ones run to the right edge of the chart, into the future.")
+vcpr_fill    = input.color(#FFF59D, "Virgin CPR Shadow Colour", group="Virgin CPR")
+vcpr_transp  = input.int(60, "Virgin CPR Shadow Transparency", minval=0, maxval=100, group="Virgin CPR")
+
 var DEF_COLOR = #FB8C00
 var R3S3_COLOR = #A020F0
 var P_COLOR = #8E2929
@@ -86,6 +94,9 @@ var arr_s1 = array.new_float()
 var arr_s2 = array.new_float()
 var arr_pdh = array.new_float()
 var arr_pdl = array.new_float()
+// Virgin CPR state, one entry per pivot, kept in step with the arrays above
+var arr_virgin = array.new_bool()   // true while the band was never touched in its own session
+var arr_vtouch = array.new_int()    // close time of the session in which it is first touched afterwards
 
 pivotX_open = float(na)
 pivotX_open := nz(pivotX_open[1], open)
@@ -215,6 +226,8 @@ if (not uses_current_bar and is_time_change) or (uses_current_bar and not na(sec
     array.push(arr_s2, _pivot - (pivotX_prev_high - pivotX_prev_low))
     array.push(arr_pdh, pivotX_prev_high)
     array.push(arr_pdl, pivotX_prev_low)
+    array.push(arr_virgin, true)
+    array.push(arr_vtouch, int(na))
 
     if array.size(arr_time) > look_back
         if array.size(arr_time) > 0
@@ -231,6 +244,7 @@ if (not uses_current_bar and is_time_change) or (uses_current_bar and not na(sec
             array.shift(arr_r1), array.shift(arr_r2)
             array.shift(arr_s1), array.shift(arr_s2)
             array.shift(arr_pdh), array.shift(arr_pdl)
+            array.shift(arr_virgin), array.shift(arr_vtouch)
     is_change := true
 else
     if is_daily_based and custom_years_divisor == -1
@@ -239,6 +253,21 @@ else
     else
         pivotX_high := math.max(pivotX_high, high)
         pivotX_low := math.min(pivotX_low, low)
+
+// Virgin CPR tracking — runs on every bar. The newest CPR loses its virginity
+// the moment price trades into its band; older virgin CPRs remember the END of
+// the session in which a candle finally reaches them, and stop extending there.
+pivot_period_close = time_close(resolution)
+if sp and (vcpr_show or vcpr_extend) and array.size(arr_p) > 0
+    _cur = array.size(arr_p) - 1
+    for i = 0 to _cur
+        _band_lo = math.min(array.get(arr_bc, i), array.get(arr_tc, i))
+        _band_hi = math.max(array.get(arr_bc, i), array.get(arr_tc, i))
+        _hit = high >= _band_lo and low <= _band_hi
+        if _hit and i == _cur
+            array.set(arr_virgin, i, false)
+        else if _hit and i < _cur and array.get(arr_virgin, i) and na(array.get(arr_vtouch, i))
+            array.set(arr_vtouch, i, nz(pivot_period_close, time))
 
 if barstate.islast and array.size(arr_time) > 0 and is_change
     is_change := false
@@ -268,12 +297,25 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
             draw_label(i, array.get(p, i), "P", p_color)
         // Draw CPR Lines
         if sp and array.size(arr_p) > i
-            _lp = line.new(array.get(arr_time, i), array.get(arr_p, i), array.get(arr_time, i+1), array.get(arr_p, i), xloc=xloc.bar_time, color=pivtcol, width=1)
-            _lbc = line.new(array.get(arr_time, i), array.get(arr_bc, i), array.get(arr_time, i+1), array.get(arr_bc, i), xloc=xloc.bar_time, color=pivtcol, width=1)
-            _ltc = line.new(array.get(arr_time, i), array.get(arr_tc, i), array.get(arr_time, i+1), array.get(arr_tc, i), xloc=xloc.bar_time, color=pivtcol, width=1)
+            // The running session is still forming, so it is never styled virgin yet
+            _is_live = i == array.size(arr_p) - 1
+            // Lines keep the normal CPR colour/style — only the shadow marks a virgin CPR
+            _virgin = vcpr_show and not _is_live and array.get(arr_virgin, i)
+            _x1 = array.get(arr_time, i)
+            _x2 = array.get(arr_time, i + 1)
+            _ext = extend.none
+            if _virgin and vcpr_extend
+                _vt = array.get(arr_vtouch, i)
+                if na(_vt)
+                    _ext := extend.right          // never touched — carry it into the future
+                else if _vt > _x2
+                    _x2 := _vt                    // stop at the end of the touch day
+            _lp = line.new(_x1, array.get(arr_p, i), _x2, array.get(arr_p, i), xloc=xloc.bar_time, color=pivtcol, width=1, extend=_ext)
+            _lbc = line.new(_x1, array.get(arr_bc, i), _x2, array.get(arr_bc, i), xloc=xloc.bar_time, color=pivtcol, width=1, extend=_ext)
+            _ltc = line.new(_x1, array.get(arr_tc, i), _x2, array.get(arr_tc, i), xloc=xloc.bar_time, color=pivtcol, width=1, extend=_ext)
             array.push(lines, _lp), array.push(lines, _lbc), array.push(lines, _ltc)
             if shadow
-                array.push(fills, linefill.new(_lbc, _ltc, color.new(pivotColor, cprTransp)))
+                array.push(fills, linefill.new(_lbc, _ltc, _virgin ? color.new(vcpr_fill, vcpr_transp) : color.new(pivotColor, cprTransp)))
 
             if not hist_cpr_only and show_resistance and kind == TRADITIONAL
                 _lr1 = line.new(array.get(arr_time, i), array.get(arr_r1, i), array.get(arr_time, i+1), array.get(arr_r1, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)

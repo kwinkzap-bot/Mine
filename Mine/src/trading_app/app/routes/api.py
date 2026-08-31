@@ -13639,6 +13639,34 @@ def _sm_avg_fill_price(broker_type: str, svc, order_id) -> Optional[float]:
     return None
 
 
+def _sm_wait_for_fills(broker_type: str, svc, order_ids, timeout_s: float = 90.0,
+                       poll_s: float = 3.0) -> dict:
+    """Poll the broker's order book until every one of `order_ids` is terminal.
+
+    Returns {order_id: (status, avg_price, filled_qty)} in the vocabulary of
+    _normalize_broker_order — EXECUTED / CANCELLED / REJECTED / OPEN — plus
+    'UNKNOWN' for an order the book never showed. A book we could not read is
+    "don't know", never "filled": the caller spends the proceeds of whatever
+    this reports as EXECUTED, so a wrong guess here buys on money that does not
+    exist. An order still OPEN at the timeout is left resting at the broker.
+    """
+    import time as _t
+    kind     = 'kite' if broker_type == 'zerodha' else broker_type
+    pending  = {str(o) for o in order_ids if o}
+    out      = {oid: ('UNKNOWN', None, None) for oid in pending}
+    deadline = _t.monotonic() + timeout_s
+    while pending:
+        for oid, row in _broker_order_book(kind, svc).items():
+            if oid in pending:
+                out[oid] = row
+                if row[0] != 'OPEN':
+                    pending.discard(oid)
+        if not pending or _t.monotonic() >= deadline:
+            break
+        _t.sleep(poll_s)
+    return out
+
+
 def _sm_record_exit(config: dict, symbol: str, qty: int, entry_price: float,
                     entry_date: str, exit_price: float, exit_date: Optional[str] = None):
     """Append a realized-exit record to the config's exit_history (per group)."""
@@ -14104,9 +14132,15 @@ def sm_live_rebalance_preview(config_id):
 
 @api_bp.route('/algo/swing-momentum/configs/<config_id>/rebalance', methods=['POST'])
 def sm_live_rebalance(config_id):
-    """Execute the rebalance: SELL holdings that dropped past exit_rank, then BUY
-    the top-ranked replacements sized by the proceeds. Places real orders on the
-    config's broker and rewrites live_entries in the JSON."""
+    """Execute the rebalance: SELL holdings that dropped past exit_rank, wait for
+    those sells to fill, then BUY the top-ranked replacements sized by the
+    proceeds. Places real orders on the config's broker and rewrites
+    live_entries in the JSON.
+
+    The BUYs are strictly second: they are funded by the sale, so each one only
+    goes out once the sell that frees its slot is confirmed EXECUTED. A sell
+    that is rejected — or still resting when the wait times out — keeps its
+    holding and takes its replacement off the list."""
     import time as _t
     configs = _sm_load_live_configs()
     config  = next((c for c in configs if c['id'] == config_id), None)
@@ -14142,27 +14176,60 @@ def sm_live_rebalance(config_id):
         if error is not None: rec['error'] = error
         return rec
 
-    # 1) SELL the exiting holdings
-    proceeds = 0.0
+    # 1) SELL the exiting holdings, and wait for them to actually fill. The
+    #    replacements are sized by the sale proceeds, so placing them before the
+    #    sells are confirmed spends money the broker has not released yet — an
+    #    unfilled or rejected sell would leave the group short of funds.
+    placed_sells = []
     for s in sells:
         oid, e = _sm_place_equity_order(broker_type, svc, s['symbol'], s['qty'], 'SELL', price=s['price'])
         if oid:
-            summary['sold'] += 1
-            proceeds += s['qty'] * s['price']
-            sold_syms.append(s['symbol'])
-            orig = by_sym.get(s['symbol'], {})
-            _sm_record_exit(config, s['symbol'], s['qty'],
-                            float(orig.get('entry_price', s['price'])),
-                            orig.get('entry_date', ''), s['price'])
+            placed_sells.append((s, str(oid)))
         else:
             summary['failed'] += 1
             summary['errors'].append(f"SELL {s['symbol']}: {e}")
 
-    # 2) BUY the replacements sized by the proceeds
+    proceeds = 0.0
+    fills    = _sm_wait_for_fills(broker_type, svc, [oid for _, oid in placed_sells]) \
+               if placed_sells else {}
+    for s, oid in placed_sells:
+        status, avg, _q = fills.get(oid, ('UNKNOWN', None, None))
+        if status != 'EXECUTED':
+            # Not filled: keep the holding, and do not deploy its proceeds.
+            summary['failed'] += 1
+            summary['errors'].append(
+                f"SELL {s['symbol']} ({oid}): {status.lower()} — not confirmed filled, "
+                f"holding kept and no replacement bought")
+            logger.warning('SM rebalance %s: SELL %s order %s ended %s — not deploying its proceeds',
+                           config_id, s['symbol'], oid, status)
+            continue
+        px = float(avg) if avg and float(avg) > 0 else s['price']
+        summary['sold'] += 1
+        proceeds += s['qty'] * px
+        sold_syms.append(s['symbol'])
+        orig = by_sym.get(s['symbol'], {})
+        _sm_record_exit(config, s['symbol'], s['qty'],
+                        float(orig.get('entry_price', px)),
+                        orig.get('entry_date', ''), px)
+
+    # 2) BUY the replacements — one per slot the sales actually freed, funded by
+    #    the real proceeds (plus any banked cash, which absorbs the slippage
+    #    between the previewed price and the fill).
+    budget   = proceeds + max(_sm_cash_balance(config), 0.0)
     buy_oids = []
-    for b in buys:
+    for b in buys[len(sold_syms):]:
+        summary['failed'] += 1
+        summary['errors'].append(f"BUY {b['symbol']}: skipped — its sell did not fill")
+    for b in buys[:len(sold_syms)]:
+        cost = b['qty'] * b['price']
+        if cost > budget:
+            summary['failed'] += 1
+            summary['errors'].append(
+                f"BUY {b['symbol']}: skipped — needs Rs{cost:,.0f}, only Rs{budget:,.0f} available")
+            continue
         oid, e = _sm_place_equity_order(broker_type, svc, b['symbol'], b['qty'], 'BUY', price=b['price'])
         if oid:
+            budget -= cost
             summary['bought'] += 1
             entry = {'symbol': b['symbol'], 'entry_price': b['price'], 'qty': b['qty'],
                      'entry_date': datetime.today().strftime('%Y-%m-%d'),
@@ -14202,6 +14269,112 @@ def sm_live_rebalance(config_id):
 
     return jsonify({'success': True, 'summary': summary,
                     'holdings': len(config['live_entries'])})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/rebalance/manual', methods=['POST'])
+def sm_live_rebalance_manual(config_id):
+    """Record a rebalance the user executed by hand at their broker.
+
+    Body: {sells: [{symbol, qty, price}], buys: [{symbol, qty, price}], date?}
+
+    Places no orders at all — the trades already happened in the broker's app
+    and this only writes down the quantities and prices that actually executed.
+    Everything downstream of a fill is the same as the automatic path (exits
+    recorded, holdings rewritten, cash settled, flow logged), so both ways of
+    rebalancing leave the same JSON behind.
+
+    A sell qty below the held qty trims the position instead of closing it, and
+    a buy in a symbol still held averages into that holding rather than writing
+    a second row for it.
+    """
+    body    = request.get_json() or {}
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+
+    entries = list(config.get('live_entries') or [])
+    by_sym  = {e['symbol']: e for e in entries}
+    when    = str(body.get('date') or datetime.today().strftime('%Y-%m-%d'))
+
+    def _rows(key):
+        out = []
+        for r in (body.get(key) or []):
+            sym = str(r.get('symbol') or '').strip().upper()
+            if not sym:
+                return None, f'{key}: a row has no symbol'
+            try:
+                qty, px = int(float(r.get('qty') or 0)), float(r.get('price') or 0)
+            except (TypeError, ValueError):
+                return None, f'{sym}: qty and price must be numbers'
+            if qty <= 0 or px <= 0:
+                return None, f'{sym}: qty and price must both be above zero'
+            out.append((sym, qty, px))
+        return out, None
+
+    sell_rows, err = _rows('sells')
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+    buy_rows, err = _rows('buys')
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+    if not sell_rows and not buy_rows:
+        return jsonify({'success': False,
+                        'error': 'Nothing to record — enter a qty and price for at least one row'}), 400
+
+    # Validate every sell against what is actually held *before* touching
+    # anything: a bad row must not leave the group half-rewritten.
+    for sym, qty, _px in sell_rows:
+        e = by_sym.get(sym)
+        if not e:
+            return jsonify({'success': False, 'error': f'{sym}: not a holding of this group'}), 400
+        if qty > int(e.get('qty', 0) or 0):
+            return jsonify({'success': False,
+                            'error': f"{sym}: sold {qty} but only {e.get('qty')} held"}), 400
+
+    summary  = {'sold': 0, 'bought': 0, 'failed': 0, 'errors': []}
+    proceeds = 0.0
+    for sym, qty, px in sell_rows:
+        e = by_sym[sym]
+        _sm_record_exit(config, sym, qty, float(e['entry_price']),
+                        e.get('entry_date', ''), px, when)
+        e['qty']  = int(e['qty']) - qty
+        proceeds += qty * px
+        summary['sold'] += 1
+
+    spent = 0.0
+    for sym, qty, px in buy_rows:
+        held = by_sym.get(sym)
+        if held:
+            old_q = int(held.get('qty', 0) or 0)
+            held['entry_price'] = round((old_q * float(held['entry_price']) + qty * px) / (old_q + qty), 2)
+            held['qty']         = old_q + qty
+        else:
+            entries.append({'symbol': sym, 'entry_price': round(px, 2), 'qty': qty,
+                            'entry_date': when,
+                            'order': {'broker': 'Manual', 'broker_type': 'manual',
+                                      'order_id': None, 'status': 'manual'}})
+        spent += qty * px
+        summary['bought'] += 1
+
+    config['live_entries'] = [e for e in entries if int(e.get('qty', 0) or 0) > 0]
+    new_cash = _sm_set_cash(config, _sm_cash_balance(config) + proceeds - spent)
+    config.setdefault('monthly_investment_log', []).append({
+        'date':       when,
+        'amount':     0.0,
+        'proceeds':   round(proceeds, 2),
+        'deployed':   round(spent, 2),
+        'cash_after': new_cash,
+        'note':       f"Manual rebalance: sold {summary['sold']}, bought {summary['bought']}",
+        'type':       'rebalance',
+    })
+    _sm_save_live_configs(configs)
+    logger.info('SM manual rebalance %s: sold %s, bought %s, proceeds %.2f, deployed %.2f',
+                config_id, summary['sold'], summary['bought'], proceeds, spent)
+
+    return jsonify({'success': True, 'summary': summary, 'manual': True,
+                    'proceeds': round(proceeds, 2), 'deployed': round(spent, 2),
+                    'cash': new_cash, 'holdings': len(config['live_entries'])})
 
 
 @api_bp.route('/algo/swing-momentum/configs/<config_id>/holdings/edit', methods=['POST'])
@@ -14245,6 +14418,113 @@ def sm_live_edit_holding(config_id):
 
     _sm_save_live_configs(configs)
     return jsonify({'success': True, 'entry': entry})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/holdings/add', methods=['POST'])
+def sm_live_add_holding(config_id):
+    """Add a stock to a live group's holdings.
+
+    Body: {symbol, qty, entry_price?, entry_date?, place_order?}
+
+    The same two ways in the rebalance offers. With `place_order` the group's
+    broker gets a real CNC MARKET BUY and the fill price becomes the entry
+    price; without it nothing is placed and the row is recorded exactly as
+    typed — for a stock already bought by hand at the broker.
+
+    The cost comes out of the group's idle cash, the way an edit that raises a
+    holding's cost basis already does. Nothing is written if a placed order is
+    rejected.
+    """
+    body    = request.get_json() or {}
+    symbol  = str(body.get('symbol') or '').strip().upper()
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    if not symbol:
+        return jsonify({'success': False, 'error': 'Symbol is required'}), 400
+    try:
+        qty = int(float(body.get('qty') or 0))
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0:
+        return jsonify({'success': False, 'error': 'Quantity must be a whole number above zero'}), 400
+
+    entries = list(config.get('live_entries') or [])
+    if any(e['symbol'] == symbol for e in entries):
+        return jsonify({'success': False,
+                        'error': f'{symbol} is already held — use the row menu to buy more of it'}), 400
+
+    try:
+        price = float(body.get('entry_price') or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    if price <= 0:
+        price = float(_sm_current_prices([symbol]).get(symbol) or 0)
+    if price <= 0:
+        return jsonify({'success': False,
+                        'error': f'No price available for {symbol} — enter an entry price'}), 400
+
+    order_rec = {'broker': 'Manual', 'broker_type': 'manual', 'order_id': None, 'status': 'manual'}
+    warning   = None
+
+    if body.get('place_order'):
+        broker = config.get('broker') or {}
+        if not broker.get('instance'):
+            return jsonify({'success': False,
+                            'error': 'No broker set for this group. Assign one at Place Orders.'}), 400
+        instance    = int(broker['instance'])
+        broker_type = (broker.get('broker_type') or '').strip().lower()
+        broker_name = broker.get('broker_name') or broker_type.title()
+        svc = _sm_build_order_service(session.get('username', 'Mine'), instance, broker_type)
+        if svc is None:
+            return jsonify({'success': False, 'error': f'{broker_name}: not connected'}), 400
+
+        oid, err = _sm_place_equity_order(broker_type, svc, symbol, qty, 'BUY', price=price)
+        if not oid:
+            return jsonify({'success': False, 'error': f'{broker_name}: {err}'}), 400
+        order_rec = {'broker': broker_name, 'broker_type': broker_type, 'instance': instance,
+                     'order_id': str(oid), 'status': 'placed'}
+
+        status, avg, _q = _sm_wait_for_fills(broker_type, svc, [oid], timeout_s=60.0) \
+                          .get(str(oid), ('UNKNOWN', None, None))
+        if status in ('REJECTED', 'CANCELLED'):
+            return jsonify({'success': False,
+                            'error': f'{broker_name}: order {oid} was {status.lower()} — nothing recorded'}), 400
+        if status == 'EXECUTED' and avg and float(avg) > 0:
+            price = round(float(avg), 2)
+            order_rec['status'], order_rec['avg_price'] = 'filled', price
+        else:
+            # Live at the broker but not confirmed filled. Record the position
+            # rather than lose track of it, and say the price is provisional.
+            warning = (f'Order {oid} is placed but not confirmed filled — the entry price is '
+                       f'the quoted {price:.2f}. Correct it once the fill is in.')
+            logger.warning('SM add %s: %s order %s ended %s', config_id, symbol, oid, status)
+
+    entry = {'symbol': symbol, 'entry_price': round(price, 2), 'qty': qty,
+             'entry_date': str(body.get('entry_date') or datetime.today().strftime('%Y-%m-%d')),
+             'order': order_rec}
+    entries.append(entry)
+    config['live_entries'] = entries
+
+    spent    = qty * price
+    new_cash = _sm_set_cash(config, _sm_cash_balance(config) - spent)
+    config.setdefault('monthly_investment_log', []).append({
+        'date':       entry['entry_date'],
+        'amount':     0.0,
+        'proceeds':   0.0,
+        'deployed':   round(spent, 2),
+        'cash_after': new_cash,
+        'note':       f"Added {symbol} x{qty} @ {price:.2f}",
+        'type':       'add',
+    })
+    _sm_save_live_configs(configs)
+    logger.info('SM add holding %s: %s x%s @ %.2f (%s), cash %.2f',
+                config_id, symbol, qty, price, order_rec['status'], new_cash)
+
+    return jsonify({'success': True, 'entry': entry, 'warning': warning,
+                    'deployed': round(spent, 2), 'cash': new_cash,
+                    'holdings': len(entries)})
 
 
 @api_bp.route('/algo/swing-momentum/configs/<config_id>/exit-history', methods=['GET'])
@@ -14560,6 +14840,12 @@ def sm_live_signal(config_id):
             'last_rebalance':         config.get('live_since'),
             'rebalance_needed':       False,
             'configured_investment':  config.get('investment', 100000),
+            # What the user actually put in: opening capital + every SIP - every
+            # SWP. `total_invested` above is a different number — the cost of the
+            # stock held right now — and the two drift apart the moment a sale
+            # realises a gain or a loss, so the UI must not use one for the other.
+            'total_investment':       round(float(config.get('investment', 100000) or 0)
+                                            + total_sip - total_swp, 2),
             'cash_balance':           cash_bal,
             'monthly_add':            config.get('monthly_add', 0),
             'monthly_add_type':       config.get('monthly_add_type', 'static'),

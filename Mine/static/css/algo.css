@@ -1076,6 +1076,7 @@ body.ocean-theme .sm-gl-overlay {
 .sm-meta-item.sm-meta-neg { color: var(--ag-neg); }
 .sm-meta-item.sm-meta-pnl { font-weight: 700; }
 .sm-meta-item.sm-meta-idle { color: var(--ag-warning, #d97706); }
+.sm-meta-item.sm-meta-inv { font-weight: 700; color: var(--ag-text, #0f172a); }
 .sm-meta-sep {
     color: var(--ag-border);
     flex-shrink: 0;
@@ -1901,6 +1902,47 @@ body.ocean-theme .sm-gl-overlay {
 .sm-rb-tag { font-size: 11px; font-weight: 700; margin: 4px 0 6px; padding: 4px 9px; border-radius: 6px; display: inline-block; }
 .sm-rb-tag-sell { background: var(--ag-msg-err-bg, rgba(220,38,38,.08)); color: var(--ag-neg, #dc2626); }
 .sm-rb-tag-buy  { background: var(--ag-msg-ok-bg, rgba(22,163,74,.08)); color: var(--ag-pos, #16a34a); }
+
+/* Rebalance: auto (place orders) vs manual (record trades already executed) */
+.sm-rb-modes { display: flex; gap: 6px; margin-bottom: 10px; }
+.sm-rb-mode-btn {
+    flex: 1; padding: 6px 8px; font-size: 11.5px; font-weight: 700; cursor: pointer;
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 7px;
+    background: var(--ag-surface, #fff); color: var(--ag-text-2, #475569);
+}
+.sm-rb-mode-btn:hover { border-color: var(--ag-accent, #2563eb); }
+.sm-rb-mode-btn.active {
+    border-color: var(--ag-accent, #2563eb); color: var(--ag-accent, #2563eb);
+    background: rgba(37, 99, 235, .08);
+}
+.sm-rb-hint { font-size: 11px; line-height: 1.45; color: var(--ag-text-3, #64748b); margin-bottom: 8px; }
+.sm-rb-in {
+    width: 100%; max-width: 88px; padding: 3px 5px; font-size: 11px; text-align: right;
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 5px;
+    background: var(--ag-surface, #fff); color: var(--ag-text, #0f172a);
+}
+.sm-rb-in:focus { border-color: var(--ag-accent, #2563eb); outline: none; }
+
+/* Add Stock — button on the holdings header, and its modal */
+.sm-add-stock-btn {
+    margin-left: auto; padding: 3px 9px; font-size: 10.5px; font-weight: 700; cursor: pointer;
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 6px;
+    background: var(--ag-surface, #fff); color: var(--ag-text-2, #475569);
+}
+.sm-add-stock-btn:hover { border-color: var(--ag-pos, #16a34a); color: var(--ag-pos, #16a34a); }
+.sm-as-chip {
+    margin: 3px 4px 0 0; padding: 2px 7px; font-size: 10.5px; font-weight: 700; cursor: pointer;
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 999px;
+    background: var(--ag-surface, #fff); color: var(--ag-text-2, #475569);
+}
+.sm-as-chip span { font-weight: 600; color: var(--ag-text-3, #94a3b8); }
+.sm-as-chip:hover { border-color: var(--ag-accent, #2563eb); color: var(--ag-accent, #2563eb); }
+.sm-as-order {
+    display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 11.5px;
+    color: var(--ag-text-2, #475569); cursor: pointer;
+}
+.sm-as-order-off { opacity: .6; cursor: default; }
+.sm-as-warn { color: var(--ag-neg, #dc2626); font-weight: 700; }
 
 /* ── RTP live performance dashboard (charts + period tabs) ────── */
 .rtp-chart-block { margin-top: 14px; }

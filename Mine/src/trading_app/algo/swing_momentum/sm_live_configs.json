@@ -19,6 +19,15 @@
           "cash_after": 7.2,
           "note": "",
           "type": "sip"
+        },
+        {
+          "date": "2026-08-31",
+          "amount": 0.0,
+          "proceeds": 8309.0,
+          "deployed": 8311.5,
+          "cash_after": 87.83,
+          "note": "Manual rebalance: sold 1, bought 1",
+          "type": "rebalance"
         }
       ],
       "start_date": "2025-01-01",
@@ -165,20 +174,6 @@
           }
         },
         {
-          "symbol": "SCHNEIDER",
-          "entry_price": 1367.5,
-          "qty": 7,
-          "entry_date": "2026-07-02",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 6,
-            "order_id": "260702190122035",
-            "status": "filled",
-            "avg_price": 1367.5
-          }
-        },
-        {
           "symbol": "DATAPATTNS",
           "entry_price": 4561.2,
           "qty": 2,
@@ -191,6 +186,18 @@
             "status": "filled",
             "avg_price": 4561.2
           }
+        },
+        {
+          "symbol": "ATHERENERG",
+          "entry_price": 1662.3,
+          "qty": 5,
+          "entry_date": "2026-08-31",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
         }
       ],
       "broker": {
@@ -198,7 +205,21 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 90.33
+      "cash_balance": 87.83,
+      "exit_history": [
+        {
+          "symbol": "SCHNEIDER",
+          "qty": 7,
+          "entry_date": "2026-07-02",
+          "exit_date": "2026-08-31",
+          "entry_price": 1367.5,
+          "exit_price": 1187.0,
+          "invested": 9572.5,
+          "final_value": 8309.0,
+          "pnl": -1263.5,
+          "pnl_pct": -13.2
+        }
+      ]
     },
     {
       "id": "022a707b",
@@ -219,6 +240,24 @@
           "cash_after": 157.15,
           "note": "",
           "type": "sip"
+        },
+        {
+          "date": "2026-08-31",
+          "amount": 0.0,
+          "proceeds": 0.0,
+          "deployed": 0,
+          "cash_after": 157.15,
+          "note": "Rebalance: sold 0, bought 0",
+          "type": "rebalance"
+        },
+        {
+          "date": "2026-08-31",
+          "amount": 0.0,
+          "proceeds": 8272.25,
+          "deployed": 8154.0,
+          "cash_after": 275.4,
+          "note": "Manual rebalance: sold 1, bought 1",
+          "type": "rebalance"
         }
       ],
       "start_date": "2025-01-01",
@@ -367,20 +406,6 @@
           }
         },
         {
-          "symbol": "SCHNEIDER",
-          "entry_price": 1430.9,
-          "qty": 7,
-          "entry_date": "2026-07-03",
-          "order": {
-            "broker": "Saranya (Dhan)",
-            "broker_type": "dhan",
-            "instance": 5,
-            "order_id": null,
-            "status": "failed",
-            "error": "No Dhan security_id for SCHNEIDER"
-          }
-        },
-        {
           "symbol": "ATHERENERG",
           "entry_price": 1150.0,
           "qty": 8,
@@ -393,6 +418,18 @@
             "status": "failed",
             "error": "No Dhan security_id for ATHERENERG"
           }
+        },
+        {
+          "symbol": "JINDALSAW",
+          "entry_price": 302.0,
+          "qty": 27,
+          "entry_date": "2026-08-31",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
         }
       ],
       "broker": {
@@ -400,7 +437,21 @@
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       },
-      "cash_balance": 157.15
+      "cash_balance": 275.4,
+      "exit_history": [
+        {
+          "symbol": "SCHNEIDER",
+          "qty": 7,
+          "entry_date": "2026-07-03",
+          "exit_date": "2026-08-31",
+          "entry_price": 1430.9,
+          "exit_price": 1181.75,
+          "invested": 10016.3,
+          "final_value": 8272.25,
+          "pnl": -1744.05,
+          "pnl_pct": -17.41
+        }
+      ]
     },
     {
       "id": "53d3fc6b",
@@ -412,7 +463,35 @@
       "investment": 99700.0,
       "monthly_add": 0.0,
       "monthly_add_type": "static",
-      "monthly_investment_log": [],
+      "monthly_investment_log": [
+        {
+          "date": "2026-08-31",
+          "amount": 0.0,
+          "proceeds": 10724.8,
+          "deployed": 0,
+          "cash_after": 10724.8,
+          "note": "Rebalance: sold 1, bought 0",
+          "type": "rebalance"
+        },
+        {
+          "date": "2026-08-31",
+          "amount": 0.0,
+          "proceeds": 7200.0,
+          "deployed": 8477.28,
+          "cash_after": 9447.52,
+          "note": "Manual rebalance: sold 1, bought 1",
+          "type": "rebalance"
+        },
+        {
+          "date": "2026-08-31",
+          "amount": 0.0,
+          "proceeds": 0.0,
+          "deployed": 8832.74,
+          "cash_after": 614.78,
+          "note": "Added IFCI x98 @ 90.13",
+          "type": "add"
+        }
+      ],
       "start_date": "2025-01-01",
       "status": "watching",
       "added_at": "2026-08-04 11:06",
@@ -497,16 +576,28 @@
           "entry_date": "2026-08-04"
         },
         {
-          "symbol": "LLOYDSME",
-          "entry_price": 2059.1,
-          "qty": 4,
-          "entry_date": "2026-08-04"
+          "symbol": "JINDALSAW",
+          "entry_price": 302.76,
+          "qty": 28,
+          "entry_date": "2026-08-31",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
         },
         {
-          "symbol": "HSCL",
-          "entry_price": 752.05,
-          "qty": 16,
-          "entry_date": "2026-08-04"
+          "symbol": "IFCI",
+          "entry_price": 90.13,
+          "qty": 98,
+          "entry_date": "2026-08-31",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
         }
       ],
       "broker": {
@@ -514,7 +605,33 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 0.0
+      "cash_balance": 614.78,
+      "exit_history": [
+        {
+          "symbol": "HSCL",
+          "qty": 16,
+          "entry_date": "2026-08-04",
+          "exit_date": "2026-08-31",
+          "entry_price": 752.05,
+          "exit_price": 670.3,
+          "invested": 12032.8,
+          "final_value": 10724.8,
+          "pnl": -1308.0,
+          "pnl_pct": -10.87
+        },
+        {
+          "symbol": "LLOYDSME",
+          "qty": 4,
+          "entry_date": "2026-08-04",
+          "exit_date": "2026-08-31",
+          "entry_price": 2059.1,
+          "exit_price": 1800.0,
+          "invested": 8236.4,
+          "final_value": 7200.0,
+          "pnl": -1036.4,
+          "pnl_pct": -12.58
+        }
+      ]
     }
   ]
 }
