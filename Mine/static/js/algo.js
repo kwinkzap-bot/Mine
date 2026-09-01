@@ -4910,6 +4910,14 @@ function _smSaveInv(id) {
 // id → { holdings: [...], broker: {...}|null } captured at render time
 const _smHoldingsData = {};
 
+// Manual mode for the SIP/SWP popup — on by default: the user places the trade
+// with the broker themselves and the popup only records it. Unticking it hands
+// the order back to the group's broker. Prices become editable per row and
+// Confirm sends nothing to the broker. `prices` holds the parsed numbers used
+// for sizing; `raw` holds exactly what was typed, so a re-render mid-keystroke
+// doesn't reformat "205" into "205.00" under the caret.
+const _smFlowManual = { on: false, prices: {}, raw: {} };
+
 // Build the SIP/SWP plan.
 //
 // SIP — the budget is the entered amount plus whatever idle cash the group is
@@ -4925,7 +4933,8 @@ const _smHoldingsData = {};
 // equal weight the strategy wants — until no share fits in what is left. SWP
 // mirrors it, selling from the largest holding first and never overshooting the
 // requested withdrawal.
-function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0, cashBalance = null) {
+function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0, cashBalance = null,
+                     priceOverrides = null) {
     const n = holdings.length;
     const empty = { allocs: [], sipAmount: amount, idle: 0, fromCash: 0,
                     deployedBase: 0, splitAmount: 0, leftover: 0 };
@@ -4948,9 +4957,12 @@ function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0, cashBalan
     const fromCash    = isSip ? 0 : Math.min(idle, amount);
     const splitAmount = isSip ? amount + idle : amount - fromCash;
 
+    // A manually edited price replaces the live quote for sizing as well as for
+    // the new average — the money goes in at the price actually paid.
+    const ovr = priceOverrides || {};
     const allocs = holdings.map(h => ({
         symbol: h.symbol,
-        price:  Number(h.current_price) || 0,
+        price:  Number(ovr[h.symbol]) > 0 ? Number(ovr[h.symbol]) : Number(h.current_price) || 0,
         qty:    0,
         held:   Number(h.qty) || 0,
         entry:  Number(h.entry_price) || 0,
@@ -4991,6 +5003,7 @@ function _smOpenFlowModal(id, mode) {
     // Open immediately with whatever we already have, then refresh the group's
     // data (holdings, live prices, deployed value) and recompute the split so the
     // popup always reflects the current state — not a stale snapshot.
+    _smFlowManual.on = true; _smFlowManual.prices = {}; _smFlowManual.raw = {};
     _smBuildFlowModal(id, mode);
     _smInvalidateCache(id);
     _smPrefetch(id, true);
@@ -5031,6 +5044,10 @@ function _smBuildFlowModal(id, mode) {
         <div class="sm-flow-controls">
             <label class="sm-gl-field"><span>${isSip ? 'Invest amount (₹)' : 'Withdraw amount (₹)'}</span>
                 <input type="number" id="flowAmount" value="${defAmt}" step="500" min="0"></label>
+            <label class="sm-flow-manual" title="Record a trade you place with the broker yourself — prices become editable and no order is sent.">
+                <input type="checkbox" id="flowManual" checked>
+                <span>Manual — edit ${isSip ? 'buy' : 'sell'} price, no broker order</span>
+            </label>
         </div>
         <div class="sm-flow-table-wrap">
             <table class="sm-flow-table">
@@ -5058,6 +5075,23 @@ function _smBuildFlowModal(id, mode) {
 
     const recompute = () => _smRenderFlowTable(id, mode);
     document.getElementById('flowAmount').addEventListener('input', recompute);
+    document.getElementById('flowManual').addEventListener('change', (e) => {
+        _smFlowManual.on = e.target.checked;
+        if (!_smFlowManual.on) { _smFlowManual.prices = {}; _smFlowManual.raw = {}; }
+        recompute();
+    });
+    // Delegated: the tbody is rebuilt on every recompute, so a handler bound to
+    // an individual price input would not survive the first keystroke.
+    document.getElementById('flowTableBody').addEventListener('input', (e) => {
+        const el = e.target.closest && e.target.closest('.sm-flow-px');
+        if (!el) return;
+        const sym = el.dataset.sym;
+        const v   = parseFloat(el.value);
+        _smFlowManual.raw[sym] = el.value;
+        if (v > 0) _smFlowManual.prices[sym] = v;
+        else       delete _smFlowManual.prices[sym];   // blank falls back to live
+        recompute();
+    });
     document.getElementById('flowConfirmBtn').addEventListener('click', () => _smSubmitFlow(id, mode));
     recompute();
 }
@@ -5068,10 +5102,17 @@ function _smRenderFlowTable(id, mode) {
     const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
     const isSip    = mode === 'sip';
     const plan     = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0,
-                                 data.cashBalance);
+                                 data.cashBalance,
+                                 _smFlowManual.on ? _smFlowManual.prices : null);
     const allocs   = plan.allocs;
     const body     = document.getElementById('flowTableBody');
     const fmt      = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    // Rebuilding the tbody drops focus, so note where the caret was in an edited
+    // price cell and put it back afterwards.
+    const act     = document.activeElement;
+    const keepSym = act && act.classList && act.classList.contains('sm-flow-px') ? act.dataset.sym : null;
+    const keepCar = keepSym ? act.selectionStart : null;
 
     let deployed = 0;
     body.innerHTML = allocs.map(a => {
@@ -5088,12 +5129,21 @@ function _smRenderFlowTable(id, mode) {
         }
         return `<tr>
             <td class="sm-col-sym"><strong>${a.symbol}</strong></td>
-            <td>₹${a.price.toFixed(2)}</td>
+            ${_smFlowManual.on
+                ? `<td class="sm-flow-px-cell"><input type="text" inputmode="decimal" class="sm-flow-px"
+                       data-sym="${a.symbol}" value="${(_smFlowManual.raw[a.symbol] !== undefined
+                           ? String(_smFlowManual.raw[a.symbol]) : a.price.toFixed(2)).replace(/"/g, '&quot;')}"></td>`
+                : `<td>₹${a.price.toFixed(2)}</td>`}
             <td>${a.held}</td>
             <td class="${isSip ? 'sm-pos' : 'sm-neg'}"><strong>${a.qty}</strong></td>
             ${detail}
         </tr>`;
     }).join('');
+
+    if (keepSym) {
+        const el = body.querySelector(`.sm-flow-px[data-sym="${keepSym}"]`);
+        if (el) { el.focus(); try { el.setSelectionRange(keepCar, keepCar); } catch (_) {} }
+    }
 
     // "deployed" is the value moving through the market; for a SWP the payout is
     // that plus whatever came straight out of idle cash without selling anything.
@@ -5119,7 +5169,8 @@ function _smSubmitFlow(id, mode) {
     const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
     if (!(amount > 0)) { window.showNotification && window.showNotification('Enter a valid amount', 'error'); return; }
     const plan     = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0,
-                                 data.cashBalance);
+                                 data.cashBalance,
+                                 _smFlowManual.on ? _smFlowManual.prices : null);
     const allocs   = plan.allocs.filter(a => a.qty > 0);
     // A withdrawal covered entirely by idle cash sells nothing — still valid.
     if (!allocs.length && !(mode === 'swp' && plan.fromCash > 0)) {
@@ -5127,12 +5178,15 @@ function _smSubmitFlow(id, mode) {
     }
 
     // Use this group's stored broker automatically (no picker in the popup).
-    const broker = data.broker || null;
+    // Manual mode records the trade only — the order is placed by hand, so no
+    // broker is attached and the server never reaches for one.
+    const manual = _smFlowManual.on;
+    const broker = manual ? null : (data.broker || null);
 
     const payload = {
-        mode, amount,
+        mode, amount, manual,
         date: new Date().toISOString().split('T')[0],
-        allocations: allocs.map(a => ({ symbol: a.symbol, qty: a.qty })),
+        allocations: allocs.map(a => ({ symbol: a.symbol, qty: a.qty, price: a.price })),
     };
     if (broker && broker.instance) {
         payload.broker_instance = broker.instance;
@@ -5157,12 +5211,14 @@ function _smSubmitFlow(id, mode) {
         const res = document.getElementById('flowResult');
         const bs  = d.broker_summary;
         let msg = `✅ ${mode === 'sip' ? 'Bought' : 'Sold'} ₹${Math.round(d.deployed).toLocaleString('en-IN')} across stocks.`;
+        if (d.manual) msg += ' Recorded at your prices — no broker order placed.';
         if (bs) msg += bs.placed ? ` ${bs.placed} order(s) on ${bs.broker}${bs.failed ? `, ${bs.failed} failed` : ''}.`
                                  : ` ⚠ ${bs.error || 'No orders placed'} (list updated).`;
         res.className = 'sm-gl-summary ' + (bs && !bs.placed ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
         res.style.display = 'block';
         res.textContent = msg;
-        window.showNotification && window.showNotification(mode === 'sip' ? 'SIP executed' : 'SWP executed', 'success');
+        window.showNotification && window.showNotification(
+            (mode === 'sip' ? 'SIP ' : 'SWP ') + (d.manual ? 'recorded' : 'executed'), 'success');
         setTimeout(() => { document.getElementById('smFlowModal')?.remove(); _smLiveLoadSignal(id); }, 1300);
     }).catch(() => {
         btn.disabled = false; btn.textContent = mode === 'sip' ? 'Confirm & Buy' : 'Confirm & Sell';

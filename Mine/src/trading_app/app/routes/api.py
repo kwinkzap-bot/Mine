@@ -13777,18 +13777,22 @@ def _sm_current_prices(symbols: list) -> dict:
 def sm_live_sip_swp(config_id):
     """Execute a SIP (buy more) or SWP (sell) split equally across all holdings.
 
-    Body: {mode: 'sip'|'swp', amount: float, note?, allocations?: [{symbol, qty}],
+    Body: {mode: 'sip'|'swp', amount: float, note?, manual?,
+           allocations?: [{symbol, qty, price?}],
            broker_instance?, broker_type?, broker_name?}
 
     - SIP: buy `qty` of each holding, update entry_price to the new weighted average.
     - SWP: sell `qty` of each holding (capped at held qty); avg entry unchanged.
     - With a broker: places CNC MARKET orders and uses the avg fill price.
     - Without a broker: uses the current market price as the fill price.
+    - manual=True: the user placed the trade with the broker themselves, so no
+      order is sent and the per-allocation `price` they typed is the fill.
     Logs the flow in monthly_investment_log (amount > 0 for SIP, < 0 for SWP).
     """
     body    = request.get_json() or {}
     mode    = (body.get('mode') or 'sip').lower()
     amount  = float(body.get('amount', 0) or 0)
+    manual  = bool(body.get('manual'))
     configs = _sm_load_live_configs()
     config  = next((c for c in configs if c['id'] == config_id), None)
     if not config:
@@ -13817,7 +13821,16 @@ def sm_live_sip_swp(config_id):
             e   = by_sym.get(sym)
             if not e or q <= 0:
                 continue
-            plan.append((e, q, prices.get(sym, e['entry_price'])))
+            # Manual: the price typed in the popup is the price actually traded
+            # at, so it wins over the live quote for the fill, the new average
+            # and the cash settlement below.
+            px = 0.0
+            if manual:
+                try:
+                    px = float(a.get('price') or 0)
+                except (TypeError, ValueError):
+                    px = 0.0
+            plan.append((e, q, px if px > 0 else prices.get(sym, e['entry_price'])))
     else:
         plan = _sm_plan_split(entries, prices, mode, budget)
 
@@ -13830,7 +13843,7 @@ def sm_live_sip_swp(config_id):
     broker_inst   = body.get('broker_instance')
     broker_summary = None
     fill_prices   = {}   # symbol -> avg fill price (broker) when available
-    if broker_inst and plan:
+    if broker_inst and plan and not manual:
         try:
             import time as _t
             username    = session.get('username', 'Mine')
@@ -13906,17 +13919,19 @@ def sm_live_sip_swp(config_id):
         'cash_after': new_cash,
         'note':       body.get('note', ''),
         'type':       mode,
+        'manual':     manual,
     })
 
     # Remember the broker used as this config's default (so every order popup
     # preselects the group's broker next time).
-    if broker_inst:
+    if broker_inst and not manual:
         config['broker'] = {'instance':    broker_inst,
                             'broker_type': body.get('broker_type'),
                             'broker_name': body.get('broker_name')}
 
     _sm_save_live_configs(configs)
     return jsonify({'success': True, 'mode': mode,
+                    'manual': manual,
                     'deployed': round(deployed, 2),
                     'from_cash': round(from_cash, 2),
                     'cash_balance': new_cash,

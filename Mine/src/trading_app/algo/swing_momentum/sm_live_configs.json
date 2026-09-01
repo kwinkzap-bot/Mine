@@ -28,6 +28,16 @@
           "cash_after": 87.83,
           "note": "Manual rebalance: sold 1, bought 1",
           "type": "rebalance"
+        },
+        {
+          "date": "2026-09-01",
+          "amount": 5000.0,
+          "deployed": 4981.82,
+          "from_cash": 0.0,
+          "cash_after": 106.01,
+          "note": "",
+          "type": "sip",
+          "manual": true
         }
       ],
       "start_date": "2025-01-01",
@@ -37,8 +47,8 @@
       "live_entries": [
         {
           "symbol": "HFCL",
-          "entry_price": 204.92,
-          "qty": 50,
+          "entry_price": 205.7,
+          "qty": 51,
           "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
@@ -64,8 +74,8 @@
         },
         {
           "symbol": "ACUTAAS",
-          "entry_price": 3628.5,
-          "qty": 2,
+          "entry_price": 3488.07,
+          "qty": 3,
           "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
@@ -119,8 +129,8 @@
         },
         {
           "symbol": "AEGISLOG",
-          "entry_price": 1235.9,
-          "qty": 7,
+          "entry_price": 1232.66,
+          "qty": 8,
           "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
@@ -161,8 +171,8 @@
         },
         {
           "symbol": "EMMVEE",
-          "entry_price": 345.02,
-          "qty": 31,
+          "entry_price": 344.23,
+          "qty": 32,
           "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
@@ -205,7 +215,7 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 87.83,
+      "cash_balance": 106.01,
       "exit_history": [
         {
           "symbol": "SCHNEIDER",
@@ -258,6 +268,16 @@
           "cash_after": 275.4,
           "note": "Manual rebalance: sold 1, bought 1",
           "type": "rebalance"
+        },
+        {
+          "date": "2026-09-01",
+          "amount": 5000.0,
+          "deployed": 5179.02,
+          "from_cash": 0.0,
+          "cash_after": 96.38,
+          "note": "",
+          "type": "sip",
+          "manual": true
         }
       ],
       "start_date": "2025-01-01",
@@ -267,8 +287,8 @@
       "live_entries": [
         {
           "symbol": "HFCL",
-          "entry_price": 206.92,
-          "qty": 44,
+          "entry_price": 207.71,
+          "qty": 45,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -337,8 +357,8 @@
         },
         {
           "symbol": "AEGISLOG",
-          "entry_price": 1302.2,
-          "qty": 6,
+          "entry_price": 1278.18,
+          "qty": 8,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -351,8 +371,8 @@
         },
         {
           "symbol": "EMMVEE",
-          "entry_price": 357.19,
-          "qty": 27,
+          "entry_price": 352.26,
+          "qty": 31,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -421,8 +441,8 @@
         },
         {
           "symbol": "JINDALSAW",
-          "entry_price": 302.0,
-          "qty": 27,
+          "entry_price": 303.3,
+          "qty": 31,
           "entry_date": "2026-08-31",
           "order": {
             "broker": "Manual",
@@ -437,7 +457,7 @@
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       },
-      "cash_balance": 275.4,
+      "cash_balance": 96.38,
       "exit_history": [
         {
           "symbol": "SCHNEIDER",
@@ -490,6 +510,16 @@
           "cash_after": 614.78,
           "note": "Added IFCI x98 @ 90.13",
           "type": "add"
+        },
+        {
+          "date": "2026-09-01",
+          "amount": 5000.0,
+          "deployed": 5598.39,
+          "from_cash": 0.0,
+          "cash_after": 16.39,
+          "note": "",
+          "type": "sip",
+          "manual": true
         }
       ],
       "start_date": "2025-01-01",
@@ -499,8 +529,8 @@
       "live_entries": [
         {
           "symbol": "HFCL",
-          "entry_price": 203.45,
-          "qty": 32,
+          "entry_price": 205.85,
+          "qty": 34,
           "entry_date": "2026-08-04"
         },
         {
@@ -517,8 +547,8 @@
         },
         {
           "symbol": "AEGISLOG",
-          "entry_price": 1372.2,
-          "qty": 5,
+          "entry_price": 1345.22,
+          "qty": 6,
           "entry_date": "2026-08-04"
         },
         {
@@ -535,8 +565,8 @@
         },
         {
           "symbol": "LAURUSLABS",
-          "entry_price": 1831.3,
-          "qty": 3,
+          "entry_price": 1834.32,
+          "qty": 4,
           "entry_date": "2026-08-04"
         },
         {
@@ -547,8 +577,8 @@
         },
         {
           "symbol": "CEMPRO",
-          "entry_price": 1303.4,
-          "qty": 5,
+          "entry_price": 1289.13,
+          "qty": 6,
           "entry_date": "2026-08-04"
         },
         {
@@ -577,8 +607,8 @@
         },
         {
           "symbol": "JINDALSAW",
-          "entry_price": 302.76,
-          "qty": 28,
+          "entry_price": 303.07,
+          "qty": 29,
           "entry_date": "2026-08-31",
           "order": {
             "broker": "Manual",
@@ -589,8 +619,8 @@
         },
         {
           "symbol": "IFCI",
-          "entry_price": 90.13,
-          "qty": 98,
+          "entry_price": 89.99,
+          "qty": 102,
           "entry_date": "2026-08-31",
           "order": {
             "broker": "Manual",
@@ -605,7 +635,7 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 614.78,
+      "cash_balance": 196.37,
       "exit_history": [
         {
           "symbol": "HSCL",
@@ -632,6 +662,101 @@
           "pnl_pct": -12.58
         }
       ]
+    },
+    {
+      "id": "accb3a3e",
+      "label": "Nifty MIDSMALLCAP 400 \u00b7 Monthly \u00b7 Top 12 \u00b7 Exit >35",
+      "index": "NIFTY MIDSMALLCAP 400",
+      "top_n": 12,
+      "exit_rank": 35,
+      "rebalance_freq": "monthly",
+      "investment": 100000.0,
+      "monthly_add": 0.0,
+      "monthly_add_type": "static",
+      "monthly_investment_log": [],
+      "start_date": "2025-01-01",
+      "status": "watching",
+      "added_at": "2026-09-01 12:39",
+      "live_since": "2026-09-01",
+      "live_entries": [
+        {
+          "symbol": "HFCL",
+          "entry_price": 241.4,
+          "qty": 34,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "WELCORP",
+          "entry_price": 2510.1,
+          "qty": 3,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "ATHERENERG",
+          "entry_price": 1724.8,
+          "qty": 4,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "CPPLUS",
+          "entry_price": 3662.0,
+          "qty": 2,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "RRKABEL",
+          "entry_price": 2977.0,
+          "qty": 2,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "JINDALSAW",
+          "entry_price": 312.0,
+          "qty": 29,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "AEGISLOG",
+          "entry_price": 1203.7,
+          "qty": 7,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "SYRMA",
+          "entry_price": 1449.3,
+          "qty": 6,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "LAURUSLABS",
+          "entry_price": 1843.0,
+          "qty": 5,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "CEMPRO",
+          "entry_price": 1212.7,
+          "qty": 7,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "SAILIFE",
+          "entry_price": 1556.1,
+          "qty": 6,
+          "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "ACMESOLAR",
+          "entry_price": 400.6,
+          "qty": 27,
+          "entry_date": "2026-09-01"
+        }
+      ],
+      "broker": {
+        "instance": 5,
+        "broker_type": "dhan",
+        "broker_name": "Saranya (Dhan)"
+      }
     }
   ]
 }

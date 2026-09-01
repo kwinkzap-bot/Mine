@@ -1824,6 +1824,20 @@ body.ocean-theme .sm-gl-overlay {
     color: var(--ag-text, #0f172a); background: var(--ag-bg, #f8fafc); outline: none;
 }
 .sm-gl-field input:focus, .sm-gl-field select:focus { border-color: var(--ag-accent, #2563eb); }
+.sm-flow-manual {
+    display: flex; align-items: center; gap: 6px; align-self: end; justify-self: end;
+    height: 31px; font-size: 11px; font-weight: 700; color: var(--ag-text-2, #475569);
+    cursor: pointer; user-select: none;
+}
+.sm-flow-manual input { accent-color: var(--ag-accent, #2563eb); cursor: pointer; margin: 0; }
+.sm-flow-px-cell { padding: 2px 5px !important; }
+.sm-flow-px {
+    width: 100%; box-sizing: border-box; height: 22px; padding: 0 5px;
+    text-align: right; font-family: inherit; font-size: 11px; font-weight: 700;
+    border: 1.5px solid var(--ag-border, #e2e8f0); border-radius: 5px;
+    color: var(--ag-text, #0f172a); background: var(--ag-surface, #fff); outline: none;
+}
+.sm-flow-px:focus { border-color: var(--ag-accent, #2563eb); }
 .sm-flow-table-wrap { max-height: 230px; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--ag-border, #e2e8f0); border-radius: 7px; }
 .sm-flow-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
 .sm-flow-table td, .sm-flow-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
