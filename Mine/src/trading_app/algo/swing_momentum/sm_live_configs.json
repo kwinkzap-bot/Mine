@@ -53,7 +53,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121568",
             "status": "placed"
           }
@@ -66,7 +66,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121611",
             "status": "filled",
             "avg_price": 3497.0
@@ -80,7 +80,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121645",
             "status": "filled",
             "avg_price": 3628.5
@@ -94,7 +94,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121701",
             "status": "filled",
             "avg_price": 2408.0
@@ -108,7 +108,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121749",
             "status": "placed"
           }
@@ -121,7 +121,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121784",
             "status": "filled",
             "avg_price": 1407.7
@@ -135,7 +135,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121825",
             "status": "filled",
             "avg_price": 1235.9
@@ -149,7 +149,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121875",
             "status": "filled",
             "avg_price": 1491.0
@@ -163,7 +163,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121920",
             "status": "filled",
             "avg_price": 2389.6
@@ -177,7 +177,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190121972",
             "status": "filled",
             "avg_price": 347.45
@@ -191,7 +191,7 @@
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
-            "instance": 6,
+            "instance": 7,
             "order_id": "260702190122090",
             "status": "filled",
             "avg_price": 4561.2
@@ -211,7 +211,7 @@
         }
       ],
       "broker": {
-        "instance": 6,
+        "instance": 7,
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
@@ -293,7 +293,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "Invalid IP"
@@ -307,7 +307,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for CPPLUS"
@@ -321,7 +321,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for ACUTAAS"
@@ -335,7 +335,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for CEMPRO"
@@ -349,7 +349,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for KIRLOSENG"
@@ -363,7 +363,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for AEGISLOG"
@@ -377,7 +377,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for EMMVEE"
@@ -391,7 +391,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for WELCORP"
@@ -405,7 +405,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for RRKABEL"
@@ -419,7 +419,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for SYRMA"
@@ -433,7 +433,7 @@
           "order": {
             "broker": "Saranya (Dhan)",
             "broker_type": "dhan",
-            "instance": 5,
+            "instance": 6,
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for ATHERENERG"
@@ -453,7 +453,7 @@
         }
       ],
       "broker": {
-        "instance": 5,
+        "instance": 6,
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       },
@@ -631,7 +631,7 @@
         }
       ],
       "broker": {
-        "instance": 6,
+        "instance": 7,
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
@@ -753,7 +753,7 @@
         }
       ],
       "broker": {
-        "instance": 5,
+        "instance": 6,
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       }

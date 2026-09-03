@@ -434,6 +434,16 @@ BROKER_TYPE_CONFIGS = {
         'login_type': 'modal',
         'login_action': 'showFyersLoginModal()',
         'auth_endpoint': '/auth/login/fyers'
+    },
+    'icici': {
+        'icon': '🅘',
+        # Data only — no order-placement path goes through Breeze. It is listed
+        # here so the Brokers page can drive the daily session login, which the
+        # data provider needs as much as a trading broker does.
+        'description': 'Market data only (Breeze)',
+        'required_fields': ['API_KEY', 'SECRET_KEY'],
+        'login_type': 'url',
+        'login_url': '/auth/login/icici'
     }
 }
 
@@ -718,6 +728,12 @@ def get_available_brokers() -> EndpointResponse:
                 config['access_token'] = session.get(f'fyers_{instance_num}_access_token') or user_vars.get(f'{broker_prefix}ACCESS_TOKEN')
                 config['app_id'] = user_vars.get(f'{broker_prefix}APP_ID')
                 config['secret'] = user_vars.get(f'{broker_prefix}SECRET_KEY')
+            elif broker_type == 'icici':
+                # The Breeze session token lives only in the env file — the
+                # callback that writes it arrives cross-site, with no session
+                # to stash a copy in.
+                config['session_token'] = user_vars.get(f'{broker_prefix}SESSION_TOKEN')
+                config['api_key'] = user_vars.get(f'{broker_prefix}API_KEY')
             broker_configs.append(config)
             
         def verify_broker_status(b_conf):
@@ -828,6 +844,23 @@ def get_available_brokers() -> EndpointResponse:
                         else:
                             s_pops.append(f'fyers_{instance_num}_access_token')
                             msg_status = 'Token expired'
+
+                elif broker_type == 'icici':
+                    # Without this branch the page reported a perfectly live
+                    # Breeze session as 'Not connected', because every unknown
+                    # broker type falls through to the default.
+                    from trading_app.service.icici_data_service import verify_session
+                    session_token = b_conf.get('session_token')
+                    api_key = b_conf.get('api_key')
+                    if not session_token:
+                        msg_status = 'Login required'
+                    elif verify_session(api_key, session_token):
+                        is_logged_in = True
+                        msg_status = 'Connected'
+                    else:
+                        # Breeze tokens die at midnight, so this is the normal
+                        # morning state, not a fault.
+                        msg_status = 'Token expired'
             except Exception as e:
                 logger.error(f"Error checking broker {broker_type} instance {instance_num}: {e}")
                 msg_status = 'Check error'
@@ -10877,7 +10910,12 @@ def _cpr_bands_from_daily(kite_service: 'KiteService', token) -> Dict[str, Any]:
         from_dt = datetime.now() - timedelta(days=_CPR_WIDTH_HISTORY_DAYS * 3 + 10)
         bars = kite_service._historical_with_retry(instrument_token=token, from_date=from_dt, to_date=datetime.now(), interval='day')
         if not bars:
-            return None
+            # Contract is {'today': ..., 'next': ...} — both callers index
+            # straight into it. Returning a bare None here crashed the endpoint
+            # with "'NoneType' object is not subscriptable" whenever the data
+            # provider answered with no candles, which is every provider
+            # outage, not an exotic case.
+            return {'today': None, 'next': None}
         bars.sort(key=lambda b: b['date'], reverse=True)
         # Every COMPLETE session, newest first — [0] is the bar today's CPR is
         # built from, the rest are the context it gets compared against. Today's

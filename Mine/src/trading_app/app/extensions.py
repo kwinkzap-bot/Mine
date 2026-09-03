@@ -54,7 +54,19 @@ def init_extensions(app):
     @app.before_request
     def refresh_session_timeout():
         """Refresh session timeout on every request to keep user logged in during trading."""
-        from flask import session
+        from flask import request, session
+
+        # A request that arrives with no session cookie has no session to
+        # refresh — and marking one permanent here makes an EMPTY session
+        # non-empty, so Flask writes a fresh empty cookie that overwrites the
+        # real login. That is not hypothetical: ICICI Direct posts its login
+        # callback cross-site, a SameSite=Lax cookie is never sent on a
+        # cross-site POST, and this hook logged the user out every single time
+        # they connected the broker. Any third-party callback hits the same
+        # trap, so the guard belongs here rather than in one route.
+        if app.config.get('SESSION_COOKIE_NAME', 'session') not in request.cookies:
+            return
+
         session.permanent = True
         # The session expiration is automatically extended on each request
     

@@ -2123,3 +2123,25 @@ body.dark-theme .oip-oo-cancel-all,
     border-color: #ef4444;
     color: #ef4444;
 }
+
+/* ── Replay page (/replay) — chart size ──────────────────────────────────
+   .oip-chart-wrap is a fixed 575px on /oi-profile, where several charts stack
+   under each other. Replay has one chart, so it sets its own height here —
+   one knob, and the card shrinks to match because the page and the container
+   are back to sizing themselves off their content. oi_replay.js sizes the
+   LightweightCharts canvas off this wrapper, so the two stay in step; nudge
+   --oip-replay-chart-h to make the block taller or shorter. */
+.oip-page--replay {
+    --oip-replay-chart-h: clamp(360px, 62vh, 620px);
+    height: auto;
+    min-height: 0;
+}
+
+.oip-page--replay .oip-container {
+    flex: 0 0 auto;
+}
+
+.oip-page--replay #oipChartWrap {
+    flex: 0 0 auto;
+    height: var(--oip-replay-chart-h);
+}

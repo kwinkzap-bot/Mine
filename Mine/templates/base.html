@@ -102,8 +102,9 @@
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
             <a href="/dashboard"
-                class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
+                class="nav-link {% if request.path in ['/dashboard', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
                 Dashboard</a>
+            <a href="/replay" class="nav-link {% if request.path == '/replay' %}active{% endif %}">🕒 Replay</a>
              <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}">👁
                 Watchlist</a>
             <a href="/orderplacement"

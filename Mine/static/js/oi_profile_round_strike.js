@@ -18,12 +18,16 @@
  * so the default is always the day's actual open, never a live/current
  * price, and never racing Opt Prem's own fetch timing.
  *
- * Reuses shared globals/helpers already defined in oi_profile.js /
- * oi_indicators.js (oipSymbol, _oipTodayCandles, oipCalculateVWAP,
- * showNotification) — all plain top-level declarations in classic <script>
- * tags loaded earlier on this page, so they're visible here too. The
- * timeframe is NOT shared: this block has its own dropdown and its own
- * oipRSInterval (see below).
+ * Carried by TWO pages now — OI Profile and Replay (templates/oi_replay.html)
+ * — which is why the helpers it reaches for (fmtL, the CPR/IVP header
+ * renderers, the stop-order path) live in oi_profile_shared.js rather than
+ * oi_profile.js: Replay cannot load oi_profile.js at all, because that file
+ * and oi_replay.js declare the same top-level `let`s. What it still takes
+ * from whichever main file the host page does load is the page-level state
+ * both of them define (oipSymbol, oipCalculateVWAP) plus showNotification —
+ * all plain top-level declarations in classic <script> tags loaded earlier,
+ * so they're visible here too. The timeframe is NOT shared: this block has
+ * its own dropdown and its own oipRSInterval (see below).
  *
  * Order buttons deliberately use their OWN class (.oip-rs-order-btn, not
  * .oip-order-btn) and their own state (oipRSCurrentCEStrike/PEStrike, own
@@ -895,7 +899,9 @@ function oipRSInitCharts() {
             if (oipIntrinsicChart?.chart && oipIntrinsicSeries) window._oipSyncCrosshair(oipRSChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
             if (oipCEChart?.chart && oipCESeries) window._oipSyncCrosshair(oipRSChart.chart, oipCEChart.chart, param, oipCESeries);
             if (oipPEChart?.chart && oipPESeries) window._oipSyncCrosshair(oipRSChart.chart, oipPEChart.chart, param, oipPESeries);
-            if (oipFixedChart?.chart && oipFixedCeSeries) window._oipSyncCrosshair(oipRSChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
+            // typeof-guarded: Fixed 24000 Monthly is an OI Profile chart, and this
+            // file is loaded on Replay too, where oi_profile.js (where it lives) is not.
+            if (typeof oipFixedChart !== 'undefined' && oipFixedChart?.chart && oipFixedCeSeries) window._oipSyncCrosshair(oipRSChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
         });
     }
 
@@ -1396,7 +1402,7 @@ function oipRSApplyHeader(h) {
     }
     document.getElementById('ivCrushAlert')?.classList.toggle('hidden', !h.iv_crush_alert);
 
-    // CPR keeps oi_profile.js's renderer: the card's Index/Future toggle lives
+    // CPR keeps oi_profile_shared.js's renderer: the card's day toggle lives
     // there and reads the same oipCprData, so feeding it here keeps one code
     // path for both the click and the poll.
     if (h.cpr && (h.cpr.index || h.cpr.index_next) && typeof oipRenderCprCard === 'function') {
@@ -1427,8 +1433,11 @@ let oipRSIsLoading = false;
 // so the loop goes straight round again instead of waiting out a full tick.
 let oipRSReloadPending = false;
 
+// Deliberately NOT suppressed by window.oipReplayMode. This block is live on
+// /replay too (the flag is set there for the historical chart above it), and
+// its feed is its own — one request to /api/oi-profile/round-strike, unrelated
+// to anything the replay chart fetches.
 function oipRSScheduleLoop(delay) {
-    if (window.oipReplayMode) return;
     if (oipRSPollTimer) clearTimeout(oipRSPollTimer);
     oipRSPollTimer = setTimeout(() => {
         if (document.hidden) { oipRSScheduleLoop(OIP_RS_POLL_MS_HIDDEN); return; }
@@ -1572,9 +1581,9 @@ async function oipRSPlaceOrder(side, action, btn) {
         return;
     }
 
-    // Stop entries go through the shared helpers in oi_profile.js, which loads
-    // before this file — one endpoint, one direction check, one wording for
-    // both toolbars.
+    // Stop entries go through the shared helpers in oi_profile_shared.js, which
+    // loads before this file — one endpoint, one direction check, one wording
+    // for both toolbars.
     if (orderType === 'STOP') {
         if (mode === 'mine') {
             showNotification('STOP is broker-only — a Mine order cannot wait for a rise. Switch mode to Broker.', 'error');
