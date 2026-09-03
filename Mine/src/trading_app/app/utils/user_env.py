@@ -51,6 +51,10 @@ class UserEnvManager:
         'FYERS_SECRET_KEY': ('fyers', 'SECRET_KEY'),
         'FYERS_ACCESS_TOKEN': ('fyers', 'ACCESS_TOKEN'),
         'FYERS_REDIRECT_URI': ('fyers', 'REDIRECT_URI'),
+        # ICICI Direct (Breeze)
+        'ICICI_API_KEY': ('icici', 'API_KEY'),
+        'ICICI_SECRET_KEY': ('icici', 'SECRET_KEY'),
+        'ICICI_SESSION_TOKEN': ('icici', 'SESSION_TOKEN'),
     }
     
     @staticmethod
@@ -140,6 +144,9 @@ class UserEnvManager:
                 ('fyers', 'SECRET_KEY'): 'FYERS_SECRET_KEY',
                 ('fyers', 'ACCESS_TOKEN'): 'FYERS_ACCESS_TOKEN',
                 ('fyers', 'REDIRECT_URI'): 'FYERS_REDIRECT_URI',
+                ('icici', 'API_KEY'): 'ICICI_API_KEY',
+                ('icici', 'SECRET_KEY'): 'ICICI_SECRET_KEY',
+                ('icici', 'SESSION_TOKEN'): 'ICICI_SESSION_TOKEN',
             }
             
             # Find all broker instances and set legacy names

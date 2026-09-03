@@ -23,6 +23,7 @@ dependencies = [
     "pytz>=2024.1",
     "gspread>=6.0.0",
     "google-auth>=2.28.0",
+    "breeze-connect>=1.0.60",
 ]
 
 [tool.black]

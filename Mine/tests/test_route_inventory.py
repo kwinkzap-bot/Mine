@@ -74,5 +74,29 @@ def test_route_counts_per_blueprint():
     for rule in app.url_map.iter_rules():
         prefix = rule.endpoint.split(".")[0]
         counts[prefix] = counts.get(prefix, 0) + 1
-    assert counts == {"api": 171, "pages": 24, "auth": 13, "oi_crossover": 10,
+    assert counts == {"api": 171, "pages": 24, "auth": 16, "oi_crossover": 10,
                       "order_placement": 6, "watchlist": 16, "static": 1}
+
+
+def test_icici_callback_bounces_a_cross_site_post_to_a_get():
+    """ICICI posts its login callback cross-site, and a SameSite=Lax cookie is
+    never sent on a cross-site POST — so that request has no session and the
+    page it renders shows the user logged out. The POST must therefore answer
+    with a redirect to a same-site GET, which does carry the cookie. Rendering
+    the result directly from the POST is the bug this guards against."""
+    app = build_route_app()
+    client = app.test_client()
+
+    resp = client.post("/auth/callback/icici")          # no API_Session
+    assert resp.status_code == 303
+    # Either registered alias of icici_callback is fine — what matters is that
+    # it is a GET of that view carrying the outcome.
+    location = resp.headers["Location"]
+    assert "icici" in location and location.endswith("?status=no-session")
+
+    # And the GET half renders the page itself rather than bouncing again.
+    resp = client.get("/auth/callback/icici?status=ok")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "ICICI Direct connected" in body
+    assert "&#39;" not in body          # Jinja must not escape quotes into the JS

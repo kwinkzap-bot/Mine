@@ -127,7 +127,7 @@ def ema_rsi_filter():
 @require_user_auth
 @login_required
 def dashboard():
-    """Dashboard — Backtest and Replay tabs."""
+    """Dashboard — PCR, FII Sector, Swing Trade and the embedded pages."""
     return render_template('dashboard.html')
 
 @pages_bp.route('/backtest')
@@ -159,7 +159,14 @@ def historic_oi():
 @require_user_auth
 @login_required
 def oi_replay():
-    return redirect(url_for('pages.dashboard') + '#replay')
+    """Replay — its own page rather than a Dashboard tab.
+
+    Its markup and its two scripts (oi_indicators.js, oi_replay.js) were
+    loaded on every Dashboard visit even though the other ten panels never
+    touch them, and the LightweightCharts canvas could not size itself until
+    the hidden panel was switched to. Standalone, it lays out on first paint.
+    """
+    return render_template('oi_replay.html')
 
 @pages_bp.route('/orders')
 @require_user_auth

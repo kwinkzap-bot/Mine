@@ -2,6 +2,7 @@
 from flask import Blueprint, redirect, request, session, url_for, jsonify, render_template, render_template_string
 from kiteconnect import KiteConnect
 import os
+import time
 from typing import Optional
 from trading_app.app.utils.logger import logger
 from trading_app.app.config import current_config
@@ -17,6 +18,13 @@ from trading_app.service.kite_order_services import apply_kite_proxy, generate_s
 # to kite.zerodha.com and back — leading to a stale or wrong instance being
 # picked up in /callback, causing "Token is invalid or has expired".
 _pending_zerodha_logins: dict = {}
+
+# Same story for ICICI, one step worse: Breeze posts its callback back to us
+# cross-site, and a cross-site POST carries no SameSite=Lax session cookie at
+# all — so session['username'] is empty in icici_callback even though the user
+# is logged in, and the token gets thrown away. Remember who started the login
+# here instead. One entry: only one ICICI login can be in flight at a time.
+_pending_icici_login: dict = {}
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -1183,6 +1191,220 @@ def _update_fyers_env_credentials(access_token: Optional[str] = None, username: 
         
     except Exception as e:
         logger.error(f"❌ Error updating Fyers credentials: {e}", exc_info=True)
+        return False
+
+
+@auth_bp.route('/login/icici')
+def icici_login():
+    """Send the user to the ICICI Direct (Breeze) login page.
+
+    Breeze has no OAuth code exchange. The user logs in on
+    api.icicidirect.com and ICICI posts an API session number back to the
+    app's registered redirect URL — that number *is* the credential, and it
+    expires daily, exactly like the Zerodha access token.
+    """
+    username = session.get('username')
+    from trading_app.app.utils.user_env import UserEnvManager
+
+    icici_instance = None
+    if username:
+        for i in range(1, 21):
+            if UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower() in ('icici', 'icicidirect', 'breeze'):
+                icici_instance = i
+                break
+
+    def get_var(env_key):
+        if username:
+            val = UserEnvManager.get_user_var(username, env_key)
+            if val:
+                return val
+        return os.getenv(env_key, '')
+
+    api_key = get_var('ICICI_API_KEY')
+    if not api_key:
+        error_msg = ("ICICI Direct credentials not configured. Add BROKER_{N}_TYPE=icici "
+                     "with BROKER_{N}_API_KEY and BROKER_{N}_SECRET_KEY to your env file. "
+                     "Register the app at https://api.icicidirect.com/apiuser/home")
+        logger.error(f"[ICICI Login] {error_msg}")
+        return jsonify({'error': error_msg}), 500
+
+    session['icici_instance_num'] = icici_instance
+    session.permanent = True
+
+    _pending_icici_login.clear()
+    _pending_icici_login.update({'username': username,
+                                 'instance_num': icici_instance,
+                                 'at': time.time()})
+
+    from urllib.parse import quote_plus
+    auth_url = f"https://api.icicidirect.com/apiuser/login?api_key={quote_plus(api_key)}"
+    logger.info("[ICICI Login] Redirecting to Breeze login")
+    return redirect(auth_url)
+
+
+@auth_bp.route('/callback/icici', methods=['GET', 'POST'])
+@auth_bp.route('/login/icici/callback', methods=['GET', 'POST'])
+def icici_callback():
+    """Store the API session number ICICI hands back after login.
+
+    ICICI posts it as form field API_Session; some flows return it on the
+    query string as apisession instead, so both are accepted.
+    """
+    api_session = (request.form.get('API_Session')
+                   or request.form.get('apisession')
+                   or request.args.get('API_Session')
+                   or request.args.get('apisession'))
+
+    # Second half of the bounce — a plain same-site GET, so the session cookie
+    # is back and the user is still signed in when they see the result.
+    if not api_session and request.args.get('status'):
+        ok, message = _ICICI_RESULT_MESSAGES.get(
+            request.args['status'], (False, 'ICICI Direct login failed'))
+        return _icici_result_page(ok, message)
+
+    if not api_session:
+        logger.error("[ICICI Callback] No API_Session in callback: "
+                     f"form={list(request.form.keys())} args={list(request.args.keys())}")
+        return _icici_bounce('no-session')
+
+    username = session.get('username')
+    instance_num = session.get('icici_instance_num')
+
+    if not username:
+        # The cross-site POST dropped the cookie. Fall back to whoever started
+        # the login, but only while it is recent — a day-old entry must never
+        # write a token into some other user's env file.
+        pending = _pending_icici_login
+        if pending and (time.time() - pending.get('at', 0)) < 900:
+            username = pending.get('username')
+            instance_num = instance_num or pending.get('instance_num')
+            logger.info("[ICICI Callback] No session cookie on the cross-site POST — "
+                        f"using the pending login for {username}")
+
+    if not username:
+        logger.error("[ICICI Callback] No user to attribute the session token to")
+        return _icici_bounce('no-user')
+
+    if not _update_icici_env_credentials(session_token=str(api_session).strip(),
+                                         username=username, instance_num=instance_num):
+        return _icici_bounce('save-failed')
+
+    _pending_icici_login.clear()
+
+    # A new session token means the cached adapter is holding a dead one.
+    try:
+        from trading_app.service.provider_logic import _icici_adapter_cache
+        _icici_adapter_cache.clear()
+    except Exception:
+        pass
+
+    logger.info(f"[ICICI Callback] Session token stored for {username}")
+    return _icici_bounce('ok')
+
+
+# What each bounce slug tells the user on the way back.
+_ICICI_RESULT_MESSAGES = {
+    'ok':          (True,  'ICICI Direct connected'),
+    'no-session':  (False, 'ICICI Direct did not return an API session'),
+    'no-user':     (False, 'Session expired — log in to the app and try again'),
+    'save-failed': (False, 'Could not write the session token to your env file'),
+}
+
+
+def _icici_bounce(slug: str):
+    """Answer ICICI's cross-site POST with a redirect to a same-site GET.
+
+    Breeze posts the callback from api.icicidirect.com. A SameSite=Lax cookie
+    is not sent on a cross-site POST, so that request has no session — which is
+    why the page it rendered showed the user as logged out. Lax *does* send the
+    cookie on a top-level GET, so bouncing through a 303 lands the user on a
+    normal signed-in page. That is what makes this end the way the Kite login
+    ends, and it is the only reliable way to get there: Flask writes the
+    session cookie after every after_request hook has run, so a response the
+    POST produces itself cannot be corrected on the way out.
+    """
+    return redirect(url_for('auth.icici_callback', status=slug), code=303)
+
+
+def _icici_result_page(ok: bool, message: str):
+    """Close the popup / bounce back to the app, the way the Zerodha callback does.
+
+    ICICI lands the user on this URL directly, so answering with raw JSON left
+    them staring at an error blob with no way back.
+    """
+    return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>{{ "Login Successful" if ok else "Login Failed" }}</title>
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background: #f5f5f5; }
+                .box { padding: 20px; border-radius: 8px; display: inline-block; }
+                .success { color: #155724; background: #d4edda; }
+                .failure { color: #721c24; background: #f8d7da; }
+            </style>
+        </head>
+        <body>
+            <div class="box {{ 'success' if ok else 'failure' }}">
+                <h2>{{ "✓" if ok else "✗" }} {{ message }}</h2>
+                <p>Returning to the app... <a href="/">go now</a></p>
+            </div>
+            <script>
+                (function () {
+                    try {
+                        if (window.opener && !window.opener.closed) {
+                            window.opener.postMessage(
+                                { type: '{{ msg_type }}', broker: 'icici' }, '*');
+                        }
+                    } catch (e) { /* opener is cross-origin — nothing to tell it */ }
+
+                    setTimeout(function () {
+                        try { window.close(); } catch (e) {}
+                        // window.close() is refused for a window the browser did
+                        // not open itself, and for a popup that has navigated
+                        // across origins on the way here — which is exactly what
+                        // the ICICI login does. So the close alone left the user
+                        // parked on this page forever. If we are still on screen
+                        // a moment later, go back to the app instead.
+                        setTimeout(function () { window.location.replace('/'); }, 400);
+                    }, 1200);
+                })();
+            </script>
+        </body>
+        </html>
+    ''', ok=ok, message=message,
+         msg_type='LOGIN_SUCCESS' if ok else 'LOGIN_FAILED')
+
+
+def _update_icici_env_credentials(session_token: Optional[str] = None,
+                                  username: Optional[str] = None,
+                                  instance_num: Optional[int] = None) -> bool:
+    """Write the daily Breeze session token into the user's env file."""
+    try:
+        if not username:
+            logger.warning("[_update_icici_env_credentials] No username provided, skipping env update")
+            return False
+
+        from trading_app.app.utils.user_env import UserEnvManager
+
+        if not instance_num:
+            for i in range(1, 21):
+                if UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower() in ('icici', 'icicidirect', 'breeze'):
+                    instance_num = i
+                    break
+
+        if not instance_num:
+            logger.warning(f"[_update_icici_env_credentials] No icici broker instance for {username}")
+            return UserEnvManager.save_user_vars(username, {'ICICI_SESSION_TOKEN': session_token})
+
+        success = UserEnvManager.save_user_vars(
+            username, {f'BROKER_{instance_num}_SESSION_TOKEN': session_token})
+        if success:
+            logger.info(f"✓ {username}.env updated with ICICI session token (instance {instance_num})")
+        return success
+
+    except Exception as e:
+        logger.error(f"❌ Error updating ICICI credentials: {e}", exc_info=True)
         return False
 
 
