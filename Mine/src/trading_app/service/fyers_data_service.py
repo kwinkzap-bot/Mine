@@ -51,6 +51,20 @@ _BSE_FUTURE_ROOTS: Dict[str, List[str]] = {
     'BANKEX': ['BANKEX', 'BSEBANKEX'],
 }
 
+def _parse_iso_expiry(expiry_type: Optional[str]):
+    """An expiry_type that names one date -> that date; anything else -> None.
+
+    Lets 'nearest' / 'monthly' and an ISO date share the one parameter that is
+    already threaded through every strike-token caller and cache key.
+    """
+    if not expiry_type or expiry_type in ('nearest', 'monthly'):
+        return None
+    try:
+        return datetime.strptime(str(expiry_type)[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
 # Global Token Mapping (Root:Strike:Type -> FyersSymbol) for high-speed resolution
 _FYERS_OPTION_TOKEN_CACHE: Dict[str, str] = {}
 _FYERS_OPTION_TOKEN_LOCK = threading.Lock()
@@ -1204,10 +1218,15 @@ class FyersDataServiceAdapter:
         Searches the high-speed memory cache first, then the CSV master.
 
         expiry_type: 'nearest' (default, unchanged behaviour for all existing
-        callers) or 'monthly' — the last expiry within the nearest calendar
-        month that still has an unexpired contract. The fast cache (populated
-        by OpenInterestService) always holds nearest-expiry tokens, so
-        'monthly' requests skip it and go straight to the CSV master.
+        callers), 'monthly' — the last expiry within the nearest calendar
+        month that still has an unexpired contract — or an ISO date
+        ('2026-09-15') for one named expiry, which is what the Round Strike
+        expiry dropdown sends. An ISO date that is not listed resolves to
+        nothing rather than silently falling back to the nearest: a chart
+        quietly showing a different expiry than the one selected is worse than
+        an empty one. The fast cache (populated by OpenInterestService) always
+        holds nearest-expiry tokens, so anything else skips it and goes
+        straight to the CSV master.
         """
         root_upper = root.strip().upper()
         opt_upper = option_type.strip().upper()
@@ -1225,9 +1244,13 @@ class FyersDataServiceAdapter:
 
         # 2. Fallback to CSV Master
         from datetime import date as _date
-        instruments = self.instruments('NFO')  # Uses 1-hour cache
+        # SENSEX/BANKEX options live on BSE's master, not NSE's — the same
+        # split list_future_contracts already makes for their futures.
+        exchange = 'BFO' if root_upper in _BSE_FUTURE_ROOTS else 'NFO'
+        roots = {r.upper() for r in _BSE_FUTURE_ROOTS.get(root_upper, [root_upper])}
+        instruments = self.instruments(exchange)  # Uses 1-hour cache
         today = _date.today()
-        root_upper = root.strip().upper()
+        want_expiry = _parse_iso_expiry(expiry_type)
         opt_upper = option_type.strip().upper()
 
         matches = []
@@ -1245,21 +1268,28 @@ class FyersDataServiceAdapter:
             if abs(inst_strk - strike) >= 0.5:
                 continue
 
+            if want_expiry and inst_exp != want_expiry:
+                continue
+
             # Match by name OR tradingsymbol prefix (handles Fyers CSV column shifts)
-            name_ok = (inst_name == root_upper)
-            ts_ok   = (inst_ts.startswith(root_upper) and
-                       len(inst_ts) > len(root_upper) and
-                       not inst_ts[len(root_upper)].isalpha())
+            name_ok = inst_name in roots
+            ts_ok   = any(inst_ts.startswith(r) and
+                          len(inst_ts) > len(r) and
+                          not inst_ts[len(r)].isalpha()
+                          for r in roots)
             if name_ok or ts_ok:
                 matches.append(inst)
 
         if not matches:
-            logger.warning(f"[FyersAdapter] No option found for {root} {strike}{opt_upper}")
+            logger.warning(f"[FyersAdapter] No option found for {root} {strike}{opt_upper}"
+                           f"{f' expiring {want_expiry}' if want_expiry else ''}")
             return None
 
         matches.sort(key=lambda x: x['expiry'])
 
-        if expiry_type == 'monthly':
+        if want_expiry:
+            chosen = matches[0]        # already filtered to that one expiry
+        elif expiry_type == 'monthly':
             by_month = {}
             for m in matches:
                 exp = m['expiry']

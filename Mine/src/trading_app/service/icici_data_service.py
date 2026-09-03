@@ -94,12 +94,19 @@ _HIST_ERROR = threading.local()
 # so a caller still holding a Kite token gets translated the same way the Fyers
 # adapter translates it.
 from trading_app.service.fyers_data_service import (  # noqa: E402  (cycle-free: no reverse import)
+    _BSE_FUTURE_ROOTS,
     _KITE_TO_FYERS_INDICES,
     FyersDataServiceAdapter,
 )
 
-# Breeze intervals: 1second, 1minute, 5minute, 30minute, 1day. Everything else
-# the app asks for is built by aggregating the next-finest one that divides it.
+# Breeze intervals: 1minute, 5minute, 30minute, 1day — the four
+# get_historical_data_v2 documents. Everything else the app asks for is built by
+# aggregating the next-finest one that divides it.
+#
+# '1second' is listed here because the 30-second timeframe is built from it, but
+# v2 does not serve it within any usable request budget (see _BREEZE_UNSUPPORTED
+# below), so a 30s chart on ICICI is refused with a reason rather than drawn from
+# a silently truncated window.
 #   app interval -> (breeze interval, how many of them make one bar)
 _INTERVAL_MAP: Dict[str, Tuple[str, int]] = {
     '30second': ('1second', 30),
@@ -120,11 +127,25 @@ _INTERVAL_MAP: Dict[str, Tuple[str, int]] = {
 }
 
 # Seconds in one bar of each Breeze interval, and how many days of it we dare
-# ask for in a single request. Breeze truncates long windows silently, so the
-# chunk sizes keep every request well under ~1000 candles.
+# ask for in a single request. get_historical_data_v2 documents a hard ceiling
+# of 1000 candles per request and truncates silently above it, so each chunk is
+# sized to stay under that against a 375-minute session:
+#
+#   1minute    2 days  ->   750 candles
+#   5minute   10 days  ->   750
+#   30minute  60 days  ->  ~516 (≈43 trading days x 12)
+#   1day     500 days  ->  ~340 trading days
+#
+# 1second is the exception and cannot be made to fit: one session alone is
+# 22,500 one-second candles, 22x the ceiling, and chunking down to ~16-minute
+# windows would cost 23 requests per day against a 100 req/min account budget.
+# It is refused outright rather than served silently truncated — which is what
+# a 1-day chunk was quietly doing. See _INTERVAL_MAP's note.
+_BREEZE_MAX_CANDLES = 1000
 _BREEZE_BAR_SECONDS = {'1second': 1, '1minute': 60, '5minute': 300,
                        '30minute': 1800, '1day': 86400}
-_CHUNK_DAYS = {'1second': 1, '1minute': 2, '5minute': 10, '30minute': 60, '1day': 500}
+_CHUNK_DAYS = {'1minute': 2, '5minute': 10, '30minute': 60, '1day': 500}
+_BREEZE_UNSUPPORTED = {'1second'}
 
 # NSE/BSE cash and derivatives both open at 09:15; anchoring the aggregation
 # there is what makes a 15-minute bar here line up with Kite's and with the
@@ -248,6 +269,60 @@ class IciciDataServiceAdapter:
                 self._reverse_at = datetime.now()
             return self._reverse
 
+    def _resolve_contract_id(self, sym: str) -> Optional[Dict[str, Any]]:
+        """'ICICI:<ROOT>:<YYYY-MM-DD>:<CE|PE>:<strike>' (option, see
+        option_contract_id) or 'ICICI:<ROOT>:<YYYY-MM-DD>:FUT' (future, see
+        future_contract_id) -> Breeze request parts.
+
+        No symbol-master lookup beyond the root's stock_code, which is a
+        property of the underlying and not of any one contract — so this keeps
+        working after the contract has expired and been delisted.
+        """
+        parts = sym.split(':')
+        if len(parts) == 4 and parts[3].strip().upper() == 'FUT':
+            _, root, exp_raw, _ = parts
+            root = root.strip().upper()
+            try:
+                expiry = datetime.strptime(exp_raw.strip()[:10], '%Y-%m-%d').date()
+            except ValueError:
+                logger.warning("[IciciAdapter] %r: unparseable expiry", sym)
+                return None
+            exch = 'BFO' if root in _BSE_FUTURE_ROOTS else 'NFO'
+            code = master.stock_code(root, exch)
+            if not code:
+                logger.warning("[IciciAdapter] no Breeze stock_code for %s on %s", root, exch)
+                return None
+            return {'root': root, 'stock_code': code, 'exchange_code': exch,
+                    'product_type': 'futures', 'expiry_date': _breeze_expiry(expiry),
+                    'right': None, 'strike_price': None, 'symbol': sym}
+
+        if len(parts) != 5:
+            logger.warning("[IciciAdapter] malformed contract id %r", sym)
+            return None
+        _, root, exp_raw, right, strike_raw = parts
+        root = root.strip().upper()
+        right = right.strip().upper()
+        if right not in ('CE', 'PE'):
+            logger.warning("[IciciAdapter] %r: right must be CE or PE", sym)
+            return None
+        try:
+            expiry = datetime.strptime(exp_raw.strip()[:10], '%Y-%m-%d').date()
+            strike = int(float(strike_raw))
+        except ValueError:
+            logger.warning("[IciciAdapter] %r: unparseable expiry or strike", sym)
+            return None
+
+        exch = 'BFO' if root in _BSE_FUTURE_ROOTS else 'NFO'
+        code = master.stock_code(root, exch)
+        if not code:
+            logger.warning("[IciciAdapter] no Breeze stock_code for %s on %s", root, exch)
+            return None
+
+        return {'root': root, 'stock_code': code, 'exchange_code': exch,
+                'product_type': 'options', 'expiry_date': _breeze_expiry(expiry),
+                'right': 'call' if right == 'CE' else 'put',
+                'strike_price': str(strike), 'symbol': sym}
+
     def _resolve(self, symbol: Union[int, str]) -> Optional[Dict[str, Any]]:
         """Translate one app symbol into the pieces Breeze needs.
 
@@ -257,6 +332,12 @@ class IciciDataServiceAdapter:
         sym = str(symbol).strip()
         sym = _KITE_TO_FYERS_INDICES.get(sym, sym)
         upper = sym.upper()
+
+        # Explicit contract id (see option_contract_id) — parsed, never looked
+        # up, so it resolves for expiries the symbol masters have already
+        # dropped. This is the only path that works for a past expiry.
+        if upper.startswith('ICICI:'):
+            return self._resolve_contract_id(sym)
 
         # Index spot: 'NSE:NIFTY50-INDEX'
         if upper.endswith('-INDEX'):
@@ -513,6 +594,12 @@ class IciciDataServiceAdapter:
             logger.error("[IciciAdapter] unsupported interval %r", interval)
             return []
         breeze_interval, factor = _INTERVAL_MAP[interval]
+        if breeze_interval in _BREEZE_UNSUPPORTED:
+            _HIST_ERROR.msg = (f"ICICI Direct does not serve {interval} candles — its history "
+                               f"API caps a request at {_BREEZE_MAX_CANDLES} candles, and one "
+                               f"session of 1-second bars is 22,500. Use 1m or coarser.")
+            logger.warning("[IciciAdapter] %s refused: %s", interval, _HIST_ERROR.msg)
+            return []
 
         fd = _as_date(from_date)
         td = _as_date(to_date)
@@ -686,6 +773,32 @@ def verify_session(api_key: str, session_token: str,
 
 # ── Module-level helpers ──────────────────────────────────────────────────
 
+def option_contract_id(root: str, strike: float, option_type: str, expiry: Union[str, dt_date]) -> str:
+    """The id _resolve understands for one option contract, live or expired.
+
+    'ICICI:NIFTY:2026-08-25:CE:24000'. It exists because the thing it addresses
+    — a contract whose expiry has passed — is gone from every broker's symbol
+    master within a day of expiring, so there is no tradingsymbol left to look
+    up. Breeze never needs one: get_historical_data_v2 takes stock_code,
+    expiry_date, right and strike as separate fields, and all four are in here.
+    """
+    exp = expiry.isoformat() if hasattr(expiry, 'isoformat') else str(expiry)[:10]
+    return f"ICICI:{root.strip().upper()}:{exp}:{option_type.strip().upper()}:{int(float(strike))}"
+
+
+def future_contract_id(root: str, expiry: Union[str, dt_date]) -> str:
+    """The id _resolve understands for one index future, live or expired.
+
+    'ICICI:NIFTY:2026-08-25:FUT'. Same reasoning as option_contract_id: a
+    future is dropped from every broker's symbol master within a day of
+    expiring too, so a past month's future volume (the Round Strike overlay,
+    when the block is looking at a past option expiry) has no tradingsymbol
+    left to look up either.
+    """
+    exp = expiry.isoformat() if hasattr(expiry, 'isoformat') else str(expiry)[:10]
+    return f"ICICI:{root.strip().upper()}:{exp}:FUT"
+
+
 def _breeze_expiry(day: dt_date) -> str:
     """Breeze wants an ISO instant, not a date: '2026-09-29T06:00:00.000Z'."""
     return f"{day.isoformat()}T06:00:00.000Z"
@@ -731,9 +844,14 @@ def _success(resp: Any) -> List[Dict[str, Any]]:
 
 
 def _error_of(resp: Any) -> str:
+    """The human-readable error Breeze attached to a response, or '' when
+    there isn't one. A bare Status code (200 on a benign empty result, e.g.
+    a window with no trading in it) is not an error and must not be reported
+    as though it were — callers branch error-vs-benign on this being truthy.
+    """
     if not isinstance(resp, dict):
         return str(resp)[:200]
-    return str(resp.get('Error') or resp.get('error') or resp.get('Status') or '')
+    return str(resp.get('Error') or resp.get('error') or '')
 
 
 def _parse_stamp(raw: Any) -> Optional[datetime]:

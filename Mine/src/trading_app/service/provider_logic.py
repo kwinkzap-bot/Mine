@@ -48,45 +48,114 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
         logger.error(f"Error getting Kite instance: {e}")
         return None
 
+def _resolve_username(user: Optional[str] = None) -> str:
+    """The user whose broker credentials a provider lookup should use."""
+    if user:
+        return user
+    if has_request_context():
+        return session.get('username') or ''
+    return ''
+
+
+def _provider_flag(var: str, username: str, default: str = '') -> str:
+    """Read a provider-selection env flag (DATA_PROVIDER, CHART_DATA_PROVIDER).
+
+    Returns '' when the flag is absent or blank, so a caller can tell "not set"
+    from "set to something" and chain its own default. The value is taken up to
+    the first space: these lines carry a trailing `# KITE, FYERS or ICICI`
+    comment in env/Mine.env.
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+
+    if username:
+        UserEnvManager._user_env_cache.pop(username, None)
+        raw = UserEnvManager.get_user_var(username, var, default)
+    else:
+        raw = os.getenv(var, default)
+    parts = str(raw or '').upper().split()
+    return parts[0] if parts else ''
+
+
+def _provider_by_type(provider_type: str, username: str) -> Optional[Any]:
+    """Build the adapter a provider flag names, with the standing fallbacks."""
+    if provider_type in ('ICICI', 'BREEZE', 'ICICIDIRECT'):
+        adapter = _get_icici_adapter(username)
+        if adapter is not None:
+            return adapter
+        # Fyers before Kite: Kite has no historical-data subscription on
+        # any of the configured apps, so falling straight through to it
+        # leaves every chart and CPR calculation with nothing.
+        adapter = _get_fyers_adapter(username)
+        if adapter is not None:
+            logger.warning(f"ICICI unavailable for {username} — serving Fyers instead.")
+            return adapter
+        logger.warning(f"ICICI and Fyers both unavailable for {username}. Falling back to Kite.")
+
+    if provider_type == 'FYERS':
+        adapter = _get_fyers_adapter(username)
+        if adapter is not None:
+            return adapter
+
+    # Default fallback to Kite
+    return get_kite(user=username, instance=1)
+
+
 def get_data_provider(user: Optional[str] = None) -> Optional[Any]:
     """Returns the configured data provider (Kite, Fyers or ICICI Direct)."""
     try:
-        from trading_app.app.utils.user_env import UserEnvManager
-        
-        username = user
-        if not username and has_request_context():
-            username = session.get('username')
-        
-        if not username:
-            provider_type = os.getenv('DATA_PROVIDER', 'KITE').upper().split()[0]
-            username = 'Mine' # Fallback for env lookups
-        else:
-            UserEnvManager._user_env_cache.pop(username, None)
-            raw_val = UserEnvManager.get_user_var(username, 'DATA_PROVIDER', 'KITE')
-            provider_type = raw_val.upper().split()[0]
-        
-        if provider_type in ('ICICI', 'BREEZE', 'ICICIDIRECT'):
-            adapter = _get_icici_adapter(username)
-            if adapter is not None:
-                return adapter
-            # Fyers before Kite: Kite has no historical-data subscription on
-            # any of the configured apps, so falling straight through to it
-            # leaves every chart and CPR calculation with nothing.
-            adapter = _get_fyers_adapter(username)
-            if adapter is not None:
-                logger.warning(f"ICICI unavailable for {username} — serving Fyers instead.")
-                return adapter
-            logger.warning(f"ICICI and Fyers both unavailable for {username}. Falling back to Kite.")
-
-        if provider_type == 'FYERS':
-            adapter = _get_fyers_adapter(username)
-            if adapter is not None:
-                return adapter
-
-        # Default fallback to Kite
-        return get_kite(user=username, instance=1)
+        username = _resolve_username(user)
+        provider_type = _provider_flag('DATA_PROVIDER', username, 'KITE') or 'KITE'
+        return _provider_by_type(provider_type, username or 'Mine')
     except Exception as e:
         logger.error(f"Error getting data provider: {e}")
+        return None
+
+
+def get_oi_chain_provider(user: Optional[str] = None) -> Optional[Any]:
+    """The ICICI Direct (Breeze) adapter, whatever the provider flags say.
+
+    The OI Profile and Replay pages read their option-chain numbers — OI, the
+    OI change, PCR, ATM and max pain — off Breeze, while every other feed on
+    those pages (candles, quotes, futures volume, CPR, VWAP) follows
+    CHART_DATA_PROVIDER. The chain is the one number set worth a second broker
+    session: Breeze answers it as a whole-expiry ladder in two calls. Nothing
+    else there is better on Breeze, and its 100 req/min budget could not carry
+    the 1 Hz candle polling those pages do anyway — which is why this one is
+    fixed rather than flag-driven.
+
+    Returns None when ICICI is unconfigured or its daily session is dead, so
+    each caller falls back to the source it used before rather than losing the
+    data outright.
+    """
+    try:
+        return _get_icici_adapter(_resolve_username(user) or 'Mine')
+    except Exception as e:
+        logger.error(f"Error getting ICICI OI-chain provider: {e}")
+        return None
+
+
+def get_chart_provider(user: Optional[str] = None) -> Optional[Any]:
+    """The provider CHART_DATA_PROVIDER names, for everything on OI Profile and
+    Replay that is NOT the OI chain — candles, quotes, futures volume, CPR,
+    VWAP, strike tokens.
+
+    Its own flag rather than DATA_PROVIDER so those two pages can sit on a
+    different broker from the rest of the app: their charts poll at 1 Hz, which
+    Breeze's 100 req/min budget cannot carry, while the chain above wants
+    Breeze precisely. Unset, it IS DATA_PROVIDER — the split costs nothing
+    until you ask for it.
+
+    Same fallbacks as get_data_provider: a named broker that has no live
+    session degrades to the next usable one rather than leaving the page blank.
+    """
+    try:
+        username = _resolve_username(user)
+        provider_type = (_provider_flag('CHART_DATA_PROVIDER', username)
+                         or _provider_flag('DATA_PROVIDER', username, 'KITE')
+                         or 'KITE')
+        return _provider_by_type(provider_type, username or 'Mine')
+    except Exception as e:
+        logger.error(f"Error getting chart data provider: {e}")
         return None
 
 

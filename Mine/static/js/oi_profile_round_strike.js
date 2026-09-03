@@ -13,10 +13,10 @@
  * Examples: open=23907 -> near50=23900 (mult of 100) -> CE=23800, PE=24000
  *           open=23933 -> near50=23950 (half-mark)    -> CE=23900, PE=24000
  *
- * The open price and strike list are fetched by THIS block itself
- * (oipRSFetchOpenAndStrikes), independent of Opt Prem's own load/state —
- * so the default is always the day's actual open, never a live/current
- * price, and never racing Opt Prem's own fetch timing.
+ * The rule above is applied server-side (_rs_default_strikes in api.py) and
+ * fetched by THIS block itself (oipRSLoadDefaultStrikes), independent of Opt
+ * Prem's own load/state — so the default is always the day's actual open,
+ * never a live/current price, and never racing Opt Prem's own fetch timing.
  *
  * Carried by TWO pages now — OI Profile and Replay (templates/oi_replay.html)
  * — which is why the helpers it reaches for (fmtL, the CPR/IVP header
@@ -721,14 +721,6 @@ function oipRSSyncDeciderVisibility() {
 // inside it (matters for coarser intervals like 15m/30m).
 const OIP_RS_BAR_MINUTES = { '30second': 0.5, minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '30minute': 30 };
 
-function oipRSComputeStrikes(openPrice) {
-    const near50 = Math.round(openPrice / 50) * 50;
-    if (near50 % 100 === 0) {
-        return { ceStrike: near50 - 100, peStrike: near50 + 100 };
-    }
-    return { ceStrike: near50 - 50, peStrike: near50 + 50 };
-}
-
 // ── Per-day step series (leg levels + Deciders) ──────────────────────────────
 // The trading-day key for a bar. "Fake IST Epoch" timestamps, so the UTC
 // getters already read as IST clock time (the convention _oipGroupCandlesByDay
@@ -1113,11 +1105,58 @@ function oipRSInitIndicatorsPopup() {
 // first call goes out without them precisely to LEARN which pair to ask for
 // (session_open + strikes), and the option legs come back empty until it does.
 
+// This block's own index and expiry (#oipRSSymbol / #oipRSExpiry), present only
+// on /replay. Absent — on OI Profile — the block keeps following that page's
+// symbol input and the nearest expiry, exactly as it did before the dropdowns
+// existed. One accessor each so every caller reads the same source of truth.
+function oipRSSymbolOf() {
+    return document.getElementById('oipRSSymbol')?.value || oipSymbol;
+}
+
+function oipRSExpiryOf() {
+    return document.getElementById('oipRSExpiry')?.value || 'nearest';
+}
+
+// Reference date for the expiry dropdown (#oipRSDate, /replay only). Defaults
+// to today — set once at init, in local time so it can't roll back a day for
+// anyone west of UTC.
+function oipRSTodayLocal() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function oipRSDateOf() {
+    return document.getElementById('oipRSDate')?.value || oipRSTodayLocal();
+}
+
+// The contract that was "nearest" as of the reference date: the earliest
+// expiry on or after it. Past a date beyond every expiry this list carries
+// (older than the past-expiry window), falls back to the oldest one offered
+// rather than an empty selection.
+function oipRSPickExpiryForDate(expiries) {
+    const ref = oipRSDateOf();
+    const sorted = [...expiries].sort((a, b) => a.date.localeCompare(b.date));
+    return sorted.find(e => e.date >= ref)?.date || sorted[0]?.date || 'nearest';
+}
+
+// Strike spacing per index. Only consulted when this block has its own symbol
+// dropdown — otherwise the page's oipStrikeStep already describes the symbol
+// the whole page is on.
+const OIP_RS_STEP_BY_SYMBOL = { NIFTY: 50, BANKNIFTY: 100, SENSEX: 100, FINNIFTY: 50, MIDCPNIFTY: 25 };
+
+function oipRSStepOf() {
+    if (document.getElementById('oipRSSymbol')) {
+        return OIP_RS_STEP_BY_SYMBOL[oipRSSymbolOf()] || 50;
+    }
+    return (typeof oipStrikeStep !== 'undefined' && oipStrikeStep) || 50;
+}
+
 function oipRSApiUrl(withStrikes = true) {
     const _daysForInterval = { day: 365, week: 1095, month: 3650 };
     const days = _daysForInterval[oipRSInterval] ?? 5;
-    const step = (typeof oipStrikeStep !== 'undefined' && oipStrikeStep) || 50;
-    let url = `/api/oi-profile/round-strike?symbol=${oipSymbol}&interval=${oipRSInterval}&days=${days}&step=${step}`;
+    const step = oipRSStepOf();
+    let url = `/api/oi-profile/round-strike?symbol=${oipRSSymbolOf()}&interval=${oipRSInterval}`
+            + `&days=${days}&step=${step}&expiry=${encodeURIComponent(oipRSExpiryOf())}`;
     if (withStrikes) {
         const ce = document.getElementById('oipRSCEStrikeDropdown')?.value;
         const pe = document.getElementById('oipRSPEStrikeDropdown')?.value;
@@ -1126,30 +1165,136 @@ function oipRSApiUrl(withStrikes = true) {
     return `${url}&_t=${Date.now()}`;
 }
 
-// First call — no strikes yet. Returns the day's OPEN (never a live/current
-// price, so the round-strike default is stable through the session) plus the
-// tradable strike list for the two dropdowns.
-async function oipRSFetchOpenAndStrikes() {
+// Fills #oipRSExpiry for the current index. No-op where the dropdown does not
+// exist (OI Profile), so the block goes on asking for the nearest expiry there.
+//
+// The previously selected date is kept when the new index also lists it —
+// switching NIFTY -> SENSEX on a shared monthly expiry should not silently jump
+// the chart back to the weekly. When it does not list it, the selection falls
+// to 'Nearest' rather than to whichever date happens to sort first.
+async function oipRSPopulateExpiries(reselectForDate = false) {
+    const sel = document.getElementById('oipRSExpiry');
+    if (!sel) return;
+
+    const previous = sel.value;
+    try {
+        // 260 = five years of weekly expiries, the server's own cap — enough
+        // for any symbol's cadence, weekly or monthly, to reach five years back.
+        const res = await fetch(`/api/oi-profile/expiries?symbol=${oipRSSymbolOf()}&past=260&_t=${Date.now()}`);
+        const data = await res.json();
+        const expiries = data.expiries || [];
+
+        sel.innerHTML = '';
+        const nearest = document.createElement('option');
+        nearest.value = 'nearest';
+        nearest.textContent = 'Nearest';
+        sel.appendChild(nearest);
+
+        // Two groups, because they are not the same kind of thing: a live
+        // expiry is a tradable contract, a past one is history only — its
+        // candles are settled and come from ICICI Direct rather than from the
+        // provider every other series on this page uses.
+        const mkOption = (e) => {
+            const opt = document.createElement('option');
+            opt.value = e.date;
+            // The monthly is the contract most people mean when they say "the
+            // monthly", so it is worth a mark rather than a date to count back from.
+            opt.textContent = e.monthly ? `${e.label} (M)` : e.label;
+            // Past dates outside what the recorder actually observed are derived
+            // from the live cadence and can miss a rescheduled expiry — say so on
+            // hover rather than letting an empty chart be the only hint.
+            if (e.approx) {
+                opt.textContent += ' ~';
+                opt.title = 'Derived from the expiry cadence — if this date was rescheduled, the chart will come back empty';
+            }
+            return opt;
+        };
+
+        // Past entries are scoped to the six months BEFORE the reference date
+        // (today by default, or whatever's in the date picker) — five years of
+        // history is available (see the fetch above) but not worth scrolling
+        // through, and the six months that matter shift with the date picker.
+        // Both groups then sort nearest-the-reference-date first: for Live
+        // that is already ascending-by-date (soonest expiry first); for Past
+        // it is the opposite, most-recent-first, since every past date sits
+        // before the reference.
+        const refMs = new Date(oipRSDateOf()).getTime();
+        const daysBefore = (e) => (refMs - new Date(e.date).getTime()) / 86400000;
+        const PAST_WINDOW_DAYS = 183; // ~6 months
+        const groups = [
+            ['Past (settled)', expiries.filter(e => e.past && daysBefore(e) <= PAST_WINDOW_DAYS)
+                                       .sort((a, b) => daysBefore(a) - daysBefore(b))],
+            ['Live', expiries.filter(e => !e.past).sort((a, b) => a.date.localeCompare(b.date))],
+        ];
+        groups.forEach(([label, list]) => {
+            if (!list.length) return;
+            const grp = document.createElement('optgroup');
+            grp.label = label;
+            list.forEach(e => grp.appendChild(mkOption(e)));
+            sel.appendChild(grp);
+        });
+
+        // A date-picker change forces the reselect even when the previous
+        // value is still valid — the whole point of changing the date is to
+        // jump the contract, not to keep the one already showing.
+        if (reselectForDate) {
+            sel.value = oipRSPickExpiryForDate(expiries);
+        } else {
+            sel.value = expiries.some(e => e.date === previous) ? previous : 'nearest';
+        }
+        if (data.past_note) sel.title = data.past_note;
+        if (!data.success && data.error) console.warn('[RoundStrike]', data.error);
+    } catch (err) {
+        console.warn('[RoundStrike] expiry list failed:', err);
+        // Leave whatever the dropdown already holds — a failed refresh must not
+        // strip the user's current selection out from under a working chart.
+    }
+}
+
+// Single request for a symbol/expiry/date that hasn't been asked for by name
+// yet. The server computes the same round-number CE/PE default the client
+// used to derive here (see _rs_default_strikes in api.py), snapped to
+// whatever this expiry's ladder actually lists, and returns candles for that
+// pair in the same response — one round trip instead of a first call to learn
+// session_open/strikes and a second one to ask for legs by name. Populates
+// both strike dropdowns from the response and hands it back for the caller
+// to render (or null on failure, leaving the dropdowns as they were).
+async function oipRSLoadDefaultStrikes() {
     try {
         const res = await fetch(oipRSApiUrl(false));
         const data = await res.json();
-        if (!data.success) return { openPrice: 0, strikes: [] };
-
-        // The stats strip can already be painted from this first response —
-        // no reason to leave it on '--' until the strikes resolve.
-        oipRSApplyHeader(data.header);
+        if (!data.success) return null;
 
         // strikes come back as {strike: number} objects — extract, dedupe, sort
         // (same shape/handling as Opt Prem's own dropdown population).
         const strikes = [...new Set((data.strikes || []).map(s => parseFloat(s.strike)))]
             .filter(n => !isNaN(n))
             .sort((a, b) => a - b);
+        oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, Number(data.ce_strike));
+        oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, Number(data.pe_strike));
 
-        return { openPrice: Number(data.session_open) || 0, strikes };
+        return data;
     } catch (e) {
-        console.warn('[RoundStrike] open-price fetch error:', e);
-        return { openPrice: 0, strikes: [] };
+        console.warn('[RoundStrike] default-strikes fetch error:', e);
+        return null;
     }
+}
+
+// Re-derives the CE/PE ladder for the current index+expiry and re-aims the
+// block at it. Runs on every index, expiry or date change: all three change
+// which contracts exist, so the strikes showing in the two dropdowns are
+// stale the moment any of them moves.
+async function oipRSReloadStrikeChoices() {
+    const data = await oipRSLoadDefaultStrikes();
+    if (data) {
+        oipRSApplyHeader(data.header);
+        oipRSPendingResetZoom = true;   // a different contract is a different price scale
+        oipRSRenderChart(data);
+        oipRSSetStaleChip(data.data_stale || data.fetch_error || null);
+    }
+    // Resume the normal loop from here — no immediate re-fetch needed, the
+    // call above already drew the new contract.
+    oipRSScheduleLoop(data ? OIP_RS_POLL_MS : 0);
 }
 
 function oipRSPopulateDropdown(sel, strikes, selected) {
@@ -1596,7 +1741,7 @@ async function oipRSPlaceOrder(side, action, btn) {
         const t = btn.title;
         btn.title = 'Placing...';
         try {
-            const r = await oipPlaceStopOrder({ symbol: oipSymbol, strike, side, action, trigger: limitPrice });
+            const r = await oipPlaceStopOrder({ symbol: oipRSSymbolOf(), strike, side, action, trigger: limitPrice });
             if (r.success) {
                 showNotification(`Stop ${action} ${side} ${strike} resting at ₹${limitPrice} — triggers when the premium touches it.`, 'success');
             } else {
@@ -1621,7 +1766,7 @@ async function oipRSPlaceOrder(side, action, btn) {
     try {
         const endpoint = mode === 'mine' ? '/api/mine-orders' : '/api/orders/place';
         const body = {
-            symbol: oipSymbol, strike: strike, option_type: side, action: action,
+            symbol: oipRSSymbolOf(), strike: strike, option_type: side, action: action,
             strategy: 'intrinsic', order_type: orderType, limit_price: sendPrice
         };
         if (mode === 'mine') body.price = sendPrice || 0;
@@ -1670,7 +1815,7 @@ async function oipRSPlaceSLOrders(btn, side) {
         const res = await fetch('/api/order/place-sl', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
-            body: JSON.stringify({ symbol: oipSymbol, strike: strike, option_type: side, trigger_price: triggerPrice })
+            body: JSON.stringify({ symbol: oipRSSymbolOf(), strike: strike, option_type: side, trigger_price: triggerPrice })
         });
         const r = await res.json();
         if (r.success) {
@@ -1784,16 +1929,39 @@ async function oipRSInit() {
 
     oipRSInitCharts();
 
-    const { openPrice, strikes } = await oipRSFetchOpenAndStrikes();
-    const { ceStrike, peStrike } = oipRSComputeStrikes(openPrice);
+    // Date picker defaults to today — /replay only, no-op where it's absent.
+    const dateInp = document.getElementById('oipRSDate');
+    if (dateInp && !dateInp.value) dateInp.value = oipRSTodayLocal();
 
-    oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, ceStrike);
-    oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, peStrike);
+    // Before the first data call: both are part of the request it makes.
+    // No-ops on OI Profile, where neither dropdown is in the markup.
+    await oipRSPopulateExpiries();
+
+    // One request for the default pair — see oipRSLoadDefaultStrikes. It
+    // already carries candles, so the first render below needs no fetch of
+    // its own.
+    const firstData = await oipRSLoadDefaultStrikes();
 
     // A strike change re-aims this block's own request at the new pair.
     const onStrikeChange = () => oipRSRequestReload();
     document.getElementById('oipRSCEStrikeDropdown')?.addEventListener('change', onStrikeChange);
     document.getElementById('oipRSPEStrikeDropdown')?.addEventListener('change', onStrikeChange);
+
+    // A new index relists the expiries as well as the strikes — BANKNIFTY has
+    // no weeklies where NIFTY and SENSEX do, so the expiry dropdown has to be
+    // rebuilt before the strike ladder is asked for.
+    document.getElementById('oipRSSymbol')?.addEventListener('change', async () => {
+        await oipRSPopulateExpiries();
+        await oipRSReloadStrikeChoices();
+    });
+    document.getElementById('oipRSExpiry')?.addEventListener('change', () => oipRSReloadStrikeChoices());
+
+    // A new reference date re-picks the expiry nearest it, then re-aims the
+    // strike ladder at whatever that turned out to be.
+    document.getElementById('oipRSDate')?.addEventListener('change', async () => {
+        await oipRSPopulateExpiries(true);
+        await oipRSReloadStrikeChoices();
+    });
 
     oipRSInitOrderButtons();
     oipRSInitRayTool();
@@ -1803,11 +1971,20 @@ async function oipRSInit() {
     // indicator off never carries an empty one under the candles.
     oipRSSyncOiChgPane();
 
-    // First real tick — the strikes only just resolved, so the call above went
-    // out without them. Rays are restored by the render that follows (see
-    // oipRSRenderChart), and every tick after this one is scheduled by the loop.
-    oipRSPendingResetZoom = true;
-    oipRSScheduleLoop(0);
+    // First render — firstData already carries candles for the default pair
+    // (see oipRSLoadDefaultStrikes above), so this draws immediately instead
+    // of waiting on the loop's first tick to re-ask for it by name. Rays are
+    // restored by the render itself (oipRSInitRayTool above has already set up
+    // what it restores); every tick after this one is scheduled by the loop.
+    if (firstData) {
+        oipRSApplyHeader(firstData.header);
+        oipRSPendingResetZoom = true;
+        oipRSRenderChart(firstData);
+        oipRSSetStaleChip(firstData.data_stale || firstData.fetch_error || null);
+        oipRSScheduleLoop(OIP_RS_POLL_MS);
+    } else {
+        oipRSScheduleLoop(0);
+    }
 
     // A tab that comes back to the foreground should show current data at once
     // rather than up to OIP_RS_POLL_MS_HIDDEN of staleness.

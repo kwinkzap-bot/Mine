@@ -1115,9 +1115,15 @@ async function oipRefreshAll() {
 async function oipLoadOI() {
     if (window.oipReplayMode) return;
     try {
+        // oi_source: the option chain on this page comes from ICICI Direct
+        // (Breeze) while everything else here — candles, quotes, futures
+        // volume, CPR, VWAP — stays on Fyers. Asked for by name rather than
+        // switched on server-side, so the dashboard's own OI tab (which posts
+        // to this same endpoint) keeps the configured provider. The server
+        // falls back to it too whenever the daily Breeze session is dead.
         const res = await fetch('/api/open-interest', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbol: oipSymbol })
+            body: JSON.stringify({ symbol: oipSymbol, oi_source: 'icici' })
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);

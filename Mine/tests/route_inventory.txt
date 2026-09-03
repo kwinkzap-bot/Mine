@@ -150,6 +150,7 @@
 /api/oi-profile/atm-ce-oi-strikes	api.oi_profile_atm_ce_oi_strikes	GET,HEAD,OPTIONS	True
 /api/oi-profile/candles	api.oi_profile_candles	GET,HEAD,OPTIONS	True
 /api/oi-profile/cpr-width	api.oi_profile_cpr_width	GET,HEAD,OPTIONS	True
+/api/oi-profile/expiries	api.oi_profile_expiries	GET,HEAD,OPTIONS	True
 /api/oi-profile/premium-strikes	api.oi_profile_premium_strikes	GET,HEAD,OPTIONS	True
 /api/oi-profile/round-strike	api.oi_profile_round_strike	GET,HEAD,OPTIONS	True
 /api/open-interest	api.get_open_interest	OPTIONS,POST	True

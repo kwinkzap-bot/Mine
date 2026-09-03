@@ -614,10 +614,14 @@ class KiteService:
     def get_option_symbol(self, name: str, strike: float, option_type: str, expiry_type: str = 'nearest') -> Optional[str]:
         """
         expiry_type: 'nearest' (default, unchanged behaviour for all existing
-        callers) or 'monthly' — the last expiry within the nearest calendar
+        callers), 'monthly' — the last expiry within the nearest calendar
         month that still has an unexpired contract (NSE's monthly contract is
         always the final expiry of its month, regardless of which weekday the
-        exchange currently uses for expiry).
+        exchange currently uses for expiry) — or an ISO date ('2026-09-15')
+        naming one listed expiry, which is what the Round Strike expiry
+        dropdown sends. An unlisted date resolves to None rather than falling
+        back to the nearest: showing a different expiry than the one selected
+        is worse than showing nothing.
         """
         # Fast lookup in indexed map
         options = self.get_nfo_instruments(name)
@@ -625,6 +629,12 @@ class KiteService:
 
         today = date.today()
         valid_options = []
+        want_expiry = None
+        if expiry_type and expiry_type not in ('nearest', 'monthly'):
+            try:
+                want_expiry = datetime.strptime(str(expiry_type)[:10], '%Y-%m-%d').date()
+            except ValueError:
+                want_expiry = None
 
         # Filter for specific strike, type and ensure it hasn't expired
         for o in options:
@@ -635,6 +645,8 @@ class KiteService:
                     if hasattr(expiry, 'date'):
                         expiry = expiry.date()
 
+                    if want_expiry and expiry != want_expiry:
+                        continue
                     if expiry >= today:
                         valid_options.append(o)
 
@@ -645,7 +657,9 @@ class KiteService:
         # Sort by expiry to always return the nearest one (most common for intraday)
         valid_options.sort(key=lambda x: x['expiry'])
 
-        if expiry_type == 'monthly':
+        if want_expiry:
+            chosen = valid_options[0]      # already filtered to that one expiry
+        elif expiry_type == 'monthly':
             by_month: Dict[tuple, List[Dict]] = {}
             for o in valid_options:
                 exp = o['expiry']

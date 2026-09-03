@@ -1351,6 +1351,114 @@ class OpenInterestService:
             logger.error(f"Failed to retrieve latest OI from DB: {e}")
             return None
     
+    def get_open_interest_from_chain(self, symbol: str, chain_provider: Any) -> Dict[str, Any]:
+        """A ``get_open_interest_data``-shaped payload built off ANOTHER
+        provider's option chain.
+
+        The OI Profile and Replay pages take their chain numbers from ICICI
+        Direct (Breeze) while the rest of those pages stays on Fyers, so the
+        ladder and the arithmetic done on it come from two different brokers:
+        ``chain_provider`` supplies the strikes, ``self.kite`` still answers for
+        spot price and India VIX. Any provider exposing ``get_option_chain_raw``
+        works here — the contract is the adapters' shared one.
+
+        Only what the chain actually carries is filled in. Breeze publishes no
+        implied volatility or greeks, so ce_iv/pe_iv/vega come back None and
+        IVP falls through to its India VIX path — which is where that number
+        comes from anyway (see _calculate_iv_percentile). Expiry is absent too,
+        so the theoretical/fair price columns are not computed.
+
+        Callers must NOT write this payload into oi_history: that table is one
+        provider's minute-by-minute series, recorded by the scheduler, and the
+        PCR and Vega charts read it as one continuous set of numbers.
+        """
+        symbol = (symbol or 'NIFTY').strip().upper()
+        config = self.SYMBOL_CONFIG.get(symbol) or {
+            'name': symbol,
+            'instrument_key': f'NSE:{symbol}-EQ',
+            'exchange': 'NFO',
+        }
+        instrument_key = config['instrument_key']
+
+        try:
+            raw = chain_provider.get_option_chain_raw(instrument_key, strikecount=50) or {}
+        except Exception as e:
+            logger.error(f"[OI] chain fetch failed for {symbol}: {e}", exc_info=True)
+            return {'success': False, 'error': f'Option chain fetch failed: {e}'}
+
+        if not raw:
+            return {'success': False, 'error': f'Empty option chain for {symbol}'}
+
+        # Spot stays on the configured provider — only the ladder is the other
+        # broker's. Its absence is not fatal: max pain and the IVP ATM window
+        # degrade, the OI numbers themselves do not.
+        current_price = 0.0
+        try:
+            quote = self.kite.quote([instrument_key]) or {}
+            quote_row = quote.get(instrument_key)
+            if isinstance(quote_row, dict):
+                current_price = float(quote_row.get('last_price') or 0)
+        except Exception as e:
+            logger.warning(f"[OI] {symbol}: no spot price for the chain payload ({e})")
+
+        by_strike: Dict[int, Dict[str, Any]] = {}
+        for key, leg in raw.items():
+            try:
+                strike, opt_type = int(key[0]), str(key[1]).upper()
+            except (TypeError, ValueError, IndexError):
+                continue
+            if opt_type not in ('CE', 'PE'):
+                continue
+            row = by_strike.setdefault(strike, {
+                'strike': strike,
+                'ce_oi': 0, 'pe_oi': 0,
+                'ce_change_in_oi': 0, 'pe_change_in_oi': 0,
+                'ce_ltp': None, 'pe_ltp': None,
+                'ce_iv': None, 'pe_iv': None,
+                'ce_vega': None, 'pe_vega': None,
+                'expiry_date': None,
+            })
+            side = opt_type.lower()
+            row[f'{side}_oi'] = int(leg.get('oi') or 0)
+            row[f'{side}_change_in_oi'] = int(leg.get('change_in_oi') or 0)
+            row[f'{side}_ltp'] = leg.get('ltp')
+            # 0, not None, for a chain that publishes no IV (Breeze): the ATM-IV
+            # scan below compares these numerically, and the summaries skip a
+            # falsy IV either way.
+            row[f'{side}_iv'] = leg.get('iv') or 0
+            row[f'{side}_vega'] = leg.get('vega')
+
+        strikes = [by_strike[k] for k in sorted(by_strike)]
+        if not strikes:
+            return {'success': False, 'error': f'Option chain for {symbol} carried no strikes'}
+
+        # No whole-chain totals to prefer here — Breeze returns the full expiry,
+        # so the window sum below IS the chain total.
+        pcr_oi = self._calculate_pcr(strikes)
+        max_pain = self._calculate_max_pain(strikes, current_price)
+        iv_metrics = self._calculate_iv_percentile(strikes, current_price, symbol)
+        atm_iv = iv_metrics['atm_iv']
+
+        logger.info(f"[OI] {symbol}: chain payload from {type(chain_provider).__name__} "
+                    f"({len(strikes)} strikes, PCR {pcr_oi})")
+
+        return {
+            'success': True,
+            'symbol': symbol,
+            'timestamp': datetime.now().isoformat(),
+            'current_price': current_price,
+            'strikes': strikes,
+            'ce_summary': self._calculate_summary(strikes, 'CE'),
+            'pe_summary': self._calculate_summary(strikes, 'PE'),
+            'pcr_oi': pcr_oi,
+            'max_pain': max_pain,
+            'iv_percentile': iv_metrics['percentile'],
+            'atm_iv': atm_iv,
+            'avg_iv': self._get_avg_historical_iv(symbol),
+            'iv_crush_alert': self._detect_iv_crush(symbol, atm_iv),
+            'chain_source': type(chain_provider).__name__,
+        }
+
     def get_open_interest_data(self, symbol: str = 'NIFTY', use_next_expiry: bool = False,
                                expiry_offset: int = 0) -> Dict[str, Any]:
         """
@@ -2598,9 +2706,14 @@ class OpenInterestService:
                 closest_distance = float('inf')
                 
                 for strike in strikes_with_iv:
-                    ce_iv = strike.get('ce_iv', 0)
-                    pe_iv = strike.get('pe_iv', 0)
-                    strike_price = strike.get('strike', 0)
+                    # `or 0` and not a bare .get default: a chain that carries
+                    # the key with a None value (Breeze publishes no IV) used to
+                    # raise on the comparisons below, and the except at the
+                    # bottom answered the whole call with a flat 50 — a wrong
+                    # number that looks like a real one.
+                    ce_iv = strike.get('ce_iv') or 0
+                    pe_iv = strike.get('pe_iv') or 0
+                    strike_price = strike.get('strike') or 0
                     
                     if 0 < ce_iv < 2.0: all_ivs.append(ce_iv) # Cap at 200%
                     if 0 < pe_iv < 2.0: all_ivs.append(pe_iv)

@@ -7,7 +7,7 @@ import threading
 import time as _time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Any, Optional, Tuple, Union
 
 import pandas as pd
@@ -559,7 +559,9 @@ def resolve_standard_lot(symbol: str) -> Optional[int]:
         return None
 
 
-from trading_app.service.provider_logic import get_kite, get_data_provider
+from trading_app.service.provider_logic import (
+    get_kite, get_data_provider, get_oi_chain_provider, get_chart_provider,
+)
 
 
 
@@ -8312,6 +8314,13 @@ def get_open_interest() -> EndpointResponse:
     try:
         data = request.get_json() or {}
         symbol = data.get('symbol', 'NIFTY')
+        # The OI Profile page asks for the ICICI Direct chain by name. Every
+        # other caller keeps the configured provider and the DB-first path
+        # below — the flag is what keeps this split scoped to the two pages
+        # that asked for it (OI Profile and Replay) instead of silently moving
+        # the dashboard's own OI tab onto a second broker session.
+        want_chain_broker = str(data.get('oi_source') or '').strip().lower() \
+            in ('icici', 'breeze', 'icicidirect')
         
         logger.info(f"Fetching open interest data for {symbol}")
         
@@ -8330,6 +8339,32 @@ def get_open_interest() -> EndpointResponse:
         # Request Coalescing: Only one thread fetches live for this symbol at a time
         req_lock = _get_request_lock(f"OI_{symbol}")
         with req_lock:
+            # 0. ICICI Direct chain, when the caller asked for it. Live rather
+            #    than DB-backed: oi_history holds the scheduler's series on the
+            #    configured provider, so reading it would defeat the request.
+            #    Deliberately NOT saved back for the same reason — that table has
+            #    to stay one provider's continuous numbers or the PCR and Vega
+            #    charts would step between two brokers mid-series.
+            chain_provider = get_oi_chain_provider() if want_chain_broker else None
+            if want_chain_broker and chain_provider is None:
+                logger.info(f"[OI] ICICI chain asked for on {symbol} but no live Breeze "
+                            f"session — serving the configured provider instead")
+            if chain_provider is not None:
+                try:
+                    chain_data = oi_service.get_open_interest_from_chain(symbol, chain_provider)
+                    if chain_data.get('success'):
+                        chain_data['server_timestamp'] = datetime.now().isoformat()
+                        chain_data['data_source'] = 'ICICI_CHAIN'
+                        response = jsonify(chain_data)
+                        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+                        response.headers['Pragma'] = 'no-cache'
+                        response.headers['Expires'] = '0'
+                        return response
+                    logger.warning(f"[OI] ICICI chain unusable for {symbol}: "
+                                   f"{chain_data.get('error')} — falling back")
+                except Exception as chain_exc:
+                    logger.warning(f"[OI] ICICI chain failed for {symbol}: {chain_exc} — falling back")
+
             # 1. Try to get data from DB first
             # Reduce max_age to 1 minute to ensure fresh data
             db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=1)
@@ -10276,8 +10311,8 @@ def oi_profile_candles() -> EndpointResponse:
         max_allowed_days = 10000 if interval in ['week', 'month', 'day'] else 500
         days = min(max(int(days), 1), max_allowed_days)
         kite = get_kite(instance=1)
-        # Get configured data provider (Kite or Fyers based on DATA_PROVIDER env flag)
-        _data_provider = get_data_provider()
+        # Charts on this page follow CHART_DATA_PROVIDER, not DATA_PROVIDER — see get_chart_provider.
+        _data_provider = get_chart_provider()
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
         
@@ -10997,7 +11032,7 @@ def oi_profile_cpr_width() -> EndpointResponse:
             return jsonify(cached)
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider()
+        _data_provider = get_chart_provider()
         effective_instance = _data_provider if _data_provider else kite
         if not effective_instance:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
@@ -11085,7 +11120,7 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         extra_leg = max(0, extra) * 50
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider()
+        _data_provider = get_chart_provider()
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
@@ -11332,7 +11367,7 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
 
         from trading_app.service.open_interest_service import OpenInterestService
         kite = get_kite(instance=1)
-        provider = get_data_provider()
+        provider = get_chart_provider()
         svc = OpenInterestService(provider if provider else kite)
         return jsonify(svc.get_atm_ce_oi_strikes(symbol, step, date_str))
 
@@ -11343,6 +11378,253 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
 
 # ── Round Strike block — one self-contained endpoint ────────────────────────
 # Everything the Round Strike block on the OI Profile page shows comes from
+def _rs_expiry_type(raw: Optional[str]) -> str:
+    """Validate the Round Strike `expiry` param: 'nearest', 'monthly' or an ISO date.
+
+    Anything else becomes 'nearest' rather than an error — the parameter reaches
+    a strike-token cache key and an instrument-master scan, and neither wants
+    arbitrary caller text.
+    """
+    val = (raw or 'nearest').strip()
+    if val in ('nearest', 'monthly'):
+        return val
+    try:
+        return datetime.strptime(val[:10], '%Y-%m-%d').strftime('%Y-%m-%d')
+    except ValueError:
+        return 'nearest'
+
+
+def _rs_listed_expiries(kite_service, symbol: str) -> List[Dict[str, Any]]:
+    """Every still-listed option expiry for `symbol`, nearest first.
+
+    Reads the same instrument master the strike list does, so it costs no extra
+    broker request. `monthly` marks the last expiry of its calendar month —
+    the contract traders mean by "monthly", and the one 'monthly' resolves to.
+    """
+    today = datetime.now().date()
+    seen = set()
+    for inst in kite_service.get_nfo_instruments(symbol) or []:
+        exp = inst.get('expiry')
+        if not exp:
+            continue
+        if hasattr(exp, 'date'):
+            exp = exp.date()
+        if exp >= today:
+            seen.add(exp)
+
+    ordered = sorted(seen)
+    last_of_month = {}
+    for exp in ordered:
+        last_of_month[(exp.year, exp.month)] = exp
+    monthlies = set(last_of_month.values())
+
+    return [{
+        'date': exp.isoformat(),
+        'label': exp.strftime('%d %b %Y'),
+        'monthly': exp in monthlies,
+        'past': False,
+        'approx': False,
+    } for exp in ordered]
+
+
+def _rs_observed_past_expiries(symbol: str) -> List[str]:
+    """Past expiries the OI recorder actually saw, from oi_expiry_snapshots.
+
+    Observed fact rather than inference, so these override anything the walk
+    below computes for the same week. The recorder only started keeping a
+    second chain recently, so on its own this covers a handful of weeks.
+    """
+    try:
+        import sqlite3
+        # The path, not the service — constructing OpenInterestService resolves a
+        # data provider and re-runs its schema init, neither of which a read of
+        # one column needs.
+        db_path = os.path.join(
+            os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')), 'oi_data.db')
+        today_iso = datetime.now().date().isoformat()
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                'SELECT DISTINCT expiry FROM oi_expiry_snapshots '
+                'WHERE symbol = ? AND expiry < ? ORDER BY expiry',
+                (symbol, today_iso)).fetchall()
+        return [r[0] for r in rows if r and r[0]]
+    except Exception as exc:
+        logger.debug(f'[RoundStrike] observed expiries unavailable for {symbol}: {exc}')
+        return []
+
+
+def _rs_past_expiries(symbol: str, live: List[Dict[str, Any]], count: int = 12) -> List[Dict[str, Any]]:
+    """Expiries that have already passed, oldest first.
+
+    These are DERIVED, and have to be: a contract is dropped from every
+    broker's symbol master within a day of expiring, so there is nothing left
+    to enumerate. The still-listed expiries give the cadence — 7 days apart
+    means the symbol has weeklies, otherwise it is monthly-only like BANKNIFTY
+    — and that cadence is walked backwards from the nearest live expiry.
+
+    Each computed date is then pulled back to the previous trading day when it
+    lands on a holiday, which is the exchange's own rule and the reason this
+    uses trading_calendar rather than plain arithmetic. Dates the recorder
+    actually observed are merged in and win over computed ones for the same
+    week.
+
+    A date that survives all that can still be wrong (a one-off exchange
+    reschedule), and the caller marks these `approx` so the UI can say so. The
+    chart answers definitively: a wrong date simply returns no candles.
+    """
+    from trading_app.app.utils import trading_calendar as _cal
+
+    live_dates = []
+    for e in live:
+        try:
+            live_dates.append(datetime.strptime(e['date'], '%Y-%m-%d').date())
+        except (KeyError, ValueError):
+            continue
+    if not live_dates:
+        return []
+    live_dates.sort()
+
+    anchor = live_dates[0]
+    weekly = len(live_dates) >= 2 and (live_dates[1] - live_dates[0]).days <= 8
+
+    def _step_back(d):
+        if weekly:
+            return d - timedelta(days=7)
+        # Monthly-only: the same weekday, in the last week of the previous month.
+        first_of_month = d.replace(day=1)
+        prev_month_end = first_of_month - timedelta(days=1)
+        back = prev_month_end
+        while back.weekday() != d.weekday():
+            back -= timedelta(days=1)
+        return back
+
+    computed, cursor = [], anchor
+    for _ in range(max(0, count)):
+        cursor = _step_back(cursor)
+        settled = cursor
+        # An expiry on a holiday moves EARLIER, never later.
+        if _cal.calendar_covers(settled) and not _cal.is_trading_day(settled):
+            settled = _cal.previous_trading_day(settled)
+        computed.append((cursor, settled))
+
+    today = datetime.now().date()
+    observed = {d for d in _rs_observed_past_expiries(symbol)}
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for raw, settled in computed:
+        if settled >= today:
+            continue
+        # An observed date within the same week supersedes the computed one.
+        match = next((o for o in observed
+                      if abs((datetime.strptime(o, '%Y-%m-%d').date() - raw).days) <= 3), None)
+        chosen = datetime.strptime(match, '%Y-%m-%d').date() if match else settled
+        out[chosen.isoformat()] = {
+            'date': chosen.isoformat(),
+            'label': chosen.strftime('%d %b %Y'),
+            'monthly': False,
+            'past': True,
+            'approx': match is None,
+        }
+    for o in observed:
+        out.setdefault(o, {'date': o, 'label': datetime.strptime(o, '%Y-%m-%d').strftime('%d %b %Y'),
+                           'monthly': False, 'past': True, 'approx': False})
+
+    # The last expiry of a calendar month is that month's monthly contract —
+    # but only for months that are wholly behind us. The current month still has
+    # live expiries after these, so its real monthly is in the live list and
+    # marking the last PAST date of it would name the wrong contract.
+    live_months = {(d.year, d.month) for d in live_dates}
+    ordered = [out[k] for k in sorted(out)]
+    last_of_month: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for e in ordered:
+        d = datetime.strptime(e['date'], '%Y-%m-%d').date()
+        if (d.year, d.month) not in live_months:
+            last_of_month[(d.year, d.month)] = e
+    for e in last_of_month.values():
+        e['monthly'] = True
+    return ordered
+
+
+def _rs_future_expiry_for_month(symbol: str, kite_service, target: date) -> Optional[date]:
+    """The index future's expiry covering target's calendar month.
+
+    NIFTY/BANKNIFTY/SENSEX futures are monthly-only, so this is the same date
+    NSE settles that month's monthly OPTION on — reuses the listed+past expiry
+    walk (_rs_listed_expiries/_rs_past_expiries) instead of running a second
+    one, sharing their cache with the expiry dropdown when it has already
+    warmed it. 260 = the same five-years-of-weeklies cap /oi-profile/expiries
+    uses, so a far-back target month is still found.
+    """
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    live = _rs_cached(('rs-expiries', symbol, today_str), 600.0,
+                      lambda: _rs_listed_expiries(kite_service, symbol)) or []
+    past = _rs_cached(('rs-past-expiries', symbol, today_str, 260), 600.0,
+                      lambda: _rs_past_expiries(symbol, live, 260)) or []
+    for e in past + live:
+        if not e.get('monthly'):
+            continue
+        d = datetime.strptime(e['date'], '%Y-%m-%d').date()
+        if (d.year, d.month) == (target.year, target.month):
+            return d
+    return None
+
+
+@api_bp.route('/oi-profile/expiries', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_expiries() -> EndpointResponse:
+    """Listed option expiries for a symbol — the Round Strike expiry dropdown.
+
+    Day-stable (the instrument master is re-downloaded hourly at most), so it
+    is served from the same 10-minute section cache the strike list uses rather
+    than re-scanning tens of thousands of rows on every symbol change.
+    """
+    try:
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        # How many expiries back to offer. 0 turns the past off entirely, which
+        # is what a caller wanting only tradable contracts asks for. Capped at
+        # 260 — five years of weekly expiries, the shortest cadence any symbol
+        # here has, so it also covers five years of any slower (e.g. monthly)
+        # cadence with room to spare.
+        past_count = min(max(request.args.get('past', 12, type=int) or 0, 0), 260)
+        provider = get_chart_provider()
+        kite = get_kite(instance=1)
+        if not provider and not kite:
+            return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
+
+        kite_service = KiteService(kite_instance=provider or kite)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        expiries = _rs_cached(('rs-expiries', symbol, today_str), 600.0,
+                              lambda: _rs_listed_expiries(kite_service, symbol)) or []
+        if not expiries:
+            return jsonify({'success': False, 'symbol': symbol, 'expiries': [],
+                            'error': f'No listed option expiries for {symbol} — the '
+                                     f"broker's instrument master may be incomplete."}), 200
+
+        # Past expiries are only worth offering when something can actually
+        # serve them: Fyers and Kite drop a contract from their masters the day
+        # it expires, so ICICI Direct's is the one history API that still
+        # answers for it (see option_contract_id / _resolve_contract_id).
+        past = []
+        chain_ok = get_oi_chain_provider() is not None
+        if past_count and chain_ok:
+            past = _rs_cached(('rs-past-expiries', symbol, today_str, past_count), 600.0,
+                              lambda: _rs_past_expiries(symbol, expiries, past_count)) or []
+
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'expiries': past + expiries,
+            'past_available': chain_ok,
+            'past_note': None if chain_ok else
+                ('Past expiries need a live ICICI Direct session — Fyers and Kite '
+                 'delist a contract the day it expires.'),
+        })
+    except Exception as exc:
+        logger.error(f'[RoundStrike] expiries error: {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 # /oi-profile/round-strike: its CE/PE premium candles, the two future-volume
 # overlays, and every pill in its stats strip (Price, CE OI, PE OI, ATM, CPR,
 # VWAP Bias, 9:18 Bias, PCR, Lot, Trend, IVP). It is the only live feed on that
@@ -11503,6 +11785,31 @@ def _rs_session_open(candles: list) -> float:
     return 0.0
 
 
+def _rs_default_strikes(open_price: float) -> Tuple[float, float]:
+    """The round-number CE/PE pair for a session open — same rule as
+    oipRSComputeStrikes in oi_profile_round_strike.js, kept in lockstep so a
+    caller that omits ce_strike/pe_strike gets exactly what the client would
+    have computed itself. Lets round-strike serve legs for the very first
+    request on a new symbol/expiry instead of making the client learn
+    session_open here first and come back with a second one.
+    """
+    near50 = round(open_price / 50) * 50
+    if near50 % 100 == 0:
+        return near50 - 100, near50 + 100
+    return near50 - 50, near50 + 50
+
+
+def _rs_snap_strike(target: float, strikes_list: List[Dict[str, Any]]) -> Optional[float]:
+    """The listed strike closest to `target` — a round-number default can miss
+    a real instrument on a thin far-dated ladder, same safety net the CE/PE
+    dropdowns apply client-side in oipRSPopulateDropdown.
+    """
+    candidates = [s['strike'] for s in strikes_list if s.get('strike') is not None]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda s: abs(s - target))
+
+
 def _rs_trim_days(bars: list, days: int) -> list:
     """Keep only the last `days` TRADING days of `bars`.
 
@@ -11534,17 +11841,40 @@ def _rs_trend_from_pcr(pcr: Optional[float]) -> str:
 def _rs_oi_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
     """Latest OI-chain snapshot for the stats strip (OI totals, PCR, max pain, IVP).
 
-    DB-first, exactly like /open-interest: the scheduler writes a snapshot about
-    once a minute, so a 1-second poll must never trigger a live chain fetch of
-    its own. The live fallback is kept for the case where the recorder is behind,
-    but throttled to one attempt per 30 seconds per symbol.
+    ICICI Direct (Breeze) first: the chain numbers on this block come from
+    Breeze while every other feed on the page stays on Fyers (see
+    get_oi_chain_provider). It is fetched LIVE rather than read out of
+    oi_history — that table is the scheduler's own once-a-minute series on the
+    configured provider, so serving it here would answer with the very broker
+    this split exists to bypass. One Breeze chain costs two API calls against a
+    90 req/min budget, and the caller already holds this result for 10 seconds
+    (the ('rs-oi', symbol) entry in _rs_cached), so a 1-second poll cannot turn
+    into a 1-second fetch.
+
+    Without a live Breeze session it falls back to the path this always had:
+    DB-first, exactly like /open-interest — the scheduler writes a snapshot
+    about once a minute, so a 1-second poll must never trigger a live chain
+    fetch of its own. That live fallback is kept for the case where the
+    recorder is behind, but throttled to one attempt per 30 seconds per symbol.
     """
     from trading_app.service.open_interest_service import OpenInterestService
 
-    provider = get_data_provider()
+    provider = get_chart_provider()
     if not provider:
         return None
     oi_service = OpenInterestService(provider)
+
+    chain_provider = get_oi_chain_provider()
+    if chain_provider is not None:
+        try:
+            chain_data = oi_service.get_open_interest_from_chain(symbol, chain_provider)
+            if chain_data.get('success'):
+                return chain_data
+            logger.warning(f'[RoundStrike] ICICI chain unusable for {symbol}: '
+                           f'{chain_data.get("error")} — falling back to the recorded snapshot')
+        except Exception as exc:
+            logger.warning(f'[RoundStrike] ICICI chain failed for {symbol}: {exc} '
+                           f'— falling back to the recorded snapshot')
 
     db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=2)
     if db_data:
@@ -11586,6 +11916,11 @@ def oi_profile_round_strike() -> EndpointResponse:
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
         step      = request.args.get('step', 50, type=int) or 50
+        # 'nearest' (the default every caller had before the dropdown existed),
+        # 'monthly', or one listed ISO date. It selects the CE/PE contracts and
+        # narrows the strike list to what that expiry actually lists — a far
+        # expiry carries a shorter ladder than the weekly.
+        expiry    = _rs_expiry_type(request.args.get('expiry'))
 
         valid_intervals = ['30second', 'minute', '2minute', '3minute', '5minute', '10minute',
                            '15minute', '30minute', '60minute', 'day', 'week', 'month']
@@ -11594,7 +11929,7 @@ def oi_profile_round_strike() -> EndpointResponse:
         days = min(max(int(days), 1), 10000 if interval in ('day', 'week', 'month') else 500)
 
         market_is_open = _cached_market_hours()
-        cache_key = (symbol, interval, days, ce_strike, pe_strike, step)
+        cache_key = (symbol, interval, days, ce_strike, pe_strike, step, expiry)
         ttl = _RS_RESPONSE_TTL if market_is_open else _RS_RESPONSE_TTL_CLOSED
         if cache_key in _rs_response_cache:
             cached, cached_ts = _rs_response_cache[cache_key]
@@ -11602,7 +11937,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                 return jsonify(cached)
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider()
+        _data_provider = get_chart_provider()
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
@@ -11619,6 +11954,7 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         ist_offset = int(5.5 * 3600)
         now = datetime.now()
+        today_str = now.strftime('%Y-%m-%d')
         # The +5 is a weekend/holiday buffer, not slack: _rs_trim_days below trims
         # to `days` TRADING days, so the calendar window has to overshoot to reach
         # them. Named rather than inlined because the leg cache key includes it —
@@ -11631,8 +11967,32 @@ def oi_profile_round_strike() -> EndpointResponse:
         fetch_errors: list = []
         empty_reasons: Dict[str, str] = {}
 
-        def fetch_task(token, inter):
+        def fetch_task(token, inter, from_d=None, to_d=None):
+            # from_d/to_d let a caller ask for a range other than this tick's
+            # own from_date/to_date — used by _index_session_open_on to read
+            # the INDEX's candles for a past expiry's own day, which the
+            # regular rolling from_date/to_date (ending at now) never reaches.
+            fd, td = from_d or from_date, to_d or to_date
             try:
+                # An 'ICICI:' address is an expired contract (see _leg_token
+                # below) and only the Breeze adapter can read it. Its window
+                # ends at the expiry, not at now — asking for the last five days
+                # of a contract that stopped trading in August returns nothing.
+                if str(token).startswith('ICICI:'):
+                    if leg_provider is None:
+                        return []
+                    exp_day = datetime.strptime(str(token).split(':')[2], '%Y-%m-%d')
+                    res = leg_provider.historical_data(
+                        str(token),
+                        (exp_day - timedelta(days=fetch_days)).strftime('%Y-%m-%d'),
+                        exp_day.strftime('%Y-%m-%d'),
+                        inter, use_cache=True, cache_ttl=300.0)
+                    if not res:
+                        reason = getattr(leg_provider, 'last_history_error', lambda: None)()
+                        empty_reasons[str(token)] = reason or (
+                            f'ICICI Direct returned no candles for the expired contract '
+                            f'{token} — it may not have traded at that strike or expiry.')
+                    return res
                 if _is_fyers_provider and _data_provider:
                     # use_cache=True with a short TTL rather than the old
                     # use_cache=False: the adapter's stale-cache rescue (it
@@ -11641,7 +12001,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                     # to stay live also opted out of the one thing that kept a
                     # throttled leg from coming back empty.
                     res = _data_provider.historical_data(
-                        str(token), from_date.strftime('%Y-%m-%d'), to_date.strftime('%Y-%m-%d'),
+                        str(token), fd.strftime('%Y-%m-%d'), td.strftime('%Y-%m-%d'),
                         inter, use_cache=True, cache_ttl=2.0, allow_synthetic=True)
                     if not res:
                         # Must be read on the fetching thread — it is thread-local.
@@ -11650,8 +12010,23 @@ def oi_profile_round_strike() -> EndpointResponse:
                             empty_reasons[str(token)] = reason
                     return res
                 if kite:
+                    try:
+                        kite_token = int(token)
+                    except (TypeError, ValueError):
+                        # A Fyers-formatted token from a still-warm process-lifetime
+                        # cache (_strike_token_cache/_future_token_cache carry no
+                        # provider in their key, TTL'd to end of day) while THIS
+                        # tick's chart provider resolved to something that isn't
+                        # Fyers — e.g. get_chart_provider() picking up a now-live
+                        # ICICI session. Kite can't read a Fyers symbol either;
+                        # report it rather than crash, and let the next tick
+                        # re-resolve once the provider settles.
+                        empty_reasons[str(token)] = (
+                            f'{token} was resolved for Fyers but this tick has no '
+                            f'Fyers session — retrying next poll.')
+                        return []
                     return kite_service._historical_with_retry(
-                        instrument_token=int(token), from_date=from_date, to_date=to_date, interval=inter)
+                        instrument_token=kite_token, from_date=fd, to_date=td, interval=inter)
                 return []
             except Exception as exc:
                 logger.error(f'[RoundStrike] fetch error for token {token}: {exc}')
@@ -11678,8 +12053,13 @@ def oi_profile_round_strike() -> EndpointResponse:
                     raise RuntimeError(empty_reasons.get(str(token)) or 'no candles returned')
                 return res
             before = len(fetch_errors)
+            # A settled contract's bars are final, so its entry is held for the
+            # whole day rather than the 2.5s a live leg gets — re-asking Breeze
+            # once a second for candles that cannot change would burn the tighter
+            # budget for nothing.
+            leg_ttl = 86400.0 if str(token).startswith('ICICI:') else _RS_CANDLE_TTL
             out = _rs_cached(('rs-leg', symbol, inter, fetch_days, str(token)),
-                             _RS_CANDLE_TTL, produce)
+                             leg_ttl, produce)
             # Distinguishes "this tick's fetch failed and you are looking at
             # parked bars" from a clean cache hit, which records nothing.
             if str(token) in empty_reasons or len(fetch_errors) > before:
@@ -11687,28 +12067,179 @@ def oi_profile_round_strike() -> EndpointResponse:
             return out or []
 
         # ── Per-tick fetches: the two option legs + the two volume overlays ──
+        #
+        # A past expiry cannot be served by the chart provider at all: Fyers and
+        # Kite drop a contract from their instrument masters the day it expires,
+        # so there is no symbol left to resolve, let alone fetch. ICICI Direct's
+        # history API takes the contract as separate fields (stock_code, expiry,
+        # right, strike) and so still answers for it — option_contract_id builds
+        # that address without a master lookup. The future-volume overlays below
+        # go through the same door: NIFTY/BANKNIFTY/SENSEX futures are
+        # monthly-only, so the future covering a past option expiry's month is
+        # itself past and delisted too, and future_contract_id addresses it the
+        # same way. The index leg is the only one that stays on the chart
+        # provider either way — that is a live instrument and exists on both
+        # sides regardless of which option expiry is selected.
+        past_expiry = (expiry not in ('nearest', 'monthly')
+                       and datetime.strptime(expiry, '%Y-%m-%d').date() < now.date())
+        leg_provider = _data_provider
+        if past_expiry:
+            from trading_app.service.icici_data_service import option_contract_id, future_contract_id
+            leg_provider = get_oi_chain_provider()
+            if leg_provider is None:
+                fetch_errors.append(
+                    f'{expiry} has already expired — Fyers and Kite delist the contract, '
+                    f'and ICICI Direct (the one history API that still serves it) has no '
+                    f'live session. Log in at /auth/login/icici, or pick a live expiry.')
+
+        def _leg_token(strike_val, opt_type):
+            """The address this tick's fetch should use for one option leg."""
+            if past_expiry:
+                if leg_provider is None:
+                    return None, None
+                cid = option_contract_id(symbol, strike_val, opt_type, expiry)
+                return cid, cid
+            return _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, strike_val, opt_type,
+                expiry_type=expiry)
+
+        # ── Slow-moving sections (see the TTL table above) ── moved ahead of the
+        # CE/PE leg submission below: when the caller omits ce_strike/pe_strike
+        # (a new symbol/expiry, before the client has anything to ask for by
+        # name) these two are what the default pair is computed FROM, so they
+        # have to be in hand — or at least in flight — before that decision.
+        def _index_derived():
+            raw = fetch_task(index_token, fetch_interval)
+            bars = _rs_trim_days(_oip_format_candles(raw, ist_offset, interval), days)
+            return {
+                'session_open': _rs_session_open(bars),
+                'vwap_bias': _rs_day_vwap_bias(bars),
+                'last_close': float(bars[-1]['close']) if bars else 0.0,
+            }
+
+        def _index_session_open_on(target):
+            """The index's own opening price on `target` — the day a past
+            option expiry actually traded. _index_derived's rolling window
+            (fetch_days back from NOW) never reaches it, so the round-strike
+            default for a past expiry would otherwise be sized off today's
+            open instead of the session the CE/PE legs are actually showing.
+            The index itself never expires, so the regular chart provider
+            still answers for any past date — only the derivative legs need
+            ICICI. A week of lookback lets _rs_session_open fall back to the
+            prior trading day if `target` itself comes back short.
+            """
+            day_to = datetime.combine(target, datetime.min.time()) + timedelta(days=1)
+            day_from = day_to - timedelta(days=8)
+            raw = fetch_task(index_token, fetch_interval, day_from, day_to)
+            bars = _oip_format_candles(raw, ist_offset, interval)
+            return _rs_session_open(bars)
+
+        def _strike_list():
+            # Raises rather than returning [] on an empty result, the same way the
+            # leg producers above do: _rs_cached then serves the previous good
+            # list instead of pinning an empty one for the full 600 s TTL.
+            #
+            # An empty list is never a real market state — it means the broker's
+            # instrument master came up short. On 2026-08-20 a truncated NFO dump
+            # (4,125 rows against a normal ~76,000) left NIFTY with three futures
+            # rows and no strikes, and since the block cannot choose a CE/PE pair
+            # without this list, it never asked for option legs and drew an empty
+            # chart with both dropdowns blank.
+            all_inst = kite_service.get_nfo_instruments(symbol) or []
+            # A named expiry lists its own, shorter ladder — offering strikes
+            # from the weekly on a quarterly contract would hand the dropdown
+            # pairs that resolve to no instrument at all.
+            want_exp = _rs_expiry_type(expiry)
+            if want_exp not in ('nearest', 'monthly'):
+                def _exp_of(inst):
+                    e = inst.get('expiry')
+                    return (e.date() if hasattr(e, 'date') else e)
+                target = datetime.strptime(want_exp, '%Y-%m-%d').date()
+                scoped = [i for i in all_inst if _exp_of(i) == target]
+                if scoped:
+                    all_inst = scoped
+            uniq = sorted({float(i['strike']) for i in all_inst
+                           if i.get('strike') is not None and i['strike'] > 0})
+            if not uniq:
+                raise RuntimeError(
+                    f'no option strikes for {symbol} in the instrument master '
+                    f'({len(all_inst)} rows, none carrying a strike)')
+            return [{'strike': s} for s in uniq]
+
+        # Only the index leg is worth a worker of its own — it is the one cached
+        # section that goes to the broker's history API. The strike list is a
+        # DB/instrument lookup that answers from its cache on all but the first
+        # tick, so it runs inline rather than crowding the shared pool the option
+        # legs below (and the main candles endpoint) are already using.
+        f_index = executor.submit(_rs_cached, ('rs-index', symbol, interval, days), 10.0, _index_derived)
+        strikes_list = _rs_cached(('rs-strikes', symbol, today_str, expiry), 600.0, _strike_list) or []
+
         ce_token = pe_token = ce_symbol = pe_symbol = None
         future_ce = future_pe = None
+        if not ce_strike or not pe_strike:
+            # First call for this symbol/expiry (or a change to either) — the
+            # client has nothing to name yet. Pick the same round-number pair it
+            # would (oipRSComputeStrikes in oi_profile_round_strike.js), snapped
+            # to a strike this expiry's ladder actually lists, so this one
+            # request can go straight to candles instead of the client needing
+            # session_open/strikes back first to make a second one.
+            #
+            # A past expiry sizes this off the OPEN THAT EXPIRY'S OWN DAY
+            # traded (86400 s TTL — a settled day's open never changes), not
+            # off f_index's rolling today-relative window, which for a past
+            # expiry describes a session the CE/PE legs aren't even showing.
+            if past_expiry:
+                target_day = datetime.strptime(expiry, '%Y-%m-%d').date()
+                open_price = _rs_cached(('rs-open-on', symbol, expiry), 86400.0,
+                                        lambda: _index_session_open_on(target_day)) or 0
+            else:
+                open_price = (f_index.result() or {}).get('session_open') or 0
+            default_ce, default_pe = _rs_default_strikes(open_price)
+            if not ce_strike:
+                ce_strike = _rs_snap_strike(default_ce, strikes_list) or default_ce
+            if not pe_strike:
+                pe_strike = _rs_snap_strike(default_pe, strikes_list) or default_pe
         if ce_strike:
-            ce_token, ce_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, ce_strike, 'CE')
+            ce_token, ce_symbol = _leg_token(ce_strike, 'CE')
             if ce_token:
                 future_ce = executor.submit(cached_leg, ce_token, fetch_interval)
         if pe_strike:
-            pe_token, pe_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, pe_strike, 'PE')
+            pe_token, pe_symbol = _leg_token(pe_strike, 'PE')
             if pe_token:
                 future_pe = executor.submit(cached_leg, pe_token, fetch_interval)
 
         # The index carries no traded volume — the overlay uses the current-expiry
         # future, plus Bank Nifty's (identical contract when BANKNIFTY is the
         # selected symbol, so it is fetched once and shared).
-        fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
+        def _future_leg(root):
+            """This tick's (token, symbol) for one index's future-volume leg."""
+            if past_expiry:
+                # Looking at a past OPTION expiry — but NIFTY/BANKNIFTY/SENSEX
+                # futures are monthly-only, and a weekly option expiry sits
+                # inside the SAME calendar month as a future that may well
+                # still be live (e.g. a Sep-1 weekly with today on Sep 3: the
+                # Sep monthly future doesn't settle until Sep 29). Only reach
+                # for ICICI's past-contract path once that future's own
+                # expiry has actually passed — otherwise the regular chart
+                # provider still has it, and asking Breeze for a window
+                # ending on a date that hasn't happened yet just comes back
+                # empty (Status 200, no rows — not an error, just nothing
+                # asked for).
+                target_month = datetime.strptime(expiry, '%Y-%m-%d').date()
+                fut_exp = _rs_future_expiry_for_month(root, kite_service, target_month)
+                if fut_exp is not None and fut_exp < now.date():
+                    if leg_provider is None:
+                        return None, None
+                    cid = future_contract_id(root, fut_exp)
+                    return cid, cid
+            return _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, root)
+
+        fut_token, fut_symbol = _future_leg(symbol)
         future_vol = executor.submit(cached_leg, fut_token, fetch_interval) if fut_token else None
         if symbol == 'BANKNIFTY':
             bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
         else:
-            bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
+            bnf_token, bnf_symbol = _future_leg('BANKNIFTY')
             future_bnf_vol = executor.submit(cached_leg, bnf_token, fetch_interval) if bnf_token else None
 
         # Price is the one pill nobody wants served off a 10-second cache, and
@@ -11726,36 +12257,6 @@ def oi_profile_round_strike() -> EndpointResponse:
                 return 0.0
 
         future_ltp = executor.submit(_live_ltp) if (_is_fyers_provider and _data_provider) else None
-
-        # ── Slow-moving sections (see the TTL table above) ──
-        def _index_derived():
-            raw = fetch_task(index_token, fetch_interval)
-            bars = _rs_trim_days(_oip_format_candles(raw, ist_offset, interval), days)
-            return {
-                'session_open': _rs_session_open(bars),
-                'vwap_bias': _rs_day_vwap_bias(bars),
-                'last_close': float(bars[-1]['close']) if bars else 0.0,
-            }
-
-        def _strike_list():
-            # Raises rather than returning [] on an empty result, the same way the
-            # leg producers above do: _rs_cached then serves the previous good
-            # list instead of pinning an empty one for the full 600 s TTL.
-            #
-            # An empty list is never a real market state — it means the broker's
-            # instrument master came up short. On 2026-08-20 a truncated NFO dump
-            # (4,125 rows against a normal ~76,000) left NIFTY with three futures
-            # rows and no strikes, and since the block cannot choose a CE/PE pair
-            # without this list, it never asked for option legs and drew an empty
-            # chart with both dropdowns blank.
-            all_inst = kite_service.get_nfo_instruments(symbol) or []
-            uniq = sorted({float(i['strike']) for i in all_inst
-                           if i.get('strike') is not None and i['strike'] > 0})
-            if not uniq:
-                raise RuntimeError(
-                    f'no option strikes for {symbol} in the instrument master '
-                    f'({len(all_inst)} rows, none carrying a strike)')
-            return [{'strike': s} for s in uniq]
 
         def _lot_size():
             provider = _data_provider or kite
@@ -11795,15 +12296,8 @@ def oi_profile_round_strike() -> EndpointResponse:
             _cpr_cache_put(cpr_key, bands)
             return bands
 
-        # Only the index leg is worth a worker of its own — it is the one cached
-        # section that goes to the broker's history API. The rest are DB/instrument
-        # lookups that answer from their cache on all but the first tick, so they
-        # run inline rather than crowding the shared pool the option legs above
-        # (and the main candles endpoint) are already using.
-        today_str = now.strftime('%Y-%m-%d')
-        f_index = executor.submit(_rs_cached, ('rs-index', symbol, interval, days), 10.0, _index_derived)
-
-        # ── Collect ──
+        # ── Collect ── (f_index and strikes_list were already kicked off above,
+        # ahead of the CE/PE leg submission that may depend on them)
         ce_candles = _rs_trim_days(_oip_format_candles(future_ce.result() if future_ce else [], ist_offset, interval), days)
         pe_candles = _rs_trim_days(_oip_format_candles(future_pe.result() if future_pe else [], ist_offset, interval), days)
 
@@ -11817,7 +12311,6 @@ def oi_profile_round_strike() -> EndpointResponse:
         banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
 
         oi_data      = _rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}
-        strikes_list = _rs_cached(('rs-strikes', symbol, today_str), 600.0, _strike_list) or []
         lot_size     = _rs_cached(('rs-lot', symbol, today_str), 600.0, _lot_size)
         atm_ce_oi    = _rs_cached(('rs-atm-ce-oi', symbol, step, today_str), 300.0, _atm_ce_oi) or {}
         cpr          = _rs_cached(('rs-cpr', symbol, today_str), 86400.0, _cpr_bands) or {}
@@ -11897,6 +12390,7 @@ def oi_profile_round_strike() -> EndpointResponse:
             'interval': interval,
             'ce_strike': ce_strike,
             'pe_strike': pe_strike,
+            'expiry': expiry,
             'ce_symbol': ce_symbol,
             'pe_symbol': pe_symbol,
             'ce_candles': ce_candles,

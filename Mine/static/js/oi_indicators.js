@@ -1859,20 +1859,34 @@ function _oipLayerPane(candleSeries, lineSeries, boxArrays) {
 function oipApplyOptionZOrder() {
     const box30 = typeof oip2ndCandle30sBox !== 'undefined' ? oip2ndCandle30sBox : { ce: [], pe: [] };
     const box5m = typeof oip2nd5mCandleBox  !== 'undefined' ? oip2nd5mCandleBox  : { ce: [], pe: [] };
+    // The CVWAP/PVWAP pairs (option-premium and intrinsic panes alike) are
+    // declared only in oi_profile.js, which /replay never loads (it and
+    // oi_replay.js both declare the same top-level `let`s — see the header
+    // comment in oi_profile_round_strike.js). Guarded the same way the box
+    // arrays and Fixed series above already are, rather than assuming every
+    // page that loads this shared file has the full OI Profile pane set.
+    const ceCvwap = typeof oipCECvwapSeries !== 'undefined' ? oipCECvwapSeries : null;
+    const cePvwap = typeof oipCEPvwapSeries !== 'undefined' ? oipCEPvwapSeries : null;
+    const peCvwap = typeof oipPECvwapSeries !== 'undefined' ? oipPECvwapSeries : null;
+    const pePvwap = typeof oipPEPvwapSeries !== 'undefined' ? oipPEPvwapSeries : null;
+    const intCvwapCe = typeof oipCvwapIntSeries   !== 'undefined' ? oipCvwapIntSeries   : null;
+    const intCvwapPe = typeof oipCvwapIntPeSeries !== 'undefined' ? oipCvwapIntPeSeries : null;
+    const intPvwapCe = typeof oipPvwapIntSeries   !== 'undefined' ? oipPvwapIntSeries   : null;
+    const intPvwapPe = typeof oipPvwapIntPeSeries !== 'undefined' ? oipPvwapIntPeSeries : null;
 
     _oipLayerPane(
         [oipCESeries],
-        [oipCEEma9Series, oipCEEma20Series, oipCEEma50Series, oipCECvwapSeries, oipCEPvwapSeries],
+        [oipCEEma9Series, oipCEEma20Series, oipCEEma50Series, ceCvwap, cePvwap],
         [box30.ce, box5m.ce]
     );
     _oipLayerPane(
         [oipPESeries],
-        [oipPEEma9Series, oipPEEma20Series, oipPEEma50Series, oipPECvwapSeries, oipPEPvwapSeries],
+        [oipPEEma9Series, oipPEEma20Series, oipPEEma50Series, peCvwap, pePvwap],
         [box30.pe, box5m.pe]
     );
     _oipLayerPane(
         [oipIntrinsicSeries, oipIntrinsicPeSeries],
-        [oipVwapIntSeries, oipVwapIntPeSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipPvwapIntSeries, oipPvwapIntPeSeries],
+        [oipVwapIntSeries, oipVwapIntPeSeries, intCvwapCe, intCvwapPe, intPvwapCe, intPvwapPe],
         []
     );
     _oipLayerPane(

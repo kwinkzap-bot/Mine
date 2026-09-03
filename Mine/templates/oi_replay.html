@@ -275,6 +275,34 @@
                 </div>
 
                 <div class="oip-prem-toolbar">
+                    <!-- Index + expiry for THIS block only. The chart above it stays on
+                         the page's own symbol input, so a replayed NIFTY session can be
+                         read against a live BANKNIFTY or SENSEX ladder. Both drive the
+                         whole block — CE/PE candles, the strike dropdowns beside them,
+                         the OI chain behind the stats strip and the futures-volume
+                         overlay. Only this page has them: the same script runs on OI
+                         Profile, where the block keeps following that page's symbol.
+                         Expiry options are filled from /api/oi-profile/expiries. -->
+                    <div class="oip-prem-group">
+                        <span class="oip-label">Index</span>
+                        <select id="oipRSSymbol" class="oip-select oip-select--xs"
+                            title="Index future this block charts (this block only)">
+                            <option value="NIFTY" selected>NIFTY</option>
+                            <option value="BANKNIFTY">BANKNIFTY</option>
+                            <option value="SENSEX">SENSEX</option>
+                        </select>
+                        <span class="oip-label">Date</span>
+                        <input type="date" id="oipRSDate" class="oip-input oip-input--xs"
+                            title="Reference date — defaults to today; the expiry dropdown auto-selects the contract nearest this date">
+                        <span class="oip-label">Exp</span>
+                        <select id="oipRSExpiry" class="oip-select oip-select--xs"
+                            title="Option expiry the CE/PE legs are taken from">
+                            <option value="nearest" selected>Nearest</option>
+                        </select>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
                     <!-- CE / PE strike dropdowns — default to the auto-computed round
                          strikes, editable like Opt Prem's "CE & PE" mode. -->
                     <div class="oip-prem-group">
@@ -618,104 +646,6 @@
                             </div>
                         </div>
                     </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Order controls -->
-                    <div class="oip-prem-group">
-                        <select id="oipRSOrderMode" class="oip-select oip-select--xs" title="Order Mode">
-                            <option value="broker" selected>Broker</option>
-                            <option value="mine">Mine</option>
-                        </select>
-                        <select id="oipRSOrderType" class="oip-select oip-select--xs" title="Order Type">
-                            <option value="MARKET" selected>MKT</option>
-                            <option value="LIMIT">LMT</option>
-                            <option value="STOP">STOP</option>
-                        </select>
-                        <input type="number" id="oipRSLimitPrice" class="oip-input oip-input--price"
-                            placeholder="Price ₹" step="0.05" title="Limit / trigger price">
-                        <div class="oip-order-side-group oip-order-side-group--ce">
-                            <button class="oip-rs-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
-                                CE</button>
-                            <button class="oip-rs-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S
-                                CE</button>
-                            <button id="oipRSSLCE" class="oip-rs-order-btn sl-btn" disabled
-                                title="Place SL order for CE">SL CE</button>
-                        </div>
-                        <div class="oip-order-side-group oip-order-side-group--pe">
-                            <button class="oip-rs-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B
-                                PE</button>
-                            <button class="oip-rs-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S
-                                PE</button>
-                            <button id="oipRSSLPE" class="oip-rs-order-btn sl-btn" disabled
-                                title="Place SL order for PE">SL PE</button>
-                        </div>
-                        <div class="oip-prem-sep"></div>
-                        <button id="oipRSExitAll" class="oip-rs-order-btn exit-all"
-                            title="Exit All Positions & Cancel Orders">EXIT</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Unfilled orders — edit the price or cancel; either way the change
-                 is pushed to every broker the order went to. Its own row rather
-                 than a tail on the toolbar above: the number of resting orders is
-                 not the toolbar's business, and a ladder of six used to wrap the
-                 controls onto a second line. -->
-            <div class="oip-open-orders is-empty"></div>
-            <!-- Stats strip — wrapping pill grid -->
-            <div class="oip-status-row boxed oip-status-row--compact">
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Price</span>
-                    <span id="hdrPrice" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">CE OI</span>
-                    <span id="hdrCeOI" class="oip-hdr-val red">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">PE OI</span>
-                    <span id="hdrPeOI" class="oip-hdr-val grn">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">ATM</span>
-                    <span id="hdrAtm" class="oip-hdr-val">--</span>
-                </div>
-                <div id="hdrCprCard" class="oip-hdr-metric oip-hdr-metric--clickable"
-                    title="CPR day-range type (Narrow/Medium/Wide) — click to toggle today vs next day">
-                    <span class="oip-hdr-lbl">CPR <span id="hdrCprSrc" class="oip-hdr-lbl-badge">IDX · TODAY</span></span>
-                    <span id="hdrCpr" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric"
-                    title="3-day Avg VWAP vs today's open — avg above open means Down bias, else Up">
-                    <span class="oip-hdr-lbl">VWAP Bias</span>
-                    <span id="hdrVwapBias" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric"
-                    title="Price vs the two 9:18 ATM CE OI lines — below both means Down, above both means Up">
-                    <span class="oip-hdr-lbl">9:18 Bias</span>
-                    <span id="hdrAtmCeOiBias" class="oip-hdr-val">--</span>
-                </div>
-                <div id="hdrPcrCard" class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">PCR</span>
-                    <span id="hdrPcr" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Lot</span>
-                    <span id="hdrLotSize" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Trend</span>
-                    <span id="hdrTrend" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric oip-ivp-metric" title="IV Percentile: High values mean expensive premiums">
-                    <span class="oip-hdr-lbl">IVP</span>
-                    <div class="oip-ivp-container">
-                        <span id="hdrIVP" class="oip-hdr-val">--</span>
-                        <div class="oip-ivp-gauge-bg">
-                            <div id="ivpGaugeBar" class="oip-ivp-gauge-bar" style="width: 0%"></div>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -734,7 +664,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/oi_profile_open_orders.js') }}?v={{ sv('js/oi_profile_open_orders.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_shared.js') }}?v={{ sv('js/oi_profile_shared.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
