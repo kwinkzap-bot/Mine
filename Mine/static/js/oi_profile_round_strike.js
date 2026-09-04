@@ -1333,6 +1333,10 @@ let oipRSLastCeData = null, oipRSLastPeData = null;
 // empty volume the block was reported for. Parked per interval, since bars from
 // a different timeframe sit on a different time grid and must not be reused.
 let oipRSLastFutVol = null, oipRSLastBnfVol = null, oipRSLastVolInterval = null;
+// The future's own tradingsymbol from the last render — so a replay-scrub
+// redraw (oipRSReplayRedrawFromCache), which has no fresh API response to
+// read it off, doesn't blank the volume legend for the duration of a scrub.
+let oipRSLastFutSymbol = null;
 
 // ── 5m Close Border indicator ────────────────────────────────────────────────
 // This block's own instance of the marker shared with the main OI Profile and
@@ -1382,6 +1386,73 @@ function oipRSOn5mCloseChange() {
     });
 }
 
+// ── Sync to the main chart's Bar Replay ──────────────────────────────────────
+// /replay's own chart (above this block) can scrub bar-by-bar through a day
+// (oipReplayIndex into oipFullCandles — see oipReloadStrikeOnly in
+// oi_replay.js for the same pattern). This block is otherwise oblivious to
+// that: it just live-polls. These three functions make it follow along —
+// clipping its own candles/volume to the same moment in time — so scrubbing
+// the main chart also scrubs the option premiums and futures volume sitting
+// under it, instead of those racing ahead showing "now".
+//
+// oi_replay.js loads before this file (see the <script> order in
+// oi_replay.html) and declares oipReplayIndex/oipFullCandles as ordinary
+// top-level `let`s, which — same as any other pair of classic <script> tags
+// on one page — makes them plain globals reachable here by bare name. The
+// typeof guards are what keep this safe to run on OI Profile too, which
+// never loads oi_replay.js at all.
+function oipRSMainReplayActive() {
+    const toolbar = document.getElementById('oipReplayToolbar');
+    return !!(toolbar && !toolbar.classList.contains('hidden')
+        && typeof oipReplayIndex !== 'undefined' && oipReplayIndex > 0
+        && typeof oipFullCandles !== 'undefined' && oipFullCandles?.length);
+}
+
+// The timestamp this block should clip its own series to, or null when the
+// main chart isn't replaying (the normal, live case).
+function oipRSReplayClipTime() {
+    if (!oipRSMainReplayActive()) return null;
+    return oipFullCandles[oipReplayIndex]?.time ?? null;
+}
+
+// Redraws from whatever this block last fetched (oipRSLastCeData etc. — kept
+// FULL/unclipped, see oipRSRenderChart) rather than re-fetching: a scrub is
+// just picking a different moment out of data already in hand.
+function oipRSReplayRedrawFromCache() {
+    if (!oipRSLastCeData?.length && !oipRSLastPeData?.length) return;
+    oipRSRenderChart({
+        success: true,
+        ce_strike: oipRSCurrentCEStrike,
+        pe_strike: oipRSCurrentPEStrike,
+        ce_candles: oipRSLastCeData,
+        pe_candles: oipRSLastPeData,
+        future_volume: oipRSLastFutVol || [],
+        banknifty_volume: oipRSLastBnfVol || [],
+        future_symbol: oipRSLastFutSymbol,
+    });
+}
+
+// One check per frame — cheap (a couple of property reads and a number
+// comparison) — so a fast slider drag redraws this block immediately instead
+// of waiting up to a second for its own poll loop to come back around.
+let oipRSLastSeenReplayIndex = -1;
+function oipRSWatchReplay() {
+    const active = oipRSMainReplayActive();
+    const badge = document.getElementById('oipRSLiveBadge');
+    if (active && oipReplayIndex !== oipRSLastSeenReplayIndex) {
+        oipRSLastSeenReplayIndex = oipReplayIndex;
+        if (badge) { badge.textContent = 'Replay'; badge.classList.add('oip-title-badge--replay'); }
+        oipRSReplayRedrawFromCache();
+    } else if (!active && oipRSLastSeenReplayIndex !== -1) {
+        // Replay just ended — the badge/marker reset here; oipRSPollTick
+        // (paused while active, see there) resumes live fetching on its own
+        // and the next tick's render redraws the untrimmed series.
+        oipRSLastSeenReplayIndex = -1;
+        if (badge) { badge.textContent = 'Live 1s'; badge.classList.remove('oip-title-badge--replay'); }
+    }
+    requestAnimationFrame(oipRSWatchReplay);
+}
+
 // Renders this block's chart from its own /api/oi-profile/round-strike
 // response (see oipRSLoadData). The stats strip is painted separately by
 // oipRSApplyHeader from the `header` object on that same response.
@@ -1417,8 +1488,21 @@ function oipRSRenderChart(data) {
     }
     // Parked untagged so the 5m Close Border indicator can be re-applied on a
     // checkbox/colour change without waiting for the next poll (oipRSOn5mCloseChange).
+    // Parked FULL/unclipped — oipRSReplayClipTime below trims a COPY for
+    // drawing, so a scrub back to an earlier bar has the later ones to
+    // restore rather than having thrown them away on a previous, deeper clip.
     oipRSLastCeData = ceData;
     oipRSLastPeData = peData;
+
+    // Synced to the main /replay chart's scrub position when it has one (see
+    // oipRSMainReplayActive) — everything drawn below this point only goes
+    // up to that bar, the same way oipReloadStrikeOnly clips the main
+    // chart's own option data to oipFullCandles.
+    const oipRSClip = oipRSReplayClipTime();
+    if (oipRSClip != null) {
+        ceData = ceData.filter(c => c.time <= oipRSClip);
+        peData = peData.filter(c => c.time <= oipRSClip);
+    }
 
     // Suppress the cross-chart sync listener (see oipRSInitCharts) while this
     // setData call is in flight — same guard oi_profile.js uses for OI/Opt Prem,
@@ -1440,7 +1524,12 @@ function oipRSRenderChart(data) {
     }
     oipRSLastFutVol = futVol;
     oipRSLastBnfVol = bnfVol;
+    oipRSLastFutSymbol = data.future_symbol;
     oipRSLastVolInterval = oipRSInterval;
+    if (oipRSClip != null) {
+        futVol = futVol.filter(v => v.time <= oipRSClip);
+        bnfVol = bnfVol.filter(v => v.time <= oipRSClip);
+    }
 
     // Both overlays shade by size (the `intensity` flag): a bar well above the
     // recent median paints near solid, a quiet one fades back. The two bands
@@ -1596,6 +1685,13 @@ async function oipRSPollTick() {
     // marks that response as already superseded (this tick was woken by a
     // strike/TF change), which sends the loop straight round again.
     if (oipRSIsLoading) { oipRSReloadPending = true; return; }
+
+    // The main chart is scrubbing — oipRSWatchReplay is already redrawing this
+    // block every frame from cached data, so a live fetch here would only
+    // overwrite oipRSLastCeData with today's ongoing session (burning a
+    // broker request) for a view currently clipped to a past bar anyway.
+    // Kept rescheduling so this loop notices when replay ends and resumes.
+    if (oipRSMainReplayActive()) { oipRSScheduleLoop(OIP_RS_POLL_MS); return; }
 
     const marketOpen = (typeof oipIsMarketOpen !== 'function') || oipIsMarketOpen();
     let ok = false;
@@ -1991,6 +2087,10 @@ async function oipRSInit() {
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) oipRSScheduleLoop(0);
     });
+
+    // No-op every frame until the main chart (present only on /replay) is
+    // actually scrubbing — see oipRSMainReplayActive.
+    oipRSWatchReplay();
 }
 
 document.addEventListener('DOMContentLoaded', () => { oipRSInit(); });

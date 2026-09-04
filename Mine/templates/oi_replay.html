@@ -266,7 +266,9 @@
                         <path d="M12 7v5l3 3" />
                     </svg>
                     Round Strike
-                    <span class="oip-title-badge">Live 1s</span>
+                    <!-- Text/class swapped by oipRSWatchReplay while the main chart
+                         above is scrubbing — see oipRSMainReplayActive. -->
+                    <span class="oip-title-badge" id="oipRSLiveBadge">Live 1s</span>
                     <!-- Shown only while the broker is refusing candles and the
                          chart is holding its last good bars, so a frozen series
                          is never mistaken for a quiet market. Filled by

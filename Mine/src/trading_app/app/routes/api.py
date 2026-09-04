@@ -11976,12 +11976,22 @@ def oi_profile_round_strike() -> EndpointResponse:
             try:
                 # An 'ICICI:' address is an expired contract (see _leg_token
                 # below) and only the Breeze adapter can read it. Its window
-                # ends at the expiry, not at now — asking for the last five days
-                # of a contract that stopped trading in August returns nothing.
+                # ends at `expiry` — the SELECTED option expiry, i.e. the
+                # reference session being examined — not at now, and NOT at
+                # the token's own embedded expiry: the future-volume overlay's
+                # contract (future_contract_id) can settle LATER than the
+                # option expiry whose candles it sits under (index futures are
+                # monthly, options can be weekly), and windowing on its own
+                # expiry would fetch a range that barely overlaps the CE/PE
+                # candles — oipSetVolumeBars matches bars to candles by EXACT
+                # time key, so a non-overlapping window draws nothing despite
+                # the API answering with real data. For an option leg this is
+                # the same date its own token already carries, since
+                # option_contract_id embeds this same `expiry`.
                 if str(token).startswith('ICICI:'):
                     if leg_provider is None:
                         return []
-                    exp_day = datetime.strptime(str(token).split(':')[2], '%Y-%m-%d')
+                    exp_day = datetime.strptime(expiry, '%Y-%m-%d')
                     res = leg_provider.historical_data(
                         str(token),
                         (exp_day - timedelta(days=fetch_days)).strftime('%Y-%m-%d'),
@@ -12058,7 +12068,13 @@ def oi_profile_round_strike() -> EndpointResponse:
             # once a second for candles that cannot change would burn the tighter
             # budget for nothing.
             leg_ttl = 86400.0 if str(token).startswith('ICICI:') else _RS_CANDLE_TTL
-            out = _rs_cached(('rs-leg', symbol, inter, fetch_days, str(token)),
+            # `expiry` is part of the key because an ICICI future token
+            # (future_contract_id) doesn't embed it — the window fetch_task
+            # asks for is capped at `expiry`, not at the future's own later
+            # settlement (see the comment in fetch_task's ICICI branch), so
+            # two different past option expiries sharing one calendar month's
+            # future would otherwise collide on the same cached (wrong) window.
+            out = _rs_cached(('rs-leg', symbol, inter, fetch_days, expiry, str(token)),
                              leg_ttl, produce)
             # Distinguishes "this tick's fetch failed and you are looking at
             # parked bars" from a clean cache hit, which records nothing.
