@@ -150,9 +150,7 @@ def contracts():
 @require_user_auth
 @login_required
 def historic_oi():
-    """Historic OI — a Dashboard tab; only served standalone when embedded."""
-    if not request.args.get('embed'):
-        return redirect(url_for('pages.dashboard') + '#historic-oi')
+    """Historic OI — standalone page."""
     return render_template('historic_oi.html')
 
 @pages_bp.route('/replay')

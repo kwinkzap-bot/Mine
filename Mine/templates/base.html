@@ -102,8 +102,10 @@
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
             <a href="/dashboard"
-                class="nav-link {% if request.path in ['/dashboard', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
+                class="nav-link {% if request.path in ['/dashboard', '/trading', '/contracts'] %}active{% endif %}">📊
                 Dashboard</a>
+            <a href="/historic-oi" class="nav-link {% if request.path == '/historic-oi' %}active{% endif %}">📈
+                Historic OI</a>
             <a href="/replay" class="nav-link {% if request.path == '/replay' %}active{% endif %}">🕒 Replay</a>
              <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}">👁
                 Watchlist</a>
@@ -114,8 +116,8 @@
             <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
             <a href="/scanners" class="nav-link {% if request.path == '/scanners' %}active{% endif %}">🔍
                 Scanners</a>
-            <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉
-                Options Chart</a>
+            <!-- <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉
+                Options Chart</a> -->
             <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>

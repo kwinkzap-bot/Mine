@@ -30,7 +30,6 @@
     <button class="dash-tab" id="dash-tab-portfolio"   onclick="dashSwitch('portfolio')">💼 Portfolio</button>
     <button class="dash-tab" id="dash-tab-markets"     onclick="dashSwitch('markets')">🏢 Markets</button>
     <button class="dash-tab" id="dash-tab-contracts"   onclick="dashSwitch('contracts')">📜 Contracts</button>
-    <button class="dash-tab" id="dash-tab-historic-oi" onclick="dashSwitch('historic-oi')">📈 Historic OI</button>
     <button class="dash-tab" id="dash-tab-finance"     onclick="dashSwitch('finance')">💰 Finance</button>
 </div>
 
@@ -174,9 +173,6 @@
   </div>
 </div><!-- /pcr panel -->
 
-<!-- ── Historic OI panel ──────────────────────────────────────── -->
-
-
 <!-- ── FII Sector panel ────────────────────────────────────────── -->
 <div class="dash-panel" id="dash-fii-sector-panel">
   <div class="fii-wrap">
@@ -308,13 +304,12 @@
   </div>
 </div><!-- /swing-trade panel -->
 
-<!-- ── Embedded pages: Orders / Portfolio / Markets / Contracts / Historic OI ──── -->
+<!-- ── Embedded pages: Orders / Portfolio / Markets / Contracts ──── -->
 <div class="dash-panel" id="dash-trading-panel"><iframe class="dash-iframe" id="dash-trading-frame" data-src="/trading?embed=1" title="Trading"></iframe></div>
 <div class="dash-panel" id="dash-orders-panel"><iframe class="dash-iframe" id="dash-orders-frame" data-src="/orders?embed=1" title="Orders"></iframe></div>
 <div class="dash-panel" id="dash-portfolio-panel"><iframe class="dash-iframe" id="dash-portfolio-frame" data-src="/portfolio?embed=1" title="Portfolio"></iframe></div>
 <div class="dash-panel" id="dash-markets-panel"><iframe class="dash-iframe" id="dash-markets-frame" data-src="/markets?embed=1" title="Markets"></iframe></div>
 <div class="dash-panel" id="dash-contracts-panel"><iframe class="dash-iframe" id="dash-contracts-frame" data-src="/contracts?embed=1" title="Contracts"></iframe></div>
-<div class="dash-panel" id="dash-historic-oi-panel"><iframe class="dash-iframe" id="dash-historic-oi-frame" data-src="/historic-oi?embed=1" title="Historic OI"></iframe></div>
 
 {% endblock %}
 
@@ -322,9 +317,9 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['pcr', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'contracts', 'historic-oi', 'finance'];
+const _DASH_TABS = ['pcr', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'contracts', 'finance'];
 
-const _IFRAME_TABS = ['trading', 'orders', 'portfolio', 'markets', 'contracts', 'historic-oi'];
+const _IFRAME_TABS = ['trading', 'orders', 'portfolio', 'markets', 'contracts'];
 
 function dashSwitch(tab, pushState) {
     _DASH_TABS.forEach(t => {
