@@ -334,7 +334,9 @@ const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
 // shared with the main OI and Premium charts ("both OI and Premium charts are
 // same height") and must stay where it is. The Round Strike wrapper is sized
 // inline by oipRSSetChartHeight, which beats the class.
-const OIP_RS_BASE_CHART_HEIGHT = 595;
+// Matches --oip-replay-chart-h in static/css/oi_profile.css — the index chart
+// above and this one are read as a pair and are meant to be the same height.
+const OIP_RS_BASE_CHART_HEIGHT = 431;
 
 function oipRSSetChartHeight(px) {
     try { oipRSChart?.chart?.applyOptions({ height: px }); } catch (e) {}
@@ -876,6 +878,18 @@ function oipRSInitCharts() {
     oipRSCESeries = oipRSChart.ceSeries || oipRSChart.series;
     oipRSPESeries = oipRSChart.peSeries;
 
+    // Match the bar width of whatever this block sits next to.
+    //
+    // TradingViewChart defaults to barSpacing 4 — "half of OI chart spacing for
+    // compact option view" — which is right on OI Profile, where this chart is
+    // one of several option panes that all use 4. On Replay it is stacked under
+    // the index chart, which draws at 8, so the pair rendered at two different
+    // horizontal scales and a crosshair synced by TIME landed at visibly
+    // different x positions on each.
+    if (oipRSIsHistorical()) {
+        try { oipRSChart.chart.timeScale().applyOptions({ barSpacing: 8, rightOffset: 20 }); } catch (e) {}
+    }
+
     // This chart is deliberately NOT part of the shared pan/zoom sync web that
     // the OI Profile and Opt Prem charts form (see oi_profile_init.js). That web
     // syncs LOGICAL ranges — bar indices — which only means the same thing when
@@ -969,15 +983,18 @@ function oipRSInitCharts() {
     [oipRSVolumeSeries, oipRSBnfVolumeSeries] = oipAddVolumeSeriesPair(
         oipRSChart.chart, 'oipRSVolume', showVolume, showBnfVolume, true);
 
-    document.getElementById('oipRSShowVolume')?.addEventListener('change', (e) => {
-        oipRSVolumeSeries?.applyOptions({ visible: e.target.checked });
+    // Switching an overlay ON needs a refetch on the historical block: its bars
+    // were never requested (see oipRSApiUrl), so there is nothing parked to make
+    // visible. Switching OFF just hides what is already there.
+    const onVolToggle = (series) => (e) => {
+        series()?.applyOptions({ visible: e.target.checked });
         oipRSSaveIndicatorState();
-    });
-
-    document.getElementById('oipRSShowBnfVolume')?.addEventListener('change', (e) => {
-        oipRSBnfVolumeSeries?.applyOptions({ visible: e.target.checked });
-        oipRSSaveIndicatorState();
-    });
+        if (e.target.checked && oipRSIsHistorical()) oipRSRequestReload();
+    };
+    document.getElementById('oipRSShowVolume')
+        ?.addEventListener('change', onVolToggle(() => oipRSVolumeSeries));
+    document.getElementById('oipRSShowBnfVolume')
+        ?.addEventListener('change', onVolToggle(() => oipRSBnfVolumeSeries));
 
     // Keep chart width in sync with its wrapper (same pattern as Opt Prem).
     const wrap = document.getElementById('oipRSCombinedChartWrap');
@@ -1113,17 +1130,113 @@ function oipRSInitIndicatorsPopup() {
 // first call goes out without them precisely to LEARN which pair to ask for
 // (session_open + strikes), and the option legs come back empty until it does.
 
+// The selected SETTLED expiry, or '' when there is none. Only Replay carries the
+// dropdown, so this is always '' on the OI Profile page — which is exactly what
+// keeps that page on its original live path.
+function oipRSSelectedExpiry() {
+    return document.getElementById('oipRSExpiryDropdown')?.value || '';
+}
+
+// The page symbol, on both pages. Replay used to give this block a dropdown of
+// its own, which meant the two stacked charts could sit on different instruments
+// without anything on screen saying so; there is one selector now, in the Replay
+// toolbar, and oi_replay.js calls oipRSOnDateChanged when it moves.
+function oipRSSymbol() {
+    return oipSymbol;
+}
+
+// The as-of date: where the user is standing. Owned by the Replay page's own
+// toolbar rather than this block, so a single date drives both the index chart
+// above and the option legs here. Absent on the OI Profile page, which stays live.
+function oipRSAsOfDate() {
+    return document.getElementById('oipReplayDate')?.value || '';
+}
+
+// True on Replay, where this block is historical-only: it shows a settled
+// contract, so there is nothing to poll for and no live tick to chase.
+function oipRSIsHistorical() {
+    return !!document.getElementById('oipRSExpiryDropdown');
+}
+
 function oipRSApiUrl(withStrikes = true) {
     const _daysForInterval = { day: 365, week: 1095, month: 3650 };
-    const days = _daysForInterval[oipRSInterval] ?? 5;
+    // 10 trading days back from the as-of date on the historical block, matching
+    // the window the index chart above it loads. The live page keeps its 5 — a
+    // wider intraday window there is bars nobody scrolls back to, and at
+    // 1-minute each extra pair of days is another rate-limited Breeze chunk.
+    const days = _daysForInterval[oipRSInterval] ?? (oipRSIsHistorical() ? 10 : 5);
     const step = (typeof oipStrikeStep !== 'undefined' && oipStrikeStep) || 50;
-    let url = `/api/oi-profile/round-strike?symbol=${oipSymbol}&interval=${oipRSInterval}&days=${days}&step=${step}`;
+    let url = `/api/oi-profile/round-strike?symbol=${oipRSSymbol()}&interval=${oipRSInterval}&days=${days}&step=${step}`;
     if (withStrikes) {
         const ce = document.getElementById('oipRSCEStrikeDropdown')?.value;
         const pe = document.getElementById('oipRSPEStrikeDropdown')?.value;
         if (ce && pe) url += `&ce_strike=${ce}&pe_strike=${pe}`;
     }
-    return `${url}&_t=${Date.now()}`;
+    const expiry = oipRSSelectedExpiry();
+    const asOf = oipRSAsOfDate();
+    if (expiry) url += `&expiry=${expiry}`;
+    if (asOf) url += `&date=${asOf}`;
+    // Tell the server which volume overlays are actually switched on. Each one
+    // it can skip is five fewer rate-limited Breeze chunks at 1-minute bars,
+    // and Banknifty Vol Fut is off by default — it was being fetched and
+    // discarded on every request. Only sent from the historical block; the live
+    // page omits them and keeps its original behaviour.
+    if (oipRSIsHistorical()) {
+        if (!(document.getElementById('oipRSShowVolume')?.checked ?? true)) url += '&vol=0';
+        if (!(document.getElementById('oipRSShowBnfVolume')?.checked ?? false)) url += '&bnf_vol=0';
+        // Replay has no stats strip to fill (it was removed), so everything
+        // behind those pills — and the intraday index leg they need — is work
+        // whose result this page throws away.
+        url += '&hdr=0';
+    }
+    // The cache-buster is what keeps the live block at 1s. A historical window
+    // is fixed by its own parameters, so it is left off and the browser cache
+    // is allowed to answer.
+    return oipRSIsHistorical() ? url : `${url}&_t=${Date.now()}`;
+}
+
+// Fills Replay's expiry dropdown and selects the most recent settled expiry.
+// Silent no-op on the OI Profile page, which has no such element.
+//
+// Returns true once an expiry is selected. The caller waits on that before its
+// first fetch: with no "Live" option there is nothing sensible to request until
+// the list has arrived.
+async function oipRSPopulateExpiries() {
+    const sel = document.getElementById('oipRSExpiryDropdown');
+    if (!sel) return false;
+    try {
+        const res = await fetch(`/api/oi-profile/expiries?symbol=${oipRSSymbol()}`
+            + `&date=${oipRSAsOfDate()}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'request failed');
+        sel.innerHTML = '';
+        (data.expiries || []).forEach(iso => {
+            const opt = document.createElement('option');
+            opt.value = iso;
+            // "08 Sep 26" — the year earns its place here in a way it never does
+            // on a live expiry, since the date can be sent back over a year.
+            const d = new Date(iso + 'T00:00:00');
+            opt.textContent = isNaN(d) ? iso : d.toLocaleDateString('en-GB',
+                { day: '2-digit', month: 'short', year: '2-digit' });
+            sel.appendChild(opt);
+        });
+        if (!sel.options.length) throw new Error('no expiries open on that date');
+        // The FRONT expiry, not the previous pick: having moved the date, the
+        // contract that was current then is the one being asked about. Standing
+        // on 04 Sep that is 08 Sep.
+        sel.value = data.selected || sel.options[0].value;
+        sel.title = 'Expiry open on the chosen date — the front one is picked';
+        return true;
+    } catch (e) {
+        console.warn('[RoundStrike] expiry list failed:', e);
+        // Say so in the control itself. An empty dropdown with no explanation
+        // reads as a broken page; this reads as a missing ICICI session, which
+        // is what it usually is.
+        sel.innerHTML = '<option value="">unavailable</option>';
+        sel.title = `Settled expiries unavailable: ${e.message}`;
+        oipRSSetStaleChip(`Expiry list unavailable — ${e.message}`);
+        return false;
+    }
 }
 
 // First call — no strikes yet. Returns the day's OPEN (never a live/current
@@ -1172,6 +1285,53 @@ function oipRSPopulateDropdown(sel, strikes, selected) {
         sel.appendChild(opt);
     });
 }
+
+// Points the block at whatever symbol/expiry the dropdowns now say: re-reads the
+// strike ladder and session open for that contract, re-derives the round-strike
+// pair from it, and asks for a redraw.
+//
+// The parked candles are dropped first. They exist as anti-flicker cover for a
+// leg the broker just refused, and reusing them across a contract change would
+// paint one contract's premiums under another's labels.
+async function oipRSLoadContract() {
+    oipRSLastCeData = oipRSLastPeData = null;
+    oipRSLastFutVol = oipRSLastBnfVol = null;
+    oipRSCurrentCEStrike = oipRSCurrentPEStrike = null;
+
+    const { openPrice, strikes } = await oipRSFetchOpenAndStrikes();
+    const { ceStrike, peStrike } = oipRSComputeStrikes(openPrice);
+    oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, ceStrike);
+    oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, peStrike);
+
+    oipRSPendingResetZoom = true;   // a settled window sits nowhere near the live one
+    oipRSScheduleLoop(0);
+}
+
+// Replay position, as a bar time. The Round Strike chart draws nothing after it,
+// so scrubbing the slider above walks BOTH charts forward together instead of
+// leaving this one showing the whole session while the index chart replays.
+// null = show everything (the OI Profile page never sets it).
+let oipRSReplayCutoff = null;
+
+function oipRSTrimToCutoff(rows) {
+    if (oipRSReplayCutoff == null || !rows?.length) return rows || [];
+    return rows.filter(r => r.time <= oipRSReplayCutoff);
+}
+
+// Called by oi_replay.js on every replay step. Redraws from the parked candles
+// rather than refetching — the data is already here, only the cut moves.
+window.oipRSApplyReplayCutoff = function (timeSec) {
+    const next = (timeSec == null || !Number.isFinite(timeSec)) ? null : timeSec;
+    if (next === oipRSReplayCutoff) return;
+    oipRSReplayCutoff = next;
+    if (!oipRSChart || !oipRSLastCeData) return;
+    window._oipDataRefreshing = true;
+    oipRSChart.update(
+        oipRSMark5mCloseBorders(oipRSTrimToCutoff(oipRSLastCeData)),
+        oipRSMark5mCloseBorders(oipRSTrimToCutoff(oipRSLastPeData)),
+        false);
+    requestAnimationFrame(() => { window._oipDataRefreshing = false; });
+};
 
 // Set by the callers that need the NEXT render to re-fit the chart (initial
 // load, strike change). The render itself is driven by this block's own poll
@@ -1249,6 +1409,10 @@ function oipRSRenderChart(data) {
     // candles — charting them under the new labels would show the wrong strike
     // for a tick. Drop it; the request for the new pair is already in flight.
     if (String(data.ce_strike) !== String(ceStrike) || String(data.pe_strike) !== String(peStrike)) return;
+    // Same race, one field over: an in-flight live response landing just after
+    // the user picked a past expiry would draw today's premiums as that
+    // expiry's. The backend echoes what it actually fetched, so compare.
+    if (String(data.expiry || '') !== oipRSSelectedExpiry()) return;
 
     const resetZoom = oipRSPendingResetZoom;
     oipRSPendingResetZoom = false;
@@ -1279,7 +1443,10 @@ function oipRSRenderChart(data) {
     // setData call is in flight — same guard oi_profile.js uses for OI/Opt Prem,
     // so a data refresh can't be mistaken for a user-driven pan/zoom.
     window._oipDataRefreshing = true;
-    if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(ceData), oipRSMark5mCloseBorders(peData), resetZoom);
+    // Trimmed on the way to the chart, not in the parked arrays: oipRSLastCeData
+    // stays whole so moving the replay slider back forward has data to show.
+    if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(oipRSTrimToCutoff(ceData)),
+                                      oipRSMark5mCloseBorders(oipRSTrimToCutoff(peData)), resetZoom);
 
     // Same anti-flicker rule as the candles above: an empty array means the
     // future leg failed this tick, not that volume went to nothing. Hold the
@@ -1433,12 +1600,16 @@ let oipRSIsLoading = false;
 // so the loop goes straight round again instead of waiting out a full tick.
 let oipRSReloadPending = false;
 
-// Deliberately NOT suppressed by window.oipReplayMode. This block is live on
-// /replay too (the flag is set there for the historical chart above it), and
-// its feed is its own — one request to /api/oi-profile/round-strike, unrelated
-// to anything the replay chart fetches.
+// On the OI Profile page this drives the 1-second live feed. On Replay it does
+// not run at all: that block shows a SETTLED expiry, whose candles are finished
+// data, so re-requesting them on a timer would only burn Breeze's rate budget —
+// much tighter than Fyers' — while the user scrubs the slider.
+//
+// A caller asking for an immediate refetch (delay 0) still gets one either way:
+// that is a strike/TF/symbol/expiry change, not a poll.
 function oipRSScheduleLoop(delay) {
     if (oipRSPollTimer) clearTimeout(oipRSPollTimer);
+    if (oipRSIsHistorical() && delay > 0) return;
     oipRSPollTimer = setTimeout(() => {
         if (document.hidden) { oipRSScheduleLoop(OIP_RS_POLL_MS_HIDDEN); return; }
         oipRSPollTick();
@@ -1460,6 +1631,11 @@ async function oipRSPollTick() {
         if (oipRSReloadPending) {
             oipRSReloadPending = false;
             oipRSScheduleLoop(0);
+        } else if (oipRSIsHistorical()) {
+            // Historical: one fetch per change, no follow-up tick. oipRSScheduleLoop
+            // would drop a delayed call anyway; not making it keeps the intent
+            // visible here rather than buried in that guard.
+            oipRSSetStaleChip(null);
         } else {
             oipRSScheduleLoop(!marketOpen ? OIP_RS_POLL_MS_CLOSED
                 : (ok ? OIP_RS_POLL_MS : OIP_RS_POLL_MS_ERROR));
@@ -1499,6 +1675,11 @@ async function oipRSLoadData() {
         oipRSReloadPending = true;
         return true;
     }
+    // Historical with no expiry means the list failed to load (usually a dead
+    // ICICI session). Requesting anyway would answer with LIVE candles and draw
+    // them in a block whose whole premise is a settled contract — worse than
+    // drawing nothing, because nothing about the chart would say so.
+    if (oipRSIsHistorical() && !oipRSSelectedExpiry()) return true;
     oipRSIsLoading = true;
     try {
         const res = await fetch(oipRSApiUrl(true));
@@ -1784,16 +1965,34 @@ async function oipRSInit() {
 
     oipRSInitCharts();
 
-    const { openPrice, strikes } = await oipRSFetchOpenAndStrikes();
-    const { ceStrike, peStrike } = oipRSComputeStrikes(openPrice);
+    // Replay: the expiry list has to land BEFORE the first fetch. There is no
+    // "Live" fallback to request in the meantime, and the strike ladder and
+    // session open both belong to the contract that is about to be chosen.
+    // No-op (and no wait) on the OI Profile page.
+    await oipRSPopulateExpiries();
 
-    oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, ceStrike);
-    oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, peStrike);
+    await oipRSLoadContract();
 
     // A strike change re-aims this block's own request at the new pair.
     const onStrikeChange = () => oipRSRequestReload();
     document.getElementById('oipRSCEStrikeDropdown')?.addEventListener('change', onStrikeChange);
     document.getElementById('oipRSPEStrikeDropdown')?.addEventListener('change', onStrikeChange);
+
+    // Symbol and expiry both land on a different contract, so both go the long
+    // way round — new strike ladder, new session open, new round-strike pair.
+    // A symbol change invalidates the expiry list too: cadence differs per
+    // symbol (NIFTY is weekly, BANKNIFTY monthly) and so do the dates.
+    // Moving the date re-asks which expiries were open then and re-picks the
+    // front one, so it goes through the same path as a symbol change.
+    const onContractChange = async () => {
+        await oipRSPopulateExpiries();
+        await oipRSLoadContract();
+    };
+    // The date lives in the page toolbar now, so oi_replay.js calls this when it
+    // moves rather than this block listening for it — the page has to re-window
+    // its own chart on the same change, and one owner keeps the two in step.
+    window.oipRSOnDateChanged = onContractChange;
+    document.getElementById('oipRSExpiryDropdown')?.addEventListener('change', () => oipRSLoadContract());
 
     oipRSInitOrderButtons();
     oipRSInitRayTool();
@@ -1803,16 +2002,15 @@ async function oipRSInit() {
     // indicator off never carries an empty one under the candles.
     oipRSSyncOiChgPane();
 
-    // First real tick — the strikes only just resolved, so the call above went
-    // out without them. Rays are restored by the render that follows (see
-    // oipRSRenderChart), and every tick after this one is scheduled by the loop.
-    oipRSPendingResetZoom = true;
-    oipRSScheduleLoop(0);
+    // The first real tick was already requested by oipRSLoadContract above (the
+    // bootstrap call before it went out without strikes, precisely to learn
+    // them). Rays are restored by the render that follows — see oipRSRenderChart.
 
     // A tab that comes back to the foreground should show current data at once
-    // rather than up to OIP_RS_POLL_MS_HIDDEN of staleness.
+    // rather than up to OIP_RS_POLL_MS_HIDDEN of staleness. Historical has no
+    // staleness to catch up on, so it is left alone.
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) oipRSScheduleLoop(0);
+        if (!document.hidden && !oipRSIsHistorical()) oipRSScheduleLoop(0);
     });
 }
 

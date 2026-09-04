@@ -2132,7 +2132,13 @@ body.dark-theme .oip-oo-cancel-all,
    LightweightCharts canvas off this wrapper, so the two stay in step; nudge
    --oip-replay-chart-h to make the block taller or shorter. */
 .oip-page--replay {
-    --oip-replay-chart-h: clamp(360px, 62vh, 620px);
+    /* A FIXED height, deliberately not a vh clamp any more. This chart and the
+       Round Strike chart below it are read as a pair, and a viewport-relative
+       height made this one grow and shrink with the window while the other
+       stayed put — so the two never lined up on anything but one screen size.
+       Keep this in step with OIP_RS_BASE_CHART_HEIGHT in
+       static/js/oi_profile_round_strike.js; the two are meant to be equal. */
+    --oip-replay-chart-h: 431px;
     height: auto;
     min-height: 0;
 }

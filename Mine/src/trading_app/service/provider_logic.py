@@ -123,6 +123,23 @@ def get_data_provider(user: Optional[str] = None, context: Optional[str] = None)
         return None
 
 
+def get_icici_adapter(user: Optional[str] = None) -> Optional[Any]:
+    """The Breeze adapter specifically, whatever DATA_PROVIDER happens to be.
+
+    Unlike get_data_provider this never falls back to another broker, because
+    the callers are asking for something only Breeze can do: history for an
+    already-EXPIRED contract, which it will serve because it addresses a
+    contract by (stock_code, expiry, strike, right) rather than by an
+    instrument token. Kite and Fyers both resolve through masters that drop
+    expired rows, so a fallback here would silently answer a past-expiry
+    request with the wrong contract or with nothing.
+    """
+    username = user
+    if not username and has_request_context():
+        username = session.get('username')
+    return _get_icici_adapter(username or 'Mine')
+
+
 def _get_icici_adapter(username: str) -> Optional[Any]:
     """Build (and cache) the Breeze adapter for a user, or None if unconfigured.
 

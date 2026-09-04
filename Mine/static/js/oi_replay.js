@@ -5,6 +5,41 @@
 'use strict';
 
 /* ── State ────────────────────────────────────────────────── */
+
+/* ── Crosshair sync helper ────────────────────────────────────────────────────
+   oi_profile_round_strike.js publishes its hover through window._oipSyncCrosshair
+   and skips the whole subscription when that is not a function. The definition
+   lives in oi_profile_init.js, which THIS page does not load — so on Replay the
+   sync was silently doing nothing.
+
+   Defined at module scope rather than inside oipInitCharts because that runs
+   late (deferred behind a resize event when the chart container starts hidden,
+   as it does inside the dashboard), and by then the Round Strike chart has
+   already made its one check. Only defined if absent, so the OI Profile page
+   keeps its own. */
+if (typeof window !== 'undefined' && typeof window._oipSyncCrosshair !== 'function') {
+    window._oipSyncCrosshair = (sourceChart, targetChart, param, targetSeries) => {
+        if (!targetChart || !targetSeries) return;
+        try {
+            const valid = param && param.point && param.time != null;
+            // Deferred past LC's init RAF: clearCrosshairPosition kicks off an
+            // async render that throws if the chart is not ready yet.
+            if (!valid) {
+                requestAnimationFrame(() => { try { targetChart.clearCrosshairPosition(); } catch (e) {} });
+                return;
+            }
+            const price = targetSeries.coordinateToPrice(param.point.y);
+            requestAnimationFrame(() => {
+                try {
+                    if (price != null) targetChart.setCrosshairPosition(price, param.time, targetSeries);
+                    else targetChart.clearCrosshairPosition();
+                } catch (e) {}
+            });
+        } catch (e) {}
+    };
+}
+
+
 let oipOIChart = null;
 let oipOISeries = null;
 let oipIntrinsicChart = null;
@@ -40,7 +75,6 @@ let oipCurrentPEStrike = null;
 
 let oipAllStrikes = [];
 let oipCurrentPrice = 0;
-let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTY MIDCAP 150', 'NIFTY AUTO', 'NIFTY Smallcap 100', 'NIFTY FMCG', 'NIFTY METAL', 'NIFTY PHARMA', 'NIFTY PSU BANK', 'NIFTY IT'];
 let oipSymbol = 'NIFTY';
 let oipLotSize = 50, oipStrikeStep = 50;
 let oipInterval = '5minute';   // matches the TF select's default option
@@ -54,7 +88,7 @@ let oipCustomStrikeSetOnLoad = false;
 
 // DOM Cache
 const oipElems = {
-    symbolInput: null, symbolList: null, interval: null,
+    symbolSelect: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapOI: null, showVwapInt: null,
     showCpr: null, showEMA: null, showRSI: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
@@ -65,15 +99,14 @@ const oipElems = {
     showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
     strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
-    exitAll: null, days: null, startDate: null, endDate: null,
+    exitAll: null, days: null, startDate: null, endDate: null, replayDate: null,
     hdrLotSize: null,
     hdrIVP: null, ivpGaugeBar: null, ivCrushAlert: null
 };
 
 /* ── Initialization ────────────────────────────────────────── */
 function oipInitElems() {
-    oipElems.symbolInput = document.getElementById('symbolSelect');
-    oipElems.symbolList = document.getElementById('symbolDropdownList');
+    oipElems.symbolSelect = document.getElementById('oipSymbolSelect');
     oipElems.interval = document.getElementById('oipInterval');
     oipElems.spotHigh = document.getElementById('oipSpotHigh');
     oipElems.spotLow = document.getElementById('oipSpotLow');
@@ -116,6 +149,7 @@ function oipInitElems() {
     oipElems.ceStrikeDropdown = document.getElementById('oipCEStrikeDropdown');
     oipElems.peStrikeDropdown = document.getElementById('oipPEStrikeDropdown');
     oipElems.days = document.getElementById('oipDays');
+    oipElems.replayDate = document.getElementById('oipReplayDate');
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
     oipElems.hdrIVP = document.getElementById('hdrIVP');
@@ -360,7 +394,12 @@ function oipInitCharts() {
             grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
             crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
             timeScale: { timeVisible: true, textColor: '#6b7280', borderColor: 'transparent', rightOffset: 20, barSpacing: 8, fixLeftEdge: false, fixRightEdge: false, shiftVisibleRangeOnNewBar: false },
-            rightPriceScale: { textColor: '#64748b', borderColor: 'transparent', width: 85, autoScale: true, visible: true, scaleMargins: { top: 0, bottom: 0 }, entireTextOnly: true },
+            // width 62 (not the 85 default) to match the Round Strike chart below.
+            // The two are stacked and read together, and an axis 23px wider here
+            // shifted this plot's right edge in by that much — so the same
+            // timestamp sat at two different x positions and the synced crosshair
+            // looked broken even when it was correct.
+            rightPriceScale: { textColor: '#64748b', borderColor: 'transparent', width: 62, autoScale: true, visible: true, scaleMargins: { top: 0, bottom: 0 }, entireTextOnly: true },
             handleScroll: true, handleScale: true,
             localization: { locale: 'en-IN', timeFormatter: t => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }, timezone: 'Etc/UTC' }
         });
@@ -380,6 +419,22 @@ function oipInitCharts() {
         oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
 
         oipOIChartReady = true;
+
+        // Crosshair sync with the Round Strike chart below (helper at the top of
+        // this file). This marks which chart the pointer is actually over —
+        // without it the two echo each other's synthetic crosshairs back and forth.
+        ['mouseenter', 'touchstart'].forEach(evt => {
+            elOI.addEventListener(evt, () => { window._oipActiveChartId = 'oi'; }, { passive: true });
+        });
+        // This direction (index chart -> Round Strike) had no wiring at all; the
+        // reverse already existed in oi_profile_round_strike.js.
+        oipOIChart.subscribeCrosshairMove(param => {
+            if (window._oipActiveChartId !== 'oi') return;
+            if (typeof oipRSChart !== 'undefined' && oipRSChart?.chart && typeof oipRSCESeries !== 'undefined' && oipRSCESeries) {
+                window._oipSyncCrosshair(oipOIChart, oipRSChart.chart, param, oipRSCESeries);
+            }
+        });
+
         
         // Add Scroll to Latest button (Right Arrow)
         if (typeof TradingViewChart !== 'undefined' && TradingViewChart.addScrollButton) {
@@ -404,6 +459,41 @@ function oipInitCharts() {
 // no CPR at all. Widen the range for them, but never over a From date the user
 // picked themselves.
 let oipStartDateTouched = false;
+
+// How far back the page looks from its as-of date. Trading days, not calendar
+// days — the span below is widened to cover weekends and holidays, and the API
+// trims to whatever actually traded.
+const OIP_REPLAY_WINDOW_DAYS = 10;
+
+/** YYYY-MM-DD in the LOCAL timezone — toISOString() would shift IST back a day. */
+function oipLocalDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        + `-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Turns the single as-of date into the start/end pair the candles API takes.
+// Both stay hidden: they are a detail of that API, not something to keep in
+// step by hand.
+//
+// The start is found by counting weekdays back rather than scaling calendar
+// days, so the window does not quietly grow with the weekends it spans. Two
+// days of slack cover a holiday inside it — erring long, because coming up
+// short would silently drop a session off the far end.
+function oipApplyReplayDate() {
+    const picked = oipElems.replayDate?.value;
+    if (!picked || !oipElems.startDate || !oipElems.endDate) return;
+    const start = new Date(picked + 'T00:00:00');
+    let left = OIP_REPLAY_WINDOW_DAYS;
+    while (left > 0) {
+        start.setDate(start.getDate() - 1);
+        if (start.getDay() !== 0 && start.getDay() !== 6) left--;
+    }
+    start.setDate(start.getDate() - 2);
+    oipElems.startDate.value = oipLocalDate(start);
+    oipElems.endDate.value = picked;
+    // The window is the user's now, so the year-anchor widener must not fight it.
+    oipStartDateTouched = true;
+}
 
 function oipEnsureRangeForAnchor() {
     if (oipStartDateTouched || !oipElems.startDate) return;
@@ -564,7 +654,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         }
     }
 
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}${oipCandleLegParams()}&_t=${Date.now()}`;
     const res = await fetch(url); const data = await res.json();
     if (!data.success) {
         console.error('[Replay] API error:', data.error || 'Unknown error');
@@ -773,6 +863,11 @@ let oipLastRefreshIndex = -2; // -2 so first replay call (index=0) is always non
 function oipRefreshLocalView(view, resetZoom, index) {
     if (!oipFullCandles || index < 0) return;
 
+    // Walk the Round Strike chart to the same bar. Done here rather than in each
+    // of the play/step/slider/jump handlers because every one of them lands on
+    // this function, so this is the single place the replay position is known.
+    window.oipRSApplyReplayCutoff?.(oipFullCandles[index]?.time ?? null);
+
     // Suppress cross-chart range sync for the entire refresh. series.update() and
     // series.setData() fire subscribeVisibleLogicalRangeChange synchronously; without
     // this guard, the active chart's callback runs syncRange mid-update and calls
@@ -820,6 +915,10 @@ function oipRefreshLocalView(view, resetZoom, index) {
 
     // CPR Redraw — the renderer clips to timeAtIdx itself.
     if (oipCachedIndicators.cpr) oipRenderPrecalculatedCPR(oipCachedIndicators.cpr, timeAtIdx);
+
+    // Previous session's high/low. Recomputed per step so that during a replay it
+    // shows the session before the bar being replayed, not the one before today.
+    oipDrawPrevDayHL(oipVisibleCandles(index));
 
     // 3. Option Charts
     const hasOHLC = (d) => d && d.open != null;
@@ -967,8 +1066,105 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
     if (!oipAdvanceCprLevels(daysData, maxTime)) oipRenderCprLevels(daysData, maxTime);
 }
 
+
+/* This page draws the index candles and nothing else — the Intrinsic / CE / PE /
+   Fixed panes have no container in oi_replay.html, so oipInitSecondaryCharts
+   bails and those chart objects stay null. The endpoint was still resolving and
+   fetching all of their legs, which on a historical window means eight or so
+   extra chunked Breeze fetches queued behind a 1.5 req/s budget, thrown away the
+   moment they arrive. Ask for the index only.
+
+   include_30s=false for the same reason: the 30-second sub-candles exist for the
+   option panes. */
+function oipCandleLegParams() {
+    return '&opt=false&include_30s=false';
+}
+
+/* ── Previous-day High / Low ──────────────────────────────────────────────────
+   The previous SESSION's high and low, drawn as two rose step lines that change
+   at each day boundary — so scrolling back through the window shows what the
+   prior day's range was at every point, not one flat level taken from the last
+   session on screen.
+
+   Deliberately separate from the CPR block's own "Prev H / L": that one is a
+   sub-item of CPR Levels (it disappears when CPR is switched off) and comes off
+   the CPR payload. This is computed from the candles themselves, which is what
+   lets it follow a replay — step back a day and it re-anchors.
+
+   Step lines (lineType 1) rather than price lines: a price line spans the whole
+   chart at one value, which is wrong the moment more than one session is
+   loaded. */
+const OIP_PREV_DAY_HL_COLOR = '#f43f5e';   // rose
+let oipPrevDayHighSeries = null, oipPrevDayLowSeries = null;
+
+/** IST calendar day for a bar. Bars are stored pre-shifted so UTC getters read
+ *  as IST — the same trick the chart's own time formatter uses. */
+function _oipBarDay(t) {
+    const d = new Date(t * 1000);
+    return `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+}
+
+/** [{time, value}] pairs carrying each bar's PREVIOUS session high and low. */
+function oipCalcPrevDayHL(candles) {
+    const high = [], low = [];
+    if (!candles || !candles.length) return { high, low };
+
+    // One pass to collect each session's range, in order.
+    const days = [];
+    let cur = null;
+    for (const c of candles) {
+        const day = _oipBarDay(c.time);
+        if (!cur || cur.day !== day) {
+            cur = { day, high: c.high, low: c.low };
+            days.push(cur);
+        } else {
+            if (c.high > cur.high) cur.high = c.high;
+            if (c.low < cur.low) cur.low = c.low;
+        }
+    }
+    const prevOf = new Map();
+    for (let i = 1; i < days.length; i++) prevOf.set(days[i].day, days[i - 1]);
+
+    // The first session on screen has no predecessor loaded, so it plots nothing
+    // rather than borrowing its own range.
+    for (const c of candles) {
+        const prev = prevOf.get(_oipBarDay(c.time));
+        if (!prev) continue;
+        high.push({ time: c.time, value: prev.high });
+        low.push({ time: c.time, value: prev.low });
+    }
+    return { high, low };
+}
+
+function oipDrawPrevDayHL(candles) {
+    const on = document.getElementById('oipShowPrevDayHL')?.checked === true;
+    if (!oipOIChart) return;
+
+    if (!oipPrevDayHighSeries) {
+        const opts = {
+            color: OIP_PREV_DAY_HL_COLOR, lineWidth: 1, lineType: 1,   // 1 = with steps
+            priceLineVisible: false, lastValueVisible: true,
+            crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
+        };
+        oipPrevDayHighSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { ...opts, title: 'PDH' });
+        oipPrevDayLowSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { ...opts, title: 'PDL' });
+    }
+    oipPrevDayHighSeries.applyOptions({ visible: on });
+    oipPrevDayLowSeries.applyOptions({ visible: on });
+    if (!on) return;
+
+    const { high, low } = oipCalcPrevDayHL(candles);
+    oipPrevDayHighSeries.setData(high);
+    oipPrevDayLowSeries.setData(low);
+}
+
 /* ── Replay Core ───────────────────────────────────────────── */
-function oipResetReplay() { oipFullCandles = null; oipFullOptionData = null; oipReplayIndex = 0; oipLoadCandles(); }
+function oipResetReplay() {
+    oipFullCandles = null; oipFullOptionData = null; oipReplayIndex = 0;
+    // Otherwise the Round Strike chart stays cut at wherever the slider was.
+    window.oipRSApplyReplayCutoff?.(null);
+    oipLoadCandles();
+}
 
 async function oipReloadStrikeOnly() {
     const toolbar = document.getElementById('oipReplayToolbar');
@@ -989,7 +1185,7 @@ async function oipReloadStrikeOnly() {
         const diffDays = Math.ceil((new Date(oipElems.endDate.value) - new Date(oipElems.startDate.value)) / 86400000) + 1;
         if (diffDays > 0) days = diffDays;
     }
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}${oipCandleLegParams()}&_t=${Date.now()}`;
 
     try {
         const res = await fetch(url); const data = await res.json();
@@ -1147,41 +1343,29 @@ document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems();
     oipInitIndicatorsPopup('oip-ind-replay-v3');
-    // Replay opens on the year to date — 1 January of the current year through
-    // today (it used to be a rolling 30 days). The range drives the API's `days`
-    // parameter, so this is a much bigger candle fetch than a month was.
-    const now = new Date();
-    const today = now.toISOString().split('T')[0];
-    const yearStart = new Date(Date.UTC(now.getFullYear(), 0, 1));
-    if (oipElems.startDate) oipElems.startDate.value = yearStart.toISOString().split('T')[0];
-    if (oipElems.endDate) oipElems.endDate.value = today;
-    
-    oipElems.startDate?.addEventListener('change', () => { oipStartDateTouched = true; oipResetReplay(); });
-    oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
+    // Replay opens on today and looks back OIP_REPLAY_WINDOW_DAYS trading days.
+    // It used to open on the year to date, which made the very first fetch a
+    // year of candles; the page now has one date and a fixed window behind it.
+    const today = oipLocalDate(new Date());
+    if (oipElems.replayDate) {
+        if (!oipElems.replayDate.value) oipElems.replayDate.value = today;
+        oipElems.replayDate.max = today;      // there is no history for tomorrow
+    }
+    oipApplyReplayDate();
 
-    // Dropdown Logic
-    oipElems.symbolInput?.addEventListener('input', (e) => oipRenderDropdown(e.target.value.toUpperCase(), oipElems.symbolList));
-    oipElems.symbolInput?.addEventListener('click', function (e) {
-        e.stopPropagation();
-        if (oipElems.symbolList?.classList.contains('show')) {
-            oipElems.symbolList?.classList.remove('show');
-        } else {
-            this.value = '';
-            oipRenderDropdown('', oipElems.symbolList);
-        }
+    oipElems.replayDate?.addEventListener('change', () => {
+        oipApplyReplayDate();
+        oipResetReplay();
+        // Same date, same window, one reload: the Round Strike block re-asks
+        // which expiries were open then and reloads its legs.
+        window.oipRSOnDateChanged?.();
     });
-    oipElems.symbolInput?.addEventListener('blur', () => {
-        setTimeout(() => {
-            oipElems.symbolList?.classList.remove('show');
-            if (!oipElems.symbolInput?.value.trim()) if (oipElems.symbolInput) oipElems.symbolInput.value = oipSymbol;
-        }, 200);
-    });
-    oipElems.symbolInput?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            const val = e.target.value.trim().toUpperCase();
-            if (val) oipSelectSymbol(val);
-            oipElems.symbolInput?.blur();
-        }
+    // The page's single symbol control. oipSelectSymbol reloads the index
+    // chart and tells the Round Strike block to follow.
+    oipElems.symbolSelect?.addEventListener('change', e => oipSelectSymbol(e.target.value));
+    oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
+    document.getElementById('oipShowPrevDayHL')?.addEventListener('change', () => {
+        oipDrawPrevDayHL(oipVisibleCandles(oipReplayIndex));
     });
 
     oipElems.interval?.addEventListener('change', (e) => {
@@ -1452,27 +1636,15 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     return parseFloat(oipElems.customStrikeDropdown.value) || atm;
 }
 
-function oipRenderDropdown(filter, list) {
-    if (!list) return; list.innerHTML = '';
-    const indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTY MIDCAP 150', 'NIFTY AUTO', 'NIFTY Smallcap 100', 'NIFTY FMCG', 'NIFTY METAL', 'NIFTY PHARMA', 'NIFTY PSU BANK', 'NIFTY IT'], dm = { 'NIFTY': 'NIFTY 50', 'BANKNIFTY': 'NIFTY BANK', 'FINNIFTY': 'NIFTY FIN SERVICE', 'MIDCPNIFTY': 'NIFTY MIDCAP', 'SENSEX': 'SENSEX', 'NIFTY MIDCAP 150': 'NIFTY MIDCAP 150', 'NIFTY AUTO': 'NIFTY AUTO', 'NIFTY Smallcap 100': 'NIFTY Smallcap 100', 'NIFTY SMLCAP 100': 'NIFTY Smallcap 100', 'NIFTY FMCG': 'NIFTY FMCG', 'NIFTY METAL': 'NIFTY METAL', 'NIFTY PHARAMA': 'NIFTY PHARMA', 'NIFTY PHARMA': 'NIFTY PHARMA', 'NIFTY PSU BANK': 'NIFTY PSU BANK', 'NIFTY IT': 'NIFTY IT' };
-    const matches = oipAllSymbols.filter(s => !filter || s.includes(filter) || (dm[s] || s).toUpperCase().includes(filter))
-        .sort((a, b) => { const ai = indices.indexOf(a), bi = indices.indexOf(b); if (ai !== -1 && bi !== -1) return ai - bi; if (ai !== -1) return -1; if (bi !== -1) return 1; return a.localeCompare(b); });
-    if (!matches.length) { list.classList.remove('show'); return; }
-    matches.forEach(s => {
-        const li = document.createElement('li'), d = dm[s] || s;
-        li.innerHTML = `<strong>${d}</strong> ${d !== s ? `<span style="font-size:0.8em; color:#888;">(${s})</span>` : ''}`;
-        if (s === oipSymbol) li.classList.add('highlighted');
-        li.addEventListener('click', () => { oipSelectSymbol(s); list.classList.remove('show'); });
-        list.appendChild(li);
-    });
-    list.classList.add('show');
-}
-
 async function oipSelectSymbol(s) {
     oipSymbol = s;
-    if (oipElems.symbolInput) oipElems.symbolInput.value = s;
+    if (oipElems.symbolSelect && oipElems.symbolSelect.value !== s) oipElems.symbolSelect.value = s;
     oipCustomStrikeSetOnLoad = false;
     oipResetReplay();
+    // The Round Strike block has no symbol control of its own any more — it
+    // reads oipSymbol — so it has to be told the ground moved. Its expiry list
+    // is symbol-specific too (NIFTY is weekly, BANKNIFTY monthly).
+    window.oipRSOnDateChanged?.();
 }
 
 // ── 2nd candle box shared helpers ─────────────────────────────────────────────

@@ -507,7 +507,82 @@ class IciciDataServiceAdapter:
         if not info:
             _HIST_ERROR.msg = f"{instrument_token} could not be mapped to an ICICI contract"
             return []
+        return self._history_for_info(info, from_date, to_date, interval, oi,
+                                      use_cache, cache_ttl)
 
+    def historical_option(self, root: str, expiry: dt_date, strike: float,
+                          option_type: str, from_date: str, to_date: str,
+                          interval: str, exchange_code: str = 'NFO',
+                          oi: bool = False, use_cache: bool = True,
+                          cache_ttl: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Candles for one option contract named by (root, expiry, strike, type).
+
+        The reason this exists alongside historical_data: Breeze addresses a
+        contract by its FIELDS, not by an instrument token, so it will serve an
+        already-expired series. Every token-based path in this app goes through a
+        broker instrument master, and both masters drop expired rows (Kite's
+        get_option_symbol filters `expiry >= today`, Fyers' find_option_symbol
+        the same), which is why a past expiry is unreachable through them —
+        _resolve above would fail on the symbol lookup before Breeze was ever
+        asked. Building the request fields directly skips that dead end.
+
+        Verified against Breeze on 2026-09-04: NIFTY 24050 CE expiring
+        2026-09-01 returned full 5-minute OHLC + volume + OI both on its expiry
+        day and mid-life, as did a 5-week-old July expiry.
+        """
+        code = master.stock_code(root, exchange_code)
+        if not code:
+            _HIST_ERROR.msg = f"No ICICI stock_code for {root} on {exchange_code}"
+            return []
+        right = 'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'
+        info = {
+            'root': (root or '').upper(),
+            'stock_code': code,
+            'exchange_code': exchange_code.upper(),
+            'product_type': 'options',
+            'expiry_date': _breeze_expiry(expiry),
+            'right': right,
+            'strike_price': str(int(float(strike))),
+            'symbol': f"{root}:{expiry.isoformat()}:{int(float(strike))}:{right}",
+        }
+        _HIST_ERROR.msg = None
+        return self._history_for_info(info, from_date, to_date, interval, oi,
+                                      use_cache, cache_ttl)
+
+    def historical_future(self, root: str, expiry: dt_date, from_date: str, to_date: str,
+                          interval: str, exchange_code: str = 'NFO',
+                          use_cache: bool = True,
+                          cache_ttl: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Candles for one FUTURES contract named by (root, expiry).
+
+        The futures twin of historical_option, and it exists for the same
+        reason: a August future is gone from the instrument masters by
+        September, so a token lookup cannot reach it. Replaying August volume
+        needs the contract that was actually trading in August, not whichever
+        month happens to be the front one today.
+        """
+        code = master.stock_code(root, exchange_code)
+        if not code:
+            _HIST_ERROR.msg = f"No ICICI stock_code for {root} on {exchange_code}"
+            return []
+        info = {
+            'root': (root or '').upper(),
+            'stock_code': code,
+            'exchange_code': exchange_code.upper(),
+            'product_type': 'futures',
+            'expiry_date': _breeze_expiry(expiry),
+            'right': None,
+            'strike_price': None,
+            'symbol': f"{root}:{expiry.isoformat()}:FUT",
+        }
+        _HIST_ERROR.msg = None
+        return self._history_for_info(info, from_date, to_date, interval, False,
+                                      use_cache, cache_ttl)
+
+    def _history_for_info(self, info: Dict[str, Any], from_date: str, to_date: str,
+                          interval: str, oi: bool = False, use_cache: bool = True,
+                          cache_ttl: Optional[float] = None) -> List[Dict[str, Any]]:
+        """Fetch + chunk + resample + cache, for an already-resolved contract."""
         if interval not in _INTERVAL_MAP:
             _HIST_ERROR.msg = f"Unsupported interval {interval!r}"
             logger.error("[IciciAdapter] unsupported interval %r", interval)

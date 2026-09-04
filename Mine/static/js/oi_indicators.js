@@ -21,9 +21,24 @@ let oipRSISeriesObj = null;
 let oipSignalMarkers = [];
 let oipRSIMarkers = [];
 
+// Reads a series that only ONE of this file's two host pages declares. The
+// CVWAP/PVWAP/3-AVG and Fixed-chart series are `let`s in oi_profile.js; Replay
+// loads oi_replay.js instead, where they simply do not exist — and an
+// undeclared `let` is a ReferenceError on read, not `undefined`, so neither
+// `x || null` nor a truthiness check survives it. Replay hit exactly that:
+// oipApplyOptionZOrder threw on oipCECvwapSeries, which took oipRenderCprLevels
+// and the rest of the replay step down with it on every slider move.
+//
+// Callers pass a thunk (`_oipOpt(() => oipCvwapSeries)`) so the read happens
+// inside the try. Same intent as the `typeof x !== 'undefined' ? x : null`
+// ternaries elsewhere in this file, folded into something that stays readable
+// across an array of five.
+const _oipOpt = read => { try { return read(); } catch (e) { return null; } };
+
 /* ── Indicator state persistence ─────────────────────────── */
 const _OIP_IND_IDS = [
     'oipShowOIBars', 'oipShowVolume', 'oipShowBnfVolume', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
+    'oipShowPrevDayHL',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
     'oipCprShowLabels',
     'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
@@ -649,18 +664,21 @@ function oipInjectLineStyleSelectors() {
 // their lineStyle is read fresh inside their own draw function each redraw.
 function _oipLineStyleSeriesMap() {
     return {
-        cvwap:    [oipCvwapSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipCECvwapSeries, oipPECvwapSeries],
-        pvwap:    [oipPvwapSeries, oipPvwapIntSeries, oipPvwapIntPeSeries, oipCEPvwapSeries, oipPEPvwapSeries],
-        avg3vwap: [oipAvg3VwapSeries, oipAvg3VwapIntSeries, oipAvg3VwapIntPeSeries, oipCEAvg3VwapSeries, oipPEAvg3VwapSeries],
+        cvwap:    [_oipOpt(() => oipCvwapSeries), _oipOpt(() => oipCvwapIntSeries), _oipOpt(() => oipCvwapIntPeSeries),
+                   _oipOpt(() => oipCECvwapSeries), _oipOpt(() => oipPECvwapSeries)],
+        pvwap:    [_oipOpt(() => oipPvwapSeries), _oipOpt(() => oipPvwapIntSeries), _oipOpt(() => oipPvwapIntPeSeries),
+                   _oipOpt(() => oipCEPvwapSeries), _oipOpt(() => oipPEPvwapSeries)],
+        avg3vwap: [_oipOpt(() => oipAvg3VwapSeries), _oipOpt(() => oipAvg3VwapIntSeries), _oipOpt(() => oipAvg3VwapIntPeSeries),
+                   _oipOpt(() => oipCEAvg3VwapSeries), _oipOpt(() => oipPEAvg3VwapSeries)],
         ema9:     [oipEma9Series, oipCEEma9Series, oipPEEma9Series],
         ema20:    [oipEma20Series, oipCEEma20Series, oipPEEma20Series],
         ema50:    [oipEma50Series, oipCEEma50Series, oipPEEma50Series],
         ema100:   [oipEma100Series],
         ema200:   [oipEma200Series],
         rsi:      oipRSISeriesObj ? Object.values(oipRSISeriesObj) : [],
-        fixedCeAvg:   [oipFixedCeHL2Series],
-        fixedPeAvg:   [oipFixedPeHL2Series],
-        fixedCePeAvg: [oipFixedCloseAvgSeries],
+        fixedCeAvg:   [_oipOpt(() => oipFixedCeHL2Series)],
+        fixedPeAvg:   [_oipOpt(() => oipFixedPeHL2Series)],
+        fixedCePeAvg: [_oipOpt(() => oipFixedCloseAvgSeries)],
     };
 }
 
@@ -920,12 +938,22 @@ function oipCalculate3EMAs(data) {
 function oipCalculateVWAP(candles) {
     if (!candles || candles.length === 0) return [];
     const anchor = oipAnchorPeriod();
+    // An INDEX carries no traded volume — NIFTY/BANKNIFTY/SENSEX candles come
+    // back with volume 0 on every bar. The `vol <= 0` skip below then dropped
+    // every single candle and returned an empty series, which is why VWAP drew
+    // nothing on the Replay chart while working fine on the option panes.
+    //
+    // When the whole series is volume-less, weight each bar equally: that makes
+    // it a running average of the typical price, which is what VWAP degrades to
+    // without volume and what charting platforms plot for an index. A series
+    // that HAS volume is untouched.
+    const volumeless = !candles.some(c => (c.volume || 0) > 0);
     let cumPV = 0, cumV = 0, lastDate = null;
     const result = [];
     candles.forEach(c => {
         const date = _oipPeriodKey(c.time, anchor);
         if (date !== lastDate) { cumPV = 0; cumV = 0; lastDate = date; }
-        const vol = c.volume || 0;
+        const vol = volumeless ? 1 : (c.volume || 0);
         if (vol <= 0) return;
         cumPV += ((c.high + c.low + c.close) / 3) * vol;
         cumV += vol;
@@ -1452,7 +1480,13 @@ const _OIP_CPR_CHECKBOX = {
 // period instead of rebuilding every series.
 let _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {} };
 
-function _oipCprSubChecked(id) { return document.getElementById(id)?.checked !== false; }
+// A sub-level is drawn when its checkbox says so — and NOT drawn when the page
+// carries no such checkbox at all. Replay dropped its R1-R4 / S1-S4 toggles, and
+// the old `?.checked !== false` read a missing element as "on", so removing the
+// controls would have left the levels stuck on the chart with no way to turn
+// them off. Both templates that use this renderer list every toggle they want,
+// so absent now means off.
+function _oipCprSubChecked(id) { return document.getElementById(id)?.checked === true; }
 
 // Identifies the loaded dataset: a new symbol/timeframe/date range invalidates
 // every cached series, a replay step does not.
@@ -1862,25 +1896,27 @@ function oipApplyOptionZOrder() {
 
     _oipLayerPane(
         [oipCESeries],
-        [oipCEEma9Series, oipCEEma20Series, oipCEEma50Series, oipCECvwapSeries, oipCEPvwapSeries],
+        [oipCEEma9Series, oipCEEma20Series, oipCEEma50Series,
+         _oipOpt(() => oipCECvwapSeries), _oipOpt(() => oipCEPvwapSeries)],
         [box30.ce, box5m.ce]
     );
     _oipLayerPane(
         [oipPESeries],
-        [oipPEEma9Series, oipPEEma20Series, oipPEEma50Series, oipPECvwapSeries, oipPEPvwapSeries],
+        [oipPEEma9Series, oipPEEma20Series, oipPEEma50Series,
+         _oipOpt(() => oipPECvwapSeries), _oipOpt(() => oipPEPvwapSeries)],
         [box30.pe, box5m.pe]
     );
     _oipLayerPane(
         [oipIntrinsicSeries, oipIntrinsicPeSeries],
-        [oipVwapIntSeries, oipVwapIntPeSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipPvwapIntSeries, oipPvwapIntPeSeries],
+        [oipVwapIntSeries, oipVwapIntPeSeries,
+         _oipOpt(() => oipCvwapIntSeries), _oipOpt(() => oipCvwapIntPeSeries),
+         _oipOpt(() => oipPvwapIntSeries), _oipOpt(() => oipPvwapIntPeSeries)],
         []
     );
     _oipLayerPane(
-        [typeof oipFixedCeSeries !== 'undefined' ? oipFixedCeSeries : null,
-         typeof oipFixedPeSeries !== 'undefined' ? oipFixedPeSeries : null],
-        [typeof oipFixedCeHL2Series    !== 'undefined' ? oipFixedCeHL2Series    : null,
-         typeof oipFixedPeHL2Series    !== 'undefined' ? oipFixedPeHL2Series    : null,
-         typeof oipFixedCloseAvgSeries !== 'undefined' ? oipFixedCloseAvgSeries : null],
+        [_oipOpt(() => oipFixedCeSeries), _oipOpt(() => oipFixedPeSeries)],
+        [_oipOpt(() => oipFixedCeHL2Series), _oipOpt(() => oipFixedPeHL2Series),
+         _oipOpt(() => oipFixedCloseAvgSeries)],
         []
     );
 }

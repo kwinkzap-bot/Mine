@@ -559,7 +559,7 @@ def resolve_standard_lot(symbol: str) -> Optional[int]:
         return None
 
 
-from trading_app.service.provider_logic import get_kite, get_data_provider
+from trading_app.service.provider_logic import get_kite, get_data_provider, get_icici_adapter
 
 
 
@@ -10196,6 +10196,13 @@ def oi_profile_candles() -> EndpointResponse:
         # its 3 extra parallel Fyers history calls per request — one less source
         # of rate-limit contention for this endpoint's main option-candle fetch.
         include_30s = request.args.get('include_30s', 'true').lower() != 'false'
+        # Index-only mode. The Replay page renders exactly two charts — the index
+        # candles and its own Round Strike block — and has no container for the
+        # Intrinsic / CE / PE / Fixed panes at all, so every option-premium leg
+        # below was fetched, chunked through Breeze's 1.5 req/s budget, and then
+        # discarded on arrival. Eight or so legs of pure waste on the slowest
+        # request the page makes.
+        opt_legs = request.args.get('opt', 'true').lower() not in ('false', '0')
         custom_strike = request.args.get('custom_strike', type=int)
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
@@ -10235,7 +10242,7 @@ def oi_profile_candles() -> EndpointResponse:
         # include_30s belongs in the key too: it decides whether second_30s_* come
         # back populated or empty, so without it a caller that opted out could
         # serve its stripped response to one that needs those candles.
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s)
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s, opt_legs)
 
         # The OI Profile page no longer polls this endpoint — every call is now a
         # user action (its single Refresh All button, a symbol/interval/strike
@@ -10397,7 +10404,7 @@ def oi_profile_candles() -> EndpointResponse:
         # resolved and fetched in parallel with everything else below.
         fixed_ce_token = fixed_pe_token = fixed_ce_symbol = fixed_pe_symbol = None
         future_fixed_ce = future_fixed_pe = None
-        if fixed_ce_strike:
+        if fixed_ce_strike and opt_legs:
             fixed_ce_token, fixed_ce_symbol = _get_cached_strike_token(
                 kite_service, _data_provider, _is_fyers_provider, symbol, fixed_ce_strike, 'CE', expiry_type=fixed_expiry)
             if fixed_ce_token:
@@ -10429,21 +10436,25 @@ def oi_profile_candles() -> EndpointResponse:
         # are always fixed_interval (5-minute), which can differ from the main
         # interval above; reusing future_volume would fail to time-match once
         # they diverge (see fixed_future_volume below).
-        future_fixed_vol = executor.submit(fetch_task, future_fut_token, opt_from_date, to_date, fixed_fetch_interval) if future_fut_token else None
+        future_fixed_vol = executor.submit(fetch_task, future_fut_token, opt_from_date, to_date, fixed_fetch_interval) if (future_fut_token and opt_legs) else None
         # Bank Nifty on that same fixed grid, same reuse rule as above.
         if symbol == 'BANKNIFTY':
             future_fixed_bnf_vol = future_fixed_vol
         else:
-            future_fixed_bnf_vol = executor.submit(fetch_task, bnf_fut_token, opt_from_date, to_date, fixed_fetch_interval) if bnf_fut_token else None
+            future_fixed_bnf_vol = executor.submit(fetch_task, bnf_fut_token, opt_from_date, to_date, fixed_fetch_interval) if (bnf_fut_token and opt_legs) else None
         # Also fetch 30-second candles in parallel — needed by the "2nd 30-second
         # candle" box indicator on every timeframe it supports (up to 30min), not
         # just 1-minute; day[1] of a coarser interval is a completely different
         # (wrong) bar and was giving that indicator an incorrect box.
-        _wants_30s_subcandles = include_30s and interval in ('minute', '2minute', '3minute', '5minute', '15minute', '30minute')
+        _wants_30s_subcandles = include_30s and opt_legs and interval in ('minute', '2minute', '3minute', '5minute', '15minute', '30minute')
         future_index_30s = executor.submit(fetch_task, token, from_date, to_date, '30second') if _wants_30s_subcandles else None
         
         # Use daily OHLC cache if available (TTL 5 mins)
-        daily_cache_key = (symbol, days)
+        # The window belongs in the key. Without it a historical request shared a
+        # cache entry with whatever date was asked for last, so the daily OHLC
+        # behind the previous-day levels could belong to a different session
+        # entirely — silently, since the bars themselves look perfectly valid.
+        daily_cache_key = (symbol, days, start_date_str, end_date_str)
         cached_daily = None
         with _candle_cache_lock:
             if daily_cache_key in _daily_ohlc_cache:
@@ -10453,7 +10464,12 @@ def oi_profile_candles() -> EndpointResponse:
 
         future_daily = None
         if not cached_daily:
-            d_from = (now - timedelta(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
+            # Anchored to to_date, NOT to now. With a start/end range the window
+            # ends in the past, so counting back from today produced from > to —
+            # an inverted range the broker rejects outright ("from range cannot be
+            # greater than to range"), which killed the daily fetch on every
+            # historical date and took the previous-day levels down with it.
+            d_from = (to_date - timedelta(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
             future_daily = executor.submit(fetch_task, token, d_from, to_date, 'day')
         
         # 2. Identify strikes if spot provided, otherwise wait for index
@@ -10493,8 +10509,8 @@ def oi_profile_candles() -> EndpointResponse:
         # 3. Fetch Option Candles if tokens known (use shorter opt_from_date window)
         future_ce = None
         future_pe = None
-        if ce_token: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
-        if pe_token: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
+        if ce_token and opt_legs: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
+        if pe_token and opt_legs: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
         future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and ce_token else None
         future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and pe_token else None
 
@@ -10637,8 +10653,8 @@ def oi_profile_candles() -> EndpointResponse:
                         kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
                     )
             
-            if ce_token: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
-            if pe_token: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
+            if ce_token and opt_legs: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
+            if pe_token and opt_legs: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
             future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and ce_token else None
             future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and pe_token else None
 
@@ -11402,6 +11418,71 @@ _RS_RESPONSE_TTL_CLOSED = 60.0
 # below raise on an empty result instead of returning [].
 _RS_CANDLE_TTL = 2.5
 
+# A settled expiry's candles can never change again, so they are cached for the
+# life of the process rather than re-fetched. This is a rate-limit measure as
+# much as a speed one: Breeze's budget is far tighter than Fyers', and Replay
+# leaves the same past contract on screen while the user scrubs the slider.
+_RS_EXPIRED_LEG_TTL = 86400.0
+
+# Which derivatives exchange a symbol's options live on. Only the BSE indices
+# sit on BFO; everything else this block serves is NSE.
+_RS_BFO_SYMBOLS = {'SENSEX', 'BANKEX', 'SENSEX50'}
+
+
+def _rs_option_exchange(symbol: str) -> str:
+    return 'BFO' if (symbol or '').upper() in _RS_BFO_SYMBOLS else 'NFO'
+
+
+def _rs_index_trading_days(symbol: str, adapter) -> list:
+    """Days the index actually traded — the holiday calendar we do not otherwise
+    have. Cached for the day; one daily-candle fetch covers every caller."""
+    def _fetch():
+        index_symbol = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-EQ'
+        end = datetime.now()
+        bars = adapter.historical_data(
+            index_symbol, (end - timedelta(days=420)).strftime('%Y-%m-%d'),
+            end.strftime('%Y-%m-%d'), 'day')
+        if not bars:
+            raise RuntimeError(adapter.last_history_error() or 'no daily index candles')
+        return [b['date'].date() if hasattr(b['date'], 'date') else b['date']
+                for b in bars if b.get('date')]
+    return _rs_cached(('rs-trading-days', symbol, datetime.now().strftime('%Y-%m-%d')),
+                      86400.0, _fetch) or []
+
+
+def _rs_front_future_expiry(symbol: str, day, adapter):
+    """The FUTURES contract that was the front month on `day`.
+
+    Replaying August has to read August's future, not today's front month. The
+    two are not interchangeable: on 2026-08-12 the Aug contract traded 3,054,480
+    against the Sep contract's 428,025, so pointing a volume overlay at the wrong
+    one draws a real series that is quietly seven times too small.
+
+    Monthly expiries come from the broker's live list where it still has them
+    (the last expiry falling in each month) and are reconstructed for months that
+    have already gone by.
+    """
+    exch = _rs_option_exchange(symbol)
+
+    def _build():
+        from trading_app.service import icici_symbol_master as _m
+        from trading_app.service.expiry_calendar import past_expiries
+        code = _m.stock_code(symbol, exch)
+        listed = sorted(datetime.strptime(e[:10], '%Y-%m-%d').date()
+                        for e in (_m.expiries(code, exch) if code else []))
+        # A month's LAST listed expiry is its monthly one; the rest are weeklies.
+        by_month: Dict[tuple, Any] = {}
+        for e in listed:
+            key = (e.year, e.month)
+            if key not in by_month or e > by_month[key]:
+                by_month[key] = e
+        settled = past_expiries(_rs_index_trading_days(symbol, adapter), cadence='monthly')
+        return sorted(set(by_month.values()) | set(settled))
+
+    months = _rs_cached(('rs-fut-expiries', symbol, datetime.now().strftime('%Y-%m-%d')),
+                        86400.0, _build) or []
+    return next((m for m in months if m >= day), None)
+
 
 def _rs_cached(key: Tuple, ttl: float, producer):
     """Memoize `producer()` under `key` for `ttl` seconds.
@@ -11578,16 +11659,112 @@ def _rs_oi_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
     return oi_service.get_latest_oi_from_db(symbol, max_age_minutes=1440)
 
 
+@api_bp.route('/oi-profile/expiries', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_expiries() -> EndpointResponse:
+    """The expiries a trader could have chosen on a given date, nearest first.
+
+    `date` is an AS-OF date, not a filter on settled contracts: standing on
+    2026-09-04 the answer is 08 Sep, 15 Sep, 22 Sep — the contracts that were
+    open for business that day — and `selected` names the front one, which is
+    what the block opens on.
+
+    The two halves come from different places by necessity. Expiries still
+    listed are read straight off the broker's master, which is authoritative.
+    Ones that have already settled are gone from every master the moment they
+    expire, so they are reconstructed from the regime weekday and snapped onto
+    days the index actually traded (service/expiry_calendar.py). The halves are
+    merged and cut at `date`.
+    """
+    try:
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        limit  = min(max(request.args.get('limit', 12, type=int) or 12, 1), 200)
+        raw    = (request.args.get('date') or '').strip()
+        try:
+            as_of = (datetime.strptime(raw[:10], '%Y-%m-%d').date() if raw
+                     else datetime.now().date())
+        except ValueError:
+            return jsonify({'success': False,
+                            'error': f'Bad date {raw!r}, want YYYY-MM-DD'}), 400
+
+        from trading_app.service import icici_symbol_master as _icici_master
+        from trading_app.service.expiry_calendar import expiry_weekday_for, past_expiries
+
+        def _build():
+            exch = _rs_option_exchange(symbol)
+            code = _icici_master.stock_code(symbol, exch)
+            listed = sorted(datetime.strptime(e[:10], '%Y-%m-%d').date()
+                            for e in (_icici_master.expiries(code, exch) if code else []))
+
+            # Cadence and weekday are read off the contracts the broker lists
+            # RIGHT NOW rather than assumed. NIFTY still has weeklies while
+            # BANKNIFTY/FINNIFTY/MIDCPNIFTY are monthly-only, and SENSEX runs
+            # BSE's schedule — generating every week for a monthly symbol would
+            # offer dates that never had a contract behind them.
+            cadence, weekday = 'weekly', None
+            if len(listed) >= 2:
+                gaps = [(b - a).days for a, b in zip(listed, listed[1:])]
+                cadence = 'weekly' if min(gaps) <= 10 else 'monthly'
+            if listed:
+                wd = max({d.weekday() for d in listed},
+                         key=lambda w: sum(1 for d in listed if d.weekday() == w))
+                if wd != expiry_weekday_for(datetime.now().date()):
+                    weekday = wd     # a non-NSE schedule (SENSEX) — pin it
+
+            # The settled half is only needed when the user has gone back in
+            # time; asking for today spares the daily-candle fetch entirely.
+            settled: list = []
+            if as_of < datetime.now().date():
+                adapter = get_icici_adapter()
+                if adapter is None:
+                    raise RuntimeError('no live ICICI session')
+                index_symbol = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-EQ'
+                end = datetime.now()
+                start = min(end - timedelta(days=30),
+                            datetime(as_of.year, as_of.month, as_of.day) - timedelta(days=400))
+                bars = adapter.historical_data(
+                    index_symbol, start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d'), 'day')
+                if not bars:
+                    raise RuntimeError(adapter.last_history_error() or 'no daily index candles')
+                trading_days = [b['date'].date() if hasattr(b['date'], 'date') else b['date']
+                                for b in bars if b.get('date')]
+                settled = past_expiries(trading_days, cadence=cadence, weekday=weekday)
+
+            merged = sorted(set(settled) | set(listed))
+            return [d.isoformat() for d in merged if d >= as_of][:limit]
+
+        expiries = _rs_cached(('rs-expiries', symbol, limit, as_of.isoformat(),
+                               datetime.now().strftime('%Y-%m-%d')), 86400.0, _build)
+        if expiries is None:
+            return jsonify({'success': False,
+                            'error': 'Expiries need a live ICICI session — Breeze is the '
+                                     'only provider that serves a settled contract. '
+                                     'Log in at /auth/login/icici.'}), 503
+        return jsonify({'success': True, 'symbol': symbol, 'date': as_of.isoformat(),
+                        'expiries': expiries,
+                        'selected': expiries[0] if expiries else None})
+    except Exception as exc:
+        logger.error(f'[Expiries] {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 @api_bp.route('/oi-profile/round-strike', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
 def oi_profile_round_strike() -> EndpointResponse:
     """Every piece of data the OI Profile page's Round Strike block renders.
 
-    Query params: symbol, interval, days, ce_strike, pe_strike, step.
+    Query params: symbol, interval, days, ce_strike, pe_strike, step, expiry.
     ce_strike/pe_strike may be omitted on the very first call — the block needs
     this endpoint's `session_open` and `strikes` to work out which pair to ask
     for, and the option legs come back empty until it does.
+
+    `expiry` (YYYY-MM-DD, PAST only) replays a settled contract instead of the
+    live one: the whole fetch window moves back to that expiry and both option
+    legs come off ICICI/Breeze, the one provider that will serve an expired
+    series. Omitted on every live call, which leaves the original path exactly
+    as it was.
     """
     try:
         symbol    = request.args.get('symbol', 'NIFTY').upper()
@@ -11596,6 +11773,46 @@ def oi_profile_round_strike() -> EndpointResponse:
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
         step      = request.args.get('step', 50, type=int) or 50
+        # Replay's expiry + date pickers. Both absent on every live call, which
+        # keeps the whole block below on its original path.
+        #
+        # `expiry` names the contract and may be settled OR still trading: the
+        # expiry a trader held on 04 Sep was 08 Sep, which had not expired yet.
+        # `date` is the as-of date the window ends on, so the chart shows that
+        # contract as it looked then rather than running to today.
+        def _flag(name: str, default: bool) -> bool:
+            """A 0/1 query flag. Absent means default, so the live page — which
+            sends none of these — behaves exactly as it always has."""
+            raw = request.args.get(name)
+            return default if raw is None else raw not in ('0', 'false', 'False', '')
+
+        # Replay removed its stats strip, so the pills this endpoint fills — PCR,
+        # ATM, CPR, IVP, lot size, VWAP bias — are computed and then dropped on
+        # the floor. Skipping them also skips the INTRADAY index leg, which on a
+        # 10-day 1-minute window is eight more chunks through Breeze's 1.5 req/s
+        # budget. session_open still has to come back (the block picks its round
+        # strikes off it), so it is read from a single daily bar instead.
+        _want_header = _flag('hdr', True)
+
+        expiry_raw = (request.args.get('expiry') or '').strip()
+        as_of_raw  = (request.args.get('date') or '').strip()
+        expiry_day = as_of_day = None
+        for raw, label in ((expiry_raw, 'expiry'), (as_of_raw, 'date')):
+            if not raw:
+                continue
+            try:
+                parsed = datetime.strptime(raw[:10], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'success': False,
+                                'error': f'Bad {label} {raw!r}, want YYYY-MM-DD'}), 400
+            if label == 'expiry':
+                expiry_day = parsed
+            else:
+                as_of_day = parsed
+        if as_of_day and expiry_day and as_of_day > expiry_day:
+            return jsonify({'success': False,
+                            'error': f'date {as_of_raw} is after expiry {expiry_raw} — '
+                                     f'that contract no longer existed.'}), 400
 
         valid_intervals = ['30second', 'minute', '2minute', '3minute', '5minute', '10minute',
                            '15minute', '30minute', '60minute', 'day', 'week', 'month']
@@ -11604,8 +11821,18 @@ def oi_profile_round_strike() -> EndpointResponse:
         days = min(max(int(days), 1), 10000 if interval in ('day', 'week', 'month') else 500)
 
         market_is_open = _cached_market_hours()
-        cache_key = (symbol, interval, days, ce_strike, pe_strike, step)
-        ttl = _RS_RESPONSE_TTL if market_is_open else _RS_RESPONSE_TTL_CLOSED
+        cache_key = (symbol, interval, days, ce_strike, pe_strike, step, expiry_raw, as_of_raw, _want_header)
+        # A settled expiry's answer is immutable, so it is held for the day
+        # rather than rebuilt on the sub-second live cadence.
+        # A window that closed in the past can never change again, so it is held
+        # for the day. One ending TODAY is still filling in, so it gets a short
+        # TTL — long enough that Replay is not re-fetching Breeze constantly,
+        # short enough that today's bars are not frozen at first sight.
+        _ttl_end = as_of_day or expiry_day      # window_end is derived from this below
+        _hist_ttl = (_RS_EXPIRED_LEG_TTL if (_ttl_end and _ttl_end < datetime.now().date())
+                     else 60.0)
+        ttl = (_hist_ttl if (expiry_day or as_of_day)
+               else (_RS_RESPONSE_TTL if market_is_open else _RS_RESPONSE_TTL_CLOSED))
         if cache_key in _rs_response_cache:
             cached, cached_ts = _rs_response_cache[cache_key]
             if datetime.now().timestamp() - cached_ts < ttl:
@@ -11634,8 +11861,16 @@ def oi_profile_round_strike() -> EndpointResponse:
         # them. Named rather than inlined because the leg cache key includes it —
         # two requests that differ only in range must not share parked bars.
         fetch_days = days + 5
-        from_date = (now - timedelta(days=fetch_days)).replace(hour=9, minute=0, second=0, microsecond=0)
-        to_date = now
+        # Replay moves the WHOLE window back, not just the option legs: the index
+        # bars and the two volume overlays are matched to the candles by exact
+        # time key, so leaving them on today's window would draw an empty overlay
+        # against historical premiums. The as-of date wins when given — it is
+        # where the user is standing; the expiry is only the fallback end.
+        _end_day = as_of_day or expiry_day
+        window_end = now if _end_day is None else min(
+            now, datetime(_end_day.year, _end_day.month, _end_day.day, 23, 59, 59))
+        from_date = (window_end - timedelta(days=fetch_days)).replace(hour=9, minute=0, second=0, microsecond=0)
+        to_date = window_end
         fetch_interval = 'minute' if interval == '2minute' else interval
 
         fetch_errors: list = []
@@ -11688,38 +11923,149 @@ def oi_profile_round_strike() -> EndpointResponse:
                     raise RuntimeError(empty_reasons.get(str(token)) or 'no candles returned')
                 return res
             before = len(fetch_errors)
-            out = _rs_cached(('rs-leg', symbol, inter, fetch_days, str(token)),
-                             _RS_CANDLE_TTL, produce)
+            # as_of_raw is part of the key because it MOVES the window: without
+            # it, stepping the date back served the previous date's index and
+            # volume bars from cache under the new date's candles. The 2.5 s TTL
+            # is a live-tick figure and equally wrong here — a closed window is
+            # finished data, and re-fetching it is what made every date change
+            # pay for five more rate-limited Breeze chunks per leg.
+            out = _rs_cached(('rs-leg', symbol, inter, fetch_days, str(token),
+                              expiry_raw, as_of_raw),
+                             _hist_ttl if (expiry_day or as_of_day) else _RS_CANDLE_TTL,
+                             produce)
             # Distinguishes "this tick's fetch failed and you are looking at
             # parked bars" from a clean cache hit, which records nothing.
             if str(token) in empty_reasons or len(fetch_errors) > before:
                 stale_legs[str(token)] = empty_reasons.get(str(token)) or 'fetch failed'
             return out or []
 
+        # One leg of a SETTLED expiry, off Breeze. The token-based path below
+        # cannot reach these at all: an expired contract is gone from both
+        # instrument masters (Kite's get_option_symbol keeps only
+        # `expiry >= today`, Fyers' find_option_symbol the same), so
+        # _get_cached_strike_token would hand back the wrong expiry's token or
+        # nothing. Breeze names a contract by (stock_code, expiry, strike,
+        # right) instead of a token, which is why it still answers for one.
+        def expired_leg(strike, right, inter):
+            pseudo_token = f'{symbol}:{expiry_raw}:{strike}:{right}'
+
+            def produce():
+                adapter = get_icici_adapter()
+                if adapter is None:
+                    raise RuntimeError('no live ICICI session — past-expiry candles '
+                                       'come only from Breeze')
+                res = adapter.historical_option(
+                    symbol, expiry_day, strike, right,
+                    from_date.strftime('%Y-%m-%d'), to_date.strftime('%Y-%m-%d'), inter,
+                    exchange_code=_rs_option_exchange(symbol))
+                if not res:
+                    raise RuntimeError(adapter.last_history_error() or 'no candles returned')
+                return res
+
+            before = len(fetch_errors)
+            try:
+                out = _rs_cached(('rs-leg-exp', symbol, inter, fetch_days, expiry_raw,
+                                  as_of_raw, strike, right), _hist_ttl, produce)
+            except Exception as exc:      # _rs_cached swallows, but not its own faults
+                logger.error(f'[RoundStrike] expired leg {pseudo_token} failed: {exc}')
+                fetch_errors.append(str(exc))
+                out = None
+            if out is None and str(pseudo_token) not in empty_reasons:
+                # Mirrors what fetch_task records for a live leg, so the shared
+                # empty_legs/fetch_error reporting below can name the reason.
+                empty_reasons[pseudo_token] = 'Breeze returned no candles for this expiry'
+            if pseudo_token in empty_reasons or len(fetch_errors) > before:
+                stale_legs[pseudo_token] = empty_reasons.get(pseudo_token) or 'fetch failed'
+            return out or []
+
         # ── Per-tick fetches: the two option legs + the two volume overlays ──
         ce_token = pe_token = ce_symbol = pe_symbol = None
         future_ce = future_pe = None
         if ce_strike:
-            ce_token, ce_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, ce_strike, 'CE')
-            if ce_token:
-                future_ce = executor.submit(cached_leg, ce_token, fetch_interval)
+            if expiry_day is not None:
+                ce_token = ce_symbol = f'{symbol}:{expiry_raw}:{ce_strike}:CE'
+                future_ce = executor.submit(expired_leg, ce_strike, 'CE', fetch_interval)
+            else:
+                ce_token, ce_symbol = _get_cached_strike_token(
+                    kite_service, _data_provider, _is_fyers_provider, symbol, ce_strike, 'CE')
+                if ce_token:
+                    future_ce = executor.submit(cached_leg, ce_token, fetch_interval)
         if pe_strike:
-            pe_token, pe_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, pe_strike, 'PE')
-            if pe_token:
-                future_pe = executor.submit(cached_leg, pe_token, fetch_interval)
+            if expiry_day is not None:
+                pe_token = pe_symbol = f'{symbol}:{expiry_raw}:{pe_strike}:PE'
+                future_pe = executor.submit(expired_leg, pe_strike, 'PE', fetch_interval)
+            else:
+                pe_token, pe_symbol = _get_cached_strike_token(
+                    kite_service, _data_provider, _is_fyers_provider, symbol, pe_strike, 'PE')
+                if pe_token:
+                    future_pe = executor.submit(cached_leg, pe_token, fetch_interval)
 
         # The index carries no traded volume — the overlay uses the current-expiry
         # future, plus Bank Nifty's (identical contract when BANKNIFTY is the
         # selected symbol, so it is fetched once and shared).
-        fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
-        future_vol = executor.submit(cached_leg, fut_token, fetch_interval) if fut_token else None
-        if symbol == 'BANKNIFTY':
-            bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
+        #
+        # Both are skipped unless they can actually be SEEN, because on the
+        # historical path each one costs five rate-limited Breeze chunks at
+        # 1-minute bars. Two ways they cannot:
+        #   * no strikes yet — this is the bootstrap call that exists purely to
+        #     learn session_open and the strike ladder, and it carries no option
+        #     candles for a volume overlay to sit under;
+        #   * the client says the indicator is off — Banknifty Vol Fut ships
+        #     UNCHECKED, so that leg was being fetched and thrown away on every
+        #     single request.
+        _want_vol = _flag('vol', True) and bool(ce_strike or pe_strike)
+        _want_bnf = _flag('bnf_vol', True) and bool(ce_strike or pe_strike)
+
+        # One volume leg for a historical window. The token path is wrong here in
+        # the same way it is wrong for the option legs, and more quietly:
+        # _get_cached_future_token resolves the front month as of TODAY, so
+        # replaying August drew September's thin far-month volume instead of the
+        # August contract that was actually being traded.
+        def historical_future_leg(root, fut_expiry, label, inter):
+            def produce():
+                res = _icici.historical_future(
+                    root, fut_expiry, from_date.strftime('%Y-%m-%d'),
+                    to_date.strftime('%Y-%m-%d'), inter,
+                    exchange_code=_rs_option_exchange(root))
+                if not res:
+                    raise RuntimeError(_icici.last_history_error() or 'no candles returned')
+                return res
+            out = _rs_cached(('rs-fut-exp', root, inter, fetch_days, expiry_raw, as_of_raw),
+                             _hist_ttl, produce)
+            if out is None:
+                empty_reasons[label] = 'Breeze returned no candles for that future'
+                stale_legs[label] = empty_reasons[label]
+            return out or []
+
+        def submit_historical_future(root, want):
+            """(token, symbol, future) for one historical volume overlay."""
+            if not want or _icici is None:
+                return None, None, None
+            fut_expiry = _rs_front_future_expiry(root, _end_day, _icici)
+            if not fut_expiry:
+                return None, None, None
+            label = f'{root} {fut_expiry.strftime("%b-%Y")} FUT'
+            return label, label, executor.submit(
+                historical_future_leg, root, fut_expiry, label, fetch_interval)
+
+        _historical = expiry_day is not None or as_of_day is not None
+        _icici = get_icici_adapter() if _historical else None
+
+        if _historical:
+            fut_token, fut_symbol, future_vol = submit_historical_future(symbol, _want_vol)
+            if symbol == 'BANKNIFTY':
+                bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
+            else:
+                bnf_token, bnf_symbol, future_bnf_vol = submit_historical_future('BANKNIFTY', _want_bnf)
         else:
-            bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
-            future_bnf_vol = executor.submit(cached_leg, bnf_token, fetch_interval) if bnf_token else None
+            fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
+            future_vol = executor.submit(cached_leg, fut_token, fetch_interval) if (fut_token and _want_vol) else None
+            if symbol == 'BANKNIFTY':
+                bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
+            else:
+                bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
+                future_bnf_vol = (executor.submit(cached_leg, bnf_token, fetch_interval)
+                                  if (bnf_token and _want_bnf) else None)
 
         # Price is the one pill nobody wants served off a 10-second cache, and
         # re-fetching the whole index history every tick just to read its last
@@ -11739,6 +12085,21 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         # ── Slow-moving sections (see the TTL table above) ──
         def _index_derived():
+            # One daily candle for the as-of day gives the same session open the
+            # intraday leg would, for one request instead of a chunked series.
+            if not _want_header:
+                day_end = window_end.strftime('%Y-%m-%d')
+                day_start = (window_end - timedelta(days=7)).strftime('%Y-%m-%d')
+                daily = None
+                try:
+                    if _icici is not None:
+                        daily = _icici.historical_data(index_token, day_start, day_end, 'day')
+                except Exception:
+                    daily = None
+                op = 0.0
+                if daily:
+                    op = float(daily[-1].get('open') or 0)
+                return {'session_open': op, 'vwap_bias': None, 'last_close': op}
             raw = fetch_task(index_token, fetch_interval)
             bars = _rs_trim_days(_oip_format_candles(raw, ist_offset, interval), days)
             return {
@@ -11811,7 +12172,9 @@ def oi_profile_round_strike() -> EndpointResponse:
         # run inline rather than crowding the shared pool the option legs above
         # (and the main candles endpoint) are already using.
         today_str = now.strftime('%Y-%m-%d')
-        f_index = executor.submit(_rs_cached, ('rs-index', symbol, interval, days), 10.0, _index_derived)
+        f_index = executor.submit(_rs_cached,
+                                  ('rs-index', symbol, interval, days, expiry_raw, as_of_raw),
+                                  _hist_ttl if (expiry_day or as_of_day) else 10.0, _index_derived)
 
         # ── Collect ──
         ce_candles = _rs_trim_days(_oip_format_candles(future_ce.result() if future_ce else [], ist_offset, interval), days)
@@ -11826,11 +12189,11 @@ def oi_profile_round_strike() -> EndpointResponse:
         future_volume = _volume_series(future_vol)
         banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
 
-        oi_data      = _rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}
+        oi_data      = (_rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}) if _want_header else {}
         strikes_list = _rs_cached(('rs-strikes', symbol, today_str), 600.0, _strike_list) or []
-        lot_size     = _rs_cached(('rs-lot', symbol, today_str), 600.0, _lot_size)
-        atm_ce_oi    = _rs_cached(('rs-atm-ce-oi', symbol, step, today_str), 300.0, _atm_ce_oi) or {}
-        cpr          = _rs_cached(('rs-cpr', symbol, today_str), 86400.0, _cpr_bands) or {}
+        lot_size     = _rs_cached(('rs-lot', symbol, today_str), 600.0, _lot_size) if _want_header else None
+        atm_ce_oi    = (_rs_cached(('rs-atm-ce-oi', symbol, step, today_str), 300.0, _atm_ce_oi) or {}) if _want_header else {}
+        cpr          = (_rs_cached(('rs-cpr', symbol, today_str), 86400.0, _cpr_bands) or {}) if _want_header else {}
         index_derived = f_index.result() or {}
 
         # Price: live quote first, then the index's own last bar (up to the
@@ -11907,6 +12270,9 @@ def oi_profile_round_strike() -> EndpointResponse:
             'interval': interval,
             'ce_strike': ce_strike,
             'pe_strike': pe_strike,
+            # Echoed so a response that raced past an expiry change can be
+            # spotted and dropped, the same way ce_strike/pe_strike are used.
+            'expiry': expiry_raw,
             'ce_symbol': ce_symbol,
             'pe_symbol': pe_symbol,
             'ce_candles': ce_candles,
