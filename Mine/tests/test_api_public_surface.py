@@ -30,7 +30,7 @@ EXPECTED_SIGNATURES = {
         "limit_price=None, sec_id=None)"
     ),
     "split_quantity_by_freeze_limit": "(symbol: str, total_qty: int, provider) -> list",
-    "get_data_provider": "(user: Optional[str] = None) -> Optional[Any]",
+    "get_data_provider": "(user: Optional[str] = None, context: Optional[str] = None) -> Optional[Any]",
 }
 
 

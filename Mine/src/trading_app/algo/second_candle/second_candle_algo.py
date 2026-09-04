@@ -323,7 +323,7 @@ class SecondCandleAlgo:
 
     def _get_provider(self) -> Any:
         from trading_app.service.provider_logic import get_data_provider
-        return get_data_provider(user=self.username)
+        return get_data_provider(user=self.username, context='algo_sc')
 
     @staticmethod
     def _quote_age_secs(ts: Any) -> Optional[float]:

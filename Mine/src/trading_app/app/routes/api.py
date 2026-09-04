@@ -3051,7 +3051,7 @@ def run_apex_reversal_backtest():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
             
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
             
@@ -3203,7 +3203,7 @@ def run_cpr_gap_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
             
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
             
@@ -3336,7 +3336,7 @@ def run_rtp_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -3536,7 +3536,7 @@ def run_vwap_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -3643,7 +3643,7 @@ def run_second_candle_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -3789,7 +3789,7 @@ def run_second_candle_optimise():
                     'timeframes':         entry.get('timeframes', []),
                 })
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -3992,7 +3992,7 @@ def run_scalp_pullback_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -4107,7 +4107,7 @@ def run_scalp_pullback_optimise():
                     'timeframes':          entry.get('timeframes', []),
                 })
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -4275,7 +4275,7 @@ def run_pivot_confluence_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -4400,7 +4400,7 @@ def run_pivot_confluence_optimise():
                     'timeframes':          entry.get('timeframes', []),
                 })
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -4573,7 +4573,7 @@ def run_expiry_breakout_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -4894,7 +4894,7 @@ def run_ema_pullback_backtest_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -5004,7 +5004,7 @@ def run_ema_pullback_optimise():
                 entry = cache[cache_key]
                 return jsonify({'success': True, 'from_cache': True, **entry})
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -5071,7 +5071,7 @@ def run_expiry_breakout_levels_api():
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -5147,7 +5147,7 @@ def run_expiry_breakout_scan_api():
         end_date   = (datetime.strptime(end_date_str, '%Y-%m-%d') if end_date_str
                       else now)
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
         if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
@@ -5304,7 +5304,7 @@ def run_thirty_min_fakeout_backtest_api():
         if not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -5496,7 +5496,7 @@ def run_thirty_min_fakeout_optimise():
                 entry = cache[cache_key]
                 return jsonify({'success': True, 'status': 'complete', 'from_cache': True, **entry})
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -5709,7 +5709,7 @@ def run_vwap_optimise():
                 entry = cache[cache_key]
                 return jsonify({'success': True, 'from_cache': True, **entry})
 
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -5831,7 +5831,7 @@ def run_rtp_optimise():
         # Fetching multi-year intraday data (chunked, rate-limited) plus the
         # full parameter sweep can take minutes, so run it in a background
         # thread and let the client poll /backtest/rtp/optimise/status/<task_id>.
-        current_kite = get_data_provider()
+        current_kite = get_data_provider(context='backtest')
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
@@ -8452,7 +8452,7 @@ def algo_rtp_status() -> EndpointResponse:
         # Fetch live NIFTY spot for P&L calculation
         live = None
         try:
-            provider = get_data_provider()
+            provider = get_data_provider(context='algo_rtp')
             if provider:
                 ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
                 spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
@@ -8890,7 +8890,7 @@ def algo_rtp_force_exit() -> EndpointResponse:
         if algo is None:
             algo = RTPAlgo(username=username)
 
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         spot = 0.0
         if provider:
             try:
@@ -8913,7 +8913,7 @@ def algo_rtp_delta_strikes() -> EndpointResponse:
     try:
         from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         if not provider:
             return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
 
@@ -8970,7 +8970,7 @@ def algo_rtp30s_status() -> EndpointResponse:
         # Fetch live NIFTY spot for P&L calculation
         live = None
         try:
-            provider = get_data_provider()
+            provider = get_data_provider(context='algo_rtp')
             if provider:
                 ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
                 spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
@@ -9075,7 +9075,7 @@ def algo_rtp30s_force_exit() -> EndpointResponse:
         if algo is None:
             algo = RTPAlgo(username=username, variant='30s')
 
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         spot = 0.0
         if provider:
             try:
@@ -9098,7 +9098,7 @@ def algo_rtp30s_delta_strikes() -> EndpointResponse:
     try:
         from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         if not provider:
             return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
 
@@ -9155,7 +9155,7 @@ def algo_rtp3m_status() -> EndpointResponse:
         # Fetch live NIFTY spot for P&L calculation
         live = None
         try:
-            provider = get_data_provider()
+            provider = get_data_provider(context='algo_rtp')
             if provider:
                 ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
                 spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
@@ -9260,7 +9260,7 @@ def algo_rtp3m_force_exit() -> EndpointResponse:
         if algo is None:
             algo = RTPAlgo(username=username, variant='3m')
 
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         spot = 0.0
         if provider:
             try:
@@ -9283,7 +9283,7 @@ def algo_rtp3m_delta_strikes() -> EndpointResponse:
     try:
         from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         if not provider:
             return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
 
@@ -9340,7 +9340,7 @@ def algo_rtp2m_status() -> EndpointResponse:
         # Fetch live NIFTY spot for P&L calculation
         live = None
         try:
-            provider = get_data_provider()
+            provider = get_data_provider(context='algo_rtp')
             if provider:
                 ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
                 spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
@@ -9445,7 +9445,7 @@ def algo_rtp2m_force_exit() -> EndpointResponse:
         if algo is None:
             algo = RTPAlgo(username=username, variant='2m')
 
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         spot = 0.0
         if provider:
             try:
@@ -9468,7 +9468,7 @@ def algo_rtp2m_delta_strikes() -> EndpointResponse:
     try:
         from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         if not provider:
             return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
 
@@ -9527,7 +9527,7 @@ def algo_rtp5m_status() -> EndpointResponse:
         # Fetch live NIFTY spot for P&L calculation
         live = None
         try:
-            provider = get_data_provider()
+            provider = get_data_provider(context='algo_rtp')
             if provider:
                 ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
                 spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
@@ -9632,7 +9632,7 @@ def algo_rtp5m_force_exit() -> EndpointResponse:
         if algo is None:
             algo = RTPAlgo(username=username, variant='5m')
 
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         spot = 0.0
         if provider:
             try:
@@ -9655,7 +9655,7 @@ def algo_rtp5m_delta_strikes() -> EndpointResponse:
     try:
         from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_rtp')
         if not provider:
             return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
 
@@ -9711,7 +9711,7 @@ def algo_sc_status() -> EndpointResponse:
 
         live = None
         try:
-            provider = get_data_provider()
+            provider = get_data_provider(context='algo_sc')
             if provider:
                 ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
                 spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
@@ -9814,7 +9814,7 @@ def algo_sc_force_exit() -> EndpointResponse:
         if algo is None:
             algo = SecondCandleAlgo(username=username)
 
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_sc')
         spot = 0.0
         if provider:
             try:
@@ -9837,7 +9837,7 @@ def algo_sc_delta_strikes() -> EndpointResponse:
     try:
         from trading_app.algo.second_candle.second_candle_algo import SecondCandleAlgo, get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_sc')
         if not provider:
             return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
 
@@ -10146,6 +10146,16 @@ def _oip_format_candles(raw_data, ist_offset, requested_interval):
     return temp
 
 
+def _oi_profile_page_context() -> str:
+    """OI-Profile and Replay share these endpoints byte-for-byte (same shared
+    JS, same query params), so the browser's Referer is the only signal that
+    tells them apart for REPLAY_DATA_PROVIDER vs OI_PROFILE_DATA_PROVIDER.
+    No Referer (or anything else) defaults to the OI-Profile page.
+    """
+    ref_path = (request.referrer or '').split('?', 1)[0].rstrip('/')
+    return 'replay' if ref_path.endswith('/replay') else 'oi_profile'
+
+
 @api_bp.route('/oi-profile/candles', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -10276,11 +10286,11 @@ def oi_profile_candles() -> EndpointResponse:
         max_allowed_days = 10000 if interval in ['week', 'month', 'day'] else 500
         days = min(max(int(days), 1), max_allowed_days)
         kite = get_kite(instance=1)
-        # Get configured data provider (Kite or Fyers based on DATA_PROVIDER env flag)
-        _data_provider = get_data_provider()
+        # Get configured data provider (REPLAY_/OI_PROFILE_DATA_PROVIDER if set, else DATA_PROVIDER)
+        _data_provider = get_data_provider(context=_oi_profile_page_context())
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
-        
+
         # Detect if using Fyers as data provider
         from trading_app.service.fyers_data_service import FyersDataServiceAdapter
         _is_fyers_provider = isinstance(_data_provider, FyersDataServiceAdapter)
@@ -10997,7 +11007,7 @@ def oi_profile_cpr_width() -> EndpointResponse:
             return jsonify(cached)
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider()
+        _data_provider = get_data_provider(context=_oi_profile_page_context())
         effective_instance = _data_provider if _data_provider else kite
         if not effective_instance:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
@@ -11085,7 +11095,7 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         extra_leg = max(0, extra) * 50
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider()
+        _data_provider = get_data_provider(context=_oi_profile_page_context())
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
@@ -11332,7 +11342,7 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
 
         from trading_app.service.open_interest_service import OpenInterestService
         kite = get_kite(instance=1)
-        provider = get_data_provider()
+        provider = get_data_provider(context=_oi_profile_page_context())
         svc = OpenInterestService(provider if provider else kite)
         return jsonify(svc.get_atm_ce_oi_strikes(symbol, step, date_str))
 
@@ -11602,7 +11612,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                 return jsonify(cached)
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider()
+        _data_provider = get_data_provider(context=_oi_profile_page_context())
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
@@ -13782,7 +13792,7 @@ def _sm_current_prices(symbols: list) -> dict:
     """Return {symbol: last_price} via Fyers (preferred) or yfinance fallback."""
     prices = {}
     try:
-        provider = get_data_provider()
+        provider = get_data_provider(context='algo_swing')
         if provider is not None:
             quotes = provider.quote([f'NSE:{s}-EQ' for s in symbols])
             for s in symbols:
@@ -14753,7 +14763,7 @@ def sm_live_signal(config_id):
         # Fetch current prices — Fyers if connected (gives ltp + prev_close), else yfinance fallback
         # price_map: symbol → {'ltp': float, 'prev_close': float}
         price_map = {}
-        provider  = get_data_provider()
+        provider  = get_data_provider(context='algo_swing')
         if provider is not None:
             fyers_syms = [f"NSE:{e['symbol']}-EQ" for e in live_entries]
             try:

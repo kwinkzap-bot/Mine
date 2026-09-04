@@ -372,7 +372,7 @@ class RTPAlgo:
 
     def _get_provider(self) -> Any:
         from trading_app.service.provider_logic import get_data_provider
-        return get_data_provider(user=self.username)
+        return get_data_provider(user=self.username, context='algo_rtp')
 
     def _get_nifty_spot(self, provider: Any) -> Optional[float]:
         try:

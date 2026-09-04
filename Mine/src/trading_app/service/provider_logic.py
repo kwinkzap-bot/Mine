@@ -48,42 +48,75 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
         logger.error(f"Error getting Kite instance: {e}")
         return None
 
-def get_data_provider(user: Optional[str] = None) -> Optional[Any]:
-    """Returns the configured data provider (Kite, Fyers or ICICI Direct)."""
+def get_data_provider(user: Optional[str] = None, context: Optional[str] = None) -> Optional[Any]:
+    """Returns the configured data provider (Kite, Fyers or ICICI Direct).
+
+    `context` (e.g. 'replay', 'backtest', 'algo_rtp') looks up a
+    `{CONTEXT}_DATA_PROVIDER` override first (e.g. REPLAY_DATA_PROVIDER,
+    ALGO_RTP_DATA_PROVIDER) — one per route/algo that needs to sit on a
+    different broker than the rest of the app. If that override is unset, or
+    its broker isn't reachable (not logged in / no adapter), resolution falls
+    through to the global DATA_PROVIDER, then to Kite. Callers that pass no
+    context (the majority — login status, orders, positions, scanners, etc.)
+    keep using DATA_PROVIDER only, unchanged from before this existed.
+    """
     try:
         from trading_app.app.utils.user_env import UserEnvManager
-        
+
         username = user
         if not username and has_request_context():
             username = session.get('username')
-        
+
         if not username:
-            provider_type = os.getenv('DATA_PROVIDER', 'KITE').upper().split()[0]
-            username = 'Mine' # Fallback for env lookups
+            username = 'Mine'  # Fallback for env lookups
+            def _read(name: str, default: str = '') -> str:
+                return os.getenv(name, default)
         else:
             UserEnvManager._user_env_cache.pop(username, None)
-            raw_val = UserEnvManager.get_user_var(username, 'DATA_PROVIDER', 'KITE')
+            def _read(name: str, default: str = '') -> str:
+                return UserEnvManager.get_user_var(username, name, default)
+
+        candidates = []
+        if context:
+            candidates.append(_read(f'{context.upper()}_DATA_PROVIDER'))
+        candidates.append(_read('DATA_PROVIDER', 'KITE'))
+
+        tried = set()
+        for raw_val in candidates:
+            if not raw_val:
+                continue
             provider_type = raw_val.upper().split()[0]
-        
-        if provider_type in ('ICICI', 'BREEZE', 'ICICIDIRECT'):
-            adapter = _get_icici_adapter(username)
-            if adapter is not None:
-                return adapter
-            # Fyers before Kite: Kite has no historical-data subscription on
-            # any of the configured apps, so falling straight through to it
-            # leaves every chart and CPR calculation with nothing.
-            adapter = _get_fyers_adapter(username)
-            if adapter is not None:
-                logger.warning(f"ICICI unavailable for {username} — serving Fyers instead.")
-                return adapter
-            logger.warning(f"ICICI and Fyers both unavailable for {username}. Falling back to Kite.")
+            if provider_type in tried:
+                continue
+            tried.add(provider_type)
 
-        if provider_type == 'FYERS':
-            adapter = _get_fyers_adapter(username)
-            if adapter is not None:
-                return adapter
+            if provider_type in ('ICICI', 'BREEZE', 'ICICIDIRECT'):
+                adapter = _get_icici_adapter(username)
+                if adapter is not None:
+                    return adapter
+                # Fyers before Kite: Kite has no historical-data subscription
+                # on any of the configured apps, so falling straight through
+                # to it leaves every chart and CPR calculation with nothing.
+                adapter = _get_fyers_adapter(username)
+                if adapter is not None:
+                    logger.warning(f"ICICI unavailable for {username} — serving Fyers instead.")
+                    return adapter
+                logger.warning(f"ICICI and Fyers both unavailable for {username}.")
+                continue
 
-        # Default fallback to Kite
+            if provider_type == 'FYERS':
+                adapter = _get_fyers_adapter(username)
+                if adapter is not None:
+                    return adapter
+                continue
+
+            if provider_type == 'KITE':
+                kite = get_kite(user=username, instance=1)
+                if kite is not None:
+                    return kite
+                continue
+
+        # Nothing in the chain resolved — final hardcoded fallback.
         return get_kite(user=username, instance=1)
     except Exception as e:
         logger.error(f"Error getting data provider: {e}")

@@ -419,7 +419,7 @@ class TMFAlgo:
 
     def _get_provider(self) -> Any:
         from trading_app.service.provider_logic import get_data_provider
-        return get_data_provider(user=self.username)
+        return get_data_provider(user=self.username, context='algo_tmf')
 
     def _fetch_today_candles(self, provider: Any, is_fyers: bool, symbol: str) -> Optional[pd.DataFrame]:
         from trading_app.Backtest.minute_candle_store import get_minute_history

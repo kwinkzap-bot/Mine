@@ -71,6 +71,18 @@ function _hoiRenderAll(records) {
         const futOf = r => (r.FII_Index_futures != null && r.FII_Index_futures !== 0)
             ? Number(r.FII_Index_futures) : null;
         const cls = v => v == null ? 'hoi-flat' : v > 0 ? 'hoi-up' : v < 0 ? 'hoi-down' : 'hoi-flat';
+        // Day-over-day change in total CE/PE OI. rows[i+1] is the PREVIOUS
+        // session — the grid is newest-first (same convention as chngFutOf).
+        const chngCeOf = (r, i) => {
+            const cur = r.ce_oi != null ? Number(r.ce_oi) : null;
+            const prev = rows[i + 1]?.ce_oi != null ? Number(rows[i + 1].ce_oi) : null;
+            return (cur != null && prev != null) ? cur - prev : null;
+        };
+        const chngPeOf = (r, i) => {
+            const cur = r.pe_oi != null ? Number(r.pe_oi) : null;
+            const prev = rows[i + 1]?.pe_oi != null ? Number(rows[i + 1].pe_oi) : null;
+            return (cur != null && prev != null) ? cur - prev : null;
+        };
 
         grid.innerHTML = DataGrid.render({
             rows,
@@ -85,6 +97,18 @@ function _hoiRenderAll(records) {
                   render: (_, r) => {
                       const d = diffOf(r);
                       return (d > 0 ? '↑ ' : d < 0 ? '↓ ' : '') + _hoiFmt(Math.abs(d));
+                  } },
+                { label: 'CHNG CALL OI', align: 'right',
+                  cellClass: (_, r, i) => cls(chngCeOf(r, i)),
+                  format: (_, r, i) => {
+                      const d = chngCeOf(r, i);
+                      return d == null ? '—' : (d > 0 ? '+' : '-') + _hoiFmt(Math.abs(d));
+                  } },
+                { label: 'CHNG PUT OI', align: 'right',
+                  cellClass: (_, r, i) => cls(chngPeOf(r, i)),
+                  format: (_, r, i) => {
+                      const d = chngPeOf(r, i);
+                      return d == null ? '—' : (d > 0 ? '+' : '-') + _hoiFmt(Math.abs(d));
                   } },
                 { label: 'PCR', align: 'right',
                   cellClass: (_, r) => { const p = pcrOf(r); return p == null ? 'hoi-flat' : p >= 1 ? 'hoi-up' : 'hoi-down'; },

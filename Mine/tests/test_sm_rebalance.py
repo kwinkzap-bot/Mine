@@ -299,7 +299,7 @@ def quotes(monkeypatch):
             px = {'SCHNEIDER': 1200.0, 'LLOYDSME': 1800.0}
             return {f'NSE:{s}-EQ': {'last_price': p, 'ohlc': {'close': p}}
                     for s, p in px.items()}
-    monkeypatch.setattr(api, 'get_data_provider', lambda: Provider())
+    monkeypatch.setattr(api, 'get_data_provider', lambda *a, **k: Provider())
 
 
 def test_total_investment_is_money_in_not_cost_basis(store, client, quotes):

@@ -437,7 +437,7 @@ class EmaConfluenceAlgo:
 
     def _get_provider(self) -> Any:
         from trading_app.service.provider_logic import get_data_provider
-        return get_data_provider(user=self.username)
+        return get_data_provider(user=self.username, context='algo_ema')
 
     def _underlying_token(self, symbol: str, is_fyers: bool) -> Any:
         if is_fyers:
