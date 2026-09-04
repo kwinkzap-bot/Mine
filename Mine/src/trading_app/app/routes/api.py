@@ -10211,6 +10211,10 @@ def oi_profile_candles() -> EndpointResponse:
         interval = request.args.get('interval', '5minute')
         days     = request.args.get('days', 1, type=int)
         opt_days = request.args.get('opt_days', 5, type=int)
+        # Replay sends &source=replay so this shared endpoint can pick
+        # REPLAY_CHART_DATA_PROVIDER instead of the live OI Profile page's
+        # CHART_DATA_PROVIDER — see get_chart_provider.
+        chart_route = 'replay' if request.args.get('source', '').strip().lower() == 'replay' else None
         spot_high  = request.args.get('spot_high', type=float)
         spot_low   = request.args.get('spot_low',  type=float)
         step_value = request.args.get('step', 50,  type=int)
@@ -10312,7 +10316,7 @@ def oi_profile_candles() -> EndpointResponse:
         days = min(max(int(days), 1), max_allowed_days)
         kite = get_kite(instance=1)
         # Charts on this page follow CHART_DATA_PROVIDER, not DATA_PROVIDER — see get_chart_provider.
-        _data_provider = get_chart_provider()
+        _data_provider = get_chart_provider(route=chart_route)
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
         
@@ -11364,10 +11368,14 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
         symbol   = request.args.get('symbol', 'NIFTY').upper()
         step     = request.args.get('step', 50, type=int) or 50
         date_str = request.args.get('date')
+        # Replay sends &source=replay so this shared endpoint can pick
+        # REPLAY_CHART_DATA_PROVIDER instead of the live OI Profile page's
+        # CHART_DATA_PROVIDER — see get_chart_provider.
+        chart_route = 'replay' if request.args.get('source', '').strip().lower() == 'replay' else None
 
         from trading_app.service.open_interest_service import OpenInterestService
         kite = get_kite(instance=1)
-        provider = get_chart_provider()
+        provider = get_chart_provider(route=chart_route)
         svc = OpenInterestService(provider if provider else kite)
         return jsonify(svc.get_atm_ce_oi_strikes(symbol, step, date_str))
 

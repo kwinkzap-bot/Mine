@@ -134,7 +134,7 @@ def get_oi_chain_provider(user: Optional[str] = None) -> Optional[Any]:
         return None
 
 
-def get_chart_provider(user: Optional[str] = None) -> Optional[Any]:
+def get_chart_provider(user: Optional[str] = None, route: Optional[str] = None) -> Optional[Any]:
     """The provider CHART_DATA_PROVIDER names, for everything on OI Profile and
     Replay that is NOT the OI chain — candles, quotes, futures volume, CPR,
     VWAP, strike tokens.
@@ -145,12 +145,22 @@ def get_chart_provider(user: Optional[str] = None) -> Optional[Any]:
     Breeze precisely. Unset, it IS DATA_PROVIDER — the split costs nothing
     until you ask for it.
 
+    `route='replay'` checks REPLAY_CHART_DATA_PROVIDER first — Replay wants its
+    own broker (typically ICICI, for historical accuracy) independent of what
+    the live OI Profile chart is set to, even though both pages otherwise share
+    this function and CHART_DATA_PROVIDER. Unset, Replay falls through to the
+    same CHART_DATA_PROVIDER/DATA_PROVIDER chain as OI Profile.
+
     Same fallbacks as get_data_provider: a named broker that has no live
     session degrades to the next usable one rather than leaving the page blank.
     """
     try:
         username = _resolve_username(user)
-        provider_type = (_provider_flag('CHART_DATA_PROVIDER', username)
+        provider_type = ''
+        if route:
+            provider_type = _provider_flag(f'{route.strip().upper()}_CHART_DATA_PROVIDER', username)
+        provider_type = (provider_type
+                         or _provider_flag('CHART_DATA_PROVIDER', username)
                          or _provider_flag('DATA_PROVIDER', username, 'KITE')
                          or 'KITE')
         return _provider_by_type(provider_type, username or 'Mine')

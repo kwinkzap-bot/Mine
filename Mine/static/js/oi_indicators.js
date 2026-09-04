@@ -2097,6 +2097,7 @@ async function oipFetchAtmCeOiStrikes(symbol, step, dateStr) {
     try {
         let url = `/api/oi-profile/atm-ce-oi-strikes?symbol=${encodeURIComponent(symbol)}&step=${step || 50}`;
         if (dateStr) url += `&date=${dateStr}`;
+        if (window.oipReplayMode) url += '&source=replay';
         const res  = await fetch(url);
         const data = await res.json();
         if (data && data.success) oipAtmCeOiData = data;
