@@ -30,7 +30,13 @@ EXPECTED_SIGNATURES = {
         "limit_price=None, sec_id=None)"
     ),
     "split_quantity_by_freeze_limit": "(symbol: str, total_qty: int, provider) -> list",
-    "get_data_provider": "(user: Optional[str] = None, context: Optional[str] = None) -> Optional[Any]",
+    # `context` widened from a single name to an ordered chain (str still
+    # accepted) so one block of a page can sit on its own broker —
+    # REPLAY_ROUND_STRIKE_DATA_PROVIDER before REPLAY_DATA_PROVIDER.
+    "get_data_provider": (
+        "(user: Optional[str] = None, "
+        "context: Union[str, Sequence[str], NoneType] = None) -> Optional[Any]"
+    ),
 }
 
 

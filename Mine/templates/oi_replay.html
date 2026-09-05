@@ -314,6 +314,10 @@
             <div id="oipCandleChart"></div>
             <canvas id="oipOICanvas"></canvas>
             <div id="oipTooltip" class="oip-tooltip hidden"></div>
+            <!-- Pan far enough left and oi_replay.js fetches the window before
+                 the earliest loaded bar and splices it on in place. This says so
+                 while that is in flight; it never blocks the chart. -->
+            <div id="oipBackfillNote" class="oip-backfill-note hidden"></div>
         </div>
     </div>
 

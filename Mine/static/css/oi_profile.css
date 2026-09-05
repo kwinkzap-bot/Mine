@@ -778,6 +778,26 @@ body.dark-theme .oip-stale-chip,
     overflow: hidden;
 }
 
+/* Replay's "loading earlier bars" badge. Pinned to the chart's top-left — the
+   corner the history grows out of — and pointer-events:none so it can never
+   swallow a drag on the chart underneath it. */
+.oip-backfill-note {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 5;
+    padding: 3px 9px;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 1.5;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--oip-metric-lbl);
+    background: color-mix(in srgb, var(--oip-bg) 88%, transparent);
+    border: 1px solid var(--oip-border);
+    pointer-events: none;
+}
+
 .oip-charts-row {
     display: flex;
     gap: 10px;
@@ -2136,9 +2156,11 @@ body.dark-theme .oip-oo-cancel-all,
        Round Strike chart below it are read as a pair, and a viewport-relative
        height made this one grow and shrink with the window while the other
        stayed put — so the two never lined up on anything but one screen size.
-       Keep this in step with OIP_RS_BASE_CHART_HEIGHT in
-       static/js/oi_profile_round_strike.js; the two are meant to be equal. */
-    --oip-replay-chart-h: 426px;
+       Keep this in step with OIP_RS_REPLAY_CHART_HEIGHT in
+       static/js/oi_profile_round_strike.js; the two are meant to be equal.
+       That file serves OI Profile as well and keeps its own separate height
+       there, so this number moves only this page. */
+    --oip-replay-chart-h: 410px;
     height: auto;
     min-height: 0;
 }

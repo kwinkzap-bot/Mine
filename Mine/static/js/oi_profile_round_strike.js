@@ -334,9 +334,22 @@ const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
 // shared with the main OI and Premium charts ("both OI and Premium charts are
 // same height") and must stay where it is. The Round Strike wrapper is sized
 // inline by oipRSSetChartHeight, which beats the class.
-// Matches --oip-replay-chart-h in static/css/oi_profile.css — the index chart
-// above and this one are read as a pair and are meant to be the same height.
-const OIP_RS_BASE_CHART_HEIGHT = 426;
+//
+// Per page, because this file serves both. On Replay this chart is stacked
+// under the index chart and the two are read as a pair, so it has to match
+// --oip-replay-chart-h in static/css/oi_profile.css — keep those two in step.
+// On OI Profile it stands alone among that page's other panes and keeps the
+// height it has always had; trimming it there was a side effect of a Replay-only
+// request, not something that page asked for.
+//
+// window.oipReplayMode is set in oi_replay.html's <head>, so it is already
+// there by the time this file parses.
+const OIP_RS_REPLAY_CHART_HEIGHT = 400;   // must equal --oip-replay-chart-h
+const OIP_RS_PROFILE_CHART_HEIGHT = 600;
+const OIP_RS_BASE_CHART_HEIGHT =
+    (typeof window !== 'undefined' && window.oipReplayMode)
+        ? OIP_RS_REPLAY_CHART_HEIGHT
+        : OIP_RS_PROFILE_CHART_HEIGHT;
 
 function oipRSSetChartHeight(px) {
     try { oipRSChart?.chart?.applyOptions({ height: px }); } catch (e) {}

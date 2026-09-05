@@ -176,8 +176,8 @@ _STORE_HISTORY_DAYS = 4800
 _LIVE_SIM_START = '2017-01-01'
 
 # Index symbols resolve to their own instrument token (same map the backtest
-# route uses); every other symbol is an F&O equity, 'NSE:{symbol}-EQ' (Fyers)
-# or the bare tradingsymbol (Kite).
+# route uses); every other symbol is an F&O equity, 'NSE:{symbol}-EQ' on the
+# symbol-addressed providers (Fyers, ICICI) or the bare tradingsymbol (Kite).
 _FYERS_INDICES = {
     'NIFTY':     'NSE:NIFTY50-INDEX',
     'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
@@ -185,7 +185,7 @@ _FYERS_INDICES = {
 }
 # Underlyings whose futures are BSE (BFO) contracts, not NFO ones. The Kite
 # path here only ever resolves NFO futures (KiteService.get_nfo_instruments),
-# so these are Fyers-only — see _resolve_future.
+# so these are symbol-provider-only (Fyers/ICICI) — see _resolve_future.
 _BSE_UNDERLYINGS = {'SENSEX'}
 
 _instances: Dict[str, 'EmaConfluenceAlgo'] = {}
@@ -439,18 +439,18 @@ class EmaConfluenceAlgo:
         from trading_app.service.provider_logic import get_data_provider
         return get_data_provider(user=self.username, context='algo_ema')
 
-    def _underlying_token(self, symbol: str, is_fyers: bool) -> Any:
-        if is_fyers:
+    def _underlying_token(self, symbol: str, is_symbol_provider: bool) -> Any:
+        if is_symbol_provider:
             return _FYERS_INDICES.get(symbol, f'NSE:{symbol}-EQ')
         kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105, 'SENSEX': 265}
         return kite_indices.get(symbol, symbol)
 
-    def _list_contracts(self, provider: Any, is_fyers: bool, symbol: str) -> List[Dict[str, Any]]:
+    def _list_contracts(self, provider: Any, is_symbol_provider: bool, symbol: str) -> List[Dict[str, Any]]:
         """Every live monthly FUTURES contract for `symbol`, nearest first:
         [{'symbol': token, 'expiry': date, 'lot_size': int}, ...]. Empty when
         resolution fails — callers keep whatever they already had."""
         try:
-            if is_fyers:
+            if is_symbol_provider:
                 return provider.list_future_contracts(symbol) or []
             if symbol in _BSE_UNDERLYINGS:
                 # KiteService resolves futures out of the NFO master only, so a
@@ -466,7 +466,7 @@ class EmaConfluenceAlgo:
             self.log.warning(f"{symbol}: future resolution failed: {e}")
             return []
 
-    def _ensure_future_token(self, provider: Any, is_fyers: bool, symbol: str,
+    def _ensure_future_token(self, provider: Any, is_symbol_provider: bool, symbol: str,
                              s: Dict[str, Any], now: Optional[datetime] = None) -> Optional[Any]:
         """The contract this symbol should be quoting against, resolving and
         rolling as needed.
@@ -502,7 +502,7 @@ class EmaConfluenceAlgo:
                 s['future_month'] = _contract_month_label(token)
             return token
 
-        contracts = self._list_contracts(provider, is_fyers, symbol)
+        contracts = self._list_contracts(provider, is_symbol_provider, symbol)
         target = select_contract(now, contracts, self._roll_sessions)
         if target is None:
             # A failed re-resolution keeps yesterday's token rather than going dark.
@@ -566,7 +566,7 @@ class EmaConfluenceAlgo:
         from trading_app.Backtest.ema_pullback_engine import EmaPullbackEngine
         return EmaPullbackEngine
 
-    def _daily_history(self, provider: Any, is_fyers: bool, symbol: str,
+    def _daily_history(self, provider: Any, is_symbol_provider: bool, symbol: str,
                        to_date: str) -> Optional[pd.DataFrame]:
         """Daily bars up to and including `to_date` ('YYYY-MM-DD'), as a frame
         the engine can consume.
@@ -578,7 +578,7 @@ class EmaConfluenceAlgo:
         _EMA_LOOKBACK_DAYS fetch if the store comes back empty, so a store
         problem degrades to the old behaviour instead of going dark.
         """
-        token = self._underlying_token(symbol, is_fyers)
+        token = self._underlying_token(symbol, is_symbol_provider)
         end_dt = datetime.strptime(to_date, '%Y-%m-%d')
         try:
             from trading_app.filters.candle_store import get_daily_history
@@ -603,7 +603,7 @@ class EmaConfluenceAlgo:
             return None
         return pd.DataFrame(candles)
 
-    def _scan_one(self, provider: Any, is_fyers: bool, symbol: str, cfg: Dict[str, Any],
+    def _scan_one(self, provider: Any, is_symbol_provider: bool, symbol: str, cfg: Dict[str, Any],
                   s: Dict[str, Any], to_date: str) -> Optional[str]:
         """Re-derive this symbol's CURRENT armed order by replaying the whole
         strategy over its history, exactly as the backtest does. Returns the
@@ -621,7 +621,7 @@ class EmaConfluenceAlgo:
         re-arm when the simulated trade closes.
         """
         EmaPullbackEngine = self._ema_engine()
-        df = self._daily_history(provider, is_fyers, symbol, to_date)
+        df = self._daily_history(provider, is_symbol_provider, symbol, to_date)
         if df is None or df.empty:
             s['phase'] = 'no_setup'
             return None
@@ -699,7 +699,7 @@ class EmaConfluenceAlgo:
                 self.log.error(f"{symbol}: signal notification failed: {e}")
         return scanned_candle
 
-    def _run_daily_scan(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
+    def _run_daily_scan(self, provider: Any, is_symbol_provider: bool, state: Dict[str, Any],
                         only_pending: bool = False) -> None:
         """The once-a-day sweep. only_pending=True is the catch-up pass for
         symbols added to EMA_SYMBOL_DEFAULTS after today's sweep already ran —
@@ -743,7 +743,7 @@ class EmaConfluenceAlgo:
             if only_pending and s.get('phase') != 'pending_scan':
                 continue
             try:
-                candle = self._scan_one(provider, is_fyers, symbol, cfg, s, to_date)
+                candle = self._scan_one(provider, is_symbol_provider, symbol, cfg, s, to_date)
                 scanned += 1
                 if s.get('phase') == 'watching':
                     armed += 1
@@ -1244,18 +1244,18 @@ class EmaConfluenceAlgo:
                              f"unevaluated (never judged on the future's price)")
         return None
 
-    def _tick(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
+    def _tick(self, provider: Any, is_symbol_provider: bool, state: Dict[str, Any],
               algo_active: bool, lots: int, now: Optional[datetime] = None) -> None:
         now = now or datetime.now()
         today_str = date.today().isoformat()
         if state.get('last_scan_date') != today_str:
-            self._run_daily_scan(provider, is_fyers, state)
+            self._run_daily_scan(provider, is_symbol_provider, state)
             state['last_scan_date'] = today_str
         elif any(s.get('phase') == 'pending_scan' for s in state['stocks'].values()):
             # Today's sweep already ran, but EMA_SYMBOL_DEFAULTS has since
             # grown (see _load_state's backfill) — scan the newcomers now
             # instead of leaving them dark until tomorrow morning.
-            self._run_daily_scan(provider, is_fyers, state, only_pending=True)
+            self._run_daily_scan(provider, is_symbol_provider, state, only_pending=True)
 
         if not self._in_session(now):
             # Logged once per hold, not once per 15s poll.
@@ -1274,7 +1274,7 @@ class EmaConfluenceAlgo:
 
         tokens: Dict[str, Any] = {}
         for symbol, s in {**watching, **inpos}.items():
-            token = self._ensure_future_token(provider, is_fyers, symbol, s, now)
+            token = self._ensure_future_token(provider, is_symbol_provider, symbol, s, now)
             if token:
                 tokens[symbol] = token
         # Two prices per symbol, on the same tick and in the same request:
@@ -1287,7 +1287,7 @@ class EmaConfluenceAlgo:
         # extra request against the app-wide 8 req/s budget.
         quote_map = dict(tokens)
         for symbol in {**watching, **inpos}:
-            spot_token = self._underlying_token(symbol, is_fyers)
+            spot_token = self._underlying_token(symbol, is_symbol_provider)
             if spot_token:
                 quote_map[f'{symbol}@spot'] = spot_token
         for symbol, s in inpos.items():
@@ -1406,7 +1406,17 @@ class EmaConfluenceAlgo:
                 self.log.error("Data provider unavailable — aborting for today")
                 return
 
-            is_fyers = hasattr(provider, 'fyers')
+            # Fyers and ICICI are both addressed by symbol string; only Kite
+            # wants a numeric token. ICICI delegates its symbol-master duties
+            # to the Fyers master, so it both returns and expects Fyers-shaped
+            # tokens — the old hasattr(provider, 'fyers') test called it Kite
+            # and fed Breeze a bare 'SBIN', which resolves to nothing, and sent
+            # futures resolution down the Kite path it can't serve.
+            from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+            from trading_app.service.icici_data_service import IciciDataServiceAdapter
+            is_symbol_provider = isinstance(
+                provider, (FyersDataServiceAdapter, IciciDataServiceAdapter)
+            ) or hasattr(provider, 'fyers')
             state = self._load_state()
             self._save_state(state)
 
@@ -1429,7 +1439,7 @@ class EmaConfluenceAlgo:
                 if now_mins >= _HARD_STOP_MIN:
                     break
                 try:
-                    self._tick(provider, is_fyers, state, algo_active, lots, now)
+                    self._tick(provider, is_symbol_provider, state, algo_active, lots, now)
                 except Exception as e:
                     self.log.error(f"tick error: {e}", exc_info=True)
                 self._save_state(state)

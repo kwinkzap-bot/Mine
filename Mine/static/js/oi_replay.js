@@ -504,6 +504,32 @@ function oipInitCharts() {
 
         oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(() => oipRequestDraw());
         oipOIChart.timeScale().subscribeVisibleTimeRangeChange(() => oipRequestDraw());
+
+        // Pan-left backfill. `from` is a logical bar index, so it goes negative
+        // once the user drags past bar 0 — firing while it is still positive is
+        // what buys the fetch enough time to land before blank space shows.
+        //
+        // Two guards keep it from firing on its own. A fresh load ends in
+        // fitContent(), which parks `from` at ~0 permanently, so the threshold
+        // alone would chain fetches back through the whole history the moment
+        // the page opened: it fires only after the user has actually grabbed
+        // the chart, and only when `from` is DECREASING (a leftward drag, not
+        // the rightward one that put it under the threshold in the first
+        // place). Skipped mid-refresh too — series.setData() fires this
+        // callback synchronously with a half-applied range.
+        ['mousedown', 'touchstart', 'wheel'].forEach(ev =>
+            elOI.addEventListener(ev, () => { _oipUserPanned = true; }, { passive: true }));
+
+        oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+            if (window._oipSuppressRangeSync) return;
+            if (!range || range.from == null) return;
+            const prev = _oipLastVisibleFrom;
+            _oipLastVisibleFrom = range.from;
+            if (!_oipUserPanned || prev == null) return;
+            if (range.from >= prev) return;                      // panning right
+            if (range.from > OIP_BACKFILL_TRIGGER_BARS) return;
+            oipBackfillOlderCandles();
+        });
         if (wrapOI) new ResizeObserver(() => {
             // Both dimensions: the observer used to track width only, so a taller
             // wrapper just added blank space under the chart.
@@ -529,24 +555,34 @@ let oipStartDateTouched = false;
 // number. The span sent to the API is widened to cover the non-trading days
 // inside it, and the API trims back to whatever actually traded.
 //
-// The ladder rises with the bar width so the bar COUNT stays roughly level
-// (~1,500–5,600 across the whole range) rather than exploding at the fine end.
-// That matters for more than rendering: the ICICI adapter chunks 1-minute
-// history two days at a time against a 1.5 req/s budget, so window length is
-// the single biggest driver of how long a load takes — 15 sessions of 1-minute
-// is ~11 chunks, where three months was 47.
+// The ladder is sized by what each timeframe actually COSTS to fetch, which is
+// not proportional to its bar width. ICICI serves history in chunks whose size
+// depends on the BASE interval it resamples from (_INTERVAL_MAP / _CHUNK_DAYS in
+// icici_data_service.py), and each of those round trips takes several seconds:
+//
+//   30s        <- 1-second data,  1 calendar day  per request   (by far the worst)
+//   1m/2m/3m   <- 1-minute data,  2 calendar days per request
+//   5m/15m     <- 5-minute data, 10 calendar days per request
+//   30m/1h     <- 30-minute data, 60 calendar days per request
+//   1D/1W/1M   <- daily data,    500 calendar days per request
+//
+// So 2m and 3m cost the same per calendar day as 1m — they are resampled from
+// the same 1-minute fetch — while 30m can span months for a single request. The
+// windows below are chosen to keep every timeframe to roughly three or four
+// round trips on a cold cache; the coarse tiers stay generous because their
+// history is nearly free.
 const OIP_REPLAY_WINDOW_DAYS = {
-    '30second':   7,
-    'minute':    15,
-    '2minute':   15,
-    '3minute':   20,
-    '5minute':   30,
-    '15minute':  60,
-    '30minute': 120,
-    '60minute': 250,    // ~1 year
-    'day':      750,    // ~3 years
-    'week':    1250,    // ~5 years
-    'month':   2500,    // ~10 years
+    '30second':   2,
+    'minute':     5,
+    '2minute':    5,
+    '3minute':    7,
+    '5minute':   15,
+    '15minute':  30,
+    '30minute':  60,
+    '60minute': 120,
+    'day':      250,    // ~1 year
+    'week':     500,    // ~2 years
+    'month':   1000,    // ~4 years
 };
 const OIP_REPLAY_WINDOW_FALLBACK = 30;
 
@@ -571,17 +607,21 @@ function oipLocalDate(d) {
 //
 // Depends on oipInterval, so it has to re-run when the timeframe changes, not
 // only when the date does.
-function oipApplyReplayDate() {
-    const picked = oipElems.replayDate?.value;
-    if (!picked || !oipElems.startDate || !oipElems.endDate) return;
-    const start = new Date(picked + 'T00:00:00');
+function oipWindowStartBefore(endDateStr) {
+    const start = new Date(endDateStr + 'T00:00:00');
     let left = oipReplayWindowDays();
     while (left > 0) {
         start.setDate(start.getDate() - 1);
         if (start.getDay() !== 0 && start.getDay() !== 6) left--;
     }
     start.setDate(start.getDate() - 2);
-    oipElems.startDate.value = oipLocalDate(start);
+    return oipLocalDate(start);
+}
+
+function oipApplyReplayDate() {
+    const picked = oipElems.replayDate?.value;
+    if (!picked || !oipElems.startDate || !oipElems.endDate) return;
+    oipElems.startDate.value = oipWindowStartBefore(picked);
     oipElems.endDate.value = picked;
     // The window is the user's now, so the year-anchor widener must not fight it.
     oipStartDateTouched = true;
@@ -726,8 +766,81 @@ async function oipLoadMetadata() {
     } catch (e) { console.warn('[OIP] Metadata fetch failed:', e); }
 }
 
+/* ── Initial time-scale sync with the Round Strike chart ──────────────────────
+   The two charts pair for zoom and pan through window._oipSyncTimeScale, but
+   BOTH subscriptions that drive it are gated on window._oipActiveChartId — the
+   marker that says which chart the pointer is over. On a fresh load nothing has
+   been hovered yet, so that is undefined and neither direction ever fires: the
+   index chart sits on its own fitContent() (the whole loaded window) while the
+   Round Strike chart sits on Lightweight Charts' default framing of its own,
+   much shorter window. They only line up once the user hovers one and drags,
+   which is exactly the "sync after drag" behaviour this exists to remove.
+
+   (A second reason the load could never sync itself: oipLoadCandles calls
+   fitContent() while _oipSuppressRangeSync is still true — oipRefreshLocalView
+   sets it and clears it two frames later — so that range change is dropped even
+   when _oipActiveChartId happens to be set from a previous interaction.)
+
+   Round Strike is the source. Its window is the replay date the user picked, at
+   a bar spacing you can actually read; the index chart's fitContent() squeezes
+   15 sessions of 1-minute bars to about a fifth of a pixel each. Panning left
+   from there pulls the older bars in through the backfill above.
+
+   If the Round Strike block never loads (no ICICI session, a failed fetch) the
+   poll gives up and the index chart simply keeps the framing Lightweight Charts
+   gave it — its own barSpacing:8 default, right-anchored — which is a readable
+   view in its own right, not a blank one. */
+const OIP_INITIAL_SYNC_TIMEOUT_MS = 15000;
+const OIP_INITIAL_SYNC_POLL_MS = 120;
+
+// Bumped by every load so a poll left over from the previous one gives up
+// instead of re-framing the chart under the new window.
+let _oipInitialSyncToken = 0;
+
+// A chart with no data has no visible range — this is the readiness test for
+// both sides, and for the Round Strike block it also covers its series, which
+// are populated in the same render pass.
+function _oipHasDrawnRange(chart) {
+    try { return !!chart && chart.timeScale().getVisibleRange() != null; }
+    catch (e) { return false; }
+}
+
+function oipSyncIndexToRoundStrikeOnce() {
+    const token = ++_oipInitialSyncToken;
+    const deadline = Date.now() + OIP_INITIAL_SYNC_TIMEOUT_MS;
+
+    const attempt = () => {
+        if (token !== _oipInitialSyncToken) return;           // superseded by a newer load
+        if (Date.now() > deadline) return;                    // Round Strike never arrived
+
+        const rs = (typeof oipRSChart !== 'undefined') ? oipRSChart?.chart : null;
+        // Wait out the refresh guard too: syncing mid-refresh would read a
+        // half-applied range off one chart and stamp it onto the other.
+        const ready = !window._oipSuppressRangeSync
+            && oipOIChartReady && _oipHasDrawnRange(oipOIChart)
+            && _oipHasDrawnRange(rs);
+
+        if (!ready) { setTimeout(attempt, OIP_INITIAL_SYNC_POLL_MS); return; }
+
+        try {
+            // Same call the drag path makes, minus the _oipActiveChartId gate —
+            // there is no pointer to attribute this to.
+            window._oipSyncTimeScale(rs, oipOIChart,
+                                     (typeof oipRSInterval !== 'undefined') && oipRSInterval === oipInterval);
+        } catch (e) {
+            console.warn('[Replay] initial time-scale sync failed:', e);
+        }
+    };
+
+    setTimeout(attempt, OIP_INITIAL_SYNC_POLL_MS);
+}
+
 async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     _oip30mLastBucket = -1; // force redraw on fresh load
+    // A new window is a new history — whatever the last one ran out of says
+    // nothing about this one (different symbol, timeframe or date).
+    oipResetBackfillState();
+    _oipCandleLoadInFlight = true;
     const btnPause = document.getElementById('oipReplayPause');
     if (btnPause && btnPause.style.display !== 'none') btnPause.click(); // Stop active replay
     await oipLoadMetadata();
@@ -753,13 +866,21 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     }
 
     const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}${oipCandleLegParams()}&_t=${Date.now()}`;
-    const res = await fetch(url); const data = await res.json();
+    let res, data;
+    try {
+        res = await fetch(url); data = await res.json();
+    } catch (e) {
+        _oipCandleLoadInFlight = false;
+        throw e;
+    }
     if (!data.success) {
+        _oipCandleLoadInFlight = false;
         console.error('[Replay] API error:', data.error || 'Unknown error');
         if (typeof showNotification === 'function') showNotification(data.error || 'Failed to load candle data. Check broker login.', 'error');
         return;
     }
     if (!data.candles || !data.candles.length) {
+        _oipCandleLoadInFlight = false;
         const reason = data.fetch_error ? `Broker error: ${data.fetch_error}` : 'No candle data for the selected date range. Check broker login.';
         if (typeof showNotification === 'function') showNotification(reason, 'error');
         return;
@@ -837,6 +958,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
     const ceRaw = (data.ce_opt_candles || []);
     const peRaw = (data.pe_opt_candles || []);
+    _oipRawCeCandles = ceRaw;
+    _oipRawPeCandles = peRaw;
     
     oipOptionData = [
         ...oipStripAuctionBars(ceRaw, oipInterval).map(c => ({...c, type:'CE'})),
@@ -873,8 +996,20 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     const toolbar = document.getElementById('oipReplayToolbar');
     if (toolbar) toolbar.classList.add('hidden');
 
+    _oipCandleLoadInFlight = false;
+
     if (oipOIChartReady) {
-        oipOIChart.timeScale().fitContent();
+        // fitContent() squeezes the WHOLE loaded window into the width — 15
+        // sessions of 1-minute bars comes out at about a fifth of a pixel each.
+        // Where the Round Strike block exists it is the framing authority (see
+        // oipSyncIndexToRoundStrikeOnce), so fitting here would only show that
+        // squeezed view for a moment and then jump away from it. Skipping it
+        // leaves the chart on its own barSpacing:8 default, which right-anchors
+        // within a hair of where the sync lands — so the sync reads as a settle,
+        // not a jump. Pages with no Round Strike block keep the fit.
+        if (!document.getElementById('oipRSCombinedChart')) {
+            oipOIChart.timeScale().fitContent();
+        }
 
         setTimeout(() => {
             if (oipOIChartReady && oipIntChartReady) {
@@ -897,6 +1032,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             }
         }, 100);
     }
+
+    // Last, so it overrides the fitContent() above once Round Strike has bars
+    // to match. Outside the oipOIChartReady branch on purpose: it does its own
+    // readiness check and has to keep polling if the chart is not up yet.
+    oipSyncIndexToRoundStrikeOnce();
 }
 
 let _oipPrecalcDone = false;
@@ -1247,6 +1387,195 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
    option panes. */
 function oipCandleLegParams() {
     return '&opt=false&include_30s=false';
+}
+
+/* ── Pan-left history backfill ────────────────────────────────────────────────
+   The page loads ONE window (oipReplayWindowDays() sessions behind the replay
+   date) and nothing beyond it, so dragging the chart left used to run straight
+   off the front of the data into blank space. This fetches the window BEFORE
+   the earliest loaded bar as that edge comes into view and splices it onto the
+   front, in place — no reload, no re-fit, and the bars under the cursor do not
+   move.
+
+   Two things make it feel seamless rather than like a refresh:
+
+   * It fires EARLY. The trigger is OIP_BACKFILL_TRIGGER_BARS bars of remaining
+     history, not zero, so the fetch is usually finished before the user has
+     dragged far enough to see the end of the data.
+   * Prepending N bars renumbers every logical index by +N, which would slide
+     the view N bars to the right — the visual "jump" that makes a chart feel
+     like it reloaded. The visible logical range is captured before the splice
+     and re-applied shifted by exactly N, so the same bars stay under the same
+     pixels.
+
+   `oipReplayIndex` is a position INTO oipFullCandles, so it is shifted by the
+   same N — otherwise the playhead (and the Round Strike cutoff it drives) would
+   silently jump back N bars into the newly loaded history. */
+const OIP_BACKFILL_TRIGGER_BARS = 15;
+
+let _oipBackfillBusy = false;
+// Set once the broker answers an older window with nothing. Intraday history is
+// finite (Fyers caps 1-minute history at a few months), so running out is the
+// normal end state, not an error — latch it and stop asking on every drag.
+let _oipBackfillExhausted = false;
+let _oipCandleLoadInFlight = false;
+// The raw option legs of the current window, kept so a splice can re-run the
+// same index alignment oipLoadCandles does. Replay itself fetches with
+// opt=false and these stay empty; the dashboard's Replay tab is the case that
+// would otherwise desync CE/PE from the candle array.
+let _oipRawCeCandles = [];
+let _oipRawPeCandles = [];
+// The user has grabbed the chart at least once since the last load, and the
+// last `from` seen — together these separate a real leftward drag from the
+// programmatic range changes a load/refresh produces.
+let _oipUserPanned = false;
+let _oipLastVisibleFrom = null;
+
+function oipResetBackfillState() {
+    _oipBackfillBusy = false;
+    _oipBackfillExhausted = false;
+    // A reload ends in fitContent(); forget the drag so that fit is not read
+    // as the user asking for more history.
+    _oipUserPanned = false;
+    _oipLastVisibleFrom = null;
+}
+
+function oipBackfillNote(text) {
+    const el = document.getElementById('oipBackfillNote');
+    if (!el) return;
+    if (!text) { el.classList.add('hidden'); return; }
+    el.textContent = text;
+    el.classList.remove('hidden');
+}
+
+// Realigns the option legs to oipFullCandles after it has grown at the front.
+// Same mapping oipLoadCandles uses: every index bar gets its option bar, or a
+// whitespace placeholder, so the two arrays stay index-for-index.
+function oipRealignOptionLegs() {
+    const align = (optCandles) => {
+        const optMap = new Map((optCandles || []).map(c => [c.time, c]));
+        return oipFullCandles.map(ic => optMap.get(ic.time) || { time: ic.time });
+    };
+    oipFullOptionData = [
+        ...align(_oipRawCeCandles).map(c => ({ ...c, type: 'CE' })),
+        ...align(_oipRawPeCandles).map(c => ({ ...c, type: 'PE' }))
+    ];
+}
+
+async function oipBackfillOlderCandles() {
+    if (_oipBackfillBusy || _oipBackfillExhausted || _oipCandleLoadInFlight) return;
+    if (!oipFullCandles?.length || !oipOIChartReady) return;
+
+    const firstTime = oipFullCandles[0].time;
+    // The earliest bar's own date, not the day before it: that first day is
+    // usually only partly loaded (the window start lands mid-session), so
+    // re-asking for it fills in the morning as well. Overlap is dropped below.
+    const endDate = oipLocalDate(new Date(firstTime * 1000));
+    const startDate = oipWindowStartBefore(endDate);
+    const days = Math.max(
+        1, Math.ceil((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
+
+    _oipBackfillBusy = true;
+    oipBackfillNote('Loading earlier bars…');
+    try {
+        const h = parseFloat(oipElems.spotHigh?.value || 0), l = parseFloat(oipElems.spotLow?.value || 0);
+        const st = parseInt(oipElems.step?.value || 50), m = parseInt(oipElems.multiplier?.value || 3);
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}`
+            + `&days=${days}&spot_high=${h}&spot_low=${l}&step=${st}&multiplier=${m}`
+            + `&auto_hl=true&start_date=${startDate}&end_date=${endDate}`
+            + `${oipCandleLegParams()}&_t=${Date.now()}`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        // A failed fetch is NOT exhaustion — a rate-limited or logged-out broker
+        // must stay retryable, or one bad tick would disable backfill for the
+        // life of the page.
+        if (!data.success) {
+            console.warn('[Replay] backfill failed:', data.error);
+            oipBackfillNote('');
+            return;
+        }
+
+        const older = oipStripAuctionBars(
+            (data.candles || []).filter(
+                c => c.open != null && c.high != null && c.low != null && c.close != null
+            ), oipInterval
+        ).filter(c => c.time < firstTime);
+
+        if (!older.length) {
+            _oipBackfillExhausted = true;
+            oipBackfillNote('No earlier data');
+            setTimeout(() => oipBackfillNote(''), 2000);
+            return;
+        }
+
+        // The window slid; the last load's window start is no longer what is on
+        // screen. Keeping the input honest matters because oipReloadStrikeOnly
+        // re-fetches the option legs from these two dates.
+        if (oipElems.startDate) oipElems.startDate.value = startDate;
+
+        oipSpliceOlderCandles(older);
+    } catch (e) {
+        console.warn('[Replay] backfill error:', e);
+        oipBackfillNote('');
+    } finally {
+        _oipBackfillBusy = false;
+    }
+}
+
+// Splices `older` onto the front of the loaded history and redraws in place.
+function oipSpliceOlderCandles(older) {
+    const ts = oipOIChart.timeScale();
+    const before = ts.getVisibleLogicalRange();
+    const n = older.length;
+
+    oipFullCandles = older.concat(oipFullCandles);
+    oipRealignOptionLegs();
+
+    // Every index into oipFullCandles moved by n.
+    oipReplayIndex += n;
+    // -2 rather than a shifted value: the prefix the series holds is now the
+    // wrong one, so the next refresh has to be a full setData, not an update().
+    oipLastRefreshIndex = -2;
+
+    // Everything derived from the candle array is now stale at the front:
+    // indicators are seeded from bar 0, and the box/reversal/CPR caches are
+    // keyed by day or bucket and have never seen these days.
+    _oipPrecalcDone = false;
+    oipInvalidateVisCache();
+    _oipDayBoxesClearAll();
+    oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
+    oip2ndCandle1mBox  = { oi: [], ce: [], pe: [] };
+    oip2nd5mCandleBox  = { oi: [], ce: [], pe: [] };
+    oipClearMondayBoxes();
+    oipClear30mReversalLines();
+    oipClear1DReversalLines();
+    _oip30mLastBucket = -1;
+    _oipMcprSeriesCount = -1;
+    _oipMcprLastBucket = -1;
+    _oipMcprLastTime = 0;
+
+    const slider = document.getElementById('oipReplaySlider');
+    if (slider) {
+        slider.max = oipFullCandles.length - 1;
+        slider.value = oipReplayIndex;
+    }
+
+    oipRefreshLocalView('combined', false, oipReplayIndex);
+
+    // Re-anchor. The series were re-set synchronously above, so the shifted
+    // range can be applied straight away; the second pass on the next frame
+    // covers the RAF-deferred box/CPR draws, which touch the time scale.
+    const restore = () => {
+        if (!before || before.from == null || before.to == null) return;
+        // The range subscription is suppressed for the whole refresh, so it
+        // never sees this shift — record it here or the next drag would be
+        // read as a decrease against the stale pre-splice value.
+        _oipLastVisibleFrom = before.from + n;
+        try { ts.setVisibleLogicalRange({ from: before.from + n, to: before.to + n }); } catch (e) {}
+    };
+    restore();
+    requestAnimationFrame(() => { restore(); oipBackfillNote(''); });
 }
 
 /* ── Previous-day High / Low ──────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, Sequence, Union
 from flask import has_request_context, session
 from trading_app.service.fyers_data_service import FyersDataServiceAdapter
 from trading_app.service.kite_order_services import apply_kite_proxy
@@ -48,7 +48,8 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
         logger.error(f"Error getting Kite instance: {e}")
         return None
 
-def get_data_provider(user: Optional[str] = None, context: Optional[str] = None) -> Optional[Any]:
+def get_data_provider(user: Optional[str] = None,
+                     context: Optional[Union[str, Sequence[str]]] = None) -> Optional[Any]:
     """Returns the configured data provider (Kite, Fyers or ICICI Direct).
 
     `context` (e.g. 'replay', 'backtest', 'algo_rtp') looks up a
@@ -59,6 +60,12 @@ def get_data_provider(user: Optional[str] = None, context: Optional[str] = None)
     through to the global DATA_PROVIDER, then to Kite. Callers that pass no
     context (the majority — login status, orders, positions, scanners, etc.)
     keep using DATA_PROVIDER only, unchanged from before this existed.
+
+    A SEQUENCE of contexts is tried most-specific-first, so one block of a page
+    can sit on its own broker while the rest of that page keeps the page-wide
+    flag: ('replay_round_strike', 'replay') reads
+    REPLAY_ROUND_STRIKE_DATA_PROVIDER, then REPLAY_DATA_PROVIDER, then
+    DATA_PROVIDER. An unset override is skipped, not treated as a dead end.
     """
     try:
         from trading_app.app.utils.user_env import UserEnvManager
@@ -76,9 +83,8 @@ def get_data_provider(user: Optional[str] = None, context: Optional[str] = None)
             def _read(name: str, default: str = '') -> str:
                 return UserEnvManager.get_user_var(username, name, default)
 
-        candidates = []
-        if context:
-            candidates.append(_read(f'{context.upper()}_DATA_PROVIDER'))
+        contexts = [context] if isinstance(context, str) else list(context or ())
+        candidates = [_read(f'{c.upper()}_DATA_PROVIDER') for c in contexts if c]
         candidates.append(_read('DATA_PROVIDER', 'KITE'))
 
         tried = set()

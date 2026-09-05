@@ -283,6 +283,35 @@ _api_executor = ThreadPoolExecutor(max_workers=10)
 _strike_token_cache: Dict[Tuple, Any] = {}
 _strike_token_cache_lock = threading.Lock()
 
+
+def _provider_tag(provider) -> str:
+    """Which instrument vocabulary `provider` speaks: 'fyers', 'icici' or 'kite'.
+
+    What separates these providers is not the brand but how they ADDRESS an
+    instrument: Fyers and ICICI both take a symbol string ('NSE:SBIN-EQ'),
+    Kite wants a numeric instrument token. ICICI delegates its symbol-master
+    duties to the Fyers master, so it hands back Fyers-shaped tokens and must
+    be fed Fyers-shaped ones — a `hasattr(provider, 'fyers')` test calls it
+    Kite and quietly feeds Breeze a bare 'SBIN', which resolves to nothing.
+
+    The two symbol providers still get distinct tags, not one boolean: candle
+    caches are namespaced by tag and each broker's bars belong in their own
+    file.
+    """
+    from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+    from trading_app.service.icici_data_service import IciciDataServiceAdapter
+    if isinstance(provider, IciciDataServiceAdapter):
+        return 'icici'
+    if isinstance(provider, FyersDataServiceAdapter) or hasattr(provider, 'fyers'):
+        return 'fyers'
+    return 'kite'
+
+
+def _speaks_symbols(provider) -> bool:
+    """True when `provider` is addressed by symbol string, not a Kite token."""
+    return _provider_tag(provider) != 'kite'
+
+
 def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol: str, strike: int, opt_type: str, expiry_type: str = 'nearest'):
     """Return (token, symbol_str) from cache; populate on miss. TTL = end of current trading day.
 
@@ -4678,7 +4707,7 @@ def _ema_daily_token(current_kite, symbol: str):
         'NIFTY': 256265, 'BANKNIFTY': 260105,
         'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
     }
-    if hasattr(current_kite, 'fyers'):
+    if _speaks_symbols(current_kite):
         return fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
     return kite_indices.get(symbol, symbol)
 
@@ -5317,17 +5346,16 @@ def run_thirty_min_fakeout_backtest_api():
         else:
             symbols = _TMF_STOCK_UNIVERSE
 
-        is_fyers = hasattr(current_kite, 'fyers')
+        provider_tag = _provider_tag(current_kite)
+        is_symbol_provider = provider_tag != 'kite'
 
         import pandas as pd
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from trading_app.Backtest.thirty_min_fakeout_engine import ThirtyMinFakeoutEngine, summarize_trades
         from trading_app.Backtest.minute_candle_store import get_minute_history
 
-        provider_tag = 'fyers' if is_fyers else 'kite'
-
         def _scan_symbol(symbol):
-            spot_token = f'NSE:{symbol}-EQ' if is_fyers else symbol
+            spot_token = f'NSE:{symbol}-EQ' if is_symbol_provider else symbol
             # Local per-symbol disk cache — closed trading days are fetched
             # once and kept forever, so re-running a backtest over the same
             # (or an overlapping) range is a local read, not a re-download.
@@ -5385,7 +5413,9 @@ def run_thirty_min_fakeout_backtest_api():
 
         all_trades = []
         failed = 0
-        workers = 15 if is_fyers else 8
+        # Fyers allows 10 req/s; Breeze only 100/min, so ICICI keeps the
+        # narrow pool rather than inheriting Fyers' wide one.
+        workers = 15 if provider_tag == 'fyers' else 8
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_scan_symbol, sym): sym for sym in symbols}
             for future in as_completed(futures):
@@ -5522,21 +5552,21 @@ def run_thirty_min_fakeout_optimise():
                 from trading_app.Backtest.minute_candle_store import get_minute_history
                 import itertools
 
-                is_fyers = hasattr(current_kite, 'fyers')
-                provider_tag = 'fyers' if is_fyers else 'kite'
+                provider_tag = _provider_tag(current_kite)
+                is_symbol_provider = provider_tag != 'kite'
 
                 # ── Fetch every symbol's data ONCE — the grid below reruns the
                 # engine against these same in-memory frames for each combo,
                 # instead of re-fetching (which dominates the plain scan's cost). ──
                 def _fetch(symbol):
-                    spot_token = f'NSE:{symbol}-EQ' if is_fyers else symbol
+                    spot_token = f'NSE:{symbol}-EQ' if is_symbol_provider else symbol
                     return symbol, get_minute_history(
                         current_kite, spot_token, symbol, start_date_str, end_date_str,
                         provider_tag=provider_tag,
                     )
 
                 dfs = {}
-                fetch_workers = 15 if is_fyers else 8
+                fetch_workers = 15 if provider_tag == 'fyers' else 8
                 with ThreadPoolExecutor(max_workers=fetch_workers) as executor:
                     futures = {executor.submit(_fetch, sym): sym for sym in symbols}
                     done = 0
@@ -10146,14 +10176,27 @@ def _oip_format_candles(raw_data, ist_offset, requested_interval):
     return temp
 
 
-def _oi_profile_page_context() -> str:
-    """OI-Profile and Replay share these endpoints byte-for-byte (same shared
-    JS, same query params), so the browser's Referer is the only signal that
-    tells them apart for REPLAY_DATA_PROVIDER vs OI_PROFILE_DATA_PROVIDER.
-    No Referer (or anything else) defaults to the OI-Profile page.
+def _oi_profile_page_context(block: str = '') -> Tuple[str, ...]:
+    """Data-provider contexts for this request, most specific first.
+
+    OI-Profile and Replay share these endpoints byte-for-byte (same shared JS,
+    same query params), so the browser's Referer is the only signal that tells
+    them apart for REPLAY_DATA_PROVIDER vs OI_PROFILE_DATA_PROVIDER. No Referer
+    (or anything else) defaults to the OI-Profile page.
+
+    `block` narrows it further to one block of that page: 'round_strike' asks
+    for REPLAY_ROUND_STRIKE_DATA_PROVIDER before REPLAY_DATA_PROVIDER, which is
+    how Replay draws its index chart off Fyers (fast, poll-friendly) while its
+    Round Strike block reads ICICI Direct. Unset, the block flag costs nothing
+    — resolution falls straight through to the page-wide flag.
+
+    The return value is hashable and goes into the response cache keys as well:
+    the two pages share those caches, so without it a block fetched on one
+    broker would be served back to a page sitting on the other.
     """
     ref_path = (request.referrer or '').split('?', 1)[0].rstrip('/')
-    return 'replay' if ref_path.endswith('/replay') else 'oi_profile'
+    page = 'replay' if ref_path.endswith('/replay') else 'oi_profile'
+    return (f'{page}_{block}', page) if block else (page,)
 
 
 @api_bp.route('/oi-profile/candles', methods=['GET'])
@@ -10242,7 +10285,12 @@ def oi_profile_candles() -> EndpointResponse:
         # include_30s belongs in the key too: it decides whether second_30s_* come
         # back populated or empty, so without it a caller that opted out could
         # serve its stripped response to one that needs those candles.
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s, opt_legs)
+        # The page context is part of the key because OI-Profile and Replay share
+        # this cache and can be resolving to DIFFERENT brokers — without it the
+        # first page to ask parks its broker's candles under a key the other one
+        # then hits.
+        _page_ctx = _oi_profile_page_context()
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s, opt_legs, _page_ctx)
 
         # The OI Profile page no longer polls this endpoint — every call is now a
         # user action (its single Refresh All button, a symbol/interval/strike
@@ -10294,7 +10342,7 @@ def oi_profile_candles() -> EndpointResponse:
         days = min(max(int(days), 1), max_allowed_days)
         kite = get_kite(instance=1)
         # Get configured data provider (REPLAY_/OI_PROFILE_DATA_PROVIDER if set, else DATA_PROVIDER)
-        _data_provider = get_data_provider(context=_oi_profile_page_context())
+        _data_provider = get_data_provider(context=_page_ctx)
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
@@ -11830,7 +11878,12 @@ def oi_profile_round_strike() -> EndpointResponse:
         days = min(max(int(days), 1), 10000 if interval in ('day', 'week', 'month') else 500)
 
         market_is_open = _cached_market_hours()
-        cache_key = (symbol, interval, days, ce_strike, pe_strike, step, expiry_raw, as_of_raw, _want_header)
+        # This block has its own provider flag ({PAGE}_ROUND_STRIKE_DATA_PROVIDER)
+        # so Replay can draw its index chart off one broker and this block off
+        # another. It is in the cache key too: OI-Profile and Replay share
+        # _rs_response_cache, and they no longer necessarily share a broker.
+        _rs_ctx = _oi_profile_page_context('round_strike')
+        cache_key = (symbol, interval, days, ce_strike, pe_strike, step, expiry_raw, as_of_raw, _want_header, _rs_ctx)
         # A settled expiry's answer is immutable, so it is held for the day
         # rather than rebuilt on the sub-second live cadence.
         # A window that closed in the past can never change again, so it is held
@@ -11848,7 +11901,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                 return jsonify(cached)
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider(context=_oi_profile_page_context())
+        _data_provider = get_data_provider(context=_rs_ctx)
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
@@ -11948,7 +12001,7 @@ def oi_profile_round_strike() -> EndpointResponse:
             # finished data, and re-fetching it is what made every date change
             # pay for five more rate-limited Breeze chunks per leg.
             out = _rs_cached(('rs-leg', symbol, inter, fetch_days, str(token),
-                              expiry_raw, as_of_raw),
+                              expiry_raw, as_of_raw, _rs_ctx),
                              _hist_ttl if (expiry_day or as_of_day) else _RS_CANDLE_TTL,
                              produce)
             # Distinguishes "this tick's fetch failed and you are looking at
