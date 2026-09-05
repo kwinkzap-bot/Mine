@@ -3125,9 +3125,11 @@ def run_apex_reversal_backtest():
             }
             instrument_token = index_tokens.get(symbol)
             
-        # Provider-specific adjustments (especially for Fyers)
-        if hasattr(current_kite, 'fyers'):
-            # Fyers expects symbol strings, not Kite tokens
+        # Fyers and ICICI are both addressed by symbol string; only Kite takes
+        # the numeric token picked above. The NFO cache it comes from also goes
+        # stale — it was still handing out a June future in September — so the
+        # symbol below replaces it outright rather than filling in for it.
+        if _speaks_symbols(current_kite):
             fyers_indices = {
                 'NIFTY': 'NSE:NIFTY50-INDEX',
                 'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
@@ -3268,7 +3270,7 @@ def run_cpr_gap_backtest_api():
             }
             instrument_token = index_tokens.get(symbol)
             
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             fyers_indices = {
                 'NIFTY': 'NSE:NIFTY50-INDEX',
                 'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
@@ -3382,7 +3384,7 @@ def run_rtp_backtest_api():
             'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
         }
 
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
         else:
             instrument_token = kite_indices.get(symbol, symbol)
@@ -3486,9 +3488,13 @@ def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_dat
     of pre-aggregated 5-minute data, which is why VWAP was returning only
     1 year while RTP (1-minute) returned 10 years.
 
-    Uses floor+groupby instead of resample(offset=) for pandas-version safety.
-    NSE opens at 9:15 IST which is a natural 5-minute boundary (9h15m % 5 = 0),
-    so floor('5min') on IST-aware timestamps aligns correctly without offset.
+    Uses floor+groupby instead of resample(offset=) for pandas-version safety,
+    anchored on the 09:15 session open. A bare floor() anchors on midnight,
+    which only lines up for timeframes that divide 555 minutes: 3, 5 and 15 do,
+    but 2, 10, 30 and 60 do not, and a 2-minute run came back with its first bar
+    stamped 09:14 — every bar straddling two real ones, one minute out of step
+    with the same series from the provider. Scalp Pullback defaults to 2-minute,
+    so that was every signal it produced.
     """
     import pandas as pd
 
@@ -3518,10 +3524,12 @@ def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_dat
     df['date'] = pd.to_datetime(df['date'])
     df = df.set_index('date').sort_index()
 
-    # floor() on timezone-aware IST timestamps aligns to the correct
-    # N-minute boundary (e.g. 09:15, 09:20, … for 5-minute)
+    # Offset the index so 09:15 sits on a bucket boundary, floor there, then
+    # shift the labels back — the pandas-version-safe spelling of
+    # resample(offset='9h15min').
     freq     = f'{target_mins}min'
-    slot_key = df.index.floor(freq)
+    anchor   = pd.Timedelta(hours=9, minutes=15)
+    slot_key = (df.index - anchor).floor(freq) + anchor
 
     resampled = df.groupby(slot_key).agg(
         open=('open',   'first'),
@@ -3581,7 +3589,7 @@ def run_vwap_backtest_api():
             'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
         }
 
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
         else:
             instrument_token = kite_indices.get(symbol, symbol)
@@ -3688,7 +3696,7 @@ def run_second_candle_backtest_api():
             'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
         }
 
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
         else:
             instrument_token = kite_indices.get(symbol, symbol)
@@ -3730,18 +3738,24 @@ def run_second_candle_backtest_api():
 
         logger.info('[2ndCandle BT] engine done: %d trades', len(trades))
 
-        # Warn if the data Fyers returned starts well after the requested range
-        # (30-second history is only retained for ~1 month).
+        # Warn when the bars start well after the requested range. Both brokers
+        # cut 30-second history short, for different reasons — Fyers retains
+        # only ~1 month of it, ICICI caps the lookback because a day of it costs
+        # 25 Breeze requests — so prefer whatever the provider itself says over
+        # the generic line.
         warning = None
         try:
             import pandas as _pd
             req_start = _pd.to_datetime(start_date_str).date()
             got_start = _pd.to_datetime(str(candles[0].get('date'))).date()
             if (got_start - req_start).days > 5:
-                warning = (
+                provider_reason = None
+                if hasattr(current_kite, 'last_history_error'):
+                    provider_reason = current_kite.last_history_error()
+                warning = provider_reason or (
                     f"{interval} data is only available from {got_start} "
-                    f"(requested {req_start}). Fyers retains ~1 month of 30-second "
-                    f"history — switch to a 1-minute base for multi-year backtests."
+                    f"(requested {req_start}) — switch to a 1-minute base for "
+                    f"multi-year backtests."
                 )
         except Exception:
             pass
@@ -3835,7 +3849,7 @@ def run_second_candle_optimise():
                     'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
                     'SENSEX':     'BSE:SENSEX-INDEX',
                 }
-                if hasattr(current_kite, 'fyers'):
+                if _speaks_symbols(current_kite):
                     instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
                 else:
                     kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
@@ -3987,7 +4001,7 @@ def _sp_instrument_token(provider, symbol: str):
         'NIFTY': 256265, 'BANKNIFTY': 260105,
         'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
     }
-    if hasattr(provider, 'fyers'):
+    if _speaks_symbols(provider):
         return fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
     return kite_indices.get(symbol, symbol)
 
@@ -4617,7 +4631,7 @@ def run_expiry_breakout_backtest_api():
             'NIFTY': 256265, 'BANKNIFTY': 260105,
             'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
         }
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
         else:
             instrument_token = kite_indices.get(symbol, symbol)
@@ -4763,7 +4777,7 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     end_dt    = datetime.strptime(str(end_date_str)[:10], '%Y-%m-%d')
     warmup_dt = datetime.strptime(str(warmup_from_str)[:10], '%Y-%m-%d')
     history_days = max(1, (end_dt - warmup_dt).days)
-    is_fyers = hasattr(current_kite, 'fyers')
+    is_fyers = _provider_tag(current_kite) == 'fyers'
     missing_lot_size = []   # appended from worker threads (list.append is atomic)
     rr_skipped       = []   # same — one entry per symbol, summed at the end
 
@@ -5115,7 +5129,7 @@ def run_expiry_breakout_levels_api():
             'NIFTY': 256265, 'BANKNIFTY': 260105,
             'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
         }
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
         else:
             instrument_token = kite_indices.get(symbol, symbol)
@@ -5755,7 +5769,7 @@ def run_vwap_optimise():
             'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
         }
 
-        if hasattr(current_kite, 'fyers'):
+        if _speaks_symbols(current_kite):
             instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
         else:
             instrument_token = kite_indices.get(symbol, symbol)
@@ -5879,7 +5893,7 @@ def run_rtp_optimise():
                     'SENSEX':     'BSE:SENSEX-INDEX',
                 }
 
-                if hasattr(current_kite, 'fyers'):
+                if _speaks_symbols(current_kite):
                     instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
                 else:
                     kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,

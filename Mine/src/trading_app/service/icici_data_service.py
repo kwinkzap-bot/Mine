@@ -33,13 +33,16 @@ are grouped by (root, expiry, right) and answered from ONE option-chain call
 each instead of one call per strike. A 40-strike OI Profile refresh is 2
 requests, not 40.
 
-Status: written against the documented Breeze API. Every symbol-mapping path is
-verified against the real security master; the response parsing is defensive
-(each field read under several possible key names) but has NOT been exercised
-against a live Breeze session — no credentials were available at build time.
+Status: exercised against a live Breeze session on 2026-09-05 across cash,
+index and derivative symbols at every interval the backtest routes ask for.
+Two things that session established, both handled below: Breeze truncates any
+request over 1000 rows to its LAST 1000 without saying so (see
+_BREEZE_MAX_ROWS), and it pads intraday series either side of the trading
+session with filler bars Kite and Fyers do not return (see _in_session).
 """
 
 import logging
+import os
 import threading
 import time
 from datetime import date as dt_date
@@ -147,13 +150,43 @@ _INTERVAL_MAP: Dict[str, Tuple[str, int]] = {
 # chunk sizes keep every request well under ~1000 candles.
 _BREEZE_BAR_SECONDS = {'1second': 1, '1minute': 60, '5minute': 300,
                        '30minute': 1800, '1day': 86400}
-_CHUNK_DAYS = {'1second': 1, '1minute': 2, '5minute': 10, '30minute': 60, '1day': 500}
+# 1second is absent on purpose: it is windowed inside the day instead.
+_CHUNK_DAYS = {'1minute': 2, '5minute': 10, '30minute': 60, '1day': 500}
 
 # NSE/BSE cash and derivatives both open at 09:15; anchoring the aggregation
 # there is what makes a 15-minute bar here line up with Kite's and with the
 # backtest engines' bars. An anchor of midnight would shift every odd
 # multiple (3, 15, 2h) by 15 minutes and silently change signal candles.
 _SESSION_OPEN = (9, 15)
+_SESSION_CLOSE = (15, 30)
+
+# Breeze pads its intraday series either side of the session: a flat
+# O=H=L=C row from ~09:05 (pre-open), gaps in the closing minutes, and a
+# 15:31 row carrying the whole closing-auction volume — sometimes with the
+# preceding bar's volume written NEGATIVE. Kite and Fyers both stop at the
+# session, so leaving the padding in makes the same backtest return a
+# different bar count, and a different "2nd candle of the day", depending
+# only on which broker served it. Bars are kept on their START stamp, so a
+# kept day runs 09:15..15:29 at 1-minute and 09:15..15:25 at 5-minute —
+# byte-for-byte the window Fyers returns.
+_SESSION_OPEN_MINUTE = _SESSION_OPEN[0] * 60 + _SESSION_OPEN[1]
+_SESSION_CLOSE_MINUTE = _SESSION_CLOSE[0] * 60 + _SESSION_CLOSE[1]
+
+# get_historical_data_v2 answers with at most 1000 rows and, when the window
+# holds more, returns the LAST 1000 silently — no error, no truncation flag.
+# Verified 2026-09-05: one full day of NIFTY 1-second came back as
+# 15:23:20..15:39:59, i.e. the final 16m40s of the session presented as the
+# whole day. Every other interval stays under the cap at the chunk sizes in
+# _CHUNK_DAYS (two days of 1-minute is ~780 rows), so only the 1-second base
+# has to be windowed — see _second_history.
+_BREEZE_MAX_ROWS = 1000
+_SECOND_WINDOW_SECONDS = 900
+
+# One trading day of 1-second data is 25 windows, i.e. 25 requests, against an
+# app-wide Breeze budget of 5000/day that the live algos share. Cap the
+# lookback rather than let one wide 30-second backtest spend all of it; the
+# caller learns the range was cut from last_history_error().
+_SECOND_MAX_DAYS = max(1, int(os.getenv('ICICI_SECOND_MAX_DAYS', '5') or 5))
 
 
 class IciciDataServiceAdapter:
@@ -632,6 +665,19 @@ class IciciDataServiceAdapter:
             return []
 
         raw: List[Dict[str, Any]] = []
+        if breeze_interval == '1second':
+            raw, clipped_from = self._second_history(info, fd, td)
+            if clipped_from is not None:
+                _HIST_ERROR.msg = (
+                    f"ICICI serves {interval} only {_SECOND_MAX_DAYS} day(s) back "
+                    f"(from {clipped_from}); {from_date} was requested. One day of "
+                    f"1-second data costs 25 Breeze requests, so the lookback is "
+                    f"capped — raise ICICI_SECOND_MAX_DAYS, or run this timeframe "
+                    f"on Fyers, which serves 30-second bars natively.")
+                logger.warning("[IciciAdapter] %s", _HIST_ERROR.msg)
+            return self._finish_history(raw, info, cache_key, fd, td, interval,
+                                        breeze_interval, factor, oi, use_cache)
+
         step = _CHUNK_DAYS.get(breeze_interval, 5)
         chunk = timedelta(days=step)
         # Chunk boundaries sit on a FIXED grid (every `step` days since the
@@ -658,6 +704,17 @@ class IciciDataServiceAdapter:
             raw.extend(part)
             cursor = chunk_end + timedelta(days=1)
 
+        return self._finish_history(raw, info, cache_key, fd, td, interval,
+                                    breeze_interval, factor, oi, use_cache)
+
+    def _finish_history(self, raw: List[Dict[str, Any]], info: Dict[str, Any],
+                        cache_key: str, fd: dt_date, td: dt_date, interval: str,
+                        breeze_interval: str, factor: int, oi: bool,
+                        use_cache: bool) -> List[Dict[str, Any]]:
+        """Dedupe, trim, aggregate and cache what the chunk loop collected.
+
+        Shared by both fetch paths — the day-chunked one above and the
+        intra-day windowed one 1-second history needs."""
         if not raw:
             # Same reasoning as the Fyers adapter: returning [] caches nothing,
             # so a 4-second chart poll would retry from scratch forever and keep
@@ -700,12 +757,61 @@ class IciciDataServiceAdapter:
                 _HIST_CACHE.pop(next(iter(_HIST_CACHE)))
         return candles
 
+    def _second_history(self, info: Dict[str, Any], fd: dt_date,
+                        td: dt_date) -> Tuple[List[Dict[str, Any]], Optional[dt_date]]:
+        """1-second bars, fetched in windows small enough to clear the row cap.
+
+        Returns (candles, clipped_from) — clipped_from is the date the range
+        was cut back to when it was wider than _SECOND_MAX_DAYS, else None.
+
+        Unlike the day-chunked path, a window is cached as soon as its END is
+        in the past rather than only once the whole day is: the live 30-second
+        algos re-ask for "today so far" every few seconds, and re-fetching all
+        25 of today's windows each time would spend the app's entire Breeze
+        budget before lunch. Only the window still forming is ever re-fetched.
+        """
+        now = datetime.now(IST)
+        earliest = td - timedelta(days=_SECOND_MAX_DAYS - 1)
+        clipped_from = earliest if earliest > fd else None
+
+        out: List[Dict[str, Any]] = []
+        day = max(fd, earliest)
+        while day <= td:
+            if day.weekday() < 5:      # Breeze answers weekends with nothing
+                for w_start, w_end in _session_windows(day):
+                    if w_start > now:
+                        break
+                    settled = w_end < now
+                    ckey = (f"{info['symbol']}:1second:"
+                            f"{w_start:%Y-%m-%dT%H:%M}:{w_end:%H:%M}")
+                    part = _chunk_cache_get(ckey) if settled else None
+                    if part is None:
+                        part = self._history_chunk(info, '1second', w_start, w_end)
+                        # An empty window is cached only when Breeze answered
+                        # and had nothing (a holiday), never when the request
+                        # failed — caching a failure would make it permanent.
+                        if settled and (part or getattr(_HIST_ERROR, 'clean_empty', False)):
+                            _chunk_cache_put(ckey, part)
+                    out.extend(part)
+            day += timedelta(days=1)
+        return out, clipped_from
+
     def _history_chunk(self, info: Dict[str, Any], breeze_interval: str,
-                       start: dt_date, end: dt_date) -> List[Dict[str, Any]]:
+                       start: Union[dt_date, datetime],
+                       end: Union[dt_date, datetime]) -> List[Dict[str, Any]]:
+        """One Breeze request. Dates cover the whole day; datetimes are taken
+        as the exact IST wall-clock bounds (what _second_history needs)."""
+        # datetime is a subclass of date, so it has to be tested first.
+        from_stamp = (start.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                      if isinstance(start, datetime)
+                      else f"{start.isoformat()}T00:00:00.000Z")
+        to_stamp = (end.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                    if isinstance(end, datetime)
+                    else f"{end.isoformat()}T23:59:59.000Z")
         kwargs = {
             'interval': breeze_interval,
-            'from_date': f"{start.isoformat()}T00:00:00.000Z",
-            'to_date': f"{end.isoformat()}T23:59:59.000Z",
+            'from_date': from_stamp,
+            'to_date': to_stamp,
             'stock_code': info['stock_code'],
             'exchange_code': info['exchange_code'],
             'product_type': info['product_type'],
@@ -723,6 +829,7 @@ class IciciDataServiceAdapter:
             return []
 
         rows = _success(resp)
+        _HIST_ERROR.clean_empty = False
         if not rows:
             err = _error_of(resp)
             if err:
@@ -734,12 +841,26 @@ class IciciDataServiceAdapter:
                             info['symbol'], start, end, breeze_interval)
                 _HIST_ERROR.msg = (f"ICICI has no {breeze_interval} candles for "
                                    f"{info['symbol']} between {start} and {end}")
+                # Breeze answered, the window simply holds nothing — a market
+                # holiday, or a contract that had not started trading yet.
+                _HIST_ERROR.clean_empty = True
             return []
 
+        if len(rows) >= _BREEZE_MAX_ROWS and breeze_interval != '1second':
+            # 1-second is windowed to stay clear of the cap; anything else
+            # hitting it means _CHUNK_DAYS has grown past what Breeze will
+            # answer and the caller is being handed a silently clipped tail.
+            logger.error("[IciciAdapter] %s [%s-%s] at %s returned the %d-row cap "
+                         "— older bars in this chunk were dropped by Breeze",
+                         info['symbol'], start, end, breeze_interval, _BREEZE_MAX_ROWS)
+
+        intraday = breeze_interval != '1day'
         out: List[Dict[str, Any]] = []
         for row in rows:
             stamp = _parse_stamp(row.get('datetime') or row.get('date'))
             if stamp is None:
+                continue
+            if intraday and not _in_session(stamp):
                 continue
             entry: Dict[str, Any] = {
                 'date': stamp,
@@ -747,7 +868,11 @@ class IciciDataServiceAdapter:
                 'high': _f(row.get('high')),
                 'low': _f(row.get('low')),
                 'close': _f(row.get('close')),
-                'volume': int(_f(row.get('volume'))),
+                # Breeze writes the closing-auction quantity as a NEGATIVE on the
+                # bar before it (SBIN, 2026-09-04 15:28: -6,305,822). A negative
+                # goes straight into VWAP's price x volume sum and into any
+                # volume filter, so floor it at zero rather than propagate it.
+                'volume': max(0, int(_f(row.get('volume')))),
             }
             # Present on derivatives only. Left absent rather than zero-filled
             # when Breeze omits it, matching the Fyers adapter — the
@@ -915,6 +1040,28 @@ def _quote_from_row(row: Dict[str, Any]) -> Dict[str, Any]:
         'change_in_oi': int(_num(row, 'chnge_oi', 'change_in_oi', 'oi_change') or 0),
         'timestamp': datetime.now(),
     }
+
+
+def _in_session(stamp: datetime) -> bool:
+    """True for a bar whose START falls inside the 09:15-15:30 trading session."""
+    return _SESSION_OPEN_MINUTE <= stamp.hour * 60 + stamp.minute < _SESSION_CLOSE_MINUTE
+
+
+def _session_windows(day: dt_date) -> List[Tuple[datetime, datetime]]:
+    """`day`'s session sliced into _SECOND_WINDOW_SECONDS request windows."""
+    open_at = datetime(day.year, day.month, day.day,
+                       _SESSION_OPEN[0], _SESSION_OPEN[1], tzinfo=IST)
+    close_at = datetime(day.year, day.month, day.day,
+                        _SESSION_CLOSE[0], _SESSION_CLOSE[1], tzinfo=IST)
+    windows = []
+    cursor = open_at
+    while cursor < close_at:
+        # Breeze treats to_date as inclusive, so stop one second short of the
+        # next window's first bar instead of fetching it twice.
+        end = min(cursor + timedelta(seconds=_SECOND_WINDOW_SECONDS), close_at)
+        windows.append((cursor, end - timedelta(seconds=1)))
+        cursor = end
+    return windows
 
 
 def _bucket_start(stamp: datetime, bar_seconds: int) -> datetime:

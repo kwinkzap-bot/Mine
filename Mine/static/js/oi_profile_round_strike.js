@@ -344,7 +344,7 @@ const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
 //
 // window.oipReplayMode is set in oi_replay.html's <head>, so it is already
 // there by the time this file parses.
-const OIP_RS_REPLAY_CHART_HEIGHT = 400;   // must equal --oip-replay-chart-h
+const OIP_RS_REPLAY_CHART_HEIGHT = 390;   // must equal --oip-replay-chart-h
 const OIP_RS_PROFILE_CHART_HEIGHT = 600;
 const OIP_RS_BASE_CHART_HEIGHT =
     (typeof window !== 'undefined' && window.oipReplayMode)
