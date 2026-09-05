@@ -13,13 +13,10 @@ let oipEma9Series = null, oipEma20Series = null, oipEma50Series = null,
 let oipCEEma9Series = null, oipCEEma20Series = null, oipCEEma50Series = null;
 let oipPEEma9Series = null, oipPEEma20Series = null, oipPEEma50Series = null;
 
-// CPR, RSI, signal series + markers
+// CPR series
 let oipCprSeriesObj = null;
 let oipCprSeriesMap = {};
 let oipMultiCprSeriesMap = {};
-let oipRSISeriesObj = null;
-let oipSignalMarkers = [];
-let oipRSIMarkers = [];
 
 // Reads a series that only ONE of this file's two host pages declares. The
 // CVWAP/PVWAP/3-AVG and Fixed-chart series are `let`s in oi_profile.js; Replay
@@ -40,10 +37,10 @@ const _OIP_IND_IDS = [
     'oipShowOIBars', 'oipShowVolume', 'oipShowBnfVolume', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
     'oipShowPrevDayHL',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
-    'oipCprShowLabels',
-    'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
+    'oipCprShowVirgin', 'oipCprVirginExtend', 'oipCprShowLabels',
+    'oipShowAtmCeOi',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
-    'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowMondayBox', 'oipShowPremium',
+    'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2ndCandle1m', 'oipShow2nd5mCandle', 'oipShowMondayBox', 'oipShowPremium',
     'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
     'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
@@ -101,10 +98,9 @@ function oipGetLineStyle(key) {
 
 /* ── Per-line color + width — same idea, same storage pattern as style
    above. Each key's DEFAULT mirrors its current hardcoded look so nothing
-   changes visually until the user picks a color/width. rsi and reversal1d
-   are intentionally excluded: rsi has 4 differently-colored sub-lines and
-   reversal1d's color is dynamic (green=bullish/red=bearish per candle) —
-   a single override would erase the distinction those exist to show. */
+   changes visually until the user picks a color/width. reversal1d is
+   intentionally excluded: its color is dynamic (green=bullish/red=bearish per
+   candle), and a single override would erase the distinction it exists to show. */
 const _OIP_LINE_COLOR_STORAGE_KEY = 'oip-line-colors';
 const _OIP_LINE_WIDTH_STORAGE_KEY = 'oip-line-widths';
 let oipLineColors = {};
@@ -121,6 +117,7 @@ const _OIP_LINE_DEFAULTS = {
     maxPain: { color: '#2563eb', width: 2 }, atmCeOi: { color: '#000000', width: 1 }, reversal30m: { color: '#f97316', width: 1 },
     synthDiff: { color: '#000000', width: 2 }, synthPdc: { color: '#22d3ee', width: 2 }, synthCp: { color: '#a78bfa', width: 2 },
     box30s: { color: '#FFC800', width: 1, opacity: 0.09 }, box5m: { color: '#2dd2ff', width: 1, opacity: 0.09 },
+    box1m: { color: '#FF6B6B', width: 1, opacity: 0.09 },
     mondayBox: { color: '#34ed0b', width: 1 },
     fixedCeAvg: { color: '#16a34a', width: 1 }, fixedPeAvg: { color: '#7c3aed', width: 1 }, fixedCePeAvg: { color: '#000000', width: 1 },
     fiveMClose: { color: '#fbbf24', width: 1 }, fiveMCloseOpt: { color: '#fbbf24', width: 1 },
@@ -148,7 +145,7 @@ function _oipPeDownColor() {
     return _OIP_LIGHT_THEMES.has(theme) ? '#1f2937' : '#6b7280';
 }
 // Keys that only get a style dropdown (no color/width — see comment above).
-const _OIP_NO_COLOR_KEYS = new Set(['rsi', 'reversal1d']);
+const _OIP_NO_COLOR_KEYS = new Set(['reversal1d']);
 // Keys that get ONLY a color input — no width, no style. The 5m Close Border
 // isn't a line: it recolors a candlestick's border, and lightweight-charts'
 // candle renderer accepts a border COLOUR only (always a 1px solid hairline),
@@ -157,7 +154,7 @@ const _OIP_COLOR_ONLY_KEYS = new Set(['fiveMClose', 'fiveMCloseOpt']);
 // Keys that also get a background fill-opacity control — only the box
 // indicators have a filled background (a translucent rect between the box's
 // high/low border lines); every other indicator here is a bare line.
-const _OIP_FILL_OPACITY_KEYS = new Set(['box30s', 'box5m']);
+const _OIP_FILL_OPACITY_KEYS = new Set(['box30s', 'box1m', 'box5m']);
 
 function _oipLoadLineColorsWidths() {
     try { oipLineColors = JSON.parse(localStorage.getItem(_OIP_LINE_COLOR_STORAGE_KEY) || '{}') || {}; } catch(e) { oipLineColors = {}; }
@@ -436,12 +433,12 @@ const _OIP_LINE_STYLE_ITEMS = [
     { key: 'ema50',          checkboxId: 'oipShowEma50' },
     { key: 'ema100',         checkboxId: 'oipShowEma100' },
     { key: 'ema200',         checkboxId: 'oipShowEma200' },
-    { key: 'rsi',            checkboxId: 'oipShowRSI' },
     { key: 'maxPain',        checkboxId: 'oipShowMaxPain' },
     { key: 'atmCeOi',        checkboxId: 'oipShowAtmCeOi' },
     { key: 'reversal30m',    checkboxId: 'oipShow30mReversalLines' },
     { key: 'reversal1d',     checkboxId: 'oipShow1DReversalLines' },
     { key: 'box30s',         checkboxId: 'oipShow2ndCandle30s' },
+    { key: 'box1m',          checkboxId: 'oipShow2ndCandle1m' },
     { key: 'box5m',          checkboxId: 'oipShow2nd5mCandle' },
     { key: 'mondayBox',      checkboxId: 'oipShowMondayBox' },
     { key: 'fiveMClose',     checkboxId: 'oipShow5mClose' },
@@ -595,7 +592,7 @@ function _oipBuildOpacitySelect(key) {
 
 // Builds the full per-line control group (color + width + style, right-aligned
 // as one unit) — or just style, for the 2 keys excluded from color/width
-// (rsi, reversal1d — see _OIP_NO_COLOR_KEYS comment above). Box indicators
+// (reversal1d — see _OIP_NO_COLOR_KEYS comment above). Box indicators
 // (box30s/box5m) also get a background-opacity select for their filled rect.
 function _oipBuildLinePropsGroup(key) {
     const wrap = document.createElement('span');
@@ -675,7 +672,6 @@ function _oipLineStyleSeriesMap() {
         ema50:    [oipEma50Series, oipCEEma50Series, oipPEEma50Series],
         ema100:   [oipEma100Series],
         ema200:   [oipEma200Series],
-        rsi:      oipRSISeriesObj ? Object.values(oipRSISeriesObj) : [],
         fixedCeAvg:   [_oipOpt(() => oipFixedCeHL2Series)],
         fixedPeAvg:   [_oipOpt(() => oipFixedPeHL2Series)],
         fixedCePeAvg: [_oipOpt(() => oipFixedCloseAvgSeries)],
@@ -687,7 +683,7 @@ function _oipLineStyleSeriesMap() {
 // styles (oipInjectLineStyleSelectors, called from oipInitIndicatorsPopup) —
 // same ordering issue oipSyncVwapVisibility already works around.
 // Applies color + width + style together for keys that DO have a color
-// picker; no-color keys (rsi, reversal1d) only get style.
+// picker; no-color keys (reversal1d) only get style.
 function _oipApplyLineProps(s, key) {
     if (!s) return;
     const opts = { lineStyle: oipGetLineStyle(key) };
@@ -723,9 +719,17 @@ function oipApplyLineStyleChange(key) {
     if (key === 'atmCeOi') { oipDrawAtmCeOiLines(); return; }
     if (key === 'reversal30m') { if (typeof oipFullCandles !== 'undefined' && oipFullCandles) oipDraw30mReversalLines(oipFullCandles); return; }
     if (key === 'reversal1d')  { if (typeof oipFullCandles !== 'undefined' && oipFullCandles) oipDraw1DReversalLines(oipFullCandles); return; }
-    if (key === 'box30s') { if (oipOIData?.candles) oipDraw2ndCandle30sBox(oipOIData.candles); return; }
-    if (key === 'box5m')  { if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles); return; }
-    if (key === 'mondayBox') { if (oipOIData?.candles) oipDrawMondayBox(oipOIData.candles); return; }
+    // Box redraws take the candles on screen. Under Replay that is the prefix up
+    // to the playhead, not the whole loaded window — recolouring a box must not
+    // suddenly extend it into bars the replay has not reached.
+    const boxSrc = () => (window.oipReplayMode && typeof oipVisibleCandles === 'function')
+        ? oipVisibleCandles(oipReplayIndex) : oipOIData?.candles;
+    const boxAt = () => (window.oipReplayMode && typeof oipFullCandles !== 'undefined' && oipFullCandles)
+        ? (oipFullCandles[oipReplayIndex]?.time ?? 0) : undefined;
+    if (key === 'box30s') { const c = boxSrc(); if (c) oipDraw2ndCandle30sBox(c, boxAt()); return; }
+    if (key === 'box1m')  { const c = boxSrc(); if (c && typeof oipDraw2ndCandle1mBox === 'function') oipDraw2ndCandle1mBox(c, boxAt()); return; }
+    if (key === 'box5m')  { const c = boxSrc(); if (c) oipDraw2nd5mCandleBox(c, boxAt()); return; }
+    if (key === 'mondayBox') { const c = boxSrc(); if (c) oipDrawMondayBox(c); return; }
     // 5m Close Border lives in the candle data itself, not a separate series —
     // re-push the candles so the new colour lands (see oi_profile.js).
     // typeof-guarded: this file is also loaded by dashboard/replay, which don't
@@ -880,6 +884,38 @@ function oipUpdateOptEmaVisibility() {
     });
 }
 
+/* ── Regular-session filter ───────────────────────────────────────────────────
+   NSE runs a pre-open call auction (09:00–09:15) and a closing call auction
+   after 15:30. Both print bars, and both are noise on a replay: the pre-open
+   bar carries the previous close against a near-empty book, so it lands as a
+   vertical spike off the left of every session, and the CAS bar does the same
+   at the right. Neither is tradeable, and both drag the autoscale and every
+   indicator (VWAP, EMA, CPR's own high/low) with them.
+
+   The server-side filter this data comes through keeps 09:15–15:40, which is
+   what lets the closing auction in — see _is_market_hours in
+   options_chart_service.py. Replay wants the regular session alone.
+
+   Bars are stamped at their START and stored fake-UTC (IST clock values held as
+   UTC), so the UTC getters read as IST and 15:30 is an exclusive edge: a bar
+   stamped 15:30 STARTS after the close. Daily and higher bars carry no
+   meaningful clock — a daily bar sits at midnight or at the session open — so
+   they are passed through untouched. */
+const OIP_SESSION_OPEN_MIN  = 9 * 60 + 15;    // 09:15 IST
+const OIP_SESSION_CLOSE_MIN = 15 * 60 + 30;   // 15:30 IST
+const _OIP_INTRADAY_TF = new Set(['30second', 'minute', '2minute', '3minute', '5minute', '15minute', '30minute', '60minute']);
+
+function oipInRegularSession(t) {
+    const d = new Date(t * 1000);
+    const mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+    return mins >= OIP_SESSION_OPEN_MIN && mins < OIP_SESSION_CLOSE_MIN;
+}
+
+function oipStripAuctionBars(candles, interval) {
+    if (!_OIP_INTRADAY_TF.has(interval)) return candles || [];
+    return (candles || []).filter(c => oipInRegularSession(c.time));
+}
+
 /* ── Calculation functions ────────────────────────────────── */
 function oipCalculateFixedEMA(data, period) {
     if (!data || data.length === 0) return [];
@@ -972,18 +1008,20 @@ function oipCalculateCVWAP(candles) {
     return oipCalculateVWAP(candles);
 }
 
-// PVWAP — Previous-session VWAP. For every candle of a given day the value is the
-// FINAL (closing) VWAP of the *previous* trading day, drawn as a flat line across
-// the current session. Mirrors the "Previous VWAP" plot in the
-// "Current & Previous VWAP Strategy" Pine script.
-function oipCalculatePVWAP(candles) {
-    if (!candles || candles.length === 0) return [];
-    // "Previous session" is the previous ANCHOR period — the trading day on an
-    // intraday timeframe, the previous week/month/year on the higher ones.
+// Closing VWAP of every anchor period in `candles`, in period order.
+// Shared by PVWAP and 3-AVG_VWAP, which differ only in how far back they reach.
+//
+// Carries the same volume-less rule as oipCalculateVWAP: an INDEX has no traded
+// volume (NIFTY/BANKNIFTY/SENSEX bars all come back with volume 0), so the
+// `vol <= 0` skip would drop every candle and leave each period's closing VWAP
+// null — which is exactly why both of these drew nothing on the Replay chart
+// while CVWAP, which already had the fallback, drew fine. Weight each bar
+// equally in that case; a series that HAS volume is untouched.
+function _oipClosingVwapByPeriod(candles) {
     const anchor = oipAnchorPeriod();
     const dateOf = (t) => _oipPeriodKey(t, anchor);
+    const volumeless = !candles.some(c => (c.volume || 0) > 0);
 
-    // Pass 1 — final VWAP per day, preserving day order.
     const finalVwap = {};
     const dayOrder = [];
     let cumPV = 0, cumV = 0, lastDate = null, lastVwap = null;
@@ -994,7 +1032,7 @@ function oipCalculatePVWAP(candles) {
             cumPV = 0; cumV = 0; lastVwap = null; lastDate = date;
             dayOrder.push(date);
         }
-        const vol = c.volume || 0;
+        const vol = volumeless ? 1 : (c.volume || 0);
         if (vol <= 0) return;
         cumPV += ((c.high + c.low + c.close) / 3) * vol;
         cumV += vol;
@@ -1002,6 +1040,18 @@ function oipCalculatePVWAP(candles) {
         if (!isNaN(v)) lastVwap = v;
     });
     if (lastDate !== null) finalVwap[lastDate] = lastVwap;
+    return { finalVwap, dayOrder, dateOf };
+}
+
+// PVWAP — Previous-session VWAP. For every candle of a given day the value is the
+// FINAL (closing) VWAP of the *previous* trading day, drawn as a flat line across
+// the current session. Mirrors the "Previous VWAP" plot in the
+// "Current & Previous VWAP Strategy" Pine script.
+function oipCalculatePVWAP(candles) {
+    if (!candles || candles.length === 0) return [];
+    // "Previous session" is the previous ANCHOR period — the trading day on an
+    // intraday timeframe, the previous week/month/year on the higher ones.
+    const { finalVwap, dayOrder, dateOf } = _oipClosingVwapByPeriod(candles);
 
     // Map each day to the previous day's final VWAP.
     const prevDayVwap = {};
@@ -1024,28 +1074,7 @@ function oipCalculatePVWAP(candles) {
 function oipCalculateAvg3VWAP(candles) {
     if (!candles || candles.length === 0) return [];
     // Three previous ANCHOR periods, matching PVWAP above.
-    const anchor = oipAnchorPeriod();
-    const dateOf = (t) => _oipPeriodKey(t, anchor);
-
-    // Pass 1 — final VWAP per day, preserving day order (mirrors PVWAP's pass 1).
-    const finalVwap = {};
-    const dayOrder = [];
-    let cumPV = 0, cumV = 0, lastDate = null, lastVwap = null;
-    candles.forEach(c => {
-        const date = dateOf(c.time);
-        if (date !== lastDate) {
-            if (lastDate !== null) finalVwap[lastDate] = lastVwap;
-            cumPV = 0; cumV = 0; lastVwap = null; lastDate = date;
-            dayOrder.push(date);
-        }
-        const vol = c.volume || 0;
-        if (vol <= 0) return;
-        cumPV += ((c.high + c.low + c.close) / 3) * vol;
-        cumV += vol;
-        const v = cumPV / cumV;
-        if (!isNaN(v)) lastVwap = v;
-    });
-    if (lastDate !== null) finalVwap[lastDate] = lastVwap;
+    const { finalVwap, dayOrder, dateOf } = _oipClosingVwapByPeriod(candles);
 
     // Map each day to the average of the 3 PRECEDING days' final VWAP.
     const avg3Vwap = {};
@@ -1229,14 +1258,17 @@ function oipCalculateDynamicCPR(candles) {
     _oipUpdateCprAnchorLabel(anchor);
 
     const periods = []; let current = null;
-    candles.forEach(c => {
+    candles.forEach((c, ci) => {
         const key = _oipPeriodKey(c.time, anchor);
         if (!current || current.key !== key) {
             if (current) periods.push(current);
             // isoDate is the period's FIRST calendar day — only meaningful for
             // the daily anchor, where it keys into the server's daily_ohlc.
-            current = { key, isoDate: _oipPeriodKey(c.time, 'day'), high: c.high, low: c.low, close: c.close, times: [], closes: [] };
+            // start/endIdx point back into `candles` so the Virgin CPR test below
+            // can walk a period's individual bars without copying them.
+            current = { key, isoDate: _oipPeriodKey(c.time, 'day'), high: c.high, low: c.low, close: c.close, times: [], closes: [], startIdx: ci, endIdx: ci };
         }
+        current.endIdx = ci;
         current.high = Math.max(current.high, c.high);
         current.low = Math.min(current.low, c.low);
         current.close = c.close;
@@ -1272,121 +1304,57 @@ function oipCalculateDynamicCPR(candles) {
         const cr3 = oC + (range * 1.1) / 4;
         const cs3 = oC - (range * 1.1) / 4;
 
+        /* Virgin CPR — Pine's "Highlight Virgin CPR". A CPR is virgin when no
+           candle traded into its BC–TC band during its OWN session: the level was
+           never tested, so it stays live support/resistance and gets its own
+           shadow colour instead of the normal one.
+
+           `firstTouch` is stored rather than a boolean because a replay must not
+           read ahead: the renderer calls the band virgin while the playhead is
+           still before that timestamp, so a band that gets tested at 13:40 shows
+           as virgin all morning and changes at 13:40, exactly as it did live.
+
+           `extTimes` is the "Extend until touched" variant — the band carried
+           right until the session that finally trades into it (to the last loaded
+           bar if nothing ever does). Both time arrays are kept so the popup's
+           toggle is a render choice and never needs a recompute. */
+        const bandMin = Math.min(tc, bc), bandMax = Math.max(tc, bc);
+        const touchedAt = (ci) => candles[ci].low <= bandMax && candles[ci].high >= bandMin;
+
+        let firstTouch = null;
+        for (let ci = curr.startIdx; ci <= curr.endIdx; ci++) {
+            if (touchedAt(ci)) { firstTouch = candles[ci].time; break; }
+        }
+
+        let extTimes = null;
+        if (firstTouch === null) {
+            // Walk forward to the first later session that trades into the band and
+            // stop at the end of THAT session. The scan breaks on the first touching
+            // bar, so it is normally a session or two — only a band nothing ever
+            // tests walks to the end of the loaded window.
+            let endPeriod = periods.length - 1;
+            outer:
+            for (let pi = i + 1; pi < periods.length; pi++) {
+                for (let ci = periods[pi].startIdx; ci <= periods[pi].endIdx; ci++) {
+                    if (touchedAt(ci)) { endPeriod = pi; break outer; }
+                }
+            }
+            extTimes = [];
+            for (let pi = i; pi <= endPeriod; pi++) extTimes.push(...periods[pi].times);
+        }
+
         let boxes = [
-            { type: 'cpr', min: Math.min(tc, bc), max: Math.max(tc, bc), times: curr.times }
+            { type: 'cpr', min: bandMin, max: bandMax, times: curr.times, extTimes }
         ];
 
         daysData.push({
             times: curr.times,
+            firstTouch,
             levels: { prevH: oH, prevL: oL, r1, r2, r3, r4, s1, s2, s3, s4, cr3, cs3, pp, tc, bc },
             boxes: boxes
         });
     }
     return daysData;
-}
-
-function oipCalculateRSISnR(candles) {
-    if (!candles || candles.length < 15) return null;
-    const len = 14;
-    const rsi = new Array(candles.length).fill(null);
-    let gains = 0, losses = 0;
-
-    for (let i = 1; i <= len; i++) {
-        const diff = candles[i].close - candles[i - 1].close;
-        if (diff >= 0) gains += diff;
-        else losses -= diff;
-    }
-    let avgGain = gains / len;
-    let avgLoss = losses / len;
-    rsi[len] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-
-    for (let i = len + 1; i < candles.length; i++) {
-        const diff = candles[i].close - candles[i - 1].close;
-        const gain = diff >= 0 ? diff : 0;
-        const loss = diff < 0 ? -diff : 0;
-        avgGain = (avgGain * (len - 1) + gain) / len;
-        avgLoss = (avgLoss * (len - 1) + loss) / len;
-        rsi[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-    }
-
-    let level_ob = null, level_os = null, level_bull = null, level_bear = null;
-    const ob_series = [], os_series = [], bull_series = [], bear_series = [];
-    const markers = [];
-
-    const thresh_ob = 70, thresh_bull = 60, thresh_bear = 40, thresh_os = 30;
-    let in_short = false, in_long = false;
-    let short_sl = null, long_sl = null;
-
-    const L_OB = new Array(candles.length).fill(null);
-    const L_OS = new Array(candles.length).fill(null);
-
-    for (let i = 1; i < candles.length; i++) {
-        const c = candles[i], r = rsi[i], r_prev = rsi[i - 1];
-        if (r === null || r_prev === null) continue;
-
-        const avgHigh = (c.high + c.close) / 2;
-        const avgLow = (c.low + c.close) / 2;
-
-        if (r_prev <= thresh_ob && r > thresh_ob) level_ob = avgHigh;
-        if (r_prev >= thresh_os && r < thresh_os) level_os = avgLow;
-        if ((r_prev <= thresh_bull && r > thresh_bull) || (r_prev >= thresh_bull && r < thresh_bull)) level_bull = avgHigh;
-        if ((r_prev <= thresh_bear && r > thresh_bear) || (r_prev >= thresh_bear && r < thresh_bear)) level_bear = avgLow;
-
-        L_OB[i] = level_ob;
-        L_OS[i] = level_os;
-
-        if (level_ob !== null) ob_series.push({ time: c.time, value: level_ob });
-        if (level_os !== null) os_series.push({ time: c.time, value: level_os });
-        if (level_bull !== null) bull_series.push({ time: c.time, value: level_bull });
-        if (level_bear !== null) bear_series.push({ time: c.time, value: level_bear });
-
-        if (i >= 2) {
-            const pC = candles[i - 1], ppC = candles[i - 2];
-            const pL_OB = L_OB[i - 1], ppL_OB = L_OB[i - 2], pL_OS = L_OS[i - 1], ppL_OS = L_OS[i - 2];
-
-            if (pL_OB !== null && i < candles.length - 1) {
-                const setup_ob_rej = (pC.close < pL_OB) && (pC.high >= pL_OB || ppC.close >= ppL_OB);
-                const short_entry = setup_ob_rej && (c.close < pC.low);
-                if (short_entry) {
-                    in_short = true; in_long = false; short_sl = pC.high;
-                    markers.push({ time: c.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: 'ENTRY' });
-                }
-            }
-            if (pL_OS !== null && i < candles.length - 1) {
-                const setup_os_rej = (pC.close > pL_OS) && (pC.low <= pL_OS || ppC.close <= ppL_OS);
-                const long_entry = setup_os_rej && (c.close > pC.high);
-                if (long_entry) {
-                    in_long = true; in_short = false; long_sl = pC.low;
-                    markers.push({ time: c.time, position: 'belowBar', color: '#14b8a6', shape: 'arrowUp', text: 'ENTRY' });
-                }
-            }
-
-            if (in_short && i < candles.length - 1) {
-                const tgtHit = level_bear !== null && c.low <= level_bear;
-                const slHit = short_sl !== null && c.high >= short_sl;
-                if (tgtHit || slHit) {
-                    in_short = false;
-                    markers.push({ time: c.time, position: 'aboveBar', color: tgtHit ? '#f97316' : '#800000', shape: tgtHit ? 'circle' : 'circle', text: tgtHit ? '🎯' : 'S SL' });
-                }
-            }
-            if (in_long && i < candles.length - 1) {
-                const tgtHit = level_bull !== null && c.high >= level_bull;
-                const slHit = long_sl !== null && c.low <= long_sl;
-                if (tgtHit || slHit) {
-                    in_long = false;
-                    markers.push({ time: c.time, position: 'belowBar', color: tgtHit ? '#f97316' : '#800000', shape: tgtHit ? 'circle' : 'circle', text: tgtHit ? '🎯' : 'B SL' });
-                }
-            }
-        }
-    }
-    return { ob_series, os_series, bull_series, bear_series, markers };
-}
-
-/* ── Draw / apply functions ───────────────────────────────── */
-function oipUpdateAllMarkers() {
-    if (!oipOISeries) return;
-    const combined = [...oipSignalMarkers, ...oipRSIMarkers].sort((a, b) => a.time - b.time);
-    lwSetMarkers(oipOISeries, combined);
 }
 
 /* ── CPR level labels & hierarchy ─────────────────────────────────────────
@@ -1478,7 +1446,7 @@ const _OIP_CPR_CHECKBOX = {
 
 // Tracks what is already on the chart, so a replay step can extend the live
 // period instead of rebuilding every series.
-let _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {} };
+let _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {}, boxFill: {}, extending: [] };
 
 // A sub-level is drawn when its checkbox says so — and NOT drawn when the page
 // carries no such checkbox at all. Replay dropped its R1-R4 / S1-S4 toggles, and
@@ -1507,6 +1475,30 @@ function _oipCprLineSeries(key) {
     return oipCprSeriesMap[k];
 }
 
+/* Virgin CPR shadow. Pine's colour input (#FFF59D at 60% transparency) — only
+   the shadow changes; the PP/BC/TC lines keep their normal look. */
+const _OIP_VCPR_FILL = 'rgba(255,245,157,0.40)';
+
+function _oipVirginOn()       { return document.getElementById('oipCprShowVirgin')?.checked === true; }
+function _oipVirginExtendOn() { return document.getElementById('oipCprVirginExtend')?.checked === true; }
+
+// A band is virgin until the bar that first trades into it. Evaluated against
+// the playhead so a replay never reads past it — see oipCalculateDynamicCPR.
+function _oipDayIsVirgin(day, maxTime) {
+    if (!_oipVirginOn()) return false;
+    return day.firstTouch == null || day.firstTouch > (maxTime ?? Infinity);
+}
+
+// The band's time array and fill for this day: an untested band optionally runs
+// on past its own session, and paints the virgin shadow either way.
+function _oipCprBandFor(day, maxTime, normalFill) {
+    const box = day.boxes && day.boxes[0];
+    if (!box) return null;
+    const virgin = _oipDayIsVirgin(day, maxTime);
+    const times = (virgin && _oipVirginExtendOn() && box.extTimes) ? box.extTimes : box.times;
+    return { box, times, fill: virgin ? _OIP_VCPR_FILL : normalFill };
+}
+
 function _oipCprBoxSeries(idx, fill) {
     const k = `box_${idx}`;
     if (!oipCprSeriesMap[k]) {
@@ -1527,12 +1519,12 @@ function oipClearCprSeries() {
         try { oipOIChart.removeSeries(oipCprSeriesMap[k]); } catch (e) {}
         delete oipCprSeriesMap[k];
     });
-    _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {} };
+    _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {}, boxFill: {}, extending: [] };
 }
 
 function _oipCprBlank() {
     Object.keys(oipCprSeriesMap).forEach(k => { try { oipCprSeriesMap[k].setData([]); } catch (e) {} });
-    _oipCprState.liveIdx = -1; _oipCprState.maxTime = -1; _oipCprState.boxCount = {};
+    _oipCprState.liveIdx = -1; _oipCprState.maxTime = -1; _oipCprState.boxCount = {}; _oipCprState.boxFill = {}; _oipCprState.extending = [];
 }
 
 // How many of a period's bars are at or before the playhead.
@@ -1563,43 +1555,52 @@ function oipRenderCprLevels(daysData, maxTime = Infinity) {
     const prev = _oipCprState;
     const keepBoxes = prev.sig === sig && prev.fill === fill && prev.bandOn === bandOn;
     const lineData = {}; _OIP_CPR_LEVEL_KEYS.forEach(k => lineData[k] = []);
-    const boxCount = {};
+    const boxCount = {}, boxFill = {}, extending = [];
     let liveIdx = -1, created = sig !== prev.sig;
 
     daysData.forEach((day, di) => {
         const times = day.times;
         const n = _oipVisibleCount(times, maxTime);
-        if (!n) return;
-        const complete = n === times.length;
-        if (!complete) liveIdx = di;
+        const band = _oipCprBandFor(day, maxTime, fill);
+        // A virgin band runs on past its own session, so a day whose own bars are
+        // all behind the playhead can still have a band to paint.
+        const bn = band ? _oipVisibleCount(band.times, maxTime) : 0;
+        if (!n && !bn) return;
+        if (bn > n) extending.push(di);
 
-        _OIP_CPR_LEVEL_KEYS.forEach(k => {
-            const v = day.levels[k];
-            if (v == null || isNaN(v)) return;
-            const arr = lineData[k];
-            arr.push({ time: times[0], value: v });
-            if (complete) {
-                // Whitespace on the closing bar breaks the line, so the next
-                // period's level does not get joined to this one by a diagonal.
-                if (n >= 3) arr.push({ time: times[n - 2], value: v });
-                if (n >= 2) arr.push({ time: times[n - 1] });
-            } else if (n >= 2) {
-                arr.push({ time: times[n - 1], value: v });
-            }
-        });
+        // Level lines only ever span the day's OWN session.
+        if (n) {
+            const complete = n === times.length;
+            if (!complete) liveIdx = di;
 
-        const box = day.boxes && day.boxes[0];
-        if (!box) return;
-        boxCount[di] = n;
+            _OIP_CPR_LEVEL_KEYS.forEach(k => {
+                const v = day.levels[k];
+                if (v == null || isNaN(v)) return;
+                const arr = lineData[k];
+                arr.push({ time: times[0], value: v });
+                if (complete) {
+                    // Whitespace on the closing bar breaks the line, so the next
+                    // period's level does not get joined to this one by a diagonal.
+                    if (n >= 3) arr.push({ time: times[n - 2], value: v });
+                    if (n >= 2) arr.push({ time: times[n - 1] });
+                } else if (n >= 2) {
+                    arr.push({ time: times[n - 1], value: v });
+                }
+            });
+        }
+
+        if (!band || !bn) return;
+        boxCount[di] = bn;
+        boxFill[di] = band.fill;
         if (!bandOn) { if (oipCprSeriesMap[`box_${di}`]) oipCprSeriesMap[`box_${di}`].setData([]); return; }
-        if (keepBoxes && prev.boxCount[di] === n && oipCprSeriesMap[`box_${di}`]) return;   // unchanged
+        if (keepBoxes && prev.boxCount[di] === bn && prev.boxFill?.[di] === band.fill && oipCprSeriesMap[`box_${di}`]) return;   // unchanged
         if (!oipCprSeriesMap[`box_${di}`]) created = true;
-        const s = _oipCprBoxSeries(di, fill);
+        const s = _oipCprBoxSeries(di, band.fill);
         s.applyOptions({
-            baseValue: { type: 'price', price: box.min },
-            topFillColor1: fill, topFillColor2: fill, bottomFillColor1: fill, bottomFillColor2: fill
+            baseValue: { type: 'price', price: band.box.min },
+            topFillColor1: band.fill, topFillColor2: band.fill, bottomFillColor1: band.fill, bottomFillColor2: band.fill
         });
-        s.setData(times.slice(0, n).map(t => ({ time: t, value: box.max })));
+        s.setData(band.times.slice(0, bn).map(t => ({ time: t, value: band.box.max })));
     });
 
     // Periods that fell past the playhead (a jump backwards) must not keep
@@ -1616,7 +1617,7 @@ function oipRenderCprLevels(daysData, maxTime = Infinity) {
         s.setData(_oipCprSubChecked(_OIP_CPR_CHECKBOX[k]) ? lineData[k] : []);
     });
 
-    _oipCprState = { sig, liveIdx, maxTime, boxCount, fill, bandOn };
+    _oipCprState = { sig, liveIdx, maxTime, boxCount, boxFill, extending, fill, bandOn };
     // Ordering only matters when the series stack itself changed.
     if (created) oipApplyZOrder();
 }
@@ -1661,19 +1662,35 @@ function oipAdvanceCprLevels(daysData, maxTime) {
         try { _oipCprLineSeries(k).update({ time: maxTime, value: v }); } catch (e) {}
     });
 
-    const box = day.boxes && day.boxes[0];
-    if (box && _oipCprSubChecked('oipCprShowBand')) {
-        const n = _oipVisibleCount(day.times, maxTime);
-        const s = _oipCprBoxSeries(idx, st.fill || _oipCprFade(oipGetLineColor('cprBand'), 0.14));
+    const normalFill = st.fill || _oipCprFade(oipGetLineColor('cprBand'), 0.14);
+    const band = _oipCprBandFor(day, maxTime, normalFill);
+    if (band && _oipCprSubChecked('oipCprShowBand')) {
+        // A band that just stopped being virgin has to change colour, and
+        // dropping its extension shortens it — neither is an append, so hand
+        // those steps back to the full renderer. Happens once per band at most.
+        if (st.boxFill?.[idx] && st.boxFill[idx] !== band.fill) return false;
+        const bn = _oipVisibleCount(band.times, maxTime);
+        const s = _oipCprBoxSeries(idx, band.fill);
         try {
             if (created) {
-                s.applyOptions({ baseValue: { type: 'price', price: box.min } });
-                s.setData(day.times.slice(0, n).map(t => ({ time: t, value: box.max })));
+                s.applyOptions({ baseValue: { type: 'price', price: band.box.min } });
+                s.setData(band.times.slice(0, bn).map(t => ({ time: t, value: band.box.max })));
             } else {
-                s.update({ time: maxTime, value: box.max });
+                s.update({ time: maxTime, value: band.box.max });
             }
         } catch (e) { return false; }
-        st.boxCount[idx] = n;
+        st.boxCount[idx] = bn;
+        st.boxFill[idx] = band.fill;
+
+        // Untested bands from earlier sessions are still growing to the right.
+        for (const di of (st.extending || [])) {
+            if (di === idx) continue;
+            const eb = _oipCprBandFor(daysData[di], maxTime, normalFill);
+            if (!eb || eb.fill !== st.boxFill?.[di]) return false;   // stopped being virgin
+            if (eb.times[eb.times.length - 1] < maxTime) continue;   // finished extending
+            try { _oipCprBoxSeries(di, eb.fill).update({ time: maxTime, value: eb.box.max }); } catch (e) { return false; }
+            st.boxCount[di] = _oipVisibleCount(eb.times, maxTime);
+        }
     }
 
     st.liveIdx = idx;
@@ -1713,7 +1730,10 @@ function _oipAggregateToNMin(candles, minutes) {
     return [...buckets.values()].sort((a, b) => a.time - b.time);
 }
 
-function oipDrawMultiCPR(candles) {
+// applyZ=false skips the full-chart restack at the end. Replay redraws this on
+// every step, and reordering every series each time costs more than the redraw
+// itself — it re-applies the z-order only when new bucket series appear.
+function oipDrawMultiCPR(candles, applyZ = true) {
     if (!oipOIChart || !oipOISeries) return;
 
     Object.values(oipMultiCprSeriesMap).forEach(s => { try { s.setData([]); } catch(e) {} });
@@ -1763,7 +1783,17 @@ function oipDrawMultiCPR(candles) {
     });
 
     // Pass 1 — create + set ALL fills first (lowest in the z-stack).
+    //
+    // A DISABLED config gets no series at all. Each bucket is one BaselineSeries,
+    // and the count scales with the loaded window: three months of 1-minute bars
+    // is ~394 hourly buckets, ~788 half-hourly and ~1,575 quarter-hourly. Building
+    // them for switched-off timeframes as well — which is the default state for
+    // two of the three — meant thousands of series nothing ever draws.
     fillSegs.forEach(s => {
+        if (!s.enabled) {
+            if (oipMultiCprSeriesMap[s.fillKey]) oipMultiCprSeriesMap[s.fillKey].setData([]);
+            return;
+        }
         if (!oipMultiCprSeriesMap[s.fillKey]) {
             oipMultiCprSeriesMap[s.fillKey] = oipOIChart.addSeries(LightweightCharts.BaselineSeries, {
                 baseValue: { type: 'price', price: Math.min(s.tc, s.bc) },
@@ -1772,12 +1802,8 @@ function oipDrawMultiCPR(candles) {
                 lineWidth: 0, ...shared
             });
         }
-        if (s.enabled) {
-            oipMultiCprSeriesMap[s.fillKey].applyOptions({ baseValue: { type: 'price', price: Math.min(s.tc, s.bc) } });
-            oipMultiCprSeriesMap[s.fillKey].setData(s.times.map(t => ({ time: t, value: Math.max(s.tc, s.bc) })));
-        } else {
-            oipMultiCprSeriesMap[s.fillKey].setData([]);
-        }
+        oipMultiCprSeriesMap[s.fillKey].applyOptions({ baseValue: { type: 'price', price: Math.min(s.tc, s.bc) } });
+        oipMultiCprSeriesMap[s.fillKey].setData(s.times.map(t => ({ time: t, value: Math.max(s.tc, s.bc) })));
     });
 
     // Pass 2 — one continuous PP/BC/TC line per config, drawn above every fill.
@@ -1803,7 +1829,7 @@ function oipDrawMultiCPR(candles) {
         oipMultiCprSeriesMap[s.ppKey].setData(s.enabled ? s.ppData : []);
         oipMultiCprSeriesMap[s.bcKey].setData(s.enabled ? s.bcData : []);
     });
-    oipApplyZOrder();
+    if (applyZ) oipApplyZOrder();
 }
 
 /* ── Global z-order policy (main OI pane) ─────────────────────
@@ -1843,9 +1869,6 @@ function oipApplyZOrder() {
      typeof oipMaxPainSeries  !== 'undefined' ? oipMaxPainSeries  : null
     ].forEach(s => { if (s) lines.push(s); });
 
-    // RSI S&R lines (drawn on the price pane).
-    if (oipRSISeriesObj) Object.values(oipRSISeriesObj).forEach(s => { if (s) lines.push(s); });
-
     // Candle boxes (main pane only): fill → fills, top/bottom borders → lines.
     const pushBoxes = arr => (arr || []).forEach(b => {
         if (!b || b.chart !== oipOIChart) return;
@@ -1854,6 +1877,7 @@ function oipApplyZOrder() {
         if (b.bottom) lines.push(b.bottom);
     });
     if (typeof oip2ndCandle30sBox !== 'undefined') pushBoxes(oip2ndCandle30sBox.oi);
+    if (typeof oip2ndCandle1mBox  !== 'undefined') pushBoxes(oip2ndCandle1mBox.oi);
     if (typeof oip2nd5mCandleBox  !== 'undefined') pushBoxes(oip2nd5mCandleBox.oi);
     if (typeof oipMondayBoxes     !== 'undefined') pushBoxes(oipMondayBoxes);
 

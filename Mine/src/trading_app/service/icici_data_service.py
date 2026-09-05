@@ -86,6 +86,29 @@ _QUOTE_CACHE: Dict[str, Tuple[Dict[str, Any], datetime]] = {}
 _QUOTE_LOCK = threading.Lock()
 _HIST_CACHE: Dict[str, Tuple[List[Dict[str, Any]], datetime]] = {}
 _HIST_LOCK = threading.Lock()
+
+# Per-CHUNK cache for windows that have already closed.
+#
+# _HIST_CACHE above is keyed by the whole requested range and expires in 15s, so
+# two overlapping requests share nothing and a repeat of the same one re-fetches
+# everything. That is fine for a few days; it is not fine for a long window.
+# 1-minute data chunks at 2 days (_CHUNK_DAYS), so three months is 47 chunks,
+# and Breeze is paced at 1.5 req/s — every load spends ~30s in the pacer before
+# a single byte of network time, competing with the rest of the app for the same
+# budget. That is what makes a long-window chart look like it has hung.
+#
+# A chunk that ends before today can never change, so it is cached on its own
+# key and reused across ranges: re-opening the same window, or moving the as-of
+# date by a day, then costs one live chunk instead of 47. The chunk containing
+# today is always re-fetched — its last bar is still forming.
+#
+# Bounded by candle count rather than entry count: chunks hold wildly different
+# numbers of bars (750 for 2 days of 1-minute, a handful for 1-day bars), so
+# capping entries would bound memory very poorly. ~150k candles is roughly three
+# full three-month 1-minute windows.
+_CHUNK_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+_CHUNK_CACHE_MAX_CANDLES = 150_000
+_chunk_cache_candles = 0
 _CHAIN_CACHE: Dict[str, Tuple[Dict[Any, Dict], datetime]] = {}
 _CHAIN_LOCK = threading.Lock()
 _HIST_ERROR = threading.local()
@@ -609,11 +632,30 @@ class IciciDataServiceAdapter:
             return []
 
         raw: List[Dict[str, Any]] = []
-        chunk = timedelta(days=_CHUNK_DAYS.get(breeze_interval, 5))
-        cursor = fd
+        step = _CHUNK_DAYS.get(breeze_interval, 5)
+        chunk = timedelta(days=step)
+        # Chunk boundaries sit on a FIXED grid (every `step` days since the
+        # ordinal epoch), not on wherever this particular range happens to start.
+        # Anchoring them to `fd` gave every range its own boundaries, so two
+        # windows that overlap by three months still shared no cache keys at all
+        # — moving the as-of date by a single day re-fetched everything. On a
+        # grid, any two ranges at the same interval line up. The cost is that the
+        # first chunk can begin up to `step - 1` days before `fd`; the trim below
+        # drops that overshoot.
+        cursor = dt_date.fromordinal(fd.toordinal() - (fd.toordinal() % step))
+        today = datetime.now(IST).date()
         while cursor <= td:
             chunk_end = min(cursor + chunk - timedelta(days=1), td)
-            raw.extend(self._history_chunk(info, breeze_interval, cursor, chunk_end))
+            # Settled = wholly in the past, so its bars are final. Anything
+            # touching today still has a forming bar and is always re-fetched.
+            settled = chunk_end < today
+            ckey = f"{info['symbol']}:{breeze_interval}:{cursor}:{chunk_end}"
+            part = _chunk_cache_get(ckey) if settled else None
+            if part is None:
+                part = self._history_chunk(info, breeze_interval, cursor, chunk_end)
+                if settled and part:
+                    _chunk_cache_put(ckey, part)
+            raw.extend(part)
             cursor = chunk_end + timedelta(days=1)
 
         if not raw:
@@ -638,6 +680,10 @@ class IciciDataServiceAdapter:
         for candle in raw:
             deduped[candle['date']] = candle
         candles = [deduped[k] for k in sorted(deduped)]
+
+        # Trim the grid overshoot at the left edge back to what was asked for, so
+        # aligning the chunks stays invisible to callers.
+        candles = [c for c in candles if fd <= _as_date(c['date']) <= td]
 
         if interval in ('week', 'month'):
             candles = _group_calendar(candles, interval)
@@ -764,6 +810,31 @@ def verify_session(api_key: str, session_token: str,
 def _breeze_expiry(day: dt_date) -> str:
     """Breeze wants an ISO instant, not a date: '2026-09-29T06:00:00.000Z'."""
     return f"{day.isoformat()}T06:00:00.000Z"
+
+
+def _chunk_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:
+    """Copy of a cached settled chunk, or None.
+
+    Copied on the way out because callers downstream dedupe, resample and
+    setdefault('oi', ...) over these dicts — handing out the cached objects
+    themselves would let one caller's post-processing rewrite what the next one
+    reads."""
+    with _HIST_LOCK:
+        hit = _CHUNK_CACHE.get(key)
+        return [dict(c) for c in hit] if hit is not None else None
+
+
+def _chunk_cache_put(key: str, candles: List[Dict[str, Any]]) -> None:
+    global _chunk_cache_candles
+    with _HIST_LOCK:
+        if key in _CHUNK_CACHE:
+            return
+        _CHUNK_CACHE[key] = [dict(c) for c in candles]
+        _chunk_cache_candles += len(candles)
+        # Oldest-first eviction (dicts keep insertion order), by candle count.
+        while _chunk_cache_candles > _CHUNK_CACHE_MAX_CANDLES and _CHUNK_CACHE:
+            oldest = next(iter(_CHUNK_CACHE))
+            _chunk_cache_candles -= len(_CHUNK_CACHE.pop(oldest))
 
 
 def _as_date(value: Any) -> Optional[dt_date]:

@@ -2138,7 +2138,7 @@ body.dark-theme .oip-oo-cancel-all,
        stayed put — so the two never lined up on anything but one screen size.
        Keep this in step with OIP_RS_BASE_CHART_HEIGHT in
        static/js/oi_profile_round_strike.js; the two are meant to be equal. */
-    --oip-replay-chart-h: 431px;
+    --oip-replay-chart-h: 426px;
     height: auto;
     min-height: 0;
 }

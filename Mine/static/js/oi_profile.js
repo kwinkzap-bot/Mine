@@ -886,12 +886,7 @@ function creatBaseChart(el) {
         handleScroll: true, handleScale: true,
         localization: {
             locale: 'en-IN',
-            timeFormatter: t => {
-                const d = new Date(t * 1000);
-                const h = String(d.getUTCHours()).padStart(2, '0');
-                const m = String(d.getUTCMinutes()).padStart(2, '0');
-                return `${h}:${m}`;
-            },
+            timeFormatter: window.lwCrosshairTime,
             timezone: 'Etc/UTC' // Use UTC to prevent double-shifting of already IST-shifted timestamps
         }
     });

@@ -10301,6 +10301,15 @@ def oi_profile_candles() -> EndpointResponse:
         # Detect if using Fyers as data provider
         from trading_app.service.fyers_data_service import FyersDataServiceAdapter
         _is_fyers_provider = isinstance(_data_provider, FyersDataServiceAdapter)
+        # What actually matters below is not "is it Fyers" but "does this provider
+        # address instruments by SYMBOL STRING rather than a numeric Kite token".
+        # ICICI does: its symbol-master duties are delegated to the Fyers master,
+        # so it hands back things like 'NSE:NIFTY26SEPFUT'. Treating it as
+        # not-Fyers split the two halves apart — tokens resolved as symbols while
+        # fetches were routed to Kite, which then did int('NSE:NIFTY26SEPFUT')
+        # and blew up on every future leg with REPLAY_DATA_PROVIDER=ICICI.
+        from trading_app.service.icici_data_service import IciciDataServiceAdapter
+        _is_symbol_provider = _is_fyers_provider or isinstance(_data_provider, IciciDataServiceAdapter)
         
         # Initialize KiteService with the active data provider to ensure symbol/token 
         # lookups match the data source (crucial for Fyers vs Kite compatibility)
@@ -10337,7 +10346,7 @@ def oi_profile_candles() -> EndpointResponse:
         fixed_fetch_interval = 'minute' if fixed_interval == '2minute' else fixed_interval
 
         # ── Resolve Token ──────────────────────────────────────────
-        if _is_fyers_provider:
+        if _is_symbol_provider:
             # For Fyers: use Fyers symbol strings
             token = FYERS_INDEX_SYMBOLS.get(symbol)
             if not token:
@@ -10352,7 +10361,7 @@ def oi_profile_candles() -> EndpointResponse:
         if not token:
             return jsonify({'success': False, 'error': f'Invalid or unknown symbol: {symbol}'}), 400
 
-        logger.info(f"[OI-Profile/Candles] Provider={'Fyers' if _is_fyers_provider else 'Kite'}, token={token}")
+        logger.info(f"[OI-Profile/Candles] Provider={type(_data_provider).__name__ if _data_provider else 'Kite'}, token={token}")
 
         # Shared aggregation/formatting logic (module-level so the Round Strike
         # endpoint emits identical bars — see _oip_format_candles).
@@ -10368,7 +10377,7 @@ def oi_profile_candles() -> EndpointResponse:
 
         def fetch_task(token, from_dt, to_dt, inter):
             try:
-                if _is_fyers_provider and _data_provider:
+                if _is_symbol_provider and _data_provider:
                     # Use Fyers data provider for historical data
                     from_str = from_dt.strftime('%Y-%m-%d')
                     to_str = to_dt.strftime('%Y-%m-%d')
@@ -10406,12 +10415,12 @@ def oi_profile_candles() -> EndpointResponse:
         future_fixed_ce = future_fixed_pe = None
         if fixed_ce_strike and opt_legs:
             fixed_ce_token, fixed_ce_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, fixed_ce_strike, 'CE', expiry_type=fixed_expiry)
+                kite_service, _data_provider, _is_symbol_provider, symbol, fixed_ce_strike, 'CE', expiry_type=fixed_expiry)
             if fixed_ce_token:
                 future_fixed_ce = executor.submit(fetch_task, fixed_ce_token, opt_from_date, to_date, fixed_fetch_interval)
         if fixed_pe_strike:
             fixed_pe_token, fixed_pe_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, fixed_pe_strike, 'PE', expiry_type=fixed_expiry)
+                kite_service, _data_provider, _is_symbol_provider, symbol, fixed_pe_strike, 'PE', expiry_type=fixed_expiry)
             if fixed_pe_token:
                 future_fixed_pe = executor.submit(fetch_task, fixed_pe_token, opt_from_date, to_date, fixed_fetch_interval)
 
@@ -10420,7 +10429,7 @@ def oi_profile_candles() -> EndpointResponse:
         # Index itself carries no real traded volume — resolve the current-expiry
         # future for this symbol (same resolver the CPR-width card already uses)
         # and fetch its volume in parallel, to overlay real volume on the chart.
-        future_fut_token, future_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
+        future_fut_token, future_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_symbol_provider, symbol)
         future_future_vol = executor.submit(fetch_task, future_fut_token, from_date, to_date, fetch_interval) if future_fut_token else None
         # Bank Nifty's future volume alongside the selected symbol's, so the chart
         # can overlay both without a second round-trip. When BANKNIFTY *is* the
@@ -10430,7 +10439,7 @@ def oi_profile_candles() -> EndpointResponse:
             bnf_fut_token, bnf_fut_symbol = future_fut_token, future_fut_symbol
             future_bnf_vol = future_future_vol
         else:
-            bnf_fut_token, bnf_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
+            bnf_fut_token, bnf_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_symbol_provider, 'BANKNIFTY')
             future_bnf_vol = executor.submit(fetch_task, bnf_fut_token, from_date, to_date, fetch_interval) if bnf_fut_token else None
         # Fixed 24000 Monthly's own volume — fetched separately since its candles
         # are always fixed_interval (5-minute), which can differ from the main
@@ -10485,26 +10494,26 @@ def oi_profile_candles() -> EndpointResponse:
             itm_ce_strike = ce_strike if ce_strike else None
             itm_pe_strike = pe_strike if pe_strike else None
             if itm_ce_strike:
-                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_ce_strike, 'CE')
             if itm_pe_strike:
-                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_pe_strike, 'PE')
         elif custom_strike:
             # Strike is known upfront — resolve tokens and submit CE/PE in parallel with index,
             # regardless of auto_hl mode (auto_hl still computes spot_high/low for intrinsic calc).
             itm_ce_strike = custom_strike
             itm_pe_strike = custom_strike
-            ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
-            pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+            ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_ce_strike, 'CE')
+            pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_pe_strike, 'PE')
         elif not auto_hl and not first_5m_atm and spot_high is not None and spot_low is not None:
             itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
+                kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_symbol_provider else None)
             )
         elif first_5m_atm and atm_cache_key in _daily_5m_atm_cache:
             # FAST-LANE: 5m ATM is static after 9:20 — use cached strike to concurrently fetch options.
             atm_strike = _daily_5m_atm_cache[atm_cache_key]
             itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
-            ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
-            pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+            ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_ce_strike, 'CE')
+            pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_pe_strike, 'PE')
 
         # 3. Fetch Option Candles if tokens known (use shorter opt_from_date window)
         future_ce = None
@@ -10633,24 +10642,24 @@ def oi_profile_candles() -> EndpointResponse:
                 _daily_5m_atm_cache[atm_cache_key] = atm_strike
                 
                 itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
-                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
-                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_ce_strike, 'CE')
+                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_pe_strike, 'PE')
                 logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}, CE_token={ce_token}, PE_token={pe_token}")
             else:
                 if ce_strike or pe_strike:
                     itm_ce_strike = ce_strike if ce_strike else None
                     itm_pe_strike = pe_strike if pe_strike else None
                     if itm_ce_strike:
-                        ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+                        ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_ce_strike, 'CE')
                     if itm_pe_strike:
-                        pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+                        pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_pe_strike, 'PE')
                 elif custom_strike:
                     itm_ce_strike, itm_pe_strike = custom_strike, custom_strike
-                    ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
-                    pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+                    ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_ce_strike, 'CE')
+                    pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_symbol_provider, symbol, itm_pe_strike, 'PE')
                 else:
                     itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                        kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
+                        kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_symbol_provider else None)
                     )
             
             if ce_token and opt_legs: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
@@ -11844,10 +11853,19 @@ def oi_profile_round_strike() -> EndpointResponse:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
         _is_fyers_provider = isinstance(_data_provider, FyersDataServiceAdapter)
+        # What actually matters below is not "is it Fyers" but "does this provider
+        # address instruments by SYMBOL STRING rather than a numeric Kite token".
+        # ICICI does: its symbol-master duties are delegated to the Fyers master,
+        # so it hands back things like 'NSE:NIFTY26SEPFUT'. Treating it as
+        # not-Fyers split the two halves apart — tokens resolved as symbols while
+        # fetches were routed to Kite, which then did int('NSE:NIFTY26SEPFUT')
+        # and blew up on every future leg with REPLAY_DATA_PROVIDER=ICICI.
+        from trading_app.service.icici_data_service import IciciDataServiceAdapter
+        _is_symbol_provider = _is_fyers_provider or isinstance(_data_provider, IciciDataServiceAdapter)
         effective_instance = _data_provider if _data_provider else kite
         kite_service = KiteService(kite_instance=effective_instance)
 
-        if _is_fyers_provider:
+        if _is_symbol_provider:
             index_token = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-EQ'
         else:
             index_token = NSE_INDEX_TOKENS_CPR.get(symbol) or kite_service.get_instrument_token(symbol)
@@ -11878,7 +11896,7 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         def fetch_task(token, inter):
             try:
-                if _is_fyers_provider and _data_provider:
+                if _is_symbol_provider and _data_provider:
                     # use_cache=True with a short TTL rather than the old
                     # use_cache=False: the adapter's stale-cache rescue (it
                     # serves the last good candles when every retry is rate
@@ -11987,7 +12005,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                 future_ce = executor.submit(expired_leg, ce_strike, 'CE', fetch_interval)
             else:
                 ce_token, ce_symbol = _get_cached_strike_token(
-                    kite_service, _data_provider, _is_fyers_provider, symbol, ce_strike, 'CE')
+                    kite_service, _data_provider, _is_symbol_provider, symbol, ce_strike, 'CE')
                 if ce_token:
                     future_ce = executor.submit(cached_leg, ce_token, fetch_interval)
         if pe_strike:
@@ -11996,7 +12014,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                 future_pe = executor.submit(expired_leg, pe_strike, 'PE', fetch_interval)
             else:
                 pe_token, pe_symbol = _get_cached_strike_token(
-                    kite_service, _data_provider, _is_fyers_provider, symbol, pe_strike, 'PE')
+                    kite_service, _data_provider, _is_symbol_provider, symbol, pe_strike, 'PE')
                 if pe_token:
                     future_pe = executor.submit(cached_leg, pe_token, fetch_interval)
 
@@ -12058,12 +12076,12 @@ def oi_profile_round_strike() -> EndpointResponse:
             else:
                 bnf_token, bnf_symbol, future_bnf_vol = submit_historical_future('BANKNIFTY', _want_bnf)
         else:
-            fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
+            fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_symbol_provider, symbol)
             future_vol = executor.submit(cached_leg, fut_token, fetch_interval) if (fut_token and _want_vol) else None
             if symbol == 'BANKNIFTY':
                 bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
             else:
-                bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
+                bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_symbol_provider, 'BANKNIFTY')
                 future_bnf_vol = (executor.submit(cached_leg, bnf_token, fetch_interval)
                                   if (bnf_token and _want_bnf) else None)
 
@@ -12081,7 +12099,7 @@ def oi_profile_round_strike() -> EndpointResponse:
                 logger.debug(f'[RoundStrike] LTP failed for {index_token}: {exc}')
                 return 0.0
 
-        future_ltp = executor.submit(_live_ltp) if (_is_fyers_provider and _data_provider) else None
+        future_ltp = executor.submit(_live_ltp) if (_is_symbol_provider and _data_provider) else None
 
         # ── Slow-moving sections (see the TTL table above) ──
         def _index_derived():

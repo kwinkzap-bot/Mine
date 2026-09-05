@@ -157,10 +157,7 @@ function _vegaInitChart() {
         },
         localization: {
             locale: 'en-IN',
-            timeFormatter: t => {
-                const d = new Date(t * 1000);
-                return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
-            },
+            timeFormatter: window.lwCrosshairTime,
             timezone: 'Etc/UTC',
         },
         timeScale: {

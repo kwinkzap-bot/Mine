@@ -317,7 +317,7 @@
     const IST_DAY   = istFmt({ day: 'numeric' });
     const IST_MONTH = istFmt({ month: 'short' });
     const IST_YEAR  = istFmt({ year: 'numeric' });
-    const IST_STAMP = istFmt({ day: '2-digit', month: 'short', year: '2-digit',
+    const IST_STAMP = istFmt({ weekday: 'short', day: '2-digit', month: 'short', year: '2-digit',
                               hour: '2-digit', minute: '2-digit', hour12: false });
 
     // Axis tick marks. The library picks the granularity and hands it over
@@ -333,14 +333,15 @@
         return IST_TIME.format(at);
     }
 
-    // The crosshair's time label, in the library's own "18 Aug '26 13:15"
-    // shape so only the timezone changes.
+    // The crosshair's time label, matching window.lwCrosshairTime elsewhere in
+    // the app: "Wed 02 Sep '26  13:15". This page does not load
+    // tradingview-chart.js, so the format is rebuilt here off the IST formatter.
     function istStamp(time) {
         const at = toDate(time);
         if (!at) return '';
         const part = {};
         for (const piece of IST_STAMP.formatToParts(at)) part[piece.type] = piece.value;
-        return `${part.day} ${part.month} '${part.year} ${part.hour}:${part.minute}`;
+        return `${part.weekday} ${part.day} ${part.month} '${part.year}  ${part.hour}:${part.minute}`;
     }
 
     // The bar of `pane` covering `when` — the last one that had started by

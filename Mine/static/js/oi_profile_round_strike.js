@@ -336,7 +336,7 @@ const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
 // inline by oipRSSetChartHeight, which beats the class.
 // Matches --oip-replay-chart-h in static/css/oi_profile.css — the index chart
 // above and this one are read as a pair and are meant to be the same height.
-const OIP_RS_BASE_CHART_HEIGHT = 431;
+const OIP_RS_BASE_CHART_HEIGHT = 426;
 
 function oipRSSetChartHeight(px) {
     try { oipRSChart?.chart?.applyOptions({ height: px }); } catch (e) {}
@@ -899,6 +899,13 @@ function oipRSInitCharts() {
     //
     // It does join the crosshair-sync web below: that one matches on TIME, so it
     // works across mismatched bar grids.
+    //
+    // On Replay it also pairs with the index chart for zoom and pan (the block
+    // further down, and its mirror in oi_replay.js). That pairing sidesteps the
+    // logical-range problem above rather than ignoring it: matching bar spacing
+    // is only used when the two TF dropdowns agree, and mismatched grids fall
+    // back to matching the visible TIME range — the same basis the crosshair
+    // sync uses.
     ['mouseenter', 'touchstart'].forEach(evt => {
         document.getElementById('oipRSCombinedChart')?.addEventListener(evt, () => { window._oipActiveChartId = 'rs'; }, { passive: true });
     });
@@ -916,6 +923,21 @@ function oipRSInitCharts() {
             // typeof-guarded: Fixed 24000 Monthly is an OI Profile chart, and this
             // file is loaded on Replay too, where oi_profile.js (where it lives) is not.
             if (typeof oipFixedChart !== 'undefined' && oipFixedChart?.chart && oipFixedCeSeries) window._oipSyncCrosshair(oipRSChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
+        });
+    }
+
+    // Zoom / pan, the reverse of the index chart's own subscription. Guarded on
+    // _oipSyncTimeScale existing, the same way the crosshair block above is:
+    // Replay defines it (oi_replay.js), OI Profile does not — that page already
+    // range-syncs its index / Intrinsic / CE / PE panes among themselves, and
+    // pulling this chart into that is a separate question.
+    if (oipRSChart?.chart && typeof window._oipSyncTimeScale === 'function') {
+        oipRSChart.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+            if (window._oipSuppressRangeSync || window._oipActiveChartId !== 'rs') return;
+            try {
+                if (!oipOIChart) return;
+                window._oipSyncTimeScale(oipRSChart.chart, oipOIChart, oipRSInterval === oipInterval);
+            } catch (e) {}
         });
     }
 
@@ -1430,6 +1452,16 @@ function oipRSRenderChart(data) {
 
     let ceData = (data.ce_candles || []).map(c => ({ ...c, type: 'CE' }));
     let peData = (data.pe_candles || []).map(c => ({ ...c, type: 'PE' }));
+    // Drop the pre-open and closing call-auction bars, on this block's OWN
+    // timeframe — the index chart above already sheds them, and a Round Strike
+    // chart still carrying them reads as a different session from the one it is
+    // stacked under. Replay only: the live OI Profile view is left as it was.
+    // Filtered here rather than on the way to the chart so the parked
+    // oipRSLast*Data arrays the replay slider reads back are trimmed too.
+    if (window.oipReplayMode && typeof oipStripAuctionBars === 'function') {
+        ceData = oipStripAuctionBars(ceData, oipRSInterval);
+        peData = oipStripAuctionBars(peData, oipRSInterval);
+    }
     if (sameStrikes) {
         if (!ceData.length && oipRSLastCeData?.length) ceData = oipRSLastCeData;
         if (!peData.length && oipRSLastPeData?.length) peData = oipRSLastPeData;

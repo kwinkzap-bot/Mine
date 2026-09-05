@@ -49,10 +49,10 @@
                         <span class="oip-label" style="margin-left:8px;">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs">
                             <option value="30second">30s</option>
-                            <option value="minute">1m</option>
+                            <option value="minute" selected>1m</option>
                             <option value="2minute">2m</option>
                             <option value="3minute">3m</option>
-                            <option value="5minute" selected>5m</option>
+                            <option value="5minute">5m</option>
                             <option value="15minute">15m</option>
                             <option value="30minute">30m</option>
                             <option value="60minute">1h</option>
@@ -73,14 +73,39 @@
                             Indicators
                         </button>
 
+                        <!-- The list mirrors the "Mine CPR" Pine script: same groups, and
+                             the toggles it ships ON are the ones checked here. Colour
+                             swatches quote the shared line defaults in oi_indicators.js
+                             (_OIP_LINE_DEFAULTS) so this popup and OI Profile draw the same
+                             indicator in the same colour; each row's own picker still wins.
+                             Pine's Virgin CPR / Future CPR and its SMA master switch have no
+                             equivalent here yet. -->
                         <div id="oipIndicatorsPopup" class="oip-ind-popup hidden">
                             <div class="oip-ind-popup-header">Indicators</div>
 
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Overlays</div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowVwapOI" checked><span>VWAP</span>
-                                </label>
+                                <!-- Pine plots Current / Previous / Avg-3 VWAP together, so
+                                     this is one group rather than the single flat VWAP line
+                                     Replay carried before. -->
+                                <div class="oip-ind-cpr-group">
+                                    <div class="oip-ind-item oip-ind-cpr-header">
+                                        <input type="checkbox" id="oipShowVwapGroup" checked>
+                                        <label for="oipShowVwapGroup" class="oip-ind-cpr-label">VWAP</label>
+                                        <span class="oip-cpr-expand" id="oipVwapExpandBtn">&#9658;</span>
+                                    </div>
+                                    <div class="oip-ind-cpr-sub hidden" id="oipVwapSub">
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipShowCVWAP" checked><span style="color:#3b82f6">CVWAP</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipShowPVWAP" checked><span style="color:#fdba74">PVWAP</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipShow3AvgVWAP" checked><span style="color:#ef4444">3-AVG_VWAP</span>
+                                        </label>
+                                    </div>
+                                </div>
                                 <!-- Standalone, not the CPR block's own Prev H/L: this one
                                      is computed from the candles on screen, so it follows
                                      the replay instead of staying pinned to yesterday. -->
@@ -93,6 +118,9 @@
                                         <label for="oipShowCpr" class="oip-ind-cpr-label">CPR Levels</label>
                                         <span class="oip-cpr-expand" id="oipCprExpandBtn">&#9658;</span>
                                     </div>
+                                    <!-- Pine ships R1-R3, S1-S3, PDH/PDL and the level labels
+                                         off; only the central band and the Camarilla pair are
+                                         drawn by default. -->
                                     <div class="oip-ind-cpr-sub hidden" id="oipCprSub">
                                         <label class="oip-ind-item oip-ind-sub-item">
                                             <input type="checkbox" id="oipCprShowPrevHL"><span style="color:#ef07f9">Prev H / L</span>
@@ -101,61 +129,80 @@
                                             <input type="checkbox" id="oipCprShowBand" checked><span style="color:#3f51b5">PP / BC / TC</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#7b1fa2">Camarilla R3 / S3</span>
+                                            <input type="checkbox" id="oipCprShowResistance"><span style="color:#006400">R1 &ndash; R4</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowLabels" checked><span>Level Labels</span>
+                                            <input type="checkbox" id="oipCprShowSupport"><span style="color:#ff0000">S1 &ndash; S4</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#7b1fa2">Camarilla R3 / S3</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item"
+                                            title="A CPR no candle traded into during its own session — never tested, so it stays live S/R. Only the shadow changes colour; the lines keep the normal CPR look.">
+                                            <input type="checkbox" id="oipCprShowVirgin" checked><span style="color:#c79a10">Virgin CPR</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item"
+                                            title="Carry a virgin CPR to the right until the session that first trades into it. Still-untouched ones run to the right edge.">
+                                            <input type="checkbox" id="oipCprVirginExtend" checked><span>&#8627; Extend until touched</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowLabels"><span>Level Labels</span>
                                         </label>
                                     </div>
                                 </div>
                                 <div class="oip-ind-cpr-group">
                                     <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowMultiCpr">
+                                        <input type="checkbox" id="oipShowMultiCpr" checked>
                                         <label for="oipShowMultiCpr" class="oip-ind-cpr-label">Multi CPR</label>
                                         <span class="oip-cpr-expand" id="oipMultiCprExpandBtn">&#9658;</span>
                                     </div>
+                                    <!-- Pine has the group on with 1 Hour alone: three CPR
+                                         bands at once buries the daily one. -->
                                     <div class="oip-ind-cpr-sub hidden" id="oipMultiCprSub">
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr15m" checked><span style="color:#f97316">15 Min</span>
+                                            <input type="checkbox" id="oipMultiCpr15m"><span style="color:#f97316">15 Min</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr30m" checked><span style="color:#06b6d4">30 Min</span>
+                                            <input type="checkbox" id="oipMultiCpr30m"><span style="color:#06b6d4">30 Min</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#a855f7">1 Hour</span>
+                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#9c28b0">1 Hour</span>
                                         </label>
                                     </div>
                                 </div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowSignals"><span>Entry Signals</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowRSI"><span>RSI S&amp;R</span>
-                                </label>
                             </div>
 
                             <div class="oip-ind-section">
-                                <div class="oip-ind-section-title">Moving Averages (EMA)</div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowEma9">
-                                    <span style="color:#22c55e">EMA 9</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowEma20">
-                                    <span style="color:#f97316">EMA 20</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowEma50">
-                                    <span style="color:#ef4444">EMA 50</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowEma100">
-                                    <span style="color:#3b82f6">EMA 100</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowEma200">
-                                    <span style="color:#888">EMA 200</span>
-                                </label>
+                                <!-- Collapsed by default: five rows that rarely change, kept
+                                     out of the way of the groups above. -->
+                                <div class="oip-ind-section-title oip-ind-cpr-header" id="oipEmaHeader"
+                                    style="cursor:pointer; justify-content:space-between;">
+                                    Moving Averages (EMA)
+                                    <span class="oip-cpr-expand" id="oipEmaExpandBtn">&#9658;</span>
+                                </div>
+                                <!-- Pine's per-EMA defaults: 9 / 20 / 50 / 200 on, 100 off. -->
+                                <div class="oip-ind-cpr-sub hidden" id="oipEmaSub">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma9" checked>
+                                        <span style="color:#22c55e">EMA 9</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma20" checked>
+                                        <span style="color:#f97316">EMA 20</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma50" checked>
+                                        <span style="color:#ef4444">EMA 50</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma100">
+                                        <span style="color:#3b82f6">EMA 100</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma200" checked>
+                                        <span style="color:#888888">EMA 200</span>
+                                    </label>
+                                </div>
                             </div>
 
                             <div class="oip-ind-section">
@@ -165,9 +212,9 @@
                                         <input type="checkbox" id="oipShow30mReversalLines"><span style="color:#f97316">30m Reversal</span>
                                     </label>
                                     <div class="oip-ind-reversal-inputs">
-                                        <span class="oip-ind-mini-lbl">↑</span>
+                                        <span class="oip-ind-mini-lbl">&uarr;</span>
                                         <input type="number" id="oipReversal30mCountUp" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1" title="Lines above current price">
-                                        <span class="oip-ind-mini-lbl">↓</span>
+                                        <span class="oip-ind-mini-lbl">&darr;</span>
                                         <input type="number" id="oipReversal30mCountDn" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1" title="Lines below current price">
                                         <span class="oip-ind-mini-lbl">Range</span>
                                         <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
@@ -184,11 +231,19 @@
                                         <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
                                     </div>
                                 </div>
+                                <!-- 30Sec is Replay's own; Pine's opening-range boxes are the
+                                     2nd 1-min and 2nd 5-min ones, both on by default. -->
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShow2ndCandle30s"><span style="color:#FFC800">2nd 30Sec Candle</span>
                                 </label>
                                 <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShow2ndCandle1m" checked><span style="color:#FF6B6B">2nd 1Min Candle</span>
+                                </label>
+                                <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5Min Candle</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowMondayBox" checked><span style="color:#34ed0b">Monday H/L Box</span>
                                 </label>
                             </div>
                         </div>

@@ -118,10 +118,7 @@ function _pcrBuildOpts(cfg) {
         },
         localization: {
             locale: 'en-IN',
-            timeFormatter: t => {
-                const d = new Date(t * 1000);
-                return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
-            },
+            timeFormatter: window.lwCrosshairTime,
             timezone: 'Etc/UTC', // timestamps are fake-UTC (IST hours stored as UTC) matching oi_profile.js
         },
         timeScale: {

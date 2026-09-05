@@ -18,6 +18,31 @@ window.lwSetMarkers = window.lwSetMarkers || function (series, markers) {
     }
 };
 
+// The crosshair's time label — the black pill under the time axis. Every chart
+// in the app showed a bare "12:30", which on a multi-day window says nothing
+// about WHICH day the cursor is on. This is TradingView's own shape,
+// "Wed 02 Sep '26  12:30".
+//
+// Timestamps are fake-UTC (IST clock values stored as UTC) everywhere in this
+// app, so the UTC getters are what read correctly — see the `timezone: 'Etc/UTC'`
+// that accompanies each localization block.
+//
+// Seconds only appear when a bar actually carries them (30-second charts),
+// and a bar sitting exactly on midnight — a daily/weekly/monthly candle — drops
+// the clock entirely rather than printing a meaningless 00:00.
+// Defined globally so every page's chart can share one format.
+window.lwCrosshairTime = window.lwCrosshairTime || function (t) {
+    const d = new Date(t * 1000);
+    if (isNaN(d)) return '';
+    const wd = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+    const mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()];
+    const pad = n => String(n).padStart(2, '0');
+    const date = `${wd} ${pad(d.getUTCDate())} ${mo} '${String(d.getUTCFullYear()).slice(-2)}`;
+    const h = d.getUTCHours(), m = d.getUTCMinutes(), sec = d.getUTCSeconds();
+    if (!h && !m && !sec) return date;
+    return `${date}  ${pad(h)}:${pad(m)}` + (sec ? `:${pad(sec)}` : '');
+};
+
 // v5 z-order helper — lifts the candle series above overlay indicators so it
 // renders on top (v5 added ISeriesApi.setSeriesOrder; higher index = on top).
 // A large index is clamped to the current top of the pane's series collection.
@@ -704,12 +729,7 @@ window.TradingViewChart = (function () {
                     priceFormatter: config.compactPriceAxis
                         ? _tvCompactPrice
                         : val => val.toFixed(2),
-                    timeFormatter: t => {
-                        const d = new Date(t * 1000);
-                        const h = String(d.getUTCHours()).padStart(2, '0');
-                        const m = String(d.getUTCMinutes()).padStart(2, '0');
-                        return `${h}:${m}`;
-                    },
+                    timeFormatter: window.lwCrosshairTime,
                     timezone: 'Etc/UTC' // Use UTC to prevent double-shifting of already IST-shifted timestamps
                 },
                 height: height,
