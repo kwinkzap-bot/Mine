@@ -663,6 +663,13 @@
                         <span class="rule-trigger-btn__icon">↗</span>
                     </button>
                 </div>
+                <!-- Shown when the picked symbol is not in EMA_SYMBOL_DEFAULTS.
+                     That table is the strategy's whole universe, so there are no
+                     Direction/Target defaults to pre-fill and the run is refused
+                     server-side — this says so instead of leaving the form
+                     looking ready. -->
+                <div class="form-group ema-symbol-note" id="emaSymbolNote"
+                     style="display:none; grid-column: span 4;"></div>
             </div>
 
             <!-- EMA Confluence Breakout position sizing -->

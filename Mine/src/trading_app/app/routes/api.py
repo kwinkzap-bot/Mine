@@ -4842,7 +4842,8 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     Each stock is run with ITS OWN Direction/Target from that table (the same
     per-stock settings the live algo scans with) unless use_symbol_defaults is
     off, in which case the form's single Direction/Target applies to all of
-    them. A symbol missing from the table always falls back to the form.
+    them. There is no "symbol missing from the table" case — this scan walks
+    that table's own keys, and it is the strategy's whole universe.
     The 1:1 R:R gate (require_rr) is not a per-stock setting — that table
     holds Direction/Target only — so the form's checkbox applies to every
     symbol either way.
@@ -4896,7 +4897,10 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
         if df is None or df.empty:
             return []
 
-        defaults = EMA_SYMBOL_DEFAULTS.get(symbol) if use_symbol_defaults else None
+        # This loop walks EMA_SYMBOL_DEFAULTS' own keys, so a symbol always has
+        # a row here — the only question is whether the form is overriding it
+        # for every stock at once (use_symbol_defaults off).
+        defaults = EMA_SYMBOL_DEFAULTS[symbol] if use_symbol_defaults else None
         sym_direction  = str(defaults['direction']) if defaults else direction
         sym_target_pct = float(defaults['target_pct']) if defaults else target_pct
 
@@ -5029,7 +5033,8 @@ def run_ema_pullback_backtest_api():
     filling at the trigger level (or that candle's Open if it gapped
     through). SL is the signal candle's opposite extreme (High for SELL,
     Low for BUY); Target is target_pct (default 5.0, floor 1.0) of the
-    entry price. direction: 'both'|'long'|'short', default 'both'.
+    entry price. direction ('both'|'long'|'short') and target_pct default to
+    the symbol's OWN row in EMA_SYMBOL_DEFAULTS when the request omits them.
 
     Signals are found on the UNDERLYING; the money is booked on the monthly
     FUTURE, the same split the live algo makes. Every fill is re-priced on the
@@ -5052,10 +5057,6 @@ def run_ema_pullback_backtest_api():
         symbol         = str(data.get('symbol', '') or '').strip().upper()
         start_date_str = data.get('start_date')
         end_date_str   = data.get('end_date')
-        direction      = str(data.get('direction', 'both')).lower()
-        enable_long    = direction != 'short'
-        enable_short   = direction != 'long'
-        target_pct     = float(data.get('target_pct', 5.0) or 5.0)
         # Only take a breakout whose Target is further away than its SL.
         require_rr     = bool(data.get('require_rr', False))
         lots           = max(1, int(data.get('lots', 1) or 1))
@@ -5065,6 +5066,33 @@ def run_ema_pullback_backtest_api():
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        # EMA_SYMBOL_DEFAULTS is the whole universe, not a set of overrides.
+        # A symbol outside it has no Direction/Target of its own, the live algo
+        # never scans it, and running it on whatever the form happened to hold
+        # produced a real-looking result for a strategy that does not trade it.
+        from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+        if symbol not in _EMA_ALL_SYMBOLS and symbol not in EMA_SYMBOL_DEFAULTS:
+            return jsonify({
+                'success': False,
+                'error': (f'{symbol} is not an EMA Confluence Breakout symbol. This strategy '
+                          f'runs only on the {len(EMA_SYMBOL_DEFAULTS)} stocks in its own '
+                          f'universe (the same ones the live algo scans) — pick one of those, '
+                          f'or "All Stocks". Add {symbol} to EMA_SYMBOL_DEFAULTS with its own '
+                          f'Direction/Target if it should be traded.'),
+            }), 400
+
+        # Direction/Target fall back to THIS SYMBOL'S OWN ROW, not to a
+        # blanket Both/5%. The symbol is known to be in the universe by now, so
+        # a request that omits either field means "run it the way the live algo
+        # runs it" — which is the only sense in which this strategy has a
+        # default at all. Both/5% survives solely for the All Stocks scan,
+        # whose per-stock rows are applied inside it (use_symbol_defaults).
+        cfg = EMA_SYMBOL_DEFAULTS.get(symbol) or {}
+        direction  = str(data.get('direction') or cfg.get('direction') or 'both').lower()
+        target_pct = float(data.get('target_pct') or cfg.get('target_pct') or 5.0)
+        enable_long  = direction != 'short'
+        enable_short = direction != 'long'
 
         current_kite = get_data_provider(context='backtest')
         if not current_kite:
@@ -5211,6 +5239,18 @@ def run_ema_pullback_optimise():
             # EMA_SYMBOL_DEFAULTS — that's what the All Stocks scan runs with.
             return jsonify({'success': False,
                             'error': 'Find Best Params runs on a single symbol — pick one instead of All Stocks.'}), 400
+
+        from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+        if symbol not in EMA_SYMBOL_DEFAULTS:
+            # Same gate as the backtest run: sweeping a symbol the strategy does
+            # not trade would hand back a "best" combo for a stock that will
+            # never take it.
+            return jsonify({
+                'success': False,
+                'error': (f'{symbol} is not an EMA Confluence Breakout symbol — this strategy '
+                          f'runs only on the {len(EMA_SYMBOL_DEFAULTS)} stocks in its own '
+                          f'universe. Add it to EMA_SYMBOL_DEFAULTS to sweep it.'),
+            }), 400
 
         # 'v2' retired every entry cached before the EMA warm-up / stale-order
         # fixes; 'v3' retires everything ranked on spot points, before the

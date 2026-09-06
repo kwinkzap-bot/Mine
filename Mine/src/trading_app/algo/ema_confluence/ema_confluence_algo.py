@@ -41,6 +41,14 @@ TRADING days via app/utils/trading_calendar, and because a passed roll moment
 stays due until the algo next ticks in a real session, a holiday simply defers
 the roll to the following session.
 
+The universe itself is EMA_SYMBOL_DEFAULTS and nothing else: a symbol removed
+from that table is retired at the next start-up rather than left lingering on
+the status grid with no Direction/Target to show — and an armed one really has
+to go, because the tick loop drives `watching` symbols off the STATE file, so a
+removed stock would otherwise still be able to open a position. An open
+position is booked out at its last mark first, so it lands in the trade history
+with its P&L instead of vanishing. See _retire_dropped_symbols.
+
 Per-symbol lifecycle (state persists across days — unlike TMF, this is a
 multi-day SWING strategy, not an intraday one; there is no EOD square-off):
   pending_scan  -> not yet scanned today
@@ -325,16 +333,16 @@ class EmaConfluenceAlgo:
             from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
             for sym in EMA_SYMBOL_DEFAULTS:
                 state['stocks'].setdefault(sym, {'phase': 'pending_scan'})
-            # …and one DROPPED from the universe would otherwise linger forever,
-            # skewing the status page's phase counts. Drop it — unless it still
-            # has an armed trigger or an open paper position, which must be
-            # seen through to its exit rather than abandoned mid-trade.
-            for sym in [s for s in state['stocks'] if s not in EMA_SYMBOL_DEFAULTS]:
-                if state['stocks'][sym].get('phase') in ('watching', 'in_position'):
-                    self.log.info(f"{sym}: dropped from the universe but still "
-                                  f"{state['stocks'][sym]['phase']} — keeping until it closes")
-                    continue
-                state['stocks'].pop(sym)
+            # A symbol DROPPED from the universe is retired — see
+            # _retire_dropped_symbols. Guarded like the migration below: it
+            # books positions out, and a failure in there must degrade to
+            # "state loaded unretired", never to the bare `except` at the
+            # bottom, which hands back a FRESH state and silently abandons
+            # every open position.
+            try:
+                self._retire_dropped_symbols(state, EMA_SYMBOL_DEFAULTS)
+            except Exception as e:
+                self.log.error(f"retiring dropped symbols failed, state left as-is: {e}")
             # Guarded separately: a migration failure must degrade to "state
             # loaded unmigrated", never to the bare `except` below, which would
             # hand back a FRESH state and silently abandon every open position.
@@ -345,6 +353,44 @@ class EmaConfluenceAlgo:
             return state
         except Exception:
             return self._fresh_state()
+
+    def _retire_dropped_symbols(self, state: Dict[str, Any], universe: Dict[str, Any]) -> None:
+        """Remove every symbol no longer in EMA_SYMBOL_DEFAULTS, whatever phase
+        it is in.
+
+        That table is the whole universe, so a symbol removed from it is one
+        this strategy no longer trades. Leaving it behind kept it on the Symbol
+        Status grid with a blank Allowed/Target — it has no configured
+        Direction or Target left to show — and, worse, left an armed trigger
+        live: the tick loop drives `watching` symbols off the STATE file, not
+        off the table, so a removed stock could still open a position.
+
+        An open position is not simply discarded. It is booked out at its last
+        known mark first, so the trade reaches the history file with its P&L
+        instead of vanishing unrecorded, and it fires an exit alert precisely
+        because no signal asked for it.
+        """
+        for symbol in [s for s in state['stocks'] if s not in universe]:
+            st = state['stocks'][symbol]
+            phase = st.get('phase')
+            if phase == 'in_position':
+                mark = st.get('ltp')
+                if mark is None:
+                    # No price to book at, and inventing one would write a fill
+                    # that never traded. Keep it; the next tick marks it to
+                    # market and the following start-up retires it.
+                    self.log.warning(f"{symbol}: dropped from the universe but its open "
+                                     f"position has no last mark to book out at — kept for "
+                                     f"now, will retire once it quotes again")
+                    continue
+                self.log.warning(f"{symbol}: dropped from the universe — closing its open "
+                                 f"paper position at the last mark {mark}")
+                self._record_exit(symbol, st, float(mark), 'UNIVERSE_DROP')
+            elif phase == 'watching':
+                self.log.info(f"{symbol}: dropped from the universe — discarding its armed "
+                              f"{st.get('direction', '?')} setup "
+                              f"(trigger {st.get('trigger_level')}, sl {st.get('sl_level')})")
+            state['stocks'].pop(symbol)
 
     def _migrate_levels_to_spot_scale(self, state: Dict[str, Any]) -> None:
         """One-time repair for positions opened before the Target moved onto
@@ -370,7 +416,12 @@ class EmaConfluenceAlgo:
                 self.log.warning(f"{symbol}: open position has no trigger_level to rebuild a spot "
                                  f"entry from — Target left on the futures scale, review it by hand")
                 continue
-            pct = float(s.get('target_pct', 5.0))
+            pct = self._configured_target_pct(symbol, s)
+            if pct is None:
+                self.log.warning(f"{symbol}: open position has no Target % of its own to "
+                                 f"rebuild from (not in EMA_SYMBOL_DEFAULTS) — Target left on "
+                                 f"the futures scale, review it by hand")
+                continue
             spot_entry = round(float(trigger), 2)
             was = s.get('target_level')
             s['spot_entry_price'] = spot_entry
@@ -381,6 +432,28 @@ class EmaConfluenceAlgo:
                 f"its trigger), target {was} -> {s['target_level']} ({pct}% of the spot entry). "
                 f"Futures fill {s.get('entry_price')} untouched; it still carries the P&L."
             )
+
+    def _configured_target_pct(self, symbol: str, s: Dict[str, Any]) -> Optional[float]:
+        """This symbol's Target %, from the setup it was armed with or, failing
+        that, its own row in EMA_SYMBOL_DEFAULTS.
+
+        None when NEITHER has one — which is the whole point of this method.
+        Both callers used to fall back to a bare 5.0, a number belonging to no
+        symbol in the table: an entry fired on a state row that had lost its
+        target_pct would arm a 5% target and look completely normal doing it.
+        EMA_SYMBOL_DEFAULTS is the strategy's whole universe (see that module),
+        so a symbol absent from it has no Target this algo is entitled to
+        invent, and the caller refuses rather than guesses.
+        """
+        pct = s.get('target_pct')
+        if pct is not None:
+            try:
+                return float(pct)
+            except (TypeError, ValueError):
+                pass
+        from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+        cfg = EMA_SYMBOL_DEFAULTS.get(symbol)
+        return float(cfg['target_pct']) if cfg else None
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         with self._state_lock:
@@ -782,7 +855,15 @@ class EmaConfluenceAlgo:
         derived from the FUTURES fill, because that is the instrument held.
         """
         direction   = s['direction']
-        target_pct  = float(s.get('target_pct', 5.0))
+        target_pct  = self._configured_target_pct(symbol, s)
+        if target_pct is None:
+            # No Target this symbol owns — do NOT open a position on a guessed
+            # one. Leaving it armed costs nothing (the trigger is re-evaluated
+            # every tick) and the next daily scan re-arms it with a real one.
+            self.log.error(f"{symbol}: trigger broke at spot {spot} but no Target % is "
+                           f"configured for it (not in EMA_SYMBOL_DEFAULTS, and none stored "
+                           f"on the armed setup) — entry refused, setup left armed")
+            return
         spot_entry  = round(float(spot), 2)
         entry_price = round(float(fut_ltp), 2)
         target_level = round(spot_entry * (1 + target_pct / 100), 2) if direction == 'Long' \
@@ -953,6 +1034,11 @@ class EmaConfluenceAlgo:
     _EXIT_STYLE = {
         'SL':     ('🛑', 'SL HIT'),
         'TARGET': ('🎯', 'TARGET HIT'),
+        # Not a strategy exit: the symbol was removed from EMA_SYMBOL_DEFAULTS,
+        # so the position is booked out at its last mark rather than left open
+        # in a stock this algo no longer trades. Worth an alert precisely
+        # because no signal asked for it.
+        'UNIVERSE_DROP': ('🗑', 'CLOSED — REMOVED FROM UNIVERSE'),
     }
 
     def _notify_exit(self, symbol: str, s: Dict[str, Any], record: Dict[str, Any]) -> None:

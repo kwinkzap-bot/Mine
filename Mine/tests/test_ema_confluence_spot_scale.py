@@ -19,6 +19,15 @@ import pytest
 from trading_app.algo.ema_confluence import ema_confluence_algo as eca
 from trading_app.algo.ema_confluence.ema_confluence_algo import EmaConfluenceAlgo
 
+# The `_tick` tests below never touch the state FILE, so their symbol is just a
+# label. The two `_load_state` tests do, and _load_state now retires any symbol
+# no longer in EMA_SYMBOL_DEFAULTS (see _retire_dropped_symbols) — so those take
+# a symbol read out of the live universe rather than a hard-coded ticker, which
+# would fail again the next time that table is edited.
+from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+
+IN_UNIVERSE = next(iter(EMA_SYMBOL_DEFAULTS))
+
 SEP = {'symbol': 'NSE:NHPC26SEPFUT', 'expiry': date(2026, 9, 29), 'lot_size': 5400}
 OCT = {'symbol': 'NSE:NHPC26OCTFUT', 'expiry': date(2026, 10, 27), 'lot_size': 5400}
 SPOT = 'NSE:NHPC-EQ'
@@ -266,20 +275,20 @@ def test_migration_repairs_a_target_that_actually_drifted(algo):
 
 
 def test_migration_is_idempotent_and_leaves_new_trades_alone(algo):
-    stocks = {'NHPC': _in_position()}
+    stocks = {IN_UNIVERSE: _in_position()}
     with open(eca.STATE_FILE, 'w') as f:
         json.dump({'last_scan_date': None, 'stocks': stocks}, f)
 
-    once = algo._load_state()['stocks']['NHPC']
+    once = algo._load_state()['stocks'][IN_UNIVERSE]
     assert once['spot_entry_price'] == 80.0 and once['target_level'] == 86.4
-    twice = algo._load_state()['stocks']['NHPC']
+    twice = algo._load_state()['stocks'][IN_UNIVERSE]
     assert twice['spot_entry_price'] == 80.0 and twice['target_level'] == 86.4
 
 
 def test_a_broken_migration_never_costs_the_open_positions(algo, monkeypatch):
     """_load_state's bare except returns a FRESH state — every open position
     abandoned. The migration must not be able to reach it."""
-    stocks = {'NHPC': _in_position(), 'OIL': {'phase': 'watching'}}
+    stocks = {IN_UNIVERSE: _in_position(), 'OIL': {'phase': 'watching'}}
     with open(eca.STATE_FILE, 'w') as f:
         json.dump({'last_scan_date': '2026-09-07', 'stocks': stocks}, f)
 
@@ -289,4 +298,4 @@ def test_a_broken_migration_never_costs_the_open_positions(algo, monkeypatch):
 
     loaded = algo._load_state()
     assert loaded['last_scan_date'] == '2026-09-07'
-    assert loaded['stocks']['NHPC']['phase'] == 'in_position'
+    assert loaded['stocks'][IN_UNIVERSE]['phase'] == 'in_position'

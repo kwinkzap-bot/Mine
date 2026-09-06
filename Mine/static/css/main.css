@@ -825,3 +825,17 @@ body.forest-theme *::-webkit-scrollbar-thumb:hover {
    overflow bugs rather than fixing them and silently breaks
    position:sticky descendants (the OI/algo tables rely on sticky
    headers). Overflow is fixed at each source instead. */
+
+/* EMA Confluence Breakout: the picked symbol is not in EMA_SYMBOL_DEFAULTS.
+   That table is the strategy's whole universe — there is nothing to pre-fill
+   and the server refuses the run — so the form says so rather than sitting
+   there looking ready. */
+.ema-symbol-note {
+    color: var(--color-warning);
+    background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
