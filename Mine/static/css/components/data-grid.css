@@ -327,3 +327,159 @@ body {
     .dg-table .dg-th,
     .dg-table .dg-td { padding: 5px 6px; font-size: 10px; }
 }
+
+/* ── Detail rows ──────────────────────────────────────────────────
+   A row with a `detail` (see data-grid.js) is clickable and carries a
+   chevron ahead of its first cell; the breakdown row beneath it spans the
+   whole table. The chevron is drawn in CSS rather than injected into the
+   first column, so a caller opts into expandable rows without having to
+   change its column config. */
+.dg-table .dg-tr--expandable { cursor: pointer; }
+.dg-table .dg-tr--expandable:hover { background: var(--dg-accent-dim); }
+.dg-table .dg-tr--expandable > .dg-td:first-child::before {
+    content: '▸';
+    display: inline-block;
+    width: 11px;
+    margin-right: 3px;
+    color: var(--dg-text-3);
+    font-size: 0.7em;
+    /* Rotating (rather than swapping the glyph) keeps the row from
+       reflowing by a pixel as it opens — ▸ and ▾ have different widths. */
+    transition: transform 0.12s ease;
+}
+.dg-table .dg-tr--open > .dg-td:first-child::before {
+    transform: rotate(90deg);
+    color: var(--dg-text-2);
+}
+.dg-table .dg-tr--expandable:focus-visible {
+    outline: 2px solid var(--dg-info);
+    outline-offset: -2px;
+}
+
+/* `hidden` alone loses to the table's own display rules in some themes. */
+.dg-table .dg-detail-tr[hidden] { display: none; }
+/* Recessed, NOT accented: --dg-accent-dim is a blue wash that reads as a
+   selected or errored row. A detail is neither — it is the page's own
+   background showing through beneath the surface the rows sit on, which is
+   what makes it read as a layer behind rather than a state on top. */
+.dg-table .dg-detail-td {
+    padding: 0;
+    background: var(--dg-bg);
+    border-bottom: 1px solid var(--dg-border);
+}
+.dg-table .dg-tr--open > .dg-td { background: var(--dg-row-hover); }
+
+/* ── Leg breakdown ────────────────────────────────────────────────
+   The nested table a detail row holds: one line per leg of a position that
+   was carried across contracts.
+
+   Deliberately quieter than .dg-table — it is a footnote to the row above,
+   not a second grid — and deliberately NARROW. Its columns line up with
+   nothing in the grid above, so stretching them to the parent's width only
+   pushes related numbers apart; shrink-wrapped, a price and its P&L stay in
+   the same glance. The rule down the left ties the block to the row it
+   belongs to. */
+.dg-legs-wrap {
+    /* Themed floor colour: every cell below sets its own, but inheriting a
+       token rather than the document's initial black means a cell added later
+       without one still reads on a dark ground. */
+    color: var(--dg-text-2);
+    /* Shrink to the table, not to the row's full width — otherwise the meta
+       line at the right of the header is flung to the far edge of the grid,
+       level with nothing, while the table it describes ends far short of it.
+       Block (not inline-block) to avoid an inline baseline gap under the td. */
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    padding: 9px 14px 11px 16px;
+    border-left: 2px solid color-mix(in srgb, var(--dg-accent) 45%, transparent);
+    margin-left: 18px;
+}
+.dg-legs-hdr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 3px 16px;
+    padding-bottom: 8px;
+}
+.dg-legs-chain {
+    color: var(--dg-text);
+    font-size: 0.73rem;
+    font-weight: 600;
+}
+.dg-legs-arrow {
+    color: var(--dg-text-3);
+    font-weight: 400;
+    padding: 0 5px;
+}
+.dg-legs-meta { color: var(--dg-text-3); font-size: 0.7rem; }
+
+.dg-legs {
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    /* Every figure here is meant to be read down its column. */
+    font-variant-numeric: tabular-nums;
+}
+.dg-legs th {
+    text-align: left;
+    padding: 0 0 5px;
+    color: var(--dg-text-3);
+    font-weight: 600;
+    font-size: 0.67rem;
+    text-transform: uppercase;
+    /* Tight tracking on purpose: at this size the wide-tracked micro-label
+       spreads into the gutters and the header stops reading as one row. */
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--dg-border);
+}
+.dg-legs td {
+    padding: 4px 0;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--dg-border-sub);
+}
+/* Gutters on the cells, so the first column starts flush under the chain
+   above it and the last ends flush with the P&L. */
+.dg-legs th + th, .dg-legs td + td { padding-left: 16px; }
+.dg-legs .dg-legs-num { text-align: right; }
+.dg-legs .dg-legs-contract { color: var(--dg-text); font-weight: 600; }
+.dg-legs .dg-legs-held { color: var(--dg-text-3); }
+.dg-legs .dg-legs-why  { text-align: center; }
+.dg-legs .dg-badge {
+    font-size: 0.63rem;
+    padding: 0 5px;
+    line-height: 15px;
+}
+
+/* Foot: the reconciliation. Leg P&L sums to gross, gross less brokerage is
+   the net figure the parent row shows — the sum a reader opens this to check.
+   The labels sit in the badge column, against their own numbers. */
+.dg-legs tfoot td {
+    border-bottom: none;
+    padding-top: 6px;
+    font-weight: 600;
+}
+.dg-legs .dg-legs-total td { border-top: 1px solid var(--dg-border); }
+.dg-legs .dg-legs-total .dg-legs-why {
+    color: var(--dg-text-3);
+    font-weight: 600;
+    text-align: right;
+}
+.dg-legs .dg-legs-net td {
+    padding-top: 3px;
+    color: var(--dg-text);
+    font-weight: 700;
+}
+.dg-legs .dg-legs-net td:first-child {
+    font-weight: 400;
+    color: var(--dg-text-3);
+    text-align: right;
+}
+
+@media (max-width: 600px) {
+    .dg-legs-wrap { padding: 8px 8px 10px 10px; margin-left: 8px; }
+    .dg-legs { font-size: 0.7rem; }
+    .dg-legs th + th, .dg-legs td + td { padding-left: 10px; }
+}

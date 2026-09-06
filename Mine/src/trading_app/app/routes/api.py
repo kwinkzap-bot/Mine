@@ -589,6 +589,8 @@ def resolve_standard_lot(symbol: str) -> Optional[int]:
 
 
 from trading_app.service.provider_logic import get_kite, get_data_provider, get_icici_adapter
+from trading_app.Backtest import ema_futures_pricing
+from trading_app.filters import futures_candle_store
 
 
 
@@ -4731,10 +4733,105 @@ def _ema_daily_token(current_kite, symbol: str):
 # shares the free-text Symbol search box with every single-symbol strategy.
 _EMA_ALL_SYMBOLS = {'ALL', 'ALL STOCKS', 'ALL_STOCKS'}
 
-# Flat brokerage per round-trip trade, matching EMA_BROKERAGE_PER_TRADE in
-# backtest.js — the single-symbol run applies it in the browser, so the
-# All-Stocks scan (which sizes every trade server-side) uses the same figure.
-_EMA_BROKERAGE_PER_TRADE = 1000
+# Flat brokerage per ORDER (not per round trip): an entry and an exit are two
+# orders, and every carry-forward roll adds two more — book the near contract,
+# open the far one. Mirrored by EMA_BROKERAGE_PER_ORDER in backtest.js.
+_EMA_BROKERAGE_PER_ORDER = ema_futures_pricing.BROKERAGE_PER_ORDER
+
+# Underlyings whose futures are BSE (BFO) contracts rather than NFO ones.
+# Mirrors _BSE_UNDERLYINGS in the live algo.
+_EMA_BFO_UNDERLYINGS = {'SENSEX', 'BANKEX', 'SENSEX50'}
+
+# LIVE Breeze requests one run may spend on futures contracts it does not
+# already hold on disk. Everything already stored is free, and a settled
+# contract is stored forever, so these caps only ever bite on a cold store —
+# see filters/futures_candle_store. They exist because Breeze allows 100
+# req/min against a budget the live algos share: an uncapped cold All-Stocks
+# run is thousands of requests and twenty-odd minutes, which would time the
+# HTTP request out AND starve the algos. Capped, a cold run prices what it can,
+# says how many legs it could not, and converges over the next few runs (or in
+# one pass with scripts/prewarm_ema_futures.py).
+_EMA_FUT_BUDGET_SYMBOL = max(0, int(os.getenv('EMA_BT_FUT_BUDGET_SYMBOL', '60') or 0))
+_EMA_FUT_BUDGET_SCAN   = max(0, int(os.getenv('EMA_BT_FUT_BUDGET_SCAN', '400') or 0))
+
+
+def _ema_futures_exchange(symbol: str) -> str:
+    return 'BFO' if (symbol or '').upper() in _EMA_BFO_UNDERLYINGS else 'NFO'
+
+
+def _ema_futures_adapter():
+    """The ICICI adapter, or None.
+
+    Futures pricing goes through Breeze whatever the configured data provider
+    is, because it is the only one that will serve an EXPIRED contract: Breeze
+    addresses a contract by its fields, while every instrument master (Kite's,
+    Fyers') drops a contract the moment it expires, so replaying August needs
+    the August contract that no token can name any more.
+    """
+    try:
+        return get_icici_adapter()
+    except Exception as e:
+        logger.warning('[EMA Confluence] ICICI adapter unavailable — futures pricing '
+                       'degrades to the spot scale: %s', e)
+        return None
+
+
+def _ema_price_on_futures(symbol, trades, engine_daily_df, lots, lot_size,
+                          adapter, budget):
+    """Re-price one symbol's trades on its monthly futures, rolling as the live
+    algo does. Returns the pricing stats dict (see ema_futures_pricing)."""
+    fetcher = futures_candle_store.Fetcher(
+        adapter, symbol, _ema_futures_exchange(symbol), budget)
+    return ema_futures_pricing.apply_futures_pricing(
+        trades, engine_daily_df, fetcher,
+        lots=lots, lot_size=lot_size,
+        brokerage_per_order=_EMA_BROKERAGE_PER_ORDER,
+    )
+
+
+def _ema_lot_size(symbol: str, lot_sizes: dict) -> int:
+    """That symbol's futures lot size, or 1 when the NFO cache doesn't know it.
+
+    Falling back to 1 keeps the symbol's signals rather than dropping them; the
+    caller reports which symbols were sized this way so an unsized ₹ figure is
+    visible instead of silently small. Lot sizes are today's — the exchange
+    revises them and no historical table exists — so a trade from 2018 is sized
+    with the current contract's lot.
+    """
+    try:
+        return int(lot_sizes.get(symbol) or 0) or 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def _ema_money_summary(summary: dict, trades: list, stats: dict) -> None:
+    """Fold the futures/₹ figures into a run summary, in place.
+
+    `summary` arrives computed on FUTURES points (the engine's trades have
+    already been re-priced), so only the ₹ twins and the cost counters are
+    added here.
+    """
+    from trading_app.Backtest.ema_pullback_engine import summarize_trades
+    money = summarize_trades([ema_futures_pricing.rupee_view(t) for t in trades])
+    gross = summarize_trades([{**t, 'pnl': t.get('gross_pnl_rupees', 0)} for t in trades])
+    summary['total_pnl_rupees']       = money['total_pnl']
+    summary['total_gross_pnl_rupees'] = gross['total_pnl']
+    summary['avg_win_rupees']         = money['avg_win']
+    summary['avg_loss_rupees']        = money['avg_loss']
+    summary['profit_factor_rupees']   = money['profit_factor']
+    summary['max_drawdown_rupees']    = money['max_drawdown']
+    summary['win_rate_rupees']        = money['win_rate']
+    summary['total_brokerage']        = stats.get('brokerage', 0)
+    summary['total_orders']           = stats.get('orders', 0)
+    summary['total_rolls']            = stats.get('rolls', 0)
+    summary['brokerage_per_order']    = _EMA_BROKERAGE_PER_ORDER
+    summary['futures_priced']         = True
+    # Average ₹ actually deployed per entry (futures fill x qty). The All-Stocks
+    # scan spans stocks priced ₹80 and ₹80,000, so there is no single "capital
+    # per trade" — this is the base the equity curve starts from and the CAGR
+    # annualizes.
+    summary['capital_per_trade'] = round(
+        sum(t.get('capital', 0) for t in trades) / len(trades), 2) if trades else 0.0
 
 
 def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
@@ -4750,15 +4847,23 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     holds Direction/Target only — so the form's checkbox applies to every
     symbol either way.
 
+    Signals are found on the UNDERLYING and the money is booked on the monthly
+    FUTURE, exactly as the live algo does it: every fill is re-priced on the
+    contract that was trading on that date, an open position is CARRIED FORWARD
+    to the next month three sessions before expiry, and every order — entry,
+    exit and both legs of each roll — costs ₹1,000. See
+    Backtest/ema_futures_pricing.
+
     Points aren't comparable across stocks priced ₹80 and ₹80,000, so every
     trade is also sized in ₹ here: qty = lots x that symbol's futures lot
-    size, pnl_rupees = pnl x qty - brokerage. That's the same sizing the
-    live algo trades with, and the same arithmetic the single-symbol run
-    does in the browser off the Lots / Lot Value fields.
+    size, pnl_rupees = futures points x qty - brokerage. That's the same sizing
+    the live algo trades with.
 
     Daily history comes from the per-stock disk store (filters/candle_store),
     not a fresh provider fetch per symbol — 150+ symbols x 13 years of daily
-    bars is a multi-minute download the first time and a local read after.
+    bars is a multi-minute download the first time and a local read after. The
+    futures side has its own store for the same reason, and a shared request
+    budget on top of it (filters/futures_candle_store).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -4772,6 +4877,9 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
         logger.warning('[EMA Confluence Breakout scan] lot sizes unavailable (%s) — ₹ sizing falls back to 1/point', e)
         lot_sizes = {}
 
+    fut_adapter = _ema_futures_adapter()
+    fut_budget  = futures_candle_store.Budget(_EMA_FUT_BUDGET_SCAN)
+
     symbols = list(EMA_SYMBOL_DEFAULTS.keys())
     warmup_from_str = _ema_warmup_from(start_date_str)
     end_dt    = datetime.strptime(str(end_date_str)[:10], '%Y-%m-%d')
@@ -4780,6 +4888,7 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     is_fyers = _provider_tag(current_kite) == 'fyers'
     missing_lot_size = []   # appended from worker threads (list.append is atomic)
     rr_skipped       = []   # same — one entry per symbol, summed at the end
+    pricing_stats    = []   # same — one futures-pricing stats dict per symbol
 
     def _scan_symbol(symbol):
         df = get_daily_history(current_kite, _ema_daily_token(current_kite, symbol),
@@ -4807,24 +4916,21 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
         # rather than dropping its signals — reported in _debug so a stale
         # cache shows up as "these stocks' ₹ figures are unsized" instead of
         # silently shrinking the totals.
-        lot_size = int(lot_sizes.get(symbol) or 0)
-        if lot_size <= 0:
+        lot_size = _ema_lot_size(symbol, lot_sizes)
+        if lot_size <= 1 and not lot_sizes.get(symbol):
             missing_lot_size.append(symbol)
-            lot_size = 1
-        qty = max(1, lots) * lot_size
+
+        # Futures fills, carry-forward rolls and ₹1,000/order brokerage. This
+        # rewrites entry_price/exit_price/pnl onto the CONTRACT's scale and
+        # leaves the decision record behind as spot_*; it never changes which
+        # trades happened or when.
+        stats = _ema_price_on_futures(symbol, trades, engine.daily_df, lots,
+                                      lot_size, fut_adapter, fut_budget)
+        pricing_stats.append(stats)
         for t in trades:
             t['symbol']           = symbol
-            t['lot_size']         = lot_size
-            t['qty']              = qty
             t['direction_used']   = sym_direction
             t['target_pct_used']  = sym_target_pct
-            t['capital']          = round(t['entry_price'] * qty, 2)
-            t['brokerage']        = _EMA_BROKERAGE_PER_TRADE
-            t['sl_risk_rupees']   = round(abs(t['entry_price'] - t['sl_price']) * qty, 2)
-            t['gross_pnl_rupees'] = round(t['pnl'] * qty, 2)
-            # Net of the round-trip brokerage — this is the trade's real
-            # result, and what the trades table / equity curve show.
-            t['pnl_rupees']       = round(t['gross_pnl_rupees'] - _EMA_BROKERAGE_PER_TRADE, 2)
         return trades
 
     all_trades = []
@@ -4844,26 +4950,18 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     # peak/drawdown walk is order-sensitive (same fix as the TMF scan).
     all_trades.sort(key=lambda t: t['entry_time'])
 
+    # Computed on FUTURES points — the trades were re-priced above.
     summary = summarize_trades(all_trades)
-    rupee_summary       = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
-    gross_rupee_summary = summarize_trades([{**t, 'pnl': t['gross_pnl_rupees']} for t in all_trades])
-    summary['total_pnl_rupees']       = rupee_summary['total_pnl']
-    summary['total_gross_pnl_rupees'] = gross_rupee_summary['total_pnl']
-    summary['avg_win_rupees']         = rupee_summary['avg_win']
-    summary['avg_loss_rupees']        = rupee_summary['avg_loss']
-    summary['profit_factor_rupees']   = rupee_summary['profit_factor']
-    summary['max_drawdown_rupees']    = rupee_summary['max_drawdown']
-    summary['total_brokerage']        = _EMA_BROKERAGE_PER_TRADE * len(all_trades)
+    pricing = {k: sum(st.get(k, 0) for st in pricing_stats)
+               for k in ('rolls', 'orders', 'brokerage', 'legs', 'unpriced_legs',
+                         'spot_priced_trades')}
+    _ema_money_summary(summary, all_trades, pricing)
     summary['rr_skipped']             = sum(rr_skipped)
     summary['multi_symbol']           = True
     summary['symbols_scanned']        = len(symbols)
     summary['symbols_with_trades']    = len({t['symbol'] for t in all_trades})
     summary['lots']                   = lots
-    # Average ₹ actually deployed per entry — the stocks span a huge price
-    # range, so there's no single "capital per trade" the way TMF has one.
-    # It's the base the equity curve starts from and the CAGR below annualizes.
-    avg_capital = (sum(t['capital'] for t in all_trades) / len(all_trades)) if all_trades else 0.0
-    summary['capital_per_trade'] = round(avg_capital, 2)
+    avg_capital = summary['capital_per_trade']   # set by _ema_money_summary
 
     cagr_pct = 0.0
     try:
@@ -4875,11 +4973,20 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
         cagr_pct = 0.0
     summary['cagr_pct'] = cagr_pct
 
-    logger.info('[EMA Confluence Breakout scan] %d symbols (%d failed) → %d trades',
-                len(symbols), failed, len(all_trades))
+    logger.info('[EMA Confluence Breakout scan] %d symbols (%d failed) → %d trades, '
+                '%d rolls, %d orders (₹%d brokerage); futures history: %d fetched, '
+                '%d skipped on budget, %d trades fell back to the spot scale',
+                len(symbols), failed, len(all_trades), pricing['rolls'],
+                pricing['orders'], pricing['brokerage'], fut_budget.spent,
+                fut_budget.skipped, pricing['spot_priced_trades'])
     if missing_lot_size:
         logger.warning('[EMA Confluence Breakout scan] no lot size for %d symbols '
                        '(sized 1/point): %s', len(missing_lot_size), ', '.join(sorted(missing_lot_size)))
+    if fut_budget.skipped:
+        logger.warning('[EMA Confluence Breakout scan] futures request budget (%d) spent — '
+                       '%d contracts left unfetched and priced at the spot scale. Re-run to '
+                       'continue filling the store, or run scripts/prewarm_ema_futures.py.',
+                       _EMA_FUT_BUDGET_SCAN, fut_budget.skipped)
 
     return jsonify({
         'success': True,
@@ -4890,6 +4997,20 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
             'symbols_failed':   failed,
             'missing_lot_size': sorted(missing_lot_size),
             'warmup_from':      warmup_from_str,
+            'futures': {
+                'rolls':          pricing['rolls'],
+                'orders':         pricing['orders'],
+                'legs':           pricing['legs'],
+                # Trades whose contract history had a hole, so the whole
+                # trade fell back to the spot scale rather than mixing the two
+                # (see ema_futures_pricing). They still happened — only their
+                # prices are approximate.
+                'unpriced_legs':      pricing['unpriced_legs'],
+                'spot_priced_trades': pricing['spot_priced_trades'],
+                'contracts_fetched': fut_budget.spent,
+                'contracts_skipped': fut_budget.skipped,
+                'provider':       'icici' if fut_adapter else None,
+            },
         },
     })
 
@@ -4909,6 +5030,14 @@ def run_ema_pullback_backtest_api():
     through). SL is the signal candle's opposite extreme (High for SELL,
     Low for BUY); Target is target_pct (default 5.0, floor 1.0) of the
     entry price. direction: 'both'|'long'|'short', default 'both'.
+
+    Signals are found on the UNDERLYING; the money is booked on the monthly
+    FUTURE, the same split the live algo makes. Every fill is re-priced on the
+    contract trading that day, an open position is carried forward to the next
+    month three sessions before expiry, and every order (entry, exit, and both
+    legs of each roll) costs ₹1,000 — so `entry_price`/`exit_price`/`pnl` are
+    the CONTRACT's, with the decision record kept alongside as spot_*. See
+    Backtest/ema_futures_pricing.
 
     symbol='ALL' (the Symbol box's "All Stocks" entry) runs the same rule
     over EVERY symbol in EMA_SYMBOL_DEFAULTS instead of one — each with its
@@ -4973,10 +5102,34 @@ def run_ema_pullback_backtest_api():
             require_rr=require_rr,
             start_date=start_date_str,
         )
-        trades, summary = engine.run()
+        trades, _ = engine.run()
 
-        logger.info('[EMA Confluence Breakout BT] %d daily bars (warm-up from %s) → %d trades',
-                    len(daily_candles), warmup_from_str, len(trades))
+        try:
+            lot_sizes = _fno_lot_sizes()
+        except Exception as e:
+            logger.warning('[EMA Confluence Breakout BT] lot sizes unavailable (%s) — '
+                           '₹ sizing falls back to 1/point', e)
+            lot_sizes = {}
+        lot_size = _ema_lot_size(symbol, lot_sizes)
+        fut_adapter = _ema_futures_adapter()
+        fut_budget  = futures_candle_store.Budget(_EMA_FUT_BUDGET_SYMBOL)
+        stats = _ema_price_on_futures(symbol, trades, engine.daily_df, lots,
+                                      lot_size, fut_adapter, fut_budget)
+
+        # Re-summarised AFTER pricing: the engine's own summary was computed on
+        # the spot points the trades no longer carry.
+        from trading_app.Backtest.ema_pullback_engine import summarize_trades
+        summary = summarize_trades(trades)
+        summary['rr_skipped'] = engine.rr_skipped
+        _ema_money_summary(summary, trades, stats)
+        summary['lots']     = lots
+        summary['lot_size'] = lot_size
+        summary['qty']      = stats.get('qty') or max(1, lots) * lot_size
+
+        logger.info('[EMA Confluence Breakout BT] %s: %d daily bars (warm-up from %s) → '
+                    '%d trades, %d rolls, %d orders (₹%d brokerage)',
+                    symbol, len(daily_candles), warmup_from_str, len(trades),
+                    stats.get('rolls', 0), stats.get('orders', 0), stats.get('brokerage', 0))
 
         return jsonify({
             'success': True,
@@ -4986,6 +5139,23 @@ def run_ema_pullback_backtest_api():
                 'first_daily': str(daily_candles[0].get('date', '?')),
                 'last_daily':  str(daily_candles[-1].get('date', '?')),
                 'warmup_from': warmup_from_str,
+                'futures': {
+                    'rolls':             stats.get('rolls', 0),
+                    'orders':            stats.get('orders', 0),
+                    'legs':              stats.get('legs', 0),
+                    'unpriced_legs':      stats.get('unpriced_legs', 0),
+                    'spot_priced_trades': stats.get('spot_priced_trades', 0),
+                    'contracts_used':    stats.get('contracts_used', 0),
+                    'contracts_missing': stats.get('missing_contracts', []),
+                    # Contracts whose quotes disagree with the (adjusted) spot
+                    # series by more than a carry can explain — a corporate
+                    # action. Trades touching them are priced on spot.
+                    'implausible_basis': stats.get('implausible_basis', []),
+                    'contracts_fetched': fut_budget.spent,
+                    'contracts_skipped': fut_budget.skipped,
+                    'lot_size':          lot_size,
+                    'provider':          'icici' if fut_adapter else None,
+                },
             },
             'summary': summary,
         })
@@ -5013,7 +5183,13 @@ def get_ema_pullback_symbol_defaults():
 @csrf.exempt
 @require_user_auth
 def run_ema_pullback_optimise():
-    """Sweep EMA Confluence Breakout (direction × target_pct) and return ranked results."""
+    """Sweep EMA Confluence Breakout (direction × target_pct) and return ranked results.
+
+    Every combo is scored the way the backtest books it: futures fills, monthly
+    carry-forward rolls and ₹1,000 per order. Ranking on raw spot points
+    recommended targets so tight that the round trips (and their rolls) cost
+    more in brokerage than the edge paid — see optimise_ema_pullback.
+    """
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -5024,6 +5200,7 @@ def run_ema_pullback_optimise():
         end_date_str   = data.get('end_date')
         recalculate    = bool(data.get('recalculate', False))
         require_rr     = bool(data.get('require_rr', False))
+        lots           = max(1, int(data.get('lots', 1) or 1))
 
         if not end_date_str:
             end_date_str = datetime.today().strftime('%Y-%m-%d')
@@ -5035,11 +5212,14 @@ def run_ema_pullback_optimise():
             return jsonify({'success': False,
                             'error': 'Find Best Params runs on a single symbol — pick one instead of All Stocks.'}), 400
 
-        # 'v2' retires every entry cached before the EMA warm-up / stale-order
-        # fixes — those rankings came from a different engine and are wrong.
-        # The R:R gate changes which setups are tradable, so a gated sweep gets
-        # its own cache slot instead of overwriting the ungated ranking.
-        cache_key = f"ema_pullback_v2_{symbol}" + ('_rr' if require_rr else '')
+        # 'v2' retired every entry cached before the EMA warm-up / stale-order
+        # fixes; 'v3' retires everything ranked on spot points, before the
+        # futures/carry-forward re-pricing — those rankings scored a trade this
+        # strategy never places. The R:R gate changes which setups are tradable,
+        # so a gated sweep gets its own cache slot instead of overwriting the
+        # ungated ranking; lots scale the ₹ score, so they key it too.
+        cache_key = (f"ema_pullback_v3_{symbol}_x{lots}"
+                     + ('_rr' if require_rr else ''))
 
         if not recalculate:
             cache = _load_opt_cache()
@@ -5067,12 +5247,32 @@ def run_ema_pullback_optimise():
         import pandas as pd
         from trading_app.Backtest.ema_pullback_engine import optimise_ema_pullback
 
+        try:
+            lot_sizes = _fno_lot_sizes()
+        except Exception as e:
+            logger.warning('[EMA Confluence Breakout optimise] lot sizes unavailable (%s) — '
+                           '₹ sizing falls back to 1/point', e)
+            lot_sizes = {}
+        lot_size    = _ema_lot_size(symbol, lot_sizes)
+        fut_adapter = _ema_futures_adapter()
+        # One budget for the WHOLE sweep. The 42 combos re-trade the same
+        # symbol, so they need the same handful of contracts — the first combo
+        # pays for them and every later one reads the store.
+        fut_budget  = futures_candle_store.Budget(_EMA_FUT_BUDGET_SYMBOL)
+
+        def _price(trades, engine_daily_df):
+            return _ema_price_on_futures(symbol, trades, engine_daily_df, lots,
+                                         lot_size, fut_adapter, fut_budget)
+
         results = optimise_ema_pullback(pd.DataFrame(daily_candles),
                                         start_date=start_date_str,
-                                        require_rr=require_rr)
+                                        require_rr=require_rr,
+                                        price_trades=_price)
 
-        logger.info('[EMA Confluence Breakout optimise] %d daily bars → %d combos passed filter',
-                    len(daily_candles), len(results))
+        logger.info('[EMA Confluence Breakout optimise] %s: %d daily bars → %d combos passed '
+                    'filter (futures history: %d contracts fetched, %d skipped on budget)',
+                    symbol, len(daily_candles), len(results),
+                    fut_budget.spent, fut_budget.skipped)
 
         cached_at = datetime.now().strftime('%Y-%m-%d %H:%M')
         payload   = {
@@ -5081,6 +5281,10 @@ def run_ema_pullback_optimise():
             'best':                results[0] if results else None,
             'results':             results[:15],
             'cached_at':           cached_at,
+            'lots':                lots,
+            'lot_size':            lot_size,
+            'futures_priced':      True,
+            'brokerage_per_order': _EMA_BROKERAGE_PER_ORDER,
         }
 
         cache            = _load_opt_cache()

@@ -405,7 +405,8 @@ def _opt_score(s: dict) -> float:
 
 
 def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
-                          start_date=None, require_rr: bool = False) -> list:
+                          start_date=None, require_rr: bool = False,
+                          price_trades=None) -> list:
     """Sweep (direction × target_pct) and return results sorted best-first.
 
     `start_date` is forwarded to the engine so the sweep scores the exact same
@@ -413,6 +414,15 @@ def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
     `require_rr` likewise: the 1:1 gate rejects more setups the smaller the
     target, so a sweep run without it would rank targets the actual run never
     trades.
+
+    `price_trades(trades, engine_daily_df)` is the futures/carry-forward layer
+    (Backtest/ema_futures_pricing.apply_futures_pricing, bound to this symbol's
+    contracts). With it the sweep is ranked on NET ₹ — futures fills, roll
+    spreads and ₹1,000-per-order brokerage included — because that is what the
+    strategy actually earns; ranked on raw spot points it happily recommends a
+    1% target whose forty round trips and their rolls cost more in brokerage
+    than the edge is worth. Without it the sweep falls back to spot points,
+    which is what it always did.
     """
     results = []
     for direction in _DIRECTION_GRID:
@@ -425,10 +435,10 @@ def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
                     enable_short=enable_short, target_pct=tp,
                     require_rr=require_rr, start_date=start_date,
                 )
-                _, summary = engine.run()
+                trades, summary = engine.run()
                 if summary['total_trades'] < min_trades:
                     continue
-                results.append({
+                row = {
                     'direction':     direction,
                     'target_pct':    tp,
                     'total_trades':  summary['total_trades'],
@@ -439,9 +449,52 @@ def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
                     'profit_factor': summary['profit_factor'],
                     'max_drawdown':  summary['max_drawdown'],
                     'score':         round(_opt_score(summary), 2),
-                })
+                }
+                if price_trades is not None:
+                    row.update(_rupee_row(trades, engine.daily_df, price_trades))
+                results.append(row)
             except Exception as exc:
                 logger.debug('EMA Confluence Breakout optimise skip: dir=%s tp=%s — %s', direction, tp, exc)
 
-    results.sort(key=lambda x: x['score'], reverse=True)
+    # P&L breaks ties, because _opt_score floors every losing combo at -999 and
+    # a symbol can easily have nothing profitable to offer — brokerage alone
+    # sinks a tight target. Without the tie-break the whole sweep sorts as one
+    # -999 block in submission order, and `best` (which the form auto-applies)
+    # is then whichever combo happened to run first rather than the least bad.
+    results.sort(key=lambda x: (x['score'], x.get('total_pnl_rupees', x['total_pnl'])),
+                 reverse=True)
     return results
+
+
+def _rupee_row(trades, engine_daily_df, price_trades) -> dict:
+    """Re-price one sweep combo on the futures and re-summarise it in ₹.
+
+    Every field the sweep is judged on is overwritten with its futures-scale
+    twin — including win_rate and profit_factor, which are recomputed off NET ₹
+    (see ema_futures_pricing.rupee_view): a combo whose trades win on points
+    and lose on brokerage must not be ranked as a winner.
+    """
+    from trading_app.Backtest.ema_futures_pricing import rupee_view
+
+    stats = price_trades(trades, engine_daily_df)
+    points = _summarise(trades)                       # futures points now
+    money  = _summarise([rupee_view(t) for t in trades])
+    row = {
+        'total_pnl':        points['total_pnl'],
+        'wins':             money['wins'],
+        'losses':           money['losses'],
+        'win_rate':         money['win_rate'],
+        'profit_factor':    money['profit_factor'],
+        # Points stay points and ₹ stays ₹ — the grid shows both columns.
+        'max_drawdown':     points['max_drawdown'],
+        'total_pnl_rupees': money['total_pnl'],
+        'max_drawdown_rupees': money['max_drawdown'],
+        'total_brokerage':  stats.get('brokerage', 0),
+        'total_orders':     stats.get('orders', 0),
+        'rolls':            stats.get('rolls', 0),
+        'qty':              stats.get('qty', 0),
+        'lot_size':         stats.get('lot_size', 1),
+        'futures_priced':   True,
+    }
+    row['score'] = round(_opt_score({**money, 'total_trades': points['total_trades']}), 2)
+    return row

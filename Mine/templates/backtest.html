@@ -672,7 +672,7 @@
                     <input type="number" id="emaLots" value="1" min="1" max="50" step="1" oninput="updateEmaInvestment()">
                 </div>
                 <div class="form-group">
-                    <label for="emaLotValue">Lot Value (₹/pt)</label>
+                    <label for="emaLotValue" title="One lot of the underlying's monthly FUTURES contract. Filled in from the contract itself once a run completes — the backtest books its P&amp;L on the future, so this is read back, not typed.">Lot Size (₹/pt)</label>
                     <input type="number" id="emaLotValue" value="65" min="1" step="1" oninput="updateEmaInvestment()">
                 </div>
                 <div class="form-group">

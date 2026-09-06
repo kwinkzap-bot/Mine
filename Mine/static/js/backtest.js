@@ -615,7 +615,9 @@ document.addEventListener('DOMContentLoaded', function() {
     };
 
     // EMA Confluence Breakout investment display
-    window.updateEmaInvestment = function() {
+    // `actual` is the average ₹ a completed run actually deployed per entry
+    // (futures fill × lots × lot size) — the real figure, once there is one.
+    window.updateEmaInvestment = function(actual) {
         const lots  = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
         const total = lots * 50000;
         const el = document.getElementById('emaInvestmentDisplay');
@@ -623,7 +625,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // Across All Stocks each entry is lots × THAT stock's lot size ×
         // its own price, so there's no single figure to show up front —
         // the results' Net P&L card reports the real average per entry.
-        el.textContent = isEmaAllMode() ? 'varies by stock' : '₹' + total.toLocaleString('en-IN');
+        if (isEmaAllMode()) { el.textContent = 'varies by stock'; return; }
+        el.textContent = '₹' + Math.round(actual || total).toLocaleString('en-IN');
     };
 
     // ── Status filter: narrows the strategy dropdown to one maturity bucket ──
@@ -1083,10 +1086,15 @@ document.addEventListener('DOMContentLoaded', function() {
         return 330 + (Math.floor(lots) - 5) * 62;
     }
 
-    // EMA Confluence Breakout is a cash-equity strategy (LICHSGFIN, SBIN, …),
-    // so the NIFTY options table above does not apply to it. Flat ₹1,000 per
-    // round-trip trade, independent of lot count.
-    const EMA_BROKERAGE_PER_TRADE = 1000;
+    // EMA Confluence Breakout trades monthly FUTURES, so the NIFTY options
+    // table above does not apply to it: flat ₹1,000 per ORDER, independent of
+    // lot count. An entry and an exit are two orders, and every carry-forward
+    // roll adds two more (book the near contract, open the far one) — which is
+    // why the server sends back summary.total_brokerage off the real order
+    // count rather than letting this multiply by trades. Mirrors
+    // _EMA_BROKERAGE_PER_ORDER in app/routes/api.py; the fallback below only
+    // runs against a response from before futures pricing shipped.
+    const EMA_BROKERAGE_PER_ORDER = 1000;
 
     let lastData = null;
 
@@ -1120,6 +1128,15 @@ document.addEventListener('DOMContentLoaded', function() {
         const moneyLotsId    = isSc ? 'scLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : (isEma ? 'emaLots'     : 'vwapLots')));
         const moneyLotValId  = isSc ? 'scLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue')));
         lastData.is_multi_symbol = isMultiSymbol;
+
+        // A single-symbol EMA run is sized on the CONTRACT's own lot size
+        // server-side, so show that back in the Lot Value box rather than
+        // leaving a hand-typed number next to ₹ figures it no longer drives.
+        if (isEma && !isEmaAll && summary.lot_size) {
+            const lotValEl = document.getElementById('emaLotValue');
+            if (lotValEl) lotValEl.value = summary.lot_size;
+            if (window.updateEmaInvestment) window.updateEmaInvestment(summary.capital_per_trade);
+        }
 
         if (isSM) {
             lastData.is_swing_momentum = true;
@@ -1243,22 +1260,40 @@ document.addEventListener('DOMContentLoaded', function() {
             const ddPtsEl = document.getElementById('statMaxDDPts');
             const ddEl    = document.getElementById('statMaxDD');
             if (ddPtsEl) ddPtsEl.textContent = dd.toFixed(1) + ' pts';
-            if (ddEl)    ddEl.textContent    = '₹' + Math.round(Math.abs(dd) * vLotVal * vLots).toLocaleString('en-IN');
+            if (ddEl)    ddEl.textContent    = '₹' + Math.round(
+                (isEma && summary.max_drawdown_rupees != null)
+                    ? Math.abs(summary.max_drawdown_rupees)
+                    : Math.abs(dd) * vLotVal * vLots).toLocaleString('en-IN');
 
             const ddDatesEl = document.getElementById('statMaxDDDates');
             if (ddDatesEl) ddDatesEl.textContent = '';
 
-            const brokPerTrade   = isEma ? EMA_BROKERAGE_PER_TRADE : calcBrokeragePerTrade(vLots);
-            const totalBrokerage = brokPerTrade * (summary.total_trades || 0);
-            const grossRs = pnl * vLotVal * vLots;
-            const netRs   = grossRs - totalBrokerage;
+            // EMA Confluence is sized server-side now — Lots × the contract's
+            // own lot size, priced on the future, with the carry-forward rolls
+            // and their brokerage already counted. Reading it off the Lot Value
+            // box would quietly disagree with the trades table below it.
+            const emaServerRs    = isEma && summary.futures_priced;
+            const totalBrokerage = emaServerRs
+                ? (summary.total_brokerage || 0)
+                : (isEma ? EMA_BROKERAGE_PER_ORDER * 2 : calcBrokeragePerTrade(vLots)) * (summary.total_trades || 0);
+            const netRs = emaServerRs
+                ? (summary.total_pnl_rupees || 0)
+                : pnl * vLotVal * vLots - totalBrokerage;
             const netEl   = document.getElementById('statNetRs');
             if (netEl) {
                 netEl.textContent = (netRs >= 0 ? '+' : '') + '₹' + Math.round(netRs).toLocaleString('en-IN');
                 netEl.className   = 'stat-card__val ' + (netRs >= 0 ? 'stat-val-green' : 'stat-val-red');
             }
             const netSubEl = document.getElementById('statNetRsSub');
-            if (netSubEl) netSubEl.textContent = 'brok: ₹' + totalBrokerage.toLocaleString('en-IN');
+            if (netSubEl) {
+                let sub = 'brok: ₹' + Math.round(totalBrokerage).toLocaleString('en-IN');
+                if (emaServerRs) {
+                    sub += ` · ${summary.total_orders || 0} orders`;
+                    if (summary.total_rolls) sub += ` (incl. ${summary.total_rolls} roll${summary.total_rolls > 1 ? 's' : ''})`;
+                    sub += ` · ${summary.qty || 0} qty/entry`;
+                }
+                netSubEl.textContent = sub;
+            }
         } else if (isMultiSymbol && rtpRow) {
             // Every field here is already sized server-side (TMF: ~₹1,00,000
             // per entry; EMA All Stocks: Lots × each stock's own lot size) —
@@ -1325,7 +1360,13 @@ document.addEventListener('DOMContentLoaded', function() {
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
-        const investment2 = isMultiSymbol ? (summary.capital_per_trade || 100000) : lots2 * 50000;
+        // A single-symbol EMA run is sized server-side too now, so its trades
+        // carry their own pnl_rupees — same as a multi-symbol scan's, and read
+        // directly rather than re-derived from the Lots / Lot Value boxes.
+        const directRupees = isMultiSymbol || !!(isEma && summary.futures_priced);
+        const investment2 = (isMultiSymbol || (isEma && summary.capital_per_trade))
+            ? (summary.capital_per_trade || 100000)
+            : lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 
         // Store for period tab re-renders
@@ -1333,9 +1374,9 @@ document.addEventListener('DOMContentLoaded', function() {
         _periodIsRtp    = isMoney;
         _periodLots     = lots2;
         _periodLotValue = lotValue2;
-        _periodUseDirectRupees = isMultiSymbol;
+        _periodUseDirectRupees = directRupees;
         const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
-        renderPeriodBreakdown(data.trades, isMoney, lots2, lotValue2, activePeriod, isMultiSymbol);
+        renderPeriodBreakdown(data.trades, isMoney, lots2, lotValue2, activePeriod, directRupees);
 
         renderTable();
         resultsArea.style.display = 'block';
@@ -1762,16 +1803,161 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN'), tone: DataGrid.sign },
     ];
 
+    // EMA Confluence books its money on the monthly future, so Entry/Exit
+    // Price above are the CONTRACT's — these say which contract that was, how
+    // many times the position was carried forward, and what those extra orders
+    // cost. `contract` differs from `exit_contract` exactly when it rolled.
+    const EMA_FUTURES_COLS = [
+        // Plain text only: DataGrid escapes whatever `format` returns (markup
+        // belongs in `render`), and the note this cell carries is a tooltip,
+        // which the grid puts on the cell itself via `title`.
+        { label: 'Contract', sortable: true,
+          sortValue: t => t.contract || '',
+          format: (_, t) => {
+              const months = t.rolls ? `${t.contract} → ${t.exit_contract}` : (t.contract || '—');
+              // A trade whose contract history had a hole — or whose contract
+              // predates a corporate action the spot series is adjusted for —
+              // is priced on the spot scale end to end rather than mixing the
+              // two, so say so: its P&L would otherwise read as the future's.
+              return t.futures_priced === false ? `${months} · spot` : months;
+          },
+          title: (_, t) => t.futures_priced === false
+              ? 'Priced on the spot scale — no usable futures history for this contract '
+                + '(the broker serves none, or its quotes predate a corporate action '
+                + 'the daily series is adjusted for)'
+              : '' },
+        { key: 'rolls', label: 'Rolls', sortable: true,
+          format: v => v || 0 },
+        { key: 'brokerage', label: 'Brokerage (₹)', sortable: true,
+          format: v => '-₹' + Math.round(v || 0).toLocaleString('en-IN') },
+        { key: 'pnl_rupees', label: 'P&L (₹)', sortable: true, strong: true,
+          format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN'), tone: DataGrid.sign },
+    ];
+
+    // A carried-forward EMA trade is ONE setup but several round trips — the
+    // near contract is booked out and the far one opened at each roll. The row
+    // above shows the setup (first entry, last exit, total P&L), which on its
+    // own reads as a single fill at prices that never connect; this is the
+    // breakdown behind it, one line per contract actually held.
+    const _LEG_TONE = { TARGET: 'pos', SL: 'neg', ROLL: 'info', DATA_END: 'warn' };
+
+    function _emaLegsDetail(t) {
+        if (!t || !Array.isArray(t.legs) || t.legs.length < 2) return '';
+        const esc = DataGrid.escape;
+        const px  = v => Number(v ?? 0).toFixed(2);
+        const pts = v => (Number(v) >= 0 ? '+' : '') + Number(v ?? 0).toFixed(2);
+        const rs  = v => (Number(v) >= 0 ? '+₹' : '-₹')
+                       + Math.abs(Math.round(v || 0)).toLocaleString('en-IN');
+        const tone = v => Number(v) >= 0 ? 'dg-pos' : 'dg-neg';
+        // A roll that cost nothing is not a gain — a spot-priced trade has no
+        // spread at all, and colouring its 0.00 green reads as one.
+        const rollTone = v => Number(v) === 0 ? 'dg-muted' : tone(v);
+
+        // "01/10 → 23/10/2025", with the year carried only by the end date when
+        // both fall in the same one. One column instead of two, and the eye
+        // reads a holding period rather than two unrelated dates.
+        const parts = v => String(v ?? '').slice(0, 10).split('-');
+        const held = (from, to) => {
+            const a = parts(from), b = parts(to);
+            if (a.length < 3 || b.length < 3) return '—';
+            const end = `${b[2]}/${b[1]}/${b[0]}`;
+            return (a[0] === b[0] ? `${a[2]}/${a[1]}` : `${a[2]}/${a[1]}/${a[0]}`) + ' → ' + end;
+        };
+
+        // What a roll actually cost. Held continuously the trade would have
+        // made sign×(last exit − first entry); each roll books out at the near
+        // contract's price and back in at the far one's, and that gap is the
+        // difference. It is the number this breakdown exists to show, and it
+        // appears nowhere else in the UI.
+        const sign = (t.type === 'Short' || t.direction === 'SELL') ? -1 : 1;
+        const rollDelta = (leg, i) => i === 0
+            ? null
+            : -sign * (Number(leg.entry_price) - Number(t.legs[i - 1].exit_price));
+
+        let rollTotal = 0;
+        const rows = t.legs.map((leg, i) => {
+            const delta = rollDelta(leg, i);
+            if (delta !== null) rollTotal += delta;
+            const reason = String(leg.reason || '');
+            return `<tr>
+              <td class="dg-legs-contract">${esc(leg.contract)}</td>
+              <td class="dg-legs-held">${esc(held(leg.entry_date, leg.exit_date))}</td>
+              <td class="dg-legs-num">${esc(px(leg.entry_price))}</td>
+              <td class="dg-legs-num">${esc(px(leg.exit_price))}</td>
+              <td class="dg-legs-why">${DataGrid.badge(reason, _LEG_TONE[reason] || 'neutral')}</td>
+              <td class="dg-legs-num ${delta === null ? 'dg-muted' : rollTone(delta)}">${
+                  delta === null ? '—' : esc(pts(delta))}</td>
+              <td class="dg-legs-num ${tone(leg.pnl)}">${esc(pts(leg.pnl))}</td>
+              <td class="dg-legs-num ${tone(leg.pnl_rupees)}">${esc(rs(leg.pnl_rupees))}</td>
+            </tr>`;
+        }).join('');
+
+        // Every order is ₹1,000 — entry, exit, and both legs of every roll — so
+        // the foot reconciles leg P&L → gross → the net figure the parent row
+        // shows, which is the sum a reader opens this to check. The labels sit
+        // in the badge column, hard against their own numbers, rather than
+        // stranded at the far left behind a wide colspan.
+        const orders = t.orders || t.legs.length * 2;
+        const gross  = Number(t.gross_pnl_rupees ?? 0);
+        const net    = Number(t.pnl_rupees ?? 0);
+        const chain  = t.legs.map(l => esc(l.contract))
+                             .join('<span class="dg-legs-arrow">→</span>');
+
+        return `<div class="dg-legs-wrap">
+            <div class="dg-legs-hdr">
+              <span class="dg-legs-chain">${chain}</span>
+              <span class="dg-legs-meta">${t.rolls} roll${t.rolls === 1 ? '' : 's'}
+                · qty ${(Number(t.qty) || 0).toLocaleString('en-IN')}
+                · ${orders} orders × ₹${EMA_BROKERAGE_PER_ORDER.toLocaleString('en-IN')}</span>
+            </div>
+            <table class="dg-legs">
+              <thead><tr>
+                <th>Contract</th><th>Held</th>
+                <th class="dg-legs-num">In</th><th class="dg-legs-num">Out</th>
+                <th class="dg-legs-why">Closed</th>
+                <th class="dg-legs-num" title="What the roll cost: booked out of the near contract and back into the far one at that session's prices">Roll</th>
+                <th class="dg-legs-num">Pts</th><th class="dg-legs-num">P&amp;L</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot>
+                <tr class="dg-legs-total">
+                  <td colspan="4"></td>
+                  <td class="dg-legs-why">Total</td>
+                  <td class="dg-legs-num ${rollTone(rollTotal)}">${esc(pts(rollTotal))}</td>
+                  <td class="dg-legs-num ${tone(t.pnl)}">${esc(pts(t.pnl))}</td>
+                  <td class="dg-legs-num ${tone(gross)}">${esc(rs(gross))}</td>
+                </tr>
+                <tr class="dg-legs-net">
+                  <td colspan="7">less ₹${Math.round(t.brokerage || 0).toLocaleString('en-IN')} brokerage</td>
+                  <td class="dg-legs-num ${tone(net)}">${esc(rs(net))}</td>
+                </tr>
+              </tfoot>
+            </table>
+        </div>`;
+    }
+
     function renderTable() {
         if (!lastData || !lastData.trades) return;
         if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
 
         const multi = !!lastData.is_multi_symbol;
+        const futures = !!(lastData.summary && lastData.summary.futures_priced);
+        let columns = multi ? MULTI_SYMBOL_TRADES_COLS : TRADES_COLS;
+        // The multi-symbol column set already carries qty/brokerage/₹ P&L, so
+        // it only needs the contract pair spliced in ahead of them.
+        if (futures) {
+            columns = multi
+                ? [...columns.slice(0, -4), EMA_FUTURES_COLS[0], EMA_FUTURES_COLS[1], ...columns.slice(-4)]
+                : [...columns, ...EMA_FUTURES_COLS];
+        }
         DataGrid.mountSortable('tradesGrid', {
             rows: lastData.trades,
-            columns: multi ? MULTI_SYMBOL_TRADES_COLS : TRADES_COLS,
+            columns,
             empty: 'No trades generated',
             defaultSort: multi ? { key: 'symbol', dir: 'asc' } : { key: 'exit_time', dir: 'desc' },
+            // Only rolled trades get one; a single-contract trade's row
+            // already tells the whole story.
+            detail: futures ? _emaLegsDetail : undefined,
         });
     }
 
@@ -2296,15 +2482,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // ── EMA Confluence Breakout Optimise (Find Best Params) ─────────────────
     // Only two real free params — Direction and Target % — so a single flat
     // grid (no per-timeframe grouping) sweeping both, same shape as VWAP's.
+    // The sweep is ranked on NET ₹ now — futures fills, carry-forward rolls and
+    // ₹1,000 per order — so the money columns are the ones that decide, and
+    // Win% is the net-of-cost one (a combo that wins on points and loses on
+    // brokerage is not a winner). Points stay visible beside them.
+    const _emaRs = v => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v || 0).toLocaleString('en-IN')}</span>`;
     const EMA_OPT_COLS = [
         { label: '#',             key: null,            fmt: (r, i) => i + 1 },
         { label: 'Direction',     key: 'direction',      fmt: r => r.direction === 'both' ? 'Buy & Sell' : (r.direction === 'long' ? 'Buy only' : 'Sell only') },
         { label: 'Target %',      key: 'target_pct',     fmt: r => `${r.target_pct}%` },
         { label: 'Trades',        key: 'total_trades',   fmt: r => r.total_trades },
-        { label: 'Win%',          key: 'win_rate',       fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Win%',          key: 'win_rate',       fmt: r => `${r.win_rate != null ? r.win_rate.toFixed(0) : '0'}%` },
+        { label: 'Net P&L (₹)',   key: 'total_pnl_rupees', fmt: r => r.total_pnl_rupees != null ? _emaRs(r.total_pnl_rupees) : '—' },
+        { label: 'Brokerage (₹)', key: 'total_brokerage',  fmt: r => r.total_brokerage != null ? `<span class="pnl-negative">-₹${Math.round(r.total_brokerage).toLocaleString('en-IN')}</span>` : '—' },
+        { label: 'Rolls',         key: 'rolls',          fmt: r => r.rolls != null ? r.rolls : '—' },
         { label: 'Net P&L (pts)', key: 'total_pnl',      fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
         { label: 'Prof. Factor',  key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD',        key: 'max_drawdown',   fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: 'Max DD (₹)',    key: 'max_drawdown_rupees', fmt: r => r.max_drawdown_rupees != null ? `<span class="pnl-negative">-₹${Math.round(Math.abs(r.max_drawdown_rupees)).toLocaleString('en-IN')}</span>` : `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
         { label: '',              key: null,            fmt: () => '' },
     ];
 
@@ -2327,12 +2521,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol}`;
+            if (data.futures_priced) {
+                meta += ` · futures, ${data.lots || 1} lot × ${data.lot_size || 1}`
+                      + ` · ₹${(data.brokerage_per_order || 1000).toLocaleString('en-IN')}/order`;
+            }
             if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
             metaEl.textContent = meta;
         }
 
-        _mountSingleOptGrid('emaOptGrid', data.results || [], EMA_OPT_COLS, 'total_pnl', applyEmaOptResult,
-            { win_rate: r => r.total_trades ? r.wins / r.total_trades : 0 });
+        _mountSingleOptGrid('emaOptGrid', data.results || [],
+            EMA_OPT_COLS,
+            data.futures_priced ? 'total_pnl_rupees' : 'total_pnl',
+            applyEmaOptResult, {});
 
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
@@ -2369,6 +2569,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     // The gate rejects more setups the smaller the target, so
                     // the sweep has to score under the same rule as the run.
                     require_rr: document.getElementById('emaRequireRR')?.checked ?? false,
+                    // …and it ranks on ₹, so it has to be sized like the run too.
+                    lots: Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1)),
                 })
             });
             const data = await resp.json();

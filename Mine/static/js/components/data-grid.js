@@ -61,6 +61,16 @@
      foot     Array of {label, colspan?, align?, tone?, cellClass?} — a single
               totals row rendered in <tfoot>. `label` is raw HTML (not
               escaped): callers must escape their own interpolations.
+     detail   (row, index) => HTML string, or falsy for rows that have none.
+              Renders a full-width row directly beneath its own row, hidden
+              until that row is clicked — for a breakdown that is too big for
+              a cell and too small for a modal (the per-contract legs of a
+              carried-forward trade, say). Raw HTML: escape your own
+              interpolations (DataGrid.escape is exported for that). Rows
+              that return something get a ▸/▾ affordance, keyboard focus and
+              aria-expanded; rows that don't are untouched. The detail row is
+              emitted next to its parent on every render, so it stays with it
+              through a re-sort — but it re-renders collapsed.
 
    ── Click-to-sort ──────────────────────────────────────────────────
    Every page that had a sortable table (CPR scanner, EMA touch/narrow,
@@ -272,9 +282,23 @@
         const body = rows.map((row, i) => {
             const cls   = opts.rowClass ? opts.rowClass(row, i) : '';
             const attrs = opts.rowAttrs ? opts.rowAttrs(row, i) : '';
-            return `<tr${cls ? ` class="${cls}"` : ''}${attrs ? ' ' + attrs : ''}>` +
-                   columns.map(c => cell(c, row, i)).join('') +
-                   `</tr>`;
+            const detail = opts.detail ? opts.detail(row, i) : '';
+
+            const classes = cls ? [cls] : [];
+            let rowAttrs = attrs ? ' ' + attrs : '';
+            if (detail) {
+                classes.push('dg-tr--expandable');
+                rowAttrs += ` data-dg-detail="${i}" role="button" tabindex="0" aria-expanded="false"`;
+            }
+            const tr = `<tr${classes.length ? ` class="${classes.join(' ')}"` : ''}${rowAttrs}>` +
+                       columns.map(c => cell(c, row, i)).join('') +
+                       `</tr>`;
+            if (!detail) return tr;
+            // Spans the whole table so the breakdown is free to lay itself
+            // out — it is not trying to line up with the columns above it.
+            return tr +
+                `<tr class="dg-detail-tr" data-dg-detail-for="${i}" hidden>` +
+                `<td class="dg-detail-td" colspan="${columns.length}">${detail}</td></tr>`;
         }).join('');
 
         const foot = opts.foot && opts.foot.length ? footRow(opts.foot) : '';
@@ -299,11 +323,50 @@
                `</div>`;
     }
 
+    // ── Detail rows ──────────────────────────────────────────────────
+    // Click (or Enter/Space) a row that has a `detail` to reveal the
+    // full-width row rendered beneath it. Delegated and bound once per
+    // container: innerHTML is replaced on every render, but the container
+    // node itself persists, so the listener survives a re-sort.
+    function wireDetails(el) {
+        if (!el || el.dataset.dgDetailWired) return;
+        el.dataset.dgDetailWired = '1';
+
+        const toggle = (tr) => {
+            const detail = el.querySelector(
+                `[data-dg-detail-for="${CSS.escape(tr.dataset.dgDetail)}"]`);
+            if (!detail) return;
+            const opening = detail.hidden;
+            detail.hidden = !opening;
+            tr.classList.toggle('dg-tr--open', opening);
+            tr.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        };
+        // A row can hold its own controls (a "Use this row" button, a sort
+        // header in a nested grid) — those keep their own click.
+        const rowFor = (e) => {
+            if (e.target.closest('button, a, input, select, label, [data-sort-key]')) return null;
+            const tr = e.target.closest('[data-dg-detail]');
+            return tr && el.contains(tr) ? tr : null;
+        };
+        el.addEventListener('click', (e) => {
+            const tr = rowFor(e);
+            if (tr) toggle(tr);
+        });
+        el.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const tr = rowFor(e);
+            if (tr) { e.preventDefault(); toggle(tr); }
+        });
+    }
+
     // Render straight into a container element.
     function mount(target, opts) {
         const el = typeof target === 'string'
             ? document.getElementById(target) : target;
-        if (el) el.innerHTML = render(opts);
+        if (el) {
+            el.innerHTML = render(opts);
+            if (opts.detail) wireDetails(el);
+        }
         return el;
     }
 
@@ -378,6 +441,7 @@
         if (opts.onSorted) opts.onSorted(rows, { ...state });
 
         el.innerHTML = render({ ...opts, rows, sortState: state });
+        if (opts.detail) wireDetails(el);
 
         // Bind once per container — innerHTML is replaced on every render, but
         // the container node itself persists, so a delegated listener survives.
