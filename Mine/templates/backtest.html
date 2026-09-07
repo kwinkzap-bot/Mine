@@ -26,11 +26,11 @@
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
                 <option value="vwap">📈 C/P VWAP Strategy</option>
-                <option value="second_candle">🕒 Candle Breakout</option>
+                <option value="second_candle" selected>🕒 Candle Breakout</option>
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
                 <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
-                <option value="ema_pullback" selected>📉 EMA Confluence Breakout</option>
+                <option value="ema_pullback">📉 EMA Confluence Breakout</option>
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
             </select>
@@ -65,7 +65,7 @@
                 <div class="form-group" id="mainIntervalFg">
                     <label for="interval">Timeframe</label>
                     <select id="interval">
-                        <option value="30second">30 Second (≈1 month)</option>
+                        <option value="30second" title="How far back 30-second bars go depends on the broker serving the backtest: Fyers keeps a rolling 30 days of them natively; ICICI builds them from 1-second data and serves them much further back, but at 25 Breeze requests per trading day. The results panel says what the range actually returned.">30 Second</option>
                         <option value="minute" selected>1 Minute</option>
                         <option value="2minute">2 Minute</option>
                         <option value="3minute">3 Minute</option>
@@ -228,6 +228,10 @@
                         <option value="long">Buy only</option>
                         <option value="short">Sell only</option>
                     </select>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="scOptionPnl">
+                    <label for="scOptionPnl" title="OFF: P&amp;L is measured in NIFTY index points (the default). ON: P&amp;L is measured on the OPTION the live algo would have bought — CE for a Buy signal, PE for a Sell — so theta decay and delta drift are in the numbers and a 1:3 index trade is no longer 1:3. Signals, SL and Target are always decided on the index either way. The leg is modelled with Black-Scholes on the nearest weekly expiry at 15% assumed IV, strike priced nearest ₹250 (the live algo's default) — there is no historical option chain in this app, so the premiums are a model, not a recorded price.">Opt P&amp;L</label>
                 </div>
             </div>
 

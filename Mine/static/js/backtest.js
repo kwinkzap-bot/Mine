@@ -827,6 +827,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 const dir = document.getElementById('scDirection')?.value || 'both';
                 payload.enable_long  = dir !== 'short';
                 payload.enable_short = dir !== 'long';
+                // P&L basis: unticked = NIFTY index points, ticked = the
+                // premium of the CE/PE leg the live algo would have bought.
+                payload.option_pnl   = document.getElementById('scOptionPnl')?.checked ?? false;
             }
 
             // 2-Min EMA Scalp Pullback
@@ -1129,6 +1132,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // runs against a response from before futures pricing shipped.
     const EMA_BROKERAGE_PER_ORDER = 1000;
 
+    // Is the Candle Breakout run booked on the option premium? The ₹/pt box
+    // applies to either basis, so this only labels the figures and asks the
+    // server for the matching leaderboard.
+    function _scOptionBasis() {
+        return document.getElementById('scOptionPnl')?.checked ?? false;
+    }
+
     let lastData = null;
 
     function displayResults(data) {
@@ -1160,6 +1170,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // 2nd-candle / Scalp Pullback / Pivot Confluence / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
         const moneyLotsId    = isSc ? 'scLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : (isEma ? 'emaLots'     : 'vwapLots')));
         const moneyLotValId  = isSc ? 'scLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue')));
+
+        // Candle Breakout booked on the option premium: the ₹ cards below are
+        // unchanged (Lot Value ₹/pt multiplies either basis) — this only
+        // relabels the points as premium points and shows the leg that was
+        // priced.
+        const isScOption = !!(isSc && summary.pnl_basis === 'option');
         lastData.is_multi_symbol = isMultiSymbol;
 
         // A single-symbol EMA run is sized on the CONTRACT's own lot size
@@ -1197,7 +1213,9 @@ document.addEventListener('DOMContentLoaded', function() {
         pnlEl.textContent = (pnl >= 0 ? '+' : '') + (isMultiSymbol ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
         pnlEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
         const pnlUnitEl = document.getElementById('statTotalPnlUnit');
-        if (pnlUnitEl) pnlUnitEl.textContent = isMultiSymbol ? `gross, before brokerage · ${summary.total_trades || 0} entries` : 'points';
+        if (pnlUnitEl) pnlUnitEl.textContent = isMultiSymbol
+            ? `gross, before brokerage · ${summary.total_trades || 0} entries`
+            : (isScOption ? 'option premium points' : 'points');
 
         const outcomeEl = document.getElementById('statOutcome');
         outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
@@ -1326,6 +1344,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     sub += ` · ${summary.qty || 0} qty/entry`;
                 }
                 netSubEl.textContent = sub;
+            }
+
+            // Candle Breakout: say which basis the pts above are on. On the
+            // option basis every "pts" on this screen is a PREMIUM point of a
+            // modelled leg, so the model's assumptions belong next to them
+            // rather than only in the checkbox's tooltip.
+            if (isSc) {
+                const subtitle = document.getElementById('btSubtitle');
+                if (subtitle) {
+                    subtitle.textContent = isScOption
+                        ? `P&L basis: option premium  ·  ${summary.strike_mode === 'delta' ? '~0.90Δ strike' : 'strike priced nearest ₹250'}`
+                          + `  ·  nearest weekly expiry  ·  IV ${Math.round((summary.option_iv || 0.15) * 100)}% assumed`
+                          + '  ·  modelled (Black-Scholes), not a recorded chain'
+                        : 'P&L basis: NIFTY index points';
+                }
             }
         } else if (isMultiSymbol && rtpRow) {
             // Every field here is already sized server-side (TMF: ~₹1,00,000
@@ -1836,6 +1869,22 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN'), tone: DataGrid.sign },
     ];
 
+    // Candle Breakout run on the option basis. The index Entry/Exit Price
+    // columns above still apply — the signal, SL and Target are index levels —
+    // so these say which leg was priced against them and what it cost, and keep
+    // the index result visible next to the premium P&L the row is booked on.
+    const SC_OPTION_COLS = [
+        { label: 'Leg', sortable: true,
+          sortValue: t => Number(t.strike) || 0,
+          format: (_, t) => t.strike ? `${t.strike} ${t.option_type || ''}`.trim() : '—' },
+        { key: 'entry_premium', label: 'Entry Prem', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'exit_premium', label: 'Exit Prem', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'index_pnl', label: 'Index P&L', sortable: true,
+          format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
+    ];
+
     // EMA Confluence books its money on the monthly future, so Entry/Exit
     // Price above are the CONTRACT's — these say which contract that was, how
     // many times the position was carried forward, and what those extra orders
@@ -1982,6 +2031,12 @@ document.addEventListener('DOMContentLoaded', function() {
             columns = multi
                 ? [...columns.slice(0, -4), EMA_FUTURES_COLS[0], EMA_FUTURES_COLS[1], ...columns.slice(-4)]
                 : [...columns, ...EMA_FUTURES_COLS];
+        } else if (!multi && lastData.summary && lastData.summary.pnl_basis === 'option') {
+            // Leg / premiums / index P&L go in front of the P&L column, which
+            // stays last and is now the premium's.
+            const pnlCol = columns[columns.length - 1];
+            columns = [...columns.slice(0, -1), ...SC_OPTION_COLS,
+                       { ...pnlCol, label: 'Opt P&L' }];
         }
         DataGrid.mountSortable('tradesGrid', {
             rows: lastData.trades,
@@ -2673,6 +2728,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+            meta += _scOptionBasis() ? ' · option premium basis' : ' · index basis';
             if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
             metaEl.textContent = meta;
         }
@@ -2735,6 +2791,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     exit_hour:   parseInt(exitTime[0] || 15),
                     exit_minute: parseInt(exitTime[1] || 25),
                     recalculate: recalculate,
+                    option_pnl:  _scOptionBasis(),
                 })
             });
             const data = await resp.json();

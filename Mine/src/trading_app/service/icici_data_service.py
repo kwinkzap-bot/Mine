@@ -183,10 +183,22 @@ _BREEZE_MAX_ROWS = 1000
 _SECOND_WINDOW_SECONDS = 900
 
 # One trading day of 1-second data is 25 windows, i.e. 25 requests, against an
-# app-wide Breeze budget of 5000/day that the live algos share. Cap the
-# lookback rather than let one wide 30-second backtest spend all of it; the
-# caller learns the range was cut from last_history_error().
-_SECOND_MAX_DAYS = max(1, int(os.getenv('ICICI_SECOND_MAX_DAYS', '5') or 5))
+# app-wide Breeze budget of 5000/day that the live algos share.
+#
+# This used to be a hard 5-day LOOKBACK clip, which meant a 30-second backtest
+# silently saw the last 5 days of whatever range was asked for — a year-long
+# range and a week-long one returned the same three trading days. What actually
+# needs protecting is the request budget, not the calendar, so the cap is now
+# on requests: the range is walked NEWEST-FIRST and stops when the budget for
+# this call is spent, and the caller learns where it stopped from
+# last_history_error(). Settled days are cached at the aggregated bar size, so
+# re-running the same range picks up where the last one left off.
+#
+# 800 requests ≈ 32 fresh trading days per call. Raise ICICI_SECOND_MAX_REQUESTS
+# to pull more in one go; 0 means no limit (a multi-year 30-second range can
+# then spend the whole day's Breeze budget, which the live algos share).
+_SECOND_MAX_REQUESTS = max(0, int(os.getenv('ICICI_SECOND_MAX_REQUESTS', '800') or 0))
+_SECOND_DAY_REQUESTS = 25
 
 
 class IciciDataServiceAdapter:
@@ -666,17 +678,26 @@ class IciciDataServiceAdapter:
 
         raw: List[Dict[str, Any]] = []
         if breeze_interval == '1second':
-            raw, clipped_from = self._second_history(info, fd, td)
-            if clipped_from is not None:
+            # Aggregate each day to the target bar as it arrives. Holding the
+            # raw 1-second rows for the whole range instead — 22,500 a day —
+            # is what made a wide 30-second range a memory problem, and this is
+            # a live trading process.
+            bar_seconds = (_BREEZE_BAR_SECONDS['1second'] * factor) if factor > 1 else None
+            raw, stopped_at = self._second_history(info, fd, td, bar_seconds)
+            if stopped_at is not None:
                 _HIST_ERROR.msg = (
-                    f"ICICI serves {interval} only {_SECOND_MAX_DAYS} day(s) back "
-                    f"(from {clipped_from}); {from_date} was requested. One day of "
-                    f"1-second data costs 25 Breeze requests, so the lookback is "
-                    f"capped — raise ICICI_SECOND_MAX_DAYS, or run this timeframe "
-                    f"on Fyers, which serves 30-second bars natively.")
+                    f"ICICI {interval} reaches back to {stopped_at}; {from_date} was "
+                    f"requested. One trading day of 1-second data costs "
+                    f"{_SECOND_DAY_REQUESTS} Breeze requests out of the app-wide "
+                    f"5,000/day the live algos share, so this call stopped at its "
+                    f"{_SECOND_MAX_REQUESTS}-request budget. Days already fetched are "
+                    f"cached — re-run to walk further back, or raise "
+                    f"ICICI_SECOND_MAX_REQUESTS.")
                 logger.warning("[IciciAdapter] %s", _HIST_ERROR.msg)
             return self._finish_history(raw, info, cache_key, fd, td, interval,
-                                        breeze_interval, factor, oi, use_cache)
+                                        # already aggregated above when bar_seconds is set
+                                        breeze_interval, 1 if bar_seconds else factor,
+                                        oi, use_cache)
 
         step = _CHUNK_DAYS.get(breeze_interval, 5)
         chunk = timedelta(days=step)
@@ -757,12 +778,19 @@ class IciciDataServiceAdapter:
                 _HIST_CACHE.pop(next(iter(_HIST_CACHE)))
         return candles
 
-    def _second_history(self, info: Dict[str, Any], fd: dt_date,
-                        td: dt_date) -> Tuple[List[Dict[str, Any]], Optional[dt_date]]:
+    def _second_history(self, info: Dict[str, Any], fd: dt_date, td: dt_date,
+                        bar_seconds: Optional[int] = None
+                        ) -> Tuple[List[Dict[str, Any]], Optional[dt_date]]:
         """1-second bars, fetched in windows small enough to clear the row cap.
 
-        Returns (candles, clipped_from) — clipped_from is the date the range
-        was cut back to when it was wider than _SECOND_MAX_DAYS, else None.
+        `bar_seconds` aggregates each day to that bar before it is kept (and
+        cached), which is what lets a wide range run at all: 750 30-second bars
+        a day instead of 22,500 1-second rows.
+
+        Returns (candles, stopped_at) — stopped_at is the oldest day actually
+        fetched when the request budget ran out before reaching `fd`, else None.
+        Days are walked NEWEST-FIRST so a budget-limited call returns the most
+        recent stretch of the range rather than an arbitrary middle.
 
         Unlike the day-chunked path, a window is cached as soon as its END is
         in the past rather than only once the whole day is: the live 30-second
@@ -771,30 +799,80 @@ class IciciDataServiceAdapter:
         budget before lunch. Only the window still forming is ever re-fetched.
         """
         now = datetime.now(IST)
-        earliest = td - timedelta(days=_SECOND_MAX_DAYS - 1)
-        clipped_from = earliest if earliest > fd else None
 
-        out: List[Dict[str, Any]] = []
-        day = max(fd, earliest)
+        days = []
+        day = fd
         while day <= td:
             if day.weekday() < 5:      # Breeze answers weekends with nothing
-                for w_start, w_end in _session_windows(day):
-                    if w_start > now:
-                        break
-                    settled = w_end < now
-                    ckey = (f"{info['symbol']}:1second:"
-                            f"{w_start:%Y-%m-%dT%H:%M}:{w_end:%H:%M}")
-                    part = _chunk_cache_get(ckey) if settled else None
-                    if part is None:
-                        part = self._history_chunk(info, '1second', w_start, w_end)
-                        # An empty window is cached only when Breeze answered
-                        # and had nothing (a holiday), never when the request
-                        # failed — caching a failure would make it permanent.
-                        if settled and (part or getattr(_HIST_ERROR, 'clean_empty', False)):
-                            _chunk_cache_put(ckey, part)
-                    out.extend(part)
+                days.append(day)
             day += timedelta(days=1)
-        return out, clipped_from
+
+        out: List[Dict[str, Any]] = []
+        spent = 0
+        oldest_served: Optional[dt_date] = None
+        stopped_at: Optional[dt_date] = None
+        for day in reversed(days):
+            settled_day = day < now.date()
+            # A settled day at a fixed bar size is final — cache it whole, so a
+            # re-run of the same range costs nothing for the days it already
+            # walked. Keyed by bar size: 30-second bars must never answer a
+            # request for another interval built off the same 1-second base.
+            dkey = f"{info['symbol']}:{bar_seconds or 1}s:{day}" if bar_seconds else None
+            cached = _chunk_cache_get(dkey) if (dkey and settled_day) else None
+            if cached is not None:
+                out.extend(cached)
+                oldest_served = day
+                continue
+
+            windows = [w for w in _session_windows(day) if w[0] <= now]
+            wkey = lambda w: (f"{info['symbol']}:1second:"
+                              f"{w[0]:%Y-%m-%dT%H:%M}:{w[1]:%H:%M}")
+            # Fetching half a day would cache a day-shaped hole, so a day is
+            # either affordable whole or left for the next run.
+            todo = sum(1 for w in windows
+                       if not (w[1] < now and _chunk_cache_has(wkey(w))))
+            if _SECOND_MAX_REQUESTS and todo and spent + todo > _SECOND_MAX_REQUESTS:
+                # Name the oldest day actually served, not the one we stopped
+                # before — "reaches back to <a Sunday>" helps nobody.
+                stopped_at = oldest_served or day
+                break
+
+            day_rows: List[Dict[str, Any]] = []
+            for w_start, w_end in windows:
+                settled = w_end < now
+                ckey = wkey((w_start, w_end))
+                part = _chunk_cache_get(ckey) if settled else None
+                if part is None:
+                    part = self._history_chunk(info, '1second', w_start, w_end)
+                    spent += 1
+                    # An empty window is cached only when Breeze answered
+                    # and had nothing (a holiday), never when the request
+                    # failed — caching a failure would make it permanent.
+                    #
+                    # On a settled day being aggregated, the day cache below
+                    # holds the same information at 1/30th the size, and
+                    # caching both would evict the aggregated days (which is
+                    # what makes a re-run cheap) under the candle cap. Today's
+                    # windows are still cached individually: that is what keeps
+                    # the live 30-second algos from re-fetching the whole
+                    # session on every poll.
+                    if (settled and not (settled_day and bar_seconds)
+                            and (part or getattr(_HIST_ERROR, 'clean_empty', False))):
+                        _chunk_cache_put(ckey, part)
+                day_rows.extend(part)
+
+            if bar_seconds:
+                day_rows = _resample(day_rows, bar_seconds)
+                if settled_day and dkey:
+                    _chunk_cache_put(dkey, day_rows)
+            if day_rows:
+                oldest_served = day
+            out.extend(day_rows)
+
+        # Walked newest-first; _finish_history sorts, but return it in order
+        # anyway so a direct caller is not handed a reversed series.
+        out.sort(key=lambda c: c['date'])
+        return out, stopped_at
 
     def _history_chunk(self, info: Dict[str, Any], breeze_interval: str,
                        start: Union[dt_date, datetime],
@@ -947,6 +1025,13 @@ def _chunk_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:
     with _HIST_LOCK:
         hit = _CHUNK_CACHE.get(key)
         return [dict(c) for c in hit] if hit is not None else None
+
+
+def _chunk_cache_has(key: str) -> bool:
+    """Is this chunk cached? Cheaper than _chunk_cache_get when the answer is
+    all the caller wants — get() copies every candle on the way out."""
+    with _HIST_LOCK:
+        return key in _CHUNK_CACHE
 
 
 def _chunk_cache_put(key: str, candles: List[Dict[str, Any]]) -> None:

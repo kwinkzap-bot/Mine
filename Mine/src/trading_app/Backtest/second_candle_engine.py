@@ -24,13 +24,60 @@ Exits (first trigger wins, SL checked before Target within a bar):
   TG Hit   : price hits the 1:2 target
   Time Exit: cut-off time force close (at bar open)
   EOD Exit : last bar of the day force close (at bar close)
+
+P&L basis (option_pnl flag)
+---------------------------
+Signals, SL and Target are ALWAYS decided on the index — that is what the live
+algo does too. `option_pnl` only changes what the booked P&L is measured on:
+
+  option_pnl=False (default)  P&L = index points  (the historical behaviour)
+  option_pnl=True             P&L = OPTION PREMIUM points of the leg the live
+                              algo would have bought: a CE for a Long signal,
+                              a PE for a Short one, single lot, always bought.
+
+The option leg is *modelled*, not fetched — this app has no historical option
+chain to backtest against. Each trade's leg is priced with Black-Scholes on the
+nearest weekly expiry (expiry weekday from the same NSE regime table the expiry
+engine uses, 15:30 IST), at a fixed assumed IV, and the strike is chosen the way
+the live algo chooses it (`strike_mode`: 'premium250' = strike priced nearest
+₹250, the live default; 'delta' = |delta| nearest 0.90, capped at ₹500).
+
+₹ conversion does not change with the basis — the screen's Lot Value (₹/pt)
+multiplies whichever points the run booked, so the flag moves the points scale
+and nothing else.
+
+So an option-basis run carries the model's assumptions: constant IV, no smile,
+no spread, no slippage. Its value is that theta and delta drift are in the
+numbers — a 1 : 3 index trade is NOT 1 : 3 on the premium — not that the
+premiums match any particular day's real chain.
 """
+
+import functools
+import logging
+import math
+from datetime import datetime, date, time as dt_time, timedelta
 
 import pandas as pd
 import numpy as np
-import logging
+
+from trading_app.Backtest.expiry_breakout_engine import _expiry_weekday_for
 
 logger = logging.getLogger(__name__)
+
+# ── Option-leg model (only used when option_pnl=True) ─────────────────────────
+# Deliberately mirrors the live algo's own numbers — see
+# algo/second_candle/second_candle_algo.py: _SINGLE_LOT_QTY, _DELTA_TARGET,
+# _MAX_PREMIUM, _PREM250_TARGET, _STRIKE_STEP, _FALLBACK_IV.
+_STRIKE_STEP    = 50.0    # NIFTY's — other indices pass their own
+_DELTA_TARGET   = 0.90    # 'delta' strike mode
+_MAX_PREMIUM    = 500.0   # 'delta' mode premium cap
+_PREM250_TARGET = 250.0   # 'premium250' strike mode (the live default)
+_DEFAULT_IV     = 0.15    # assumed annual IV — no historical chain to read one from
+_RISK_FREE      = 0.07
+_STRIKE_WINDOW  = 40      # strikes scanned either side of ATM (±2000 pts on a 50 step)
+_YEAR_SECS      = 365.0 * 24 * 3600
+_MIN_T_SECS     = 60.0    # never price at T=0 — the last minute is still worth something
+_EXPIRY_TIME    = dt_time(15, 30)
 
 
 class SecondCandleBacktestEngine:
@@ -44,6 +91,10 @@ class SecondCandleBacktestEngine:
         exit_minute: int = 25,
         enable_long: bool = True,
         enable_short: bool = True,
+        option_pnl: bool = False,    # book P&L on the option premium, not index points
+        option_iv: float = _DEFAULT_IV,
+        strike_mode: str = 'premium250',
+        strike_step: float = _STRIKE_STEP,
     ):
         self.df = df.copy()
         self.candle_index = max(1, int(candle_index))
@@ -52,6 +103,8 @@ class SecondCandleBacktestEngine:
         self.exit_minute = exit_minute
         self.enable_long = enable_long
         self.enable_short = enable_short
+        self.option_pnl = bool(option_pnl)
+        self.option_cfg = _option_cfg(option_iv, strike_mode, strike_step)
         self._prepare()
 
     # ── Data prep ──────────────────────────────────────────────────────────────
@@ -117,7 +170,15 @@ class SecondCandleBacktestEngine:
             if t is not None:
                 trades.append(t)
 
-        return trades, _summary(trades)
+        if self.option_pnl:
+            trades = [_apply_option_pnl(t, self.option_cfg) for t in trades]
+
+        summary = _summary(trades)
+        summary['pnl_basis'] = 'option' if self.option_pnl else 'index'
+        if self.option_pnl:
+            summary['option_iv']   = self.option_cfg['iv']
+            summary['strike_mode'] = self.option_cfg['strike_mode']
+        return trades, summary
 
 
 # ── Single-day simulation ──────────────────────────────────────────────────────
@@ -218,6 +279,136 @@ def _run_day(day_pos, opens, highs, lows, closes, time_mins, ts_strs,
     return _make_trade(position, ts_strs[last_i], c, pnl, 'EOD Exit')
 
 
+# ── Option leg model ───────────────────────────────────────────────────────────
+
+def _option_cfg(iv: float, strike_mode: str, strike_step: float) -> dict:
+    """The option-leg model's settings. ₹ conversion is deliberately NOT in
+    here: the screen's own Lot Value (₹/pt) box multiplies whichever basis is
+    running, so index points and premium points are worth the same ₹/pt — the
+    flag changes the points, nothing else."""
+    mode = strike_mode if strike_mode in ('premium250', 'delta') else 'premium250'
+    return {
+        'iv':          max(0.01, float(iv or _DEFAULT_IV)),
+        'strike_mode': mode,
+        'strike_step': float(strike_step or _STRIKE_STEP),
+    }
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard-normal CDF via math.erf — no scipy dependency."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _d1_d2(s: float, k: float, t: float, r: float, sigma: float):
+    vt = sigma * math.sqrt(t)
+    d1 = (math.log(s / k) + (r + 0.5 * sigma * sigma) * t) / vt
+    return d1, d1 - vt
+
+
+def _bs_price(flag: str, s: float, k: float, t: float, r: float, sigma: float) -> float:
+    """Black-Scholes price of a European CE ('c') / PE ('p')."""
+    if t <= 0 or sigma <= 0 or s <= 0 or k <= 0:
+        return max(0.0, (s - k) if flag == 'c' else (k - s))
+    d1, d2 = _d1_d2(s, k, t, r, sigma)
+    disc = k * math.exp(-r * t)
+    if flag == 'c':
+        return s * _norm_cdf(d1) - disc * _norm_cdf(d2)
+    return disc * _norm_cdf(-d2) - s * _norm_cdf(-d1)
+
+
+def _bs_delta(flag: str, s: float, k: float, t: float, r: float, sigma: float) -> float:
+    if t <= 0 or sigma <= 0 or s <= 0 or k <= 0:
+        itm = (s > k) if flag == 'c' else (s < k)
+        return (1.0 if flag == 'c' else -1.0) if itm else 0.0
+    d1, _ = _d1_d2(s, k, t, r, sigma)
+    return _norm_cdf(d1) if flag == 'c' else _norm_cdf(d1) - 1.0
+
+
+def _weekly_expiry_on_or_after(day: date) -> date:
+    """Nearest weekly expiry on/after `day`, using the same NSE expiry-weekday
+    regime table the expiry-breakout engine uses (Thursday up to Aug-2025,
+    Tuesday from Sep-2025). No holiday calendar exists in this app, so an
+    expiry that fell on a holiday is off by a day — worth a few paise of theta,
+    not a different trade."""
+    wd = _expiry_weekday_for(day)
+    return day + timedelta(days=(wd - day.weekday()) % 7)
+
+
+@functools.lru_cache(maxsize=100_000)
+def _select_strike(flag: str, mode: str, spot_q: float, t_q: float, iv: float,
+                   step: float = _STRIKE_STEP) -> float:
+    """Strike the live algo would have bought, on quantised (spot, T) so the
+    optimiser's repeated sweeps hit the cache instead of re-scanning the chain.
+
+    'premium250' → strike priced nearest ₹250.
+    'delta'      → |delta| nearest 0.90, and if that leg costs more than ₹500,
+                   the same-type strike priced nearest below the cap instead.
+    """
+    atm = round(spot_q / step) * step
+    strikes = [atm + i * step for i in range(-_STRIKE_WINDOW, _STRIKE_WINDOW + 1)]
+    strikes = [k for k in strikes if k > 0]
+    price = lambda k: _bs_price(flag, spot_q, k, t_q, _RISK_FREE, iv)
+
+    if mode == 'delta':
+        best = min(strikes, key=lambda k: abs(abs(_bs_delta(flag, spot_q, k, t_q, _RISK_FREE, iv))
+                                              - _DELTA_TARGET))
+        if price(best) > _MAX_PREMIUM:
+            under = [k for k in strikes if price(k) <= _MAX_PREMIUM]
+            if under:
+                best = max(under, key=price)
+        return best
+
+    return min(strikes, key=lambda k: abs(price(k) - _PREM250_TARGET))
+
+
+def _apply_option_pnl(trade: dict, cfg: dict) -> dict:
+    """Re-book one index trade as the option leg the live algo would have bought.
+
+    The index entry/exit/SL/target on the row are untouched — only `pnl` (and
+    with it `result`) moves onto the premium scale, with the index figure kept
+    as `index_pnl` so a row can still be read against the chart.
+    """
+    iv   = cfg['iv']
+    flag = 'c' if trade['type'] == 'Long' else 'p'
+
+    try:
+        entry_dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S')
+        exit_dt  = datetime.strptime(trade['exit_time'],  '%Y-%m-%d %H:%M:%S')
+    except (ValueError, TypeError):
+        logger.warning("[2ndCandle] un-parseable trade timestamps — left on the index basis")
+        return trade
+
+    expiry_dt = datetime.combine(_weekly_expiry_on_or_after(entry_dt.date()), _EXPIRY_TIME)
+    t_entry = max((expiry_dt - entry_dt).total_seconds(), _MIN_T_SECS) / _YEAR_SECS
+    t_exit  = max((expiry_dt - exit_dt).total_seconds(),  _MIN_T_SECS) / _YEAR_SECS
+
+    spot_in  = float(trade['entry_price'])
+    spot_out = float(trade['exit_price'])
+
+    # Quantised only for the strike CHOICE (5 spot points, ~5 minutes of T);
+    # both premiums are then priced at the trade's exact spot and time.
+    strike = _select_strike(flag, cfg['strike_mode'],
+                            round(spot_in / 5.0) * 5.0, round(t_entry, 5), iv,
+                            cfg['strike_step'])
+
+    prem_in  = _bs_price(flag, spot_in,  strike, t_entry, _RISK_FREE, iv)
+    prem_out = _bs_price(flag, spot_out, strike, t_exit,  _RISK_FREE, iv)
+    # A bought option is worth nothing less than zero, and never below tick.
+    prem_in  = max(prem_in,  0.05)
+    prem_out = max(prem_out, 0.0)
+
+    pnl = prem_out - prem_in          # always a BUY — CE for Long, PE for Short
+    out = dict(trade)
+    out['index_pnl']     = trade['pnl']
+    out['option_type']   = 'CE' if flag == 'c' else 'PE'
+    out['strike']        = int(strike)
+    out['entry_premium'] = round(prem_in, 2)
+    out['exit_premium']  = round(prem_out, 2)
+    out['pnl']           = round(pnl, 2)
+    out['result']        = 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH')
+    return out
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _make_trade(position, exit_ts, exit_price, pnl, exit_reason):
@@ -293,13 +484,22 @@ def _opt_score(s: dict) -> float:
 
 
 def optimise_second_candle(df, exit_hour: int = 15, exit_minute: int = 25,
-                           min_trades: int = 5) -> list:
+                           min_trades: int = 5, option_pnl: bool = False,
+                           option_iv: float = _DEFAULT_IV,
+                           strike_mode: str = 'premium250',
+                           strike_step: float = _STRIKE_STEP) -> list:
     """
     Sweep (range candle #, SL:Target ratio, direction) and rank the results.
 
     Arrays are extracted once; each combination only re-runs the per-day
     simulation. Returns results sorted best-first by _opt_score.
+
+    `option_pnl` ranks the grid on the option premium instead of index points —
+    the same basis flag the run takes, so the leaderboard is scored on whatever
+    the screen is showing. It changes the ranking, not the signals: a wide 1:5
+    target that looks best on the index can lose to theta on the premium.
     """
+    cfg = _option_cfg(option_iv, strike_mode, strike_step)
     base = SecondCandleBacktestEngine(df=df)
     if base.df.empty:
         return []
@@ -316,7 +516,7 @@ def optimise_second_candle(df, exit_hour: int = 15, exit_minute: int = 25,
                     t = _run_day(day_pos, opens, highs, lows, closes, time_mins,
                                  ts_strs, ci, rr, cutoff, el, es)
                     if t is not None:
-                        trades.append(t)
+                        trades.append(_apply_option_pnl(t, cfg) if option_pnl else t)
                 s = _summary(trades)
                 if s['total_trades'] < min_trades:
                     continue

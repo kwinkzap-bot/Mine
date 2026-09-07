@@ -3669,8 +3669,9 @@ def run_second_candle_backtest_api():
         symbol         = data.get('symbol', 'NIFTY')
         start_date_str = data.get('start_date')
         end_date_str   = data.get('end_date')
-        # Base candle size. 30second has only ~1 month of Fyers history;
-        # 'minute' and above retain ~10 years.
+        # Base candle size. 30-second is fetched Fyers-first and topped up from
+        # the configured provider (see Backtest/seconds_history.py); 'minute'
+        # and above are one cheap call on whichever provider is configured.
         interval       = data.get('interval', '30second')
         candle_index   = int(data.get('candle_index', 2))
         rr_ratio       = float(data.get('rr_ratio', 3.0))
@@ -3678,6 +3679,9 @@ def run_second_candle_backtest_api():
         exit_minute    = int(data.get('exit_minute', 25))
         enable_long    = bool(data.get('enable_long', True))
         enable_short   = bool(data.get('enable_short', True))
+        # P&L basis: False → index points (default), True → option premium
+        # points of the modelled CE/PE leg (see second_candle_engine docstring).
+        option_pnl     = bool(data.get('option_pnl', False))
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3704,12 +3708,10 @@ def run_second_candle_backtest_api():
             instrument_token = kite_indices.get(symbol, symbol)
 
         # Fetch the chosen base interval (30second → Fyers "30S", minute → "1", etc.)
-        candles = current_kite.historical_data(
-            instrument_token=instrument_token,
-            from_date=start_date_str,
-            to_date=end_date_str,
-            interval=interval,
-            use_cache=False,
+        from trading_app.Backtest.seconds_history import fetch_seconds_history
+        candles, hist_note = fetch_seconds_history(
+            current_kite, instrument_token, start_date_str, end_date_str,
+            interval=interval, user=session.get('username'),
         )
 
         if not candles:
@@ -3735,32 +3737,34 @@ def run_second_candle_backtest_api():
             exit_minute=exit_minute,
             enable_long=enable_long,
             enable_short=enable_short,
+            option_pnl=option_pnl,
+            strike_step=_opt_strike_step(symbol),
         )
         trades, summary = engine.run()
 
-        logger.info('[2ndCandle BT] engine done: %d trades', len(trades))
+        logger.info('[2ndCandle BT] engine done: %d trades (%s basis)',
+                    len(trades), summary.get('pnl_basis', 'index'))
 
-        # Warn when the bars start well after the requested range. Both brokers
-        # cut 30-second history short, for different reasons — Fyers retains
-        # only ~1 month of it, ICICI caps the lookback because a day of it costs
-        # 25 Breeze requests — so prefer whatever the provider itself says over
-        # the generic line.
-        warning = None
-        try:
-            import pandas as _pd
-            req_start = _pd.to_datetime(start_date_str).date()
-            got_start = _pd.to_datetime(str(candles[0].get('date'))).date()
-            if (got_start - req_start).days > 5:
-                provider_reason = None
-                if hasattr(current_kite, 'last_history_error'):
-                    provider_reason = current_kite.last_history_error()
-                warning = provider_reason or (
-                    f"{interval} data is only available from {got_start} "
-                    f"(requested {req_start}) — switch to a 1-minute base for "
-                    f"multi-year backtests."
-                )
-        except Exception:
-            pass
+        # What the range actually returned. For 30-second the fetch helper
+        # already says which broker covered what and where a budget-limited
+        # Breeze walk stopped; the other intervals still need the generic
+        # "starts later than you asked" check.
+        warning = hist_note
+        if warning is None:
+            try:
+                import pandas as _pd
+                req_start = _pd.to_datetime(start_date_str).date()
+                got_start = _pd.to_datetime(str(candles[0].get('date'))).date()
+                if (got_start - req_start).days > 5:
+                    provider_reason = None
+                    if hasattr(current_kite, 'last_history_error'):
+                        provider_reason = current_kite.last_history_error()
+                    warning = provider_reason or (
+                        f"{interval} data is only available from {got_start} "
+                        f"(requested {req_start})."
+                    )
+            except Exception:
+                pass
 
         return jsonify({
             'success': True,
@@ -3781,6 +3785,11 @@ def run_second_candle_backtest_api():
                 'max_drawdown':  summary['max_drawdown'],
                 'avg_win':       summary['avg_win'],
                 'avg_loss':      summary['avg_loss'],
+                # Option basis only — the frontend labels the P&L column and
+                # card as premium points and shows the leg it priced.
+                'pnl_basis':     summary.get('pnl_basis', 'index'),
+                'option_iv':     summary.get('option_iv'),
+                'strike_mode':   summary.get('strike_mode'),
             }
         })
 
@@ -3807,6 +3816,7 @@ def run_second_candle_optimise():
         exit_hour      = int(data.get('exit_hour', 15))
         exit_minute    = int(data.get('exit_minute', 25))
         recalculate    = bool(data.get('recalculate', False))
+        option_pnl     = bool(data.get('option_pnl', False))
 
         if not symbol or not start_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3816,7 +3826,10 @@ def run_second_candle_optimise():
         # One run sweeps every intraday timeframe, so the cache is keyed by
         # symbol + exit-time alone. v2 adds Net P&L (₹) / Brokerage columns and
         # excludes combos with a negative Net P&L (₹).
-        cache_key = f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_v2"
+        # The two P&L bases rank the grid differently, so they are separate
+        # cache entries — one would otherwise serve the other's leaderboard.
+        basis_key = 'opt' if option_pnl else 'idx'
+        cache_key = f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}_v2"
 
         # ── Serve from cache unless caller asked to recalculate ──────────────
         if not recalculate:
@@ -3839,6 +3852,9 @@ def run_second_candle_optimise():
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
         task_id = str(uuid.uuid4())
+        # Read in the request thread: _run() has no request context, and the
+        # Fyers-first 30-second fetch resolves that user's broker credentials.
+        opt_user = session.get('username')
         with _sc_opt_tasks_lock:
             _sc_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
 
@@ -3877,7 +3893,8 @@ def run_second_candle_optimise():
                         logger.info("[2ndCandle OPT] timeframe %s: no data — skipped", interval_str)
                         return
                     tf_results = optimise_second_candle(
-                        pd.DataFrame(candles), exit_hour=exit_hour, exit_minute=exit_minute
+                        pd.DataFrame(candles), exit_hour=exit_hour, exit_minute=exit_minute,
+                        option_pnl=option_pnl, strike_step=_opt_strike_step(symbol),
                     )
                     combos_tested += grid_size
                     for r in tf_results:
@@ -3914,19 +3931,23 @@ def run_second_candle_optimise():
                     except Exception as tf_exc:
                         logger.warning(f"[2ndCandle OPT] timeframe {interval_str} failed: {tf_exc}")
 
-                # ── 30-second: native fetch, capped to a recent window ───────
-                # A full multi-year 30s pull is thousands of chunk calls, so cap
-                # the range (best-effort; skip on any failure).
+                # ── 30-second: Fyers-first, provider beyond it ──────────────
+                # Still capped to a recent window: this sweep runs every
+                # timeframe, and the days Fyers cannot serve cost 25 Breeze
+                # requests each (best-effort; skip on any failure).
                 try:
                     from datetime import timedelta as _td
+                    from trading_app.Backtest.seconds_history import fetch_seconds_history
                     _end_dt   = datetime.strptime(end_date_str, '%Y-%m-%d')
                     _start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
                     sec_from  = max(_start_dt, _end_dt - _td(days=90)).strftime('%Y-%m-%d')
-                    _sweep(current_kite.historical_data(
-                        instrument_token=instrument_token,
-                        from_date=sec_from, to_date=end_date_str,
-                        interval='30second', use_cache=False,
-                    ), '30second', '30s', 0.5)
+                    sec_candles, sec_note = fetch_seconds_history(
+                        current_kite, instrument_token, sec_from, end_date_str,
+                        interval='30second', user=opt_user,
+                    )
+                    if sec_note:
+                        logger.info("[2ndCandle OPT] 30-second: %s", sec_note)
+                    _sweep(sec_candles, '30second', '30s', 0.5)
                 except Exception as sec_exc:
                     logger.warning(f"[2ndCandle OPT] 30-second timeframe failed: {sec_exc}")
 
@@ -6054,6 +6075,16 @@ def run_vwap_optimise():
 # ── Optimise-grid ₹ economics (mirrors the frontend so the leaderboard drops
 # combos whose Net P&L is negative *after brokerage*, not just in points) ──────
 _RTP_LOT_VALUE_BY_SYMBOL = {'NIFTY': 65, 'BANKNIFTY': 30, 'SENSEX': 20}
+
+# Option strike ladder step, by index — the 2nd-candle option-basis P&L prices
+# its CE/PE leg on this ladder (NIFTY's 50 is the fallback, as in the engine).
+_OPT_STRIKE_STEP_BY_SYMBOL = {'NIFTY': 50, 'BANKNIFTY': 100, 'FINNIFTY': 50,
+                              'MIDCPNIFTY': 25, 'SENSEX': 100}
+
+
+def _opt_strike_step(symbol: str) -> float:
+    return _OPT_STRIKE_STEP_BY_SYMBOL.get((symbol or '').upper(), 50)
+
 
 def _rtp_lot_value(symbol: str) -> float:
     """₹ per point for one lot, by symbol (defaults to NIFTY's 65)."""

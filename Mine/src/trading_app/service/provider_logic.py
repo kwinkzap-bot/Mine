@@ -193,6 +193,20 @@ def _get_icici_adapter(username: str) -> Optional[Any]:
     return adapter
 
 
+def get_fyers_adapter(user: Optional[str] = None) -> Optional[Any]:
+    """The Fyers adapter specifically, whatever DATA_PROVIDER happens to be.
+
+    The twin of get_icici_adapter, and it never falls back either: the callers
+    want something only Fyers does — native sub-minute bars, which ICICI has to
+    build out of 1-second data at 25 Breeze requests a day. Returns None when
+    Fyers is not configured, so a caller can fall back on its own terms.
+    """
+    username = user
+    if not username and has_request_context():
+        username = session.get('username')
+    return _get_fyers_adapter(username or 'Mine')
+
+
 def _get_fyers_adapter(username: str) -> Optional[Any]:
     """Build (and cache) the Fyers adapter for a user, or None if unconfigured."""
     from trading_app.app.utils.user_env import UserEnvManager
