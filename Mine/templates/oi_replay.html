@@ -85,6 +85,50 @@
 
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Overlays</div>
+                                <!-- OI Bars / Vol Fut / 5m Close Border — the rows OI
+                                     Profile's popup opens with, in its order. The OI bars
+                                     and both volume overlays already came off the same
+                                     /api/oi-profile/candles response Replay fetches
+                                     (strikes, future_volume, banknifty_volume); only the
+                                     switches were missing here. -->
+                                <label class="oip-ind-item"
+                                    title="Live CE/PE open interest by strike, drawn on the right edge — a snapshot of NOW, not of the replayed bar">
+                                    <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowVolume" checked><span>Nifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volDn"
+                                            title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
+                                    </span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
+                                    <input type="checkbox" id="oipShowBnfVolume"><span>Banknifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
+                                            title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
+                                    </span>
+                                </label>
+                                <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
+                                     every Indicator popup. Off, the volume overlays drop the up/down split
+                                     and every bar paints the flat swatch above. -->
+                                <label class="oip-ind-item"
+                                    title="Tint volume bars by the candle's direction. Off: every bar uses the flat color swatch">
+                                    <input type="checkbox" class="oip-vol-dircolor-cb" checked><span>Vol Direction Color</span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
+                                    <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
+                                </label>
                                 <!-- Pine plots Current / Previous / Avg-3 VWAP together, so
                                      this is one group rather than the single flat VWAP line
                                      Replay carried before. -->
@@ -170,6 +214,12 @@
                                         </label>
                                     </div>
                                 </div>
+                                <!-- NIFTY only, and fetched for the replayed DATE (the
+                                     endpoint takes one) — not today's 9:18 selection. -->
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18
+                                        ATM CE OI Lines</span>
+                                </label>
                             </div>
 
                             <div class="oip-ind-section">
@@ -207,6 +257,15 @@
 
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Lines</div>
+                                <!-- Replay plots max_pain_history (the per-snapshot series
+                                     in the candles response), clipped to the playhead, rather
+                                     than OI Profile's single price line at today's max pain —
+                                     a live level pinned across a replayed session says
+                                     nothing about the bar being replayed. -->
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowMaxPain"><span style="color:#2563eb">Max
+                                        Pain</span>
+                                </label>
                                 <div class="oip-ind-reversal-wrap">
                                     <label class="oip-ind-item">
                                         <input type="checkbox" id="oipShow30mReversalLines"><span style="color:#f97316">30m Reversal</span>

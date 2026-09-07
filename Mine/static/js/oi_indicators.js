@@ -1946,6 +1946,41 @@ function oipApplyOptionZOrder() {
 }
 
 /* ── Indicators popup ─────────────────────────────────────── */
+
+/* Keeps an opened popup inside the viewport. The CSS anchors it to its
+   button's LEFT edge (.oip-ind-popup { left: 0 }), which is fine while the
+   button sits well left of the window edge — OI Profile's does. Replay's
+   Indicators button sits ~200px further right (its toolbar carries the Bar
+   Replay controls too), so a 320px popup ran off the right of the window and
+   silently cut off everything right-aligned in it: the colour swatches, the
+   width/style selects, and the ► group expanders.
+
+   Measured rather than guessed, because which side has room depends on the
+   window width, not on the page. Called on open only — the popup closes on
+   any outside click, so there is nothing to re-place on resize. */
+function oipPlaceIndicatorPopup(popup) {
+    if (!popup || popup.classList.contains('hidden')) return;
+    // Clear a previous flip before measuring, or the popup is measured in the
+    // position the LAST window width called for.
+    popup.style.left = '';
+    popup.style.right = '';
+    const margin = 8;
+    if (popup.getBoundingClientRect().right <= window.innerWidth - margin) return;
+
+    // Flip to right-anchored — the popup now opens leftward from the button.
+    popup.style.left = 'auto';
+    popup.style.right = '0';
+
+    // Narrow window: flipping just moved the overflow to the other edge. Pin it
+    // to the viewport instead, offset from whatever the popup is positioned
+    // against (the button's .oip-prem-group, which is position:relative).
+    const flipped = popup.getBoundingClientRect();
+    if (flipped.left < margin) {
+        const originLeft = popup.offsetParent?.getBoundingClientRect().left ?? 0;
+        popup.style.right = '';
+        popup.style.left = `${margin - originLeft}px`;
+    }
+}
 function oipInitIndicatorsPopup(storageKey) {
     // Wire showEma200 (was declared in oipElems but never initialized)
     oipElems.showEma200 = document.getElementById('oipShowEma200');
@@ -1964,6 +1999,7 @@ function oipInitIndicatorsPopup(storageKey) {
         btn.addEventListener('click', e => {
             e.stopPropagation();
             popup.classList.toggle('hidden');
+            oipPlaceIndicatorPopup(popup);
         });
         document.addEventListener('click', e => {
             if (!popup.contains(e.target) && e.target !== btn) {
@@ -1992,6 +2028,7 @@ function oipInitIndicatorsPopup(storageKey) {
         optBtn.addEventListener('click', e => {
             e.stopPropagation();
             optPopup.classList.toggle('hidden');
+            oipPlaceIndicatorPopup(optPopup);
         });
         document.addEventListener('click', e => {
             if (!optPopup.contains(e.target) && e.target !== optBtn && !optBtn.contains(e.target)) {

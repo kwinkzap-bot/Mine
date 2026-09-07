@@ -1105,6 +1105,9 @@ function oipRSInitIndicatorsPopup() {
         btn.addEventListener('click', e => {
             e.stopPropagation();
             popup.classList.toggle('hidden');
+            // Rightmost button on both pages — without this its popup is the
+            // one most likely to run off the window. See oi_indicators.js.
+            oipPlaceIndicatorPopup(popup);
         });
         document.addEventListener('click', e => {
             if (!popup.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {

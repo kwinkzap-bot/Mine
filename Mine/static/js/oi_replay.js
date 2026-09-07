@@ -105,7 +105,11 @@ let oipCEChart = null;
 let oipPEChart = null;
 let oipCESeries = null;
 let oipPESeries = null;
-let oipMaxPainLine = null;
+// Futures-volume overlays (the index itself has no traded volume) and the
+// max-pain history line — all three plot arrays that the candles response
+// already carried on this page, so they only needed series + switches.
+let oipVolumeSeries = null, oipBnfVolumeSeries = null;
+let oipMaxPainSeries = null;
 
 const oipPremiumSeries = { entry: null, current: null, t1: null, t2: null };
 
@@ -139,7 +143,8 @@ const oipElems = {
     symbolSelect: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapOI: null, showVwapInt: null,
-    showCpr: null, showEMA: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
+    showCpr: null, showEMA: null, showOIBars: null, showVolume: null, showBnfVolume: null,
+    autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
@@ -162,6 +167,8 @@ function oipInitElems() {
     oipElems.multiplier = document.getElementById('oipMultiplier');
     oipElems.view = document.getElementById('oipIntrinsicView');
     oipElems.showOIBars = document.getElementById('oipShowOIBars');
+    oipElems.showVolume = document.getElementById('oipShowVolume');
+    oipElems.showBnfVolume = document.getElementById('oipShowBnfVolume');
     oipElems.showVwapOI = document.getElementById('oipShowVwapGroup');
     oipElems.showVwapInt = document.getElementById('oipShowVwapInt');
     oipElems.showCpr = document.getElementById('oipShowCpr');
@@ -469,6 +476,28 @@ function oipInitCharts() {
         oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
         oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
 
+        // Futures volume, same pair/scale OI Profile uses (oipAddVolumeSeriesPair
+        // in oi_indicators.js): the selected symbol's own current-expiry contract
+        // plus BANKNIFTY's as an optional comparison overlay. Off by default for
+        // Banknifty — a comparison aid, not part of the default read.
+        [oipVolumeSeries, oipBnfVolumeSeries] = oipAddVolumeSeriesPair(
+            oipOIChart, 'oipVolume',
+            oipElems.showVolume?.checked ?? true,
+            oipElems.showBnfVolume?.checked ?? false);
+
+        // Max pain over TIME, not a single level: replay walks a past session, so
+        // the value that matters is the one recorded at the bar being replayed.
+        // Stepped, because the backend samples it (oi_history snapshots) rather
+        // than computing it per candle — interpolating between two snapshots
+        // would draw a level that never existed.
+        oipMaxPainSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
+            color: oipGetLineColor('maxPain'), lineWidth: oipGetLineWidth('maxPain'),
+            lineStyle: oipGetLineStyle('maxPain'), lineType: 1,
+            visible: document.getElementById('oipShowMaxPain')?.checked ?? false,
+            lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null
+        });
+
         oipOIChartReady = true;
 
         // Crosshair sync with the Round Strike chart below (helper at the top of
@@ -720,6 +749,84 @@ function oipDrawOIBars() {
 // oipCalculateVWAP, oipCalculateFixedEMA, oipCalculateDynamicCPR, oipDrawCpr,
 // defined in oi_indicators.js
 
+/* ── Volume / Max Pain / 5m Close Border ───────────────────────────────────
+   The three overlays Replay picked up from OI Profile's popup. All of them
+   read arrays the /api/oi-profile/candles response already carried on this
+   page; what Replay adds is the clip to the playhead — an overlay that
+   painted the whole loaded window would show the user bars the replay has
+   not reached yet. */
+
+// Rebuilds each histogram from the candles up to the playhead. Passing the
+// PREFIX (rather than the full set) is what keeps the clip honest: oipSetVolumeBars
+// caches what it painted, and a later colour change repaints from that cache —
+// so a cache holding the whole window would silently un-clip the replay.
+// Skipped for a hidden overlay; toggling it back on refreshes at that point.
+function oipRefreshVolumeBars(index) {
+    if (!oipVolumeSeries && !oipBnfVolumeSeries) return;
+    const candles = oipVisibleCandles(index);
+    if (oipElems.showVolume?.checked)
+        oipSetVolumeBars(oipVolumeSeries, oipOIData?.future_volume, candles);
+    if (oipElems.showBnfVolume?.checked)
+        oipSetVolumeBars(oipBnfVolumeSeries, oipOIData?.banknifty_volume, candles, 'banknifty');
+}
+
+// max_pain_history is sampled from oi_history (its own ~snapshot clock, capped
+// at 2000 rows by the query), so it never lines up bar-for-bar with the candles
+// — a full re-filter per step is both correct and cheap at that size, where an
+// index- or exact-time-matched incremental update would simply miss most steps
+// and leave the line frozen mid-play.
+function oipMaxPainPoints() {
+    return (oipOIData?.max_pain_history || []).filter(d => d && isFinite(d.value) && d.value > 0);
+}
+
+function oipRefreshMaxPain(maxTime) {
+    if (!oipMaxPainSeries) return;
+    const pts = oipMaxPainPoints();
+    try { oipMaxPainSeries.setData(maxTime == null ? pts : pts.filter(d => d.time <= maxTime)); } catch (e) {}
+}
+
+// Re-applies the per-line colour/width/style to the max-pain series. Named for
+// the hook oipApplyLineStyleChange('maxPain') calls in oi_indicators.js — OI
+// Profile's version of this draws a single price line instead.
+function oipUpdateMaxPainLine() {
+    try {
+        oipMaxPainSeries?.applyOptions({
+            color: oipGetLineColor('maxPain'),
+            lineWidth: oipGetLineWidth('maxPain'),
+            lineStyle: oipGetLineStyle('maxPain'),
+            visible: document.getElementById('oipShowMaxPain')?.checked ?? false,
+        });
+    } catch (e) {}
+}
+
+// The border lives on the candle objects themselves, so it is re-tagged in
+// place on oipFullCandles: strip first, so turning the toggle off (or changing
+// the colour) clears the previous tag rather than layering on it.
+function oipApply5mCloseBorders() {
+    if (!Array.isArray(oipFullCandles)) return;
+    const { enabled, color } = oip5mCloseSettings('main');
+    oipFullCandles = oipMark5mCloseBorders(
+        oipStrip5mCloseBorder(oipFullCandles), enabled, color, oipInterval);
+    // The prefix cache holds the OLD candle objects — drop it or the redraw
+    // below re-pushes untagged bars.
+    oipInvalidateVisCache();
+}
+
+// Hook for oipApplyLineStyleChange('fiveMClose') and the checkbox. Re-pushes
+// only the bars up to the playhead: the border is part of the candle data, so
+// a full re-push would run the chart past the replay position.
+function oipRedraw5mCloseMain() {
+    if (!oipOISeries || !oipFullCandles?.length) return;
+    oipApply5mCloseBorders();
+    const upto = oipReplayActive() ? oipVisibleCandles(oipReplayIndex) : oipFullCandles;
+    window._oipSuppressRangeSync = true;
+    try { oipOISeries.setData(upto); } catch (e) {}
+    requestAnimationFrame(() => { window._oipSuppressRangeSync = false; });
+    // A non-incremental step next time: the series no longer matches the
+    // incremental cursor's idea of what has been pushed.
+    oipLastRefreshIndex = -2;
+}
+
 function oipDrawIntrinsicLines(intrinsic, view) {
     if (!oipIntrinsicSeries) return;
     oipLevelLines.forEach(l => { try { oipIntrinsicSeries.removePriceLine(l); if (oipIntrinsicPeSeries) oipIntrinsicPeSeries.removePriceLine(l); } catch(e){} });
@@ -921,6 +1028,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     try { if (oipOISeries) oipOISeries.setData([]); } catch(e) {}
     [oipCvwapSeries, oipPvwapSeries, oipAvg3VwapSeries].forEach(s => { try { s?.setData([]); } catch(e) {} });
     [oipEma9Series, oipEma20Series, oipEma50Series, oipEma100Series, oipEma200Series].forEach(s => { try { s?.setData([]); } catch(e) {} });
+    [oipVolumeSeries, oipBnfVolumeSeries, oipMaxPainSeries].forEach(s => { try { s?.setData([]); } catch(e) {} });
+    oipClearAtmCeOiLines();
 
     // Clear secondary chart series synchronously — all Baseline series were removed above,
     // so rendering these empty candlestick series is safe. RAF-deferral caused a race where
@@ -946,6 +1055,10 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             c => c.open != null && c.high != null && c.low != null && c.close != null
         ), oipInterval
     );
+    // The 5m-close border rides in the candle data itself (a borderColor on the
+    // bar that closes each 5-minute block), so it is applied once here and
+    // re-applied in place by oipRedraw5mCloseMain when the toggle or colour moves.
+    oipApply5mCloseBorders();
     
     const alignToIndices = (optCandles) => {
         if (!oipFullCandles.length) return optCandles;
@@ -987,6 +1100,16 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     if (oipEma50Series) oipEma50Series.setData(oipCachedIndicators.index.ema50);
     if (oipEma100Series) oipEma100Series.setData(oipCachedIndicators.index.ema100);
     if (oipEma200Series) oipEma200Series.setData(oipCachedIndicators.index.ema200);
+    oipSetVolumeBars(oipVolumeSeries, data.future_volume, oipFullCandles);
+    oipSetVolumeBars(oipBnfVolumeSeries, data.banknifty_volume, oipFullCandles, 'banknifty');
+    if (oipMaxPainSeries) oipMaxPainSeries.setData(oipMaxPainPoints());
+
+    // 9:18 ATM CE OI — fetched for the REPLAYED date, not today. Always fetched
+    // so the data is ready; oipDrawAtmCeOiLines is what the checkbox gates.
+    // Deliberately not awaited: the lines are two price levels, and blocking the
+    // whole first paint on a second round-trip is not worth it.
+    oipFetchAtmCeOiStrikes(oipSymbol, oipStrikeStep, oipElems.replayDate?.value || null)
+        .then(() => oipDrawAtmCeOiLines());
 
     if (oipIntrinsicChart) oipIntrinsicChart.update(oipFullCeData, oipFullPeData, true);
     if (oipCEChart) oipCEChart.update(oipFullCeData, [], true);
@@ -1157,6 +1280,8 @@ function oipRefreshLocalView(view, resetZoom, index) {
     updateOrSet(oipEma50Series, oipCachedIndicators.index.ema50, index);
     updateOrSet(oipEma100Series, oipCachedIndicators.index.ema100, index);
     updateOrSet(oipEma200Series, oipCachedIndicators.index.ema200, index);
+    oipRefreshVolumeBars(index);
+    oipRefreshMaxPain(timeAtIdx);
 
     // 2. CPR Redraw — the renderer clips to timeAtIdx itself.
     if (oipCachedIndicators.cpr) oipRenderPrecalculatedCPR(oipCachedIndicators.cpr, timeAtIdx);
@@ -1530,6 +1655,10 @@ function oipSpliceOlderCandles(older) {
     const n = older.length;
 
     oipFullCandles = older.concat(oipFullCandles);
+    // The spliced-in bars are untagged; re-run the pass over the whole array.
+    // Their volume bars stay empty — backfill fetches candles only, and
+    // oipSetVolumeBars emits a bar only where the response actually had one.
+    oipApply5mCloseBorders();
     oipRealignOptionLegs();
 
     // Every index into oipFullCandles moved by n.
@@ -1657,6 +1786,16 @@ function oipDrawPrevDayHL(candles) {
 }
 
 /* ── Replay Core ───────────────────────────────────────────── */
+// True while the playhead is actually cutting the chart short — the toolbar is
+// up AND parked past bar 0. Everything that re-pushes candles has to ask,
+// because a full re-push while this holds would run the chart past the
+// playhead.
+function oipReplayActive() {
+    const toolbar = document.getElementById('oipReplayToolbar');
+    return !!(toolbar && !toolbar.classList.contains('hidden')
+              && oipReplayIndex > 0 && oipFullCandles?.length);
+}
+
 function oipResetReplay() {
     oipFullCandles = null; oipFullOptionData = null; oipReplayIndex = 0;
     // Otherwise the Round Strike chart stays cut at wherever the slider was.
@@ -1665,9 +1804,7 @@ function oipResetReplay() {
 }
 
 async function oipReloadStrikeOnly() {
-    const toolbar = document.getElementById('oipReplayToolbar');
-    const replayActive = toolbar && !toolbar.classList.contains('hidden') && oipReplayIndex > 0 && oipFullCandles?.length;
-    if (!replayActive) { oipResetReplay(); return; }
+    if (!oipReplayActive()) { oipResetReplay(); return; }
 
     const h = parseFloat(oipElems.spotHigh?.value || 0), l = parseFloat(oipElems.spotLow?.value || 0);
     const s = parseInt(oipElems.step?.value || 50), m = parseInt(oipElems.multiplier?.value || 3);
@@ -1867,6 +2004,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // chart and tells the Round Strike block to follow.
     oipElems.symbolSelect?.addEventListener('change', e => oipSelectSymbol(e.target.value));
     oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
+    // Both volume overlays only rebuild while visible (see oipRefreshVolumeBars),
+    // so switching one on has to fill it in at the current playhead.
+    oipElems.showVolume?.addEventListener('change', e => {
+        oipVolumeSeries?.applyOptions({ visible: e.target.checked });
+        if (e.target.checked) oipRefreshVolumeBars(oipReplayActive() ? oipReplayIndex : (oipFullCandles?.length ?? 1) - 1);
+    });
+    oipElems.showBnfVolume?.addEventListener('change', e => {
+        oipBnfVolumeSeries?.applyOptions({ visible: e.target.checked });
+        if (e.target.checked) oipRefreshVolumeBars(oipReplayActive() ? oipReplayIndex : (oipFullCandles?.length ?? 1) - 1);
+    });
+    document.getElementById('oipShowMaxPain')?.addEventListener('change', () => oipUpdateMaxPainLine());
+    document.getElementById('oipShowAtmCeOi')?.addEventListener('change', () => oipDrawAtmCeOiLines());
+    document.getElementById('oipShow5mClose')?.addEventListener('change', () => oipRedraw5mCloseMain());
     document.getElementById('oipShowPrevDayHL')?.addEventListener('change', () => {
         oipDrawPrevDayHL(oipVisibleCandles(oipReplayIndex));
     });
