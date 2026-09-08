@@ -43,8 +43,10 @@ session with filler bars Kite and Fyers do not return (see _in_session).
 
 import logging
 import os
+import pickle
 import threading
 import time
+from collections import OrderedDict
 from datetime import date as dt_date
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -87,6 +89,72 @@ _rate_limiter = BreezeRateLimiter()
 # provider_logic does) without throwing the data away.
 _QUOTE_CACHE: Dict[str, Tuple[Dict[str, Any], datetime]] = {}
 _QUOTE_LOCK = threading.Lock()
+# How old a cached quote may be and still be served WITHOUT contacting Breeze.
+# The entries were always timestamped; until 2026-09-07 the timestamp was only
+# ever read on the failure path, so every caller paid a fresh request even when
+# another thread had just fetched the same symbol a moment earlier. Six algo
+# threads (RTP x5 + Second Candle) poll the NIFTY spot on a 1s loop, which on
+# its own demanded ~360 req/min against Breeze's published 100/min — the
+# per-second pacer above queues the excess rather than dropping it, so quotes
+# reached the algos badly delayed AND the daily quota was exhausted by 11:05.
+# 1s is shorter than the fastest consumer's bar (RTP's 30s), so no algo loses
+# freshness it was actually getting.
+_QUOTE_TTL_SEC = 1.0
+
+# Breeze enforces a DAILY call ceiling on top of its published 100/min, and
+# answers past it with {'Status': 5, 'Error': 'Limit exceed: API call per day'}.
+# That is not a transient failure and not a dead session — session_ok stays
+# True, so provider_logic keeps handing this adapter out and every quote-driven
+# algo goes blind for the rest of the day. On 2026-09-07 that left Second
+# Candle logging "open trade UNMONITORED" against a real 325-lot NIFTY PE.
+#
+# Only the QUOTE endpoints are affected; get_historical_charts keeps answering
+# on its own allowance, which is why candle-driven logic (and the Second Candle
+# per-minute H/L exit check) survived. So the failover here is deliberately
+# narrow: quotes move to Fyers for the rest of the day, candles stay on Breeze.
+# A blanket provider switch would also move history, and Fyers intraday history
+# is the thing ICICI was brought in to replace.
+_QUOTA_LOCK = threading.Lock()
+_QUOTA_EXHAUSTED_ON: Optional[dt_date] = None
+
+
+def _note_quota_error(err: str) -> bool:
+    """Record (and report) whether `err` is Breeze's daily-quota refusal."""
+    text = (err or '').lower()
+    if 'limit exceed' not in text or 'per day' not in text:
+        return False
+    global _QUOTA_EXHAUSTED_ON
+    with _QUOTA_LOCK:
+        if _QUOTA_EXHAUSTED_ON != dt_date.today():
+            _QUOTA_EXHAUSTED_ON = dt_date.today()
+            logger.error("[IciciAdapter] Breeze daily quote quota is exhausted — "
+                         "serving quotes from Fyers for the rest of today. "
+                         "Candles stay on Breeze.")
+    return True
+
+
+def _quota_exhausted() -> bool:
+    with _QUOTA_LOCK:
+        return _QUOTA_EXHAUSTED_ON == dt_date.today()
+
+
+def _fyers_quotes(symbols: List[str]) -> Dict[str, Any]:
+    """Quotes for `symbols` from the Fyers adapter, which speaks the same
+    tokens. Empty when Fyers is unavailable too — the caller then falls back
+    to its own stale cache, exactly as before."""
+    try:
+        from flask import has_request_context, session
+        from trading_app.service.provider_logic import _get_fyers_adapter
+        # Same username resolution get_data_provider uses: the algo threads run
+        # outside a request, and 'Mine' is this app's single configured user.
+        user = session.get('username') if has_request_context() else None
+        fy = _get_fyers_adapter(user or 'Mine')
+        if fy is None:
+            return {}
+        return fy.quote(symbols) or {}
+    except Exception as exc:
+        logger.warning("[IciciAdapter] Fyers quote failover failed: %s", exc)
+        return {}
 _HIST_CACHE: Dict[str, Tuple[List[Dict[str, Any]], datetime]] = {}
 _HIST_LOCK = threading.Lock()
 
@@ -199,6 +267,32 @@ _SECOND_WINDOW_SECONDS = 900
 # then spend the whole day's Breeze budget, which the live algos share).
 _SECOND_MAX_REQUESTS = max(0, int(os.getenv('ICICI_SECOND_MAX_REQUESTS', '800') or 0))
 _SECOND_DAY_REQUESTS = 25
+
+
+# An index is SPELLED one way as spot and another as an option root: the spot
+# token 'NSE:NIFTY50-INDEX' carries the body 'NIFTY50', while the F&O master
+# files its options under the name 'NIFTY'. Handing the body straight to
+# find_option_symbol returns None, and get_option_chain_raw then reports every
+# strike with an empty 'symbol' — which is how the Second Candle algo came to
+# skip a whole chain it had valid premiums for, since its strike picker
+# requires a tradable symbol. Equity roots are spelled identically on both
+# sides and need no entry here.
+_INDEX_OPTION_ROOTS = {
+    'NIFTY50':        'NIFTY',
+    'NIFTYBANK':      'BANKNIFTY',
+    'FINNIFTY':       'FINNIFTY',
+    'MIDCPNIFTY':     'MIDCPNIFTY',
+    'NIFTYNXT50':     'NIFTYNXT50',
+    'NIFTYMIDCAP150': 'NIFTYFPI',
+    'SENSEX':         'SENSEX',
+    'BANKEX':         'BANKEX',
+}
+
+
+def _option_root(body: str) -> str:
+    """The name the F&O master files `body`'s options under."""
+    key = (body or '').strip().upper()
+    return _INDEX_OPTION_ROOTS.get(key, key)
 
 
 class IciciDataServiceAdapter:
@@ -388,7 +482,8 @@ class IciciDataServiceAdapter:
 
     # ── Quotes ────────────────────────────────────────────────────────────
 
-    def quote(self, symbols: List[str], priority: int = 0) -> Dict[str, Any]:
+    def quote(self, symbols: List[str], priority: int = 0,
+              max_age: Optional[float] = None) -> Dict[str, Any]:
         """Kite-shaped quotes: {symbol: {last_price, ohlc, volume, oi, ...}}.
 
         Options are answered in bulk from the option chain (one request per
@@ -396,13 +491,32 @@ class IciciDataServiceAdapter:
         that fails falls back to the last good quote for that symbol, the same
         stale-cache rescue the Fyers adapter uses — a blank quote reaching an
         algo is far worse than a slightly old one.
+
+        A symbol whose cached quote is younger than `max_age` seconds (default
+        _QUOTE_TTL_SEC) is served from that cache and costs no request at all.
+        Callers that can live with an older mark — the EMA daily-swing scan,
+        say — should pass a larger `max_age` rather than spending the shared
+        Breeze budget on a freshness they never use.
         """
         out: Dict[str, Any] = {}
         if not symbols:
             return out
 
+        ttl = _QUOTE_TTL_SEC if max_age is None else float(max_age)
+        wanted = list(dict.fromkeys(symbols))
+        if ttl > 0:
+            cutoff = datetime.now() - timedelta(seconds=ttl)
+            with _QUOTE_LOCK:
+                for sym in wanted:
+                    hit = _QUOTE_CACHE.get(sym)
+                    if hit and hit[1] >= cutoff:
+                        out[sym] = hit[0]
+            wanted = [s for s in wanted if s not in out]
+        if not wanted:
+            return out
+
         resolved: Dict[str, Dict[str, Any]] = {}
-        for sym in symbols:
+        for sym in wanted:
             info = self._resolve(sym)
             if info:
                 resolved[sym] = info
@@ -420,6 +534,14 @@ class IciciDataServiceAdapter:
 
         now = datetime.now()
 
+        if _quota_exhausted():
+            fetched = _fyers_quotes(wanted)
+            out.update({s: q for s, q in fetched.items() if q})
+            wanted = [s for s in wanted if s not in out]
+            groups = {k: [s for s in v if s in wanted] for k, v in groups.items()}
+            groups = {k: v for k, v in groups.items() if v}
+            singles = [s for s in singles if s in wanted]
+
         for (code, exch, expiry, right), syms in groups.items():
             chain = self._chain_rows(code, exch, expiry, right)
             for sym in syms:
@@ -433,16 +555,35 @@ class IciciDataServiceAdapter:
             if row:
                 out[sym] = _quote_from_row(row)
 
+        # Anything Breeze resolved but would not price goes to Fyers before we
+        # fall back to this adapter's own stale cache — a live price from the
+        # other provider beats an old one from this side, and the same
+        # reasoning already justifies that cache.
+        #
+        # This deliberately does NOT test _quota_exhausted(). Over quota Breeze
+        # refuses in two different shapes: a {'Status': 5} body for some
+        # endpoints and a non-JSON response for others, which surfaces as
+        # "Expecting value: line 1 column 1" from inside the SDK and never
+        # reaches the Status check. Sweeping on the symptom rather than the
+        # diagnosis covers both, and covers a plain outage too. The sticky flag
+        # stays worthwhile as an optimisation: it skips the doomed Breeze
+        # attempt on every later call.
+        missing = [s for s in wanted if s not in out]
+        if missing:
+            out.update({s: q for s, q in _fyers_quotes(missing).items() if q})
+
         with _QUOTE_LOCK:
-            for sym, q in out.items():
-                _QUOTE_CACHE[sym] = (q, now)
-            for sym in symbols:
+            for sym in wanted:
+                if sym in out:
+                    _QUOTE_CACHE[sym] = (out[sym], now)
+            for sym in wanted:
                 if sym not in out and sym in _QUOTE_CACHE:
                     out[sym] = _QUOTE_CACHE[sym][0]
         return out
 
-    def ltp(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-        quotes = self.quote(symbols, priority=1)
+    def ltp(self, symbols: List[str],
+            max_age: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+        quotes = self.quote(symbols, priority=1, max_age=max_age)
         return {k: {'last_price': v.get('last_price', 0.0)} for k, v in quotes.items()}
 
     def _get_quote_row(self, info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -462,8 +603,10 @@ class IciciDataServiceAdapter:
             return None
         rows = _success(resp)
         if not rows:
-            logger.warning("[IciciAdapter] get_quotes(%s) empty: %s",
-                           info['symbol'], _error_of(resp))
+            err = _error_of(resp)
+            if not _note_quota_error(err):
+                logger.warning("[IciciAdapter] get_quotes(%s) empty: %s",
+                               info['symbol'], err)
             return None
         return rows[0]
 
@@ -491,7 +634,9 @@ class IciciDataServiceAdapter:
 
         rows = _success(resp)
         if not rows:
-            logger.warning("[IciciAdapter] option chain %s empty: %s", key, _error_of(resp))
+            err = _error_of(resp)
+            if not _note_quota_error(err):
+                logger.warning("[IciciAdapter] option chain %s empty: %s", key, err)
             return {}
 
         by_strike: Dict[str, Dict[str, Any]] = {}
@@ -541,7 +686,8 @@ class IciciDataServiceAdapter:
                     'vega': None,
                     'oi': _num(row, 'open_interest', 'oi', 'openInterest') or 0,
                     'change_in_oi': _num(row, 'chnge_oi', 'change_in_oi', 'oi_change') or 0,
-                    'symbol': self.find_option_symbol(root, float(strike), ot) or '',
+                    'symbol': self.find_option_symbol(_option_root(root),
+                                                     float(strike), ot) or '',
                 }
 
         if strikecount and result:
@@ -616,6 +762,107 @@ class IciciDataServiceAdapter:
         _HIST_ERROR.msg = None
         return self._history_for_info(info, from_date, to_date, interval, oi,
                                       use_cache, cache_ttl)
+
+    def option_session_window_count(self, day: dt_date) -> int:
+        """How many request-sized slices `day`'s session is cut into."""
+        return len(_session_windows(day))
+
+    def historical_option_minutes(self, root: str, expiry: dt_date, strike: float,
+                                  option_type: str, day: dt_date,
+                                  exchange_code: str = 'NFO') -> List[Dict[str, Any]]:
+        """One settled session of 1-minute bars for one option, disk-cached.
+
+        historical_option serves the same bars, but only ever from memory — and
+        this app restarts often enough that a backtest re-reading the same
+        sessions paid for them again every time. A minute series is one request
+        where the 30-second one is 25, so this is not about the request count; it
+        is that the incremental walk (see historical_option_window) leans on
+        these bars to decide which 30-second slices it can skip, which makes them
+        the last thing a warm re-run still waits on.
+
+        Only a day that has closed is cached — today's last bar is still moving.
+        """
+        symbol = (f"{root}:{expiry.isoformat()}:{int(float(strike))}:"
+                  f"{'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'}")
+        ckey = f"{symbol}:60s:d:{day.isoformat()}"
+        cached = _slice_cache_get(ckey)
+        if cached is not None:
+            _HIST_ERROR.msg = None
+            return cached
+
+        bars = self.historical_option(root, expiry, strike, option_type,
+                                      day.isoformat(), day.isoformat(), 'minute',
+                                      exchange_code=exchange_code)
+        if bars and day < datetime.now(IST).date():
+            _slice_cache_put(ckey, bars)
+        return bars or []
+
+    def historical_option_window(self, root: str, expiry: dt_date, strike: float,
+                                 option_type: str, day: dt_date, index: int,
+                                 bar_seconds: int = 30, exchange_code: str = 'NFO'
+                                 ) -> List[Dict[str, Any]]:
+        """ONE slice of one option's session, aggregated to `bar_seconds`.
+
+        historical_option fetches all 25 slices before it returns anything.
+        That is right for a chart, which draws the whole day, and wrong for a
+        backtest: at Breeze's app-wide 1.5 requests a second a contract-day is
+        ~17 seconds, and the 2nd-candle rule usually knows its answer by 09:30 —
+        so it was buying six hours of premiums to read fifteen minutes of them.
+        This lets a caller buy the session a slice at a time and stop.
+
+        Slices are independent because _SECOND_WINDOW_SECONDS is a multiple of
+        every bar size we aggregate to and _bucket_start anchors on the 09:15
+        open, so no aggregated bar ever straddles a boundary — slice N's bars
+        are the same bars the whole-day fetch would have produced for it.
+
+        Cached at the AGGREGATED size, not raw: a slice is ~874 one-second rows,
+        and caching 25 of those per contract-day would evict the whole 150,000
+        candle budget every seven days; as 30-second bars the same slice is 30.
+        An index past the end of the session returns [].
+        """
+        windows = _session_windows(day)
+        if not 0 <= index < len(windows):
+            return []
+        code = master.stock_code(root, exchange_code)
+        if not code:
+            _HIST_ERROR.msg = f"No ICICI stock_code for {root} on {exchange_code}"
+            return []
+        right = 'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'
+        symbol = f"{root}:{expiry.isoformat()}:{int(float(strike))}:{right}"
+        info = {
+            'root': (root or '').upper(),
+            'stock_code': code,
+            'exchange_code': exchange_code.upper(),
+            'product_type': 'options',
+            'expiry_date': _breeze_expiry(expiry),
+            'right': right,
+            'strike_price': str(int(float(strike))),
+            'symbol': symbol,
+        }
+
+        w_start, w_end = windows[index]
+        ckey = f"{symbol}:{bar_seconds}s:w:{w_start:%Y-%m-%dT%H:%M}"
+        cached = _chunk_cache_get(ckey)
+        if cached is None:
+            # Memory is per-process and this app restarts often; a settled slice
+            # is final, so it is also kept on disk.
+            cached = _slice_cache_get(ckey)
+            if cached is not None:
+                _chunk_cache_put(ckey, cached)
+        if cached is not None:
+            _HIST_ERROR.msg = None
+            return cached
+
+        _HIST_ERROR.msg = None
+        rows = self._history_chunk(info, '1second', w_start, w_end)
+        bars = _resample(rows, bar_seconds) if rows else []
+        # Only a settled slice is final. One still forming would cache a
+        # half-built last bar, and the live 30-second algos read these too.
+        if w_end < datetime.now(IST) and (bars or getattr(_HIST_ERROR, 'clean_empty', False)):
+            _chunk_cache_put(ckey, bars)
+            _slice_cache_put(ckey, bars)
+        return bars
+
 
     def historical_future(self, root: str, expiry: dt_date, from_date: str, to_date: str,
                           interval: str, exchange_code: str = 'NFO',
@@ -1013,6 +1260,112 @@ def verify_session(api_key: str, session_token: str,
 def _breeze_expiry(day: dt_date) -> str:
     """Breeze wants an ISO instant, not a date: '2026-09-29T06:00:00.000Z'."""
     return f"{day.isoformat()}T06:00:00.000Z"
+
+
+# ── Option-slice disk cache ───────────────────────────────────────────────────
+# A settled option slice is FINAL — the contract has expired, its 09:15–09:30
+# premiums will never change — and it cost a Breeze request paced at 1.5/s to
+# fetch. Keeping those only in memory meant every app restart (the LaunchAgent
+# respawns on login, and a deploy is a restart) threw away work the backtest had
+# already paid for, so the same five sessions cost the same minutes again.
+#
+# Deliberately narrow: only the aggregated slices historical_option_window
+# produces go here, not the general chunk cache. The live algos' bars are
+# re-fetched constantly and would churn the file for nothing, and today's
+# still-forming slices are never written at all.
+#
+# Loaded lazily, so a live process that never runs a backtest never reads it.
+_SLICE_CACHE_DIR = os.path.join(os.path.dirname(__file__), '..', '.cache')
+_SLICE_CACHE_FILE = os.path.join(_SLICE_CACHE_DIR, 'icici_option_slices_v1.pkl')
+# ~30 bars a slice, so this is ~60k candles on disk — a few hundred
+# contract-days at the 1-3 slices a run actually buys.
+_SLICE_CACHE_MAX = 2000
+_SLICE_SAVE_EVERY = 25
+
+_slice_cache: 'OrderedDict[str, List[Dict[str, Any]]]' = OrderedDict()
+_slice_cache_lock = threading.Lock()
+_slice_cache_loaded = False
+_slice_cache_dirty = 0
+
+
+def _slice_cache_ready() -> None:
+    """Read the file once, on the first backtest that asks."""
+    global _slice_cache_loaded
+    with _slice_cache_lock:
+        if _slice_cache_loaded:
+            return
+        _slice_cache_loaded = True
+        try:
+            if os.path.exists(_SLICE_CACHE_FILE):
+                with open(_SLICE_CACHE_FILE, 'rb') as fh:
+                    loaded = pickle.load(fh)
+                if isinstance(loaded, dict):
+                    _slice_cache.update(loaded)
+                    while len(_slice_cache) > _SLICE_CACHE_MAX:
+                        _slice_cache.popitem(last=False)
+                    logger.info('[IciciAdapter] loaded %d cached option slices from disk',
+                                len(_slice_cache))
+        except Exception as exc:      # noqa: BLE001 — a bad cache must never break a run
+            logger.warning('[IciciAdapter] option-slice cache unreadable: %s', exc)
+            _slice_cache.clear()
+
+
+def _slice_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:
+    _slice_cache_ready()
+    with _slice_cache_lock:
+        hit = _slice_cache.get(key)
+        if hit is None:
+            return None
+        _slice_cache.move_to_end(key)          # LRU
+        return [dict(c) for c in hit]
+
+
+def _slice_cache_put(key: str, bars: List[Dict[str, Any]]) -> None:
+    _slice_cache_ready()
+    global _slice_cache_dirty
+    with _slice_cache_lock:
+        if key in _slice_cache:
+            return
+        _slice_cache[key] = [dict(c) for c in bars]
+        while len(_slice_cache) > _SLICE_CACHE_MAX:
+            _slice_cache.popitem(last=False)
+        _slice_cache_dirty += 1
+        due = _slice_cache_dirty >= _SLICE_SAVE_EVERY
+        if due:
+            _slice_cache_dirty = 0
+    # Written off-thread and in batches: a backtest should not wait on the disk
+    # every slice, and a lost tail only costs the next run those few requests.
+    if due:
+        threading.Thread(target=_slice_cache_save, daemon=True).start()
+
+
+def flush_option_slice_cache() -> None:
+    """Write the slice cache out now.
+
+    The debounce above is sized for a long walk, but a fast run buys only a
+    handful of slices and would otherwise never reach it — and those are exactly
+    the ones worth keeping, since the next run of the same sessions is then free.
+    Callers invoke this when a backtest finishes.
+    """
+    global _slice_cache_dirty
+    with _slice_cache_lock:
+        if not _slice_cache_dirty:
+            return
+        _slice_cache_dirty = 0
+    _slice_cache_save()
+
+
+def _slice_cache_save() -> None:
+    try:
+        os.makedirs(_SLICE_CACHE_DIR, exist_ok=True)
+        with _slice_cache_lock:
+            snapshot = dict(_slice_cache)
+        tmp = _SLICE_CACHE_FILE + '.tmp'
+        with open(tmp, 'wb') as fh:
+            pickle.dump(snapshot, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, _SLICE_CACHE_FILE)     # never leave a half-written file
+    except Exception as exc:          # noqa: BLE001
+        logger.warning('[IciciAdapter] option-slice cache write failed: %s', exc)
 
 
 def _chunk_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:

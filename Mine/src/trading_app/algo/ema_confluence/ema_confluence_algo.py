@@ -146,6 +146,14 @@ if not any(isinstance(h, RotatingFileHandler) and getattr(h, '_emac_sink', False
     logger.setLevel(logging.INFO)
 
 _POLL_SECS = 15          # daily-swing strategy — no need for an aggressive poll
+# ...and for the same reason the marks it polls need not be a second old. On
+# ICICI every non-option quote is one Breeze request, so sweeping ~18 armed
+# futures AND their underlyings every _POLL_SECS demanded ~144 req/min on its
+# own — more than Breeze's whole published 100/min budget, which starved RTP
+# and Second Candle of the NIFTY spot and burned the daily quota before noon.
+# A minute-old mark is far inside the tolerance of a strategy whose levels come
+# off DAILY candles. Providers that don't accept the argument are unaffected.
+_QUOTE_MAX_AGE_SECS = 60
 _MARKET_OPEN_MIN = 9 * 60 + 15  # 09:15 IST — first tick that can be a real trade
 _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
 
@@ -619,7 +627,12 @@ class EmaConfluenceAlgo:
         if not uniq_tokens:
             return {}
         try:
-            data = provider.ltp(uniq_tokens) or {}
+            try:
+                data = provider.ltp(uniq_tokens, max_age=_QUOTE_MAX_AGE_SECS) or {}
+            except TypeError:
+                # Fyers/Kite take no max_age — same shape as the fallback in
+                # Backtest/minute_candle_store._fetch.
+                data = provider.ltp(uniq_tokens) or {}
         except Exception as e:
             self.log.warning(f"batch LTP fetch failed: {e}")
             return {}

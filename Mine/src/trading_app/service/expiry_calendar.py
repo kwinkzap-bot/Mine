@@ -132,3 +132,68 @@ def past_expiries(trading_days: Iterable[date], cadence: str = 'weekly',
 def past_weekly_expiries(trading_days: Iterable[date], today: Optional[date] = None,
                          limit: Optional[int] = None) -> List[date]:
     return past_expiries(trading_days, 'weekly', None, today, limit)
+
+
+# How far forward expiry_on_or_after will look for a contract. A weekly is at
+# most 7 days out and a monthly at most ~31, so anything past this means the
+# generated dates are not landing on sessions at all and walking further would
+# only return a date nothing traded on.
+_FORWARD_LIMIT_DAYS = 45
+
+
+def _month_expiry(day: date, wd_for) -> date:
+    """The last expiry-weekday of `day`'s calendar month."""
+    nxt = (day.replace(day=28) + timedelta(days=4)).replace(day=1)
+    probe = nxt - timedelta(days=1)
+    while probe.weekday() != wd_for(probe):
+        probe -= timedelta(days=1)
+    return probe
+
+
+def expiry_on_or_after(day: date, trading_days: Iterable[date],
+                       cadence: str = 'weekly',
+                       weekday: Optional[int] = None) -> Optional[date]:
+    """The expiry a contract bought on `day` would be held into — the nearest
+    one on or after it.
+
+    The forward mirror of `past_expiries`, and it exists because a backtest
+    replaying a past day needs the ONE contract that was actually trading then,
+    not a list walked backwards from today. Same inputs, same holiday handling:
+    a generated date is snapped to the last session on or before it, and if
+    that lands before `day` the expiry had already settled, so the next period's
+    is taken instead.
+
+    One difference matters for a range that runs up to today: a generated date
+    in the FUTURE has no sessions after it to snap against, so it is returned
+    as generated rather than dropped. Returns None only when nothing inside
+    the forward window resolves.
+    """
+    trading: Set[date] = {d for d in trading_days if d}
+    if not trading:
+        return None
+    floor = min(trading)
+    latest = max(trading)
+
+    def wd_for(d: date) -> int:
+        return expiry_weekday_for(d) if weekday is None else weekday
+
+    probe = day
+    limit = day + timedelta(days=_FORWARD_LIMIT_DAYS)
+    while probe <= limit:
+        if cadence == 'monthly':
+            cand = _month_expiry(probe, wd_for)
+            following = (probe.replace(day=28) + timedelta(days=4)).replace(day=1)
+        else:
+            cand = probe + timedelta(days=(wd_for(probe) - probe.weekday()) % 7)
+            following = cand + timedelta(days=1)
+
+        if cand >= day:
+            # Beyond the days we hold there is nothing to snap against, and the
+            # contract is still listed anyway — take the generated date.
+            if cand > latest:
+                return cand
+            hit = _snap(cand, trading, floor)
+            if hit is not None and hit >= day:
+                return hit
+        probe = max(following, probe + timedelta(days=1))
+    return None

@@ -4010,6 +4010,640 @@ def run_second_candle_optimise_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
+# ── 30-Sec Option Breakout ────────────────────────────────────────────────────
+# The 2nd-candle breakout read on the OPTION's own candles. Unlike every other
+# backtest on this screen it cannot run off the index series at all: the signal
+# IS a premium, so the run needs the recorded candles of the two contracts that
+# were actually trading on each past day. Breeze is the only provider that
+# serves those — it addresses a contract by (stock_code, expiry, strike, right)
+# rather than by an instrument token, and both instrument masters drop a
+# contract the moment it expires. See Backtest/option_breakout_engine.py.
+
+# The Start/End dates decide which sessions run — there is no separate day cap.
+# What there is instead is a ceiling on what ONE cold run may spend, because the
+# 5,000 Breeze requests a day are shared with the LIVE ALGOS and a range typed
+# as 2017-01-01 would otherwise walk two thousand sessions and take the budget
+# with it. Same idiom as icici_data_service._SECOND_MAX_REQUESTS: sessions are
+# walked newest-first, the walk stops when the budget is gone, and the run says
+# how far back it reached. Cached sessions cost nothing, so re-running simply
+# walks further.
+#
+# 1500 is generous on purpose — a run spends ~2 requests a contract-day and a
+# sweep ~9, so it is roughly 15 months of runs or 4 months of sweeps, and normal
+# use never reaches it.
+_OB_REQUEST_BUDGET = 1500
+
+# Contracts walked at once. Measured 2026-09-07: four leg-days in parallel took
+# the same 66s as four in series, because BreezeRateLimiter paces the whole app
+# at 1.5 req/s — so concurrency here buys nothing against a cold cache. It is
+# kept for the warm one, where the requests are gone and the work is local, and
+# held at four because a wider pool would only queue the LIVE algos' quotes
+# behind a backtest. The shared `_api_executor` is left alone for the same
+# reason.
+_OB_FETCH_WORKERS = 4
+
+# The one timeframe this strategy has. Not a default — the rule is a 30-second
+# rule, and its "2nd candle" is 09:15:30–09:16:00; on any other bar size that
+# phrase names a different window and therefore a different strategy. So the
+# run and the sweep both pin it here rather than reading it off the request,
+# and the screen hides the timeframe picker for this filter.
+_OB_INTERVAL = '30second'
+_OB_BAR_SECONDS = 30
+
+# In-memory task store, shared by the run and the sweep — see _ob_task_response.
+_ob_tasks: Dict[str, Dict[str, Any]] = {}
+_ob_tasks_lock = threading.Lock()
+
+
+class _ObError(Exception):
+    """A reason the run cannot proceed, worded for the user."""
+
+
+class _Counter:
+    """A thread-safe tally, for the fetch progress the status routes report."""
+
+    def __init__(self):
+        self._n = 0
+        self._lock = threading.Lock()
+
+    def bump(self) -> int:
+        with self._lock:
+            self._n += 1
+            return self._n
+
+
+class _Budget:
+    """How many Breeze requests one cold run may still spend.
+
+    Reserved a SESSION at a time — both legs or neither. Two reasons, and the
+    second is the important one: a walk abandoned half way would report "no
+    entry" for a leg it merely stopped paying for, and a session that ran its CE
+    but skipped its PE would book half a day's trades as if that were the whole
+    day. Both are wrong backtests rather than short ones. `settle()` hands back
+    whatever the session did not need, which is most of it.
+    """
+
+    # What a contract-day is assumed to cost while it is in flight. Measured
+    # 2026-09-08: ~2 requests for a run, ~9 for a sweep. The higher figure is
+    # reserved so a sweep cannot overshoot the ceiling, and the difference goes
+    # straight back the moment the session finishes.
+    RESERVE = 9
+
+    def __init__(self, total: int):
+        self._left = int(total)
+        self._lock = threading.Lock()
+
+    def take(self, legs: int) -> bool:
+        """Reserve a whole session, or refuse it because the budget is gone."""
+        want = self.RESERVE * max(1, legs)
+        with self._lock:
+            if self._left < want:
+                return False
+            self._left -= want
+            return True
+
+    def settle(self, legs: int, used: int) -> None:
+        """Return the unused part of a reservation. A session that somehow cost
+        more than it reserved simply refunds nothing."""
+        with self._lock:
+            self._left += max(0, self.RESERVE * max(1, legs) - int(used))
+
+
+def _ob_expiry_schedule(symbol: str):
+    """(cadence, weekday) for `symbol`, read off the contracts the broker lists
+    right now rather than assumed — the same derivation /api/oi-profile/expiries
+    uses. NIFTY still has weeklies while BANKNIFTY/FINNIFTY/MIDCPNIFTY are
+    monthly-only, and SENSEX runs BSE's own schedule."""
+    from trading_app.service import icici_symbol_master as _icici_master
+    from trading_app.service.expiry_calendar import expiry_weekday_for
+
+    exch = _rs_option_exchange(symbol)
+    code = _icici_master.stock_code(symbol, exch)
+    try:
+        listed = sorted(datetime.strptime(e[:10], '%Y-%m-%d').date()
+                        for e in (_icici_master.expiries(code, exch) if code else []))
+    except (ValueError, TypeError):
+        listed = []
+
+    cadence, weekday = 'weekly', None
+    if len(listed) >= 2:
+        gaps = [(b - a).days for a, b in zip(listed, listed[1:])]
+        cadence = 'weekly' if min(gaps) <= 10 else 'monthly'
+    if listed:
+        wd = max({d.weekday() for d in listed},
+                 key=lambda w: sum(1 for d in listed if d.weekday() == w))
+        if wd != expiry_weekday_for(datetime.now().date()):
+            weekday = wd        # a non-NSE schedule (SENSEX) — pin it
+    return cadence, weekday
+
+
+def _ob_plan(adapter, symbol, req_start, req_end, rights):
+    """Name the contract behind every session in the range.
+
+    Returns (plan, sessions, step, cadence, exchange); `plan` is one entry per
+    contract to fetch, oldest session first. Every session in the range is
+    planned — how many of them a single run can afford is _ob_walk's business,
+    not this function's. Raises _ObError with a user-facing reason.
+    """
+    from trading_app.service.expiry_calendar import expiry_on_or_after
+
+    # ── Which days traded, and what each one opened at ──
+    # The DAILY index series answers both in one cheap request: its `open` IS
+    # the 09:15 session open the strike is picked from, so the run never buys an
+    # intraday index series just to learn a number the daily bar already carries.
+    index_symbol = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-EQ'
+    # Reaching past the range on both sides: back so a strike ladder is never
+    # the first bar's, forward so an expiry falling after the last requested day
+    # still has sessions to snap against.
+    bars = adapter.historical_data(
+        index_symbol, (req_start - timedelta(days=30)).isoformat(),
+        min(req_end + timedelta(days=45), datetime.now().date()).isoformat(), 'day')
+    if not bars:
+        raise _ObError(adapter.last_history_error()
+                       or f'No daily {symbol} candles for the range')
+
+    opens = {}
+    for b in bars:
+        day = b.get('date')
+        day = day.date() if hasattr(day, 'date') else day
+        if day is not None and b.get('open'):
+            opens[day] = float(b['open'])
+    trading_days = sorted(opens)
+    in_range = [d for d in trading_days if req_start <= d <= req_end]
+    if not in_range:
+        raise _ObError(f'No {symbol} sessions between {req_start} and {req_end}')
+
+    step = _opt_strike_step(symbol)
+    cadence, weekday = _ob_expiry_schedule(symbol)
+
+    plan = []
+    for day in in_range:
+        expiry = expiry_on_or_after(day, trading_days, cadence, weekday)
+        if expiry is None:
+            logger.warning('[OptBreakout] no expiry reconstructed for %s', day)
+            continue
+        spot_open = opens[day]
+        strike = int(round(spot_open / step) * step)
+        for right in rights:
+            plan.append({'day': day, 'expiry': expiry, 'strike': strike,
+                         'option_type': right, 'spot_open': round(spot_open, 2)})
+    if not plan:
+        raise _ObError('No contract could be named for any session in the range')
+
+    return plan, in_range, step, cadence, _rs_option_exchange(symbol)
+
+
+def _ob_walk(adapter, symbol, exchange, plan, combos, cutoff, on_leg=None):
+    """Simulate every contract in `plan`, buying only the slices the rules read.
+
+    Returns (results, fetch_notes, stats). `results` is one entry per plan item:
+    the item plus `trades` (combo → trade) and whether it had any data. A leg
+    that fails contributes nothing and a note; one dead contract must not take
+    the run down with it.
+
+    The whole point is `stats['windows']` versus `stats['windows_max']` — a
+    contract-day is 25 Breeze requests at 1.5/s, and the rule usually knows its
+    answer inside the first one. See option_breakout_engine.walk_session.
+    """
+    fetch_notes: Dict[str, str] = {}
+    spent, ceiling = _Counter(), _Counter()
+    budget = _Budget(_OB_REQUEST_BUDGET)
+
+    def walk_leg_item(item):
+        """`last_history_error` is thread-local, so a reason has to be read on
+        this thread rather than after the future is joined."""
+        label = f"{item['day']} {item['strike']}{item['option_type']}"
+        day = item['day']
+        meta = {k: v for k, v in item.items() if k != 'candles'}
+
+        # The cheap index into the expensive series: one Breeze request, and it
+        # covers two days, so most of these are already cached by the leg before.
+        try:
+            minute_bars = adapter.historical_option_minutes(
+                symbol, item['expiry'], item['strike'], item['option_type'],
+                day, exchange_code=exchange)
+        except Exception as exc:      # noqa: BLE001 — the oracle is optional
+            logger.warning('[OptBreakout] %s minute index failed: %s', label, exc)
+            minute_bars = None
+
+        count = adapter.option_session_window_count(day)
+        for _ in range(count):
+            ceiling.bump()
+
+        def fetch_window(i):
+            try:
+                bars = adapter.historical_option_window(
+                    symbol, item['expiry'], item['strike'], item['option_type'],
+                    day, i, bar_seconds=_OB_BAR_SECONDS, exchange_code=exchange)
+            except Exception as exc:  # noqa: BLE001 — one dead slice, not a dead run
+                logger.warning('[OptBreakout] %s slice %d failed: %s', label, i, exc)
+                fetch_notes.setdefault(label, str(exc))
+                return []
+            spent.bump()
+            return bars
+
+        try:
+            trades, fetched = _ob_engine().walk_session(
+                meta, fetch_window, count, minute_bars, combos, cutoff)
+        except Exception as exc:      # noqa: BLE001
+            logger.warning('[OptBreakout] %s walk failed: %s', label, exc)
+            fetch_notes[label] = str(exc)
+            trades, fetched = {c: None for c in combos}, []
+
+        if not fetched or all(t is None for t in trades.values()):
+            # Silent when the contract simply had no signal; a note only when
+            # Breeze actually refused.
+            reason = adapter.last_history_error()
+            if reason:
+                fetch_notes.setdefault(label, reason)
+        if on_leg:
+            on_leg(label)
+        return {**meta, 'trades': trades, 'windows': len(fetched),
+                'had_data': bool(fetched), 'skipped': False}
+
+    def walk_day(items):
+        """One session — every leg of it, or none. See _Budget."""
+        if not budget.take(len(items)):
+            return [{**{k: v for k, v in it.items() if k != 'candles'},
+                     'trades': {c: None for c in combos}, 'windows': 0,
+                     'had_data': False, 'skipped': True} for it in items]
+        out = [walk_leg_item(it) for it in items]
+        budget.settle(len(items), sum(r['windows'] for r in out))
+        return out
+
+    # One task per SESSION, not per leg, so the budget can keep a day whole.
+    # A private pool, not the shared one — see _OB_FETCH_WORKERS. Submitted
+    # NEWEST session first so a run that exhausts the budget keeps the most
+    # recent stretch of the range rather than an arbitrary middle of it — the
+    # same choice icici_data_service._second_history makes — then put back in
+    # date order, which is what the results table and equity curve read.
+    by_day: Dict[Any, list] = {}
+    for item in plan:
+        by_day.setdefault(item['day'], []).append(item)
+
+    with ThreadPoolExecutor(max_workers=_OB_FETCH_WORKERS) as pool:
+        futures = [pool.submit(walk_day, items)
+                   for _day, items in sorted(by_day.items(), reverse=True)]
+        results = [r for f in futures for r in f.result()]
+    results.sort(key=lambda r: (r['day'], r['option_type']))
+
+    # A settled slice never changes, so the ones this run bought are worth
+    # keeping past the next app restart — the run after it pays nothing.
+    try:
+        from trading_app.service.icici_data_service import flush_option_slice_cache
+        flush_option_slice_cache()
+    except Exception as exc:          # noqa: BLE001 — a cache write is never fatal
+        logger.warning('[OptBreakout] slice cache flush failed: %s', exc)
+
+    ran = [r for r in results if not r['skipped']]
+    stats = {
+        'windows':     spent.bump() - 1,
+        'windows_max': ceiling.bump() - 1,
+        'sessions_run':     len({r['day'] for r in ran}),
+        'sessions_skipped': len({r['day'] for r in results if r['skipped']}),
+        'ran_from':    min((r['day'] for r in ran), default=None),
+        'ran_to':      max((r['day'] for r in ran), default=None),
+    }
+    logger.info('[OptBreakout] %d contract-days: %d of %d slices bought (%d%% saved)',
+                len(ran), stats['windows'], stats['windows_max'],
+                100 - (stats['windows'] * 100 // max(1, stats['windows_max'])))
+    return results, fetch_notes, stats
+
+
+def _ob_engine():
+    """The engine module, reloaded so an edit lands without a restart — the same
+    thing every other backtest route here does."""
+    import importlib
+    import trading_app.Backtest.option_breakout_engine as _ob_mod
+    importlib.reload(_ob_mod)
+    return _ob_mod
+
+
+def _ob_budget_note(stats, sessions_requested):
+    """What to tell the user when one run could not afford the whole range."""
+    if not stats.get('sessions_skipped'):
+        return []
+    return [f"Ran the most recent {stats['sessions_run']} of {sessions_requested} "
+            f"sessions ({stats['ran_from']} → {stats['ran_to']}) — the range asks for "
+            f"more Breeze requests than one run may take from the 5,000/day the live "
+            f"algos share. Sessions already fetched are cached to disk, so running it "
+            f"again walks further back and costs nothing for these"]
+
+
+def _ob_start_task(worker, *args):
+    """Register a task, run `worker(task_id, _set, *args)` on a daemon thread,
+    and answer with the task id."""
+    task_id = str(uuid.uuid4())
+    with _ob_tasks_lock:
+        _ob_tasks[task_id] = {'status': 'running', 'started_at': _time.time(),
+                              'legs_done': 0, 'legs_total': 0,
+                              'stage': 'Reading the sessions in the range'}
+
+    def _set(**fields):
+        with _ob_tasks_lock:
+            task = _ob_tasks.get(task_id)
+            if task and task.get('status') == 'running':
+                task.update(fields)
+
+    def _run():
+        try:
+            worker(task_id, _set, *args)
+        except _ObError as exc:
+            with _ob_tasks_lock:
+                _ob_tasks[task_id] = {'status': 'error', 'error': str(exc)}
+        except Exception as exc:      # noqa: BLE001 — a dead run, not a dead app
+            logger.error(f'[OptBreakout] background error: {exc}', exc_info=True)
+            with _ob_tasks_lock:
+                _ob_tasks[task_id] = {'status': 'error', 'error': str(exc)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
+def _ob_task_response(task_id):
+    """The status body both the run and the sweep answer with."""
+    with _ob_tasks_lock:
+        task = _ob_tasks.get(task_id)
+        task = dict(task) if task else None
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    if task['status'] == 'running':
+        return jsonify({
+            'success': True, 'status': 'running',
+            'legs_done':  task.get('legs_done', 0),
+            'legs_total': task.get('legs_total', 0),
+            'days_total': task.get('days_total', 0),
+            'stage':      task.get('stage', ''),
+            'elapsed':    round(_time.time() - task.get('started_at', _time.time())),
+        })
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error',
+                        'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', **task['payload']})
+
+
+def _ob_request_params(data):
+    """The parameters both endpoints take, validated. Raises _ObError."""
+    symbol      = (data.get('symbol') or 'NIFTY').upper()
+    legs_wanted = (data.get('legs') or 'both').lower()
+    try:
+        req_start = datetime.strptime(str(data.get('start_date'))[:10], '%Y-%m-%d').date()
+        req_end   = datetime.strptime(str(data.get('end_date'))[:10], '%Y-%m-%d').date()
+    except ValueError:
+        raise _ObError('Bad or missing date, want YYYY-MM-DD')
+    return {
+        'symbol':      symbol,
+        'req_start':   req_start,
+        'req_end':     req_end,
+        'exit_hour':   int(data.get('exit_hour', 15)),
+        'exit_minute': int(data.get('exit_minute', 25)),
+        'rights':      {'ce': ['CE'], 'pe': ['PE']}.get(legs_wanted, ['CE', 'PE']),
+    }
+
+
+def _ob_adapter_or_error():
+    """Resolved in the REQUEST thread — get_icici_adapter reads the session for
+    the username, and the worker has no request context."""
+    adapter = get_icici_adapter()
+    if adapter is None:
+        raise _ObError(
+            "This backtest reads the option's own recorded candles, and Breeze is "
+            'the only provider that serves a contract whose expiry has passed. '
+            'Log in at /auth/login/icici.')
+    return adapter
+
+
+@api_bp.route('/backtest/option-breakout', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_option_breakout_backtest_api():
+    """Start a 30-Sec Option Breakout run and return its task id.
+
+    Backgrounded because the cost is in the fetch, not the simulation: Breeze
+    is paced app-wide at 1.5 requests a second (BreezeRateLimiter, sized to its
+    published 100/min). The incremental walk brought a five-session run from
+    ~167s to ~15s cold and ~0.1s once its slices are cached, but a cold run over
+    a long range is still minutes, so it keeps the task-and-poll shape and the
+    status route below reports contract-by-contract progress.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data = request.get_json() or {}
+        params = _ob_request_params(data)
+        adapter = _ob_adapter_or_error()
+        params.update(
+            candle_index=int(data.get('candle_index', 2)),
+            rr_ratio=float(data.get('rr_ratio', 2.0)),
+            sl_buffer=float(data.get('sl_buffer', 1.0)),
+        )
+        return _ob_start_task(_run_option_breakout, adapter, params)
+    except _ObError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error starting Option Breakout backtest: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _run_option_breakout(task_id, _set, adapter, p):
+    """The run itself, off the request thread."""
+    plan, sessions, step, cadence, exchange = _ob_plan(
+        adapter, p['symbol'], p['req_start'], p['req_end'], p['rights'])
+
+    _set(legs_total=len(plan), days_total=len(sessions),
+         stage=f'Walking {len(plan)} contracts')
+    done = _Counter()
+    combo = (p['candle_index'], p['rr_ratio'], p['sl_buffer'])
+    cutoff = p['exit_hour'] * 60 + p['exit_minute']
+    results, fetch_notes, stats = _ob_walk(
+        adapter, p['symbol'], exchange, plan, [combo], cutoff,
+        on_leg=lambda label: _set(legs_done=done.bump(), stage=f'Done {label}'))
+
+    ran = [r for r in results if not r['skipped']]
+    trades = [r['trades'][combo] for r in ran if r['trades'][combo] is not None]
+    with_data = sum(1 for r in ran if r['had_data'])
+    summary = _ob_engine().summarise(trades, legs_scanned=len(ran),
+                                     legs_with_data=with_data,
+                                     days_scanned=stats['sessions_run'])
+
+    # ── What the run actually covered, and what it cost ──
+    notes = []
+    notes.extend(_ob_budget_note(stats, len(sessions)))
+    dead = len(ran) - with_data
+    if dead:
+        reason = next(iter(fetch_notes.values()), '')
+        notes.append(f'{dead} of {len(ran)} contracts returned no candles'
+                     + (f' ({reason})' if reason else ''))
+
+    payload = {
+        'trades':  trades,
+        'warning': '  ·  '.join(notes) if notes else None,
+        '_debug': {
+            'days_requested': len(sessions),
+            'legs_empty':     dead,
+            **{k: str(v) for k, v in stats.items()},
+        },
+        'summary': {
+            'total_trades':  summary['total_trades'],
+            'wins':          summary['wins'],
+            'losses':        summary['losses'],
+            'total_pnl':     summary['total_pnl'],
+            'win_rate':      summary['win_rate'],
+            'profit_factor': summary['profit_factor'],
+            'max_drawdown':  summary['max_drawdown'],
+            'avg_win':       summary['avg_win'],
+            'avg_loss':      summary['avg_loss'],
+            # Option-native run: every point above is a PREMIUM point of a real
+            # recorded contract, not an index point and not a model's.
+            'pnl_basis':      summary['pnl_basis'],
+            'days_scanned':   summary['days_scanned'],
+            'legs_scanned':   summary['legs_scanned'],
+            'legs_with_data': summary['legs_with_data'],
+            'both_legs_days': summary['both_legs_days'],
+            'strike_step':    step,
+            'cadence':        cadence,
+            # How much of each session the rule actually had to buy. 25 slices a
+            # contract-day is the whole session; anything well under it is the
+            # incremental walk earning its keep.
+            'slices_bought':  stats['windows'],
+            'slices_max':     stats['windows_max'],
+        },
+    }
+    with _ob_tasks_lock:
+        _ob_tasks[task_id] = {'status': 'complete', 'payload': payload}
+
+
+@api_bp.route('/backtest/option-breakout/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def run_option_breakout_status(task_id):
+    """Poll a 30-Sec Option Breakout run."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    return _ob_task_response(task_id)
+
+
+@api_bp.route('/backtest/option-breakout/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_option_breakout_optimise():
+    """Sweep (range candle # × SL:Target × SL buffer × legs) and return one
+    ranked board.
+
+    One board rather than the per-timeframe stack the RTP and 2nd-candle sweeps
+    build, because this strategy has one timeframe — see _OB_INTERVAL. The
+    sessions are the same ones the plain run walks, fetched once and swept in
+    memory: the premiums are the expensive part (see the run's own note), the
+    144-combination grid is not.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data = request.get_json() or {}
+        params = _ob_request_params(data)
+        adapter = _ob_adapter_or_error()
+        params['recalculate'] = bool(data.get('recalculate', False))
+        # Every input that moves the numbers is in the key. Unlike the other
+        # sweeps this cannot be keyed on symbol alone: the board describes a
+        # handful of named sessions, so a different range is a different answer,
+        # not a longer one.
+        params['cache_key'] = (
+            f"{params['symbol']}_ob_{params['req_start']}_{params['req_end']}"
+            f"_{''.join(params['rights'])}"
+            f"_{params['exit_hour']:02d}{params['exit_minute']:02d}_v2")
+
+        if not params['recalculate']:
+            cache = _load_opt_cache()
+            entry = cache.get(params['cache_key'])
+            if entry:
+                return jsonify({'success': True, 'status': 'complete',
+                                'from_cache': True, **entry})
+
+        return _ob_start_task(_run_option_breakout_optimise, adapter, params)
+    except _ObError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error starting Option Breakout optimise: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _run_option_breakout_optimise(task_id, _set, adapter, p):
+    """The sweep itself, off the request thread.
+
+    Every parameter set reads the SAME slices, so the whole grid rides one walk
+    per contract-day: a sweep costs about what a run costs, instead of 48 times
+    as much.
+    """
+    engine = _ob_engine()
+    plan, sessions, step, cadence, exchange = _ob_plan(
+        adapter, p['symbol'], p['req_start'], p['req_end'], p['rights'])
+
+    _set(legs_total=len(plan), days_total=len(sessions),
+         stage=f'Walking {len(plan)} contracts against {engine.GRID_SIZE} combos')
+    done = _Counter()
+    cutoff = p['exit_hour'] * 60 + p['exit_minute']
+    results, _notes, stats = _ob_walk(
+        adapter, p['symbol'], exchange, plan, engine.COMBO_GRID, cutoff,
+        on_leg=lambda label: _set(legs_done=done.bump(), stage=f'Done {label}'))
+    if not any(r['had_data'] for r in results):
+        raise _ObError('No contract returned candles for these sessions')
+
+    by_combo = {combo: [] for combo in engine.COMBO_GRID}
+    for r in results:
+        for combo, trade in r['trades'].items():
+            if trade is not None:
+                by_combo[combo].append(trade)
+
+    _set(stage='Ranking the grid')
+    lot_value = _rtp_lot_value(p['symbol'])     # ₹/pt, shared with RTP
+    ranked = engine.rank_combos(by_combo)
+    for r in ranked:
+        # ₹ net of brokerage (1 lot) — same economics as the 2nd-candle board,
+        # so the two read against each other.
+        brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+        r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
+    # Only combos still profitable after brokerage belong on the board.
+    profitable = sorted([r for r in ranked if r['net_pnl_inr'] > 0],
+                        key=lambda r: r.get('total_pnl', 0), reverse=True)
+
+    payload = {
+        'symbol':              p['symbol'],
+        'interval':            _OB_INTERVAL,
+        'total_combos_tested': engine.GRID_SIZE,
+        'combos_kept':         len(profitable),
+        'best':                profitable[0] if profitable else None,
+        'results':             profitable[:20],
+        'days_scanned':        stats['sessions_run'],
+        'sessions':            f"{stats['ran_from']} → {stats['ran_to']}",
+        'warning':             '  ·  '.join(_ob_budget_note(stats, len(sessions))) or None,
+        'lot_value':           lot_value,
+        'slices_bought':       stats['windows'],
+        'slices_max':          stats['windows_max'],
+        'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
+    }
+    disk_cache = _load_opt_cache()
+    disk_cache[p['cache_key']] = payload
+    _save_opt_cache(disk_cache)
+
+    with _ob_tasks_lock:
+        _ob_tasks[task_id] = {'status': 'complete', 'payload': payload}
+
+
+@api_bp.route('/backtest/option-breakout/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def run_option_breakout_optimise_status(task_id):
+    """Poll a 30-Sec Option Breakout sweep."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    return _ob_task_response(task_id)
+
+
+
 # Index symbol → provider token. Shared by the Scalp Pullback backtest and its
 # optimiser (same maps the VWAP / 2nd-Candle routes above build inline).
 def _sp_instrument_token(provider, symbol: str):

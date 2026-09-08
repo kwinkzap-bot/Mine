@@ -4160,17 +4160,19 @@ const _smGroupOfConfig = {};
 // Aggregate per-config invested + P&L into each broker group's header chip, and
 // roll the groups up into the two section headers (Brokers / None — track only).
 function _smUpdateGroupPnls() {
-    const sums     = {};   // gid → { invested, today, total, has }
-    const secSums  = {};   // 'live' | 'none' → { invested, today, total, has }
+    const sums     = {};   // gid → { invested, current, deployed, today, total, has }
+    const secSums  = {};   // 'live' | 'none' → { invested, current, deployed, today, total, has }
     Object.keys(_smPnlByConfig).forEach(id => {
         const gid = _smGroupOfConfig[id];
         if (!gid) return;
         const p   = _smPnlByConfig[id];
         const sid = gid === 'none' ? 'none' : 'live';
-        [sums[gid]    || (sums[gid]    = { invested: 0, today: 0, total: 0, has: false }),
-         secSums[sid] || (secSums[sid] = { invested: 0, today: 0, total: 0, has: false })
+        [sums[gid]    || (sums[gid]    = { invested: 0, current: 0, deployed: 0, today: 0, total: 0, has: false }),
+         secSums[sid] || (secSums[sid] = { invested: 0, current: 0, deployed: 0, today: 0, total: 0, has: false })
         ].forEach(s => {
             s.invested += p.invested || 0;
+            s.current += p.current || 0;
+            s.deployed += p.deployed || 0;
             s.today += p.today || 0;
             s.total += p.total || 0;
             s.has = true;
@@ -4178,6 +4180,13 @@ function _smUpdateGroupPnls() {
     });
     const fmtVal = (v) => (v >= 0 ? '+₹' : '-₹') +
         Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    // Weighted over the whole scope: pooled P&L ÷ pooled cost, the same ratio
+    // each card shows for itself. Blank while nothing is deployed yet.
+    const fmtPct = (v, base) => {
+        if (!base) return '';
+        const pct = v / base * 100;
+        return ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%)';
+    };
     const paint = (el, s, base, itemCls, labelCls, sepCls, scopeId) => {
         if (!s || !s.has) { el.className = base; el.innerHTML = ''; return; }
         el.className = `${base} ${base}-loaded`;
@@ -4186,12 +4195,16 @@ function _smUpdateGroupPnls() {
                 <span class="${labelCls}">Invested</span>${_smFmtInr(s.invested)}
             </span>
             <span class="${sepCls}">|</span>
+            <span class="${itemCls} sm-tpnl-cur">
+                <span class="${labelCls}">Current</span>${_smFmtInr(s.current)}
+            </span>
+            <span class="${sepCls}">|</span>
             <span class="${itemCls} ${s.today >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
-                <span class="${labelCls}">Today</span>${fmtVal(s.today)}
+                <span class="${labelCls}">Today</span>${fmtVal(s.today)}${fmtPct(s.today, s.deployed)}
             </span>
             <span class="${sepCls}">|</span>
             <span class="${itemCls} ${s.total >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
-                <span class="${labelCls}">Total</span>${fmtVal(s.total)}
+                <span class="${labelCls}">Total</span>${fmtVal(s.total)}${fmtPct(s.total, s.deployed)}
             </span>` + _smAggRatesHtml(scopeId, itemCls, labelCls, sepCls);
     };
     document.querySelectorAll('.sm-broker-group-pnl').forEach(el => {
@@ -4283,14 +4296,36 @@ function _smUpdateTotalPnl() {
     if (!el) return;
     const entries = Object.values(_smPnlByConfig);
     if (!entries.length) { el.className = 'sm-total-pnl-chip'; el.innerHTML = ''; return; }
-    const todaySum = entries.reduce((s, v) => s + (v.today || 0), 0);
-    const totalSum = entries.reduce((s, v) => s + (v.total || 0), 0);
+    const sum      = (k) => entries.reduce((s, v) => s + (v[k] || 0), 0);
+    const todaySum = sum('today');
+    const totalSum = sum('total');
+    const invSum   = sum('invested');
+    const curSum   = sum('current');
+    // Money-in vs what the holdings are worth now. This is a different question
+    // from Total beside it: Total is unrealised P&L against the cost of the
+    // stock held right now, so it ignores anything past rebalances already
+    // realised, and Current leaves out idle cash the same way the cards do.
+    const chgSum   = curSum - invSum;
+    const chgPct   = invSum ? chgSum / invSum * 100 : 0;
     const fmtVal = (v) => {
         const s = v >= 0 ? '+₹' : '-₹';
         return s + Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
     };
     el.className = 'sm-total-pnl-chip sm-total-pnl-loaded';
     el.innerHTML = `
+        <span class="sm-tp-item sm-tpnl-inv">
+            <span class="sm-tp-label">Invested</span>${_smFmtInr(invSum)}
+        </span>
+        <span class="sm-tp-sep">|</span>
+        <span class="sm-tp-item sm-tpnl-cur">
+            <span class="sm-tp-label">Current</span>${_smFmtInr(curSum)}
+        </span>
+        <span class="sm-tp-sep">|</span>
+        <span class="sm-tp-item ${chgSum >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}"
+              title="Current (${_smFmtInr(curSum)}) − Invested (${_smFmtInr(invSum)}). Current counts the holdings only, so idle cash waiting to be deployed is not in it.">
+            <span class="sm-tp-label">Change</span>${fmtVal(chgSum)} (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(1)}%)
+        </span>
+        <span class="sm-tp-sep">|</span>
         <span class="sm-tp-item ${todaySum >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
             <span class="sm-tp-label">Today</span>${fmtVal(todaySum)}
         </span>
@@ -4496,6 +4531,15 @@ function _smUpdateMetaRow(id, d) {
         // The group row labels this "Invested", so it has to be money-in — it
         // used to sum total_invested, i.e. Deployed under the wrong name.
         invested: (d.total_investment ?? d.total_invested) || 0,
+        // Same figure the card's own "Current" chip shows — holdings marked to
+        // market, idle cash excluded — so the group total reads as the sum of
+        // the rows under it rather than as `mark` below.
+        current: d.current_port_val || 0,
+        // Cost of the stock held now. The server divides today_pct and
+        // unrealised_pct by exactly this (api.py:15572), so summing it is what
+        // lets the group row show a real weighted % instead of an average of
+        // the per-config ones.
+        deployed: d.total_invested || 0,
         mark: (d.current_port_val || 0) + (d.cash_balance || 0),
     };
     _smUpdateTotalPnl();

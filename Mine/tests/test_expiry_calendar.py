@@ -7,6 +7,7 @@ traded rather than from a holiday list).
 from datetime import date, timedelta
 
 from trading_app.service.expiry_calendar import (
+    expiry_on_or_after,
     expiry_weekday_for,
     past_expiries,
 )
@@ -121,3 +122,58 @@ def test_expiry_day_itself_is_still_offered():
     """It settles at that day's close, so on the day it is still the front one."""
     got = _as_of([], [date(2026, 9, 8), date(2026, 9, 15)], date(2026, 9, 8))
     assert got[0] == date(2026, 9, 8)
+
+
+# ── The forward mirror, behind the 30-Sec Option Breakout backtest ──────────
+# Replaying a past session needs the ONE contract that was trading then, not a
+# list walked backwards from today.
+
+def test_forward_expiry_is_the_next_one_on_or_after_the_day():
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 30))
+    assert expiry_on_or_after(date(2026, 8, 26), days) == date(2026, 9, 1)   # Wed → next Tue
+    assert expiry_on_or_after(date(2026, 9, 7), days) == date(2026, 9, 8)
+
+
+def test_expiry_day_itself_is_the_contract_that_day_trades():
+    """It settles at that day's close, so a trade opened that morning is on it."""
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 30))
+    assert expiry_on_or_after(date(2026, 9, 1), days) == date(2026, 9, 1)
+
+
+def test_a_holiday_expiry_snaps_back_to_the_session_that_settled_it():
+    holiday = date(2026, 9, 1)             # a Tuesday the market did not trade
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 30), drop={holiday})
+    # Standing on the Thursday before, the contract settles on Monday the 31st.
+    assert expiry_on_or_after(date(2026, 8, 27), days) == date(2026, 8, 31)
+
+
+def test_an_expiry_that_settled_before_the_day_is_skipped_for_the_next_one():
+    """Snapping can land BEFORE the day asked about — that contract is gone, so
+    the answer has to be the following period's."""
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 30), drop={date(2026, 9, 1)})
+    assert expiry_on_or_after(date(2026, 9, 2), days) == date(2026, 9, 8)
+
+
+def test_monthly_cadence_returns_the_months_last_expiry_weekday():
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 30))
+    assert expiry_on_or_after(date(2026, 8, 5), days, 'monthly') == date(2026, 8, 25)
+    # Past August's, so September's — the next month's last Tuesday.
+    assert expiry_on_or_after(date(2026, 8, 26), days, 'monthly') == date(2026, 9, 29)
+
+
+def test_a_future_expiry_beyond_the_days_we_hold_is_returned_unsnapped():
+    """A range running up to today has no sessions after it to snap against,
+    and the contract is still listed anyway — dropping it would blank the run's
+    most recent days."""
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 4))
+    assert expiry_on_or_after(date(2026, 9, 4), days) == date(2026, 9, 8)
+
+
+def test_an_explicit_weekday_pins_a_non_nse_schedule_forward_too():
+    days = _weekdays(date(2026, 8, 1), date(2026, 9, 30))
+    got = expiry_on_or_after(date(2026, 9, 2), days, weekday=3)   # Thursday
+    assert got == date(2026, 9, 3) and got.weekday() == 3
+
+
+def test_no_trading_days_yields_no_forward_expiry():
+    assert expiry_on_or_after(date(2026, 9, 1), []) is None

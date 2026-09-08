@@ -30,6 +30,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // Same generation-token pattern for the Pivot Confluence optimise.
     let _pcOptRun    = 0;
     let _pcOptAbort  = null;
+    // The 30-Sec Option Breakout run is backgrounded on the server too, so it
+    // needs the same generation token — switching strategy mid-fetch must stop
+    // the poll rather than render a stale result under the new strategy's
+    // column set.
+    let _obRun       = 0;
+    let _obAbort     = null;
+    let _obOptRun    = 0;
+    let _obOptAbort  = null;
     // True while a "Find Best Params" sweep owns the shared #loading card
     // (see _showOptLoader far below). Declared up here because the cancel*
     // helpers call _hideOptLoader() during init, before that block runs —
@@ -121,6 +129,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // reads back as yesterday between 00:00 and 05:30.
     function localToday() {
         const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
+    // N days back, in the browser's own timezone — same reason as localToday().
+    function daysAgoLocal(n) {
+        const d = new Date();
+        d.setDate(d.getDate() - n);
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
@@ -369,7 +384,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // the last real symbol had (it's greyed out in that mode anyway).
         if ((symbol || '').toUpperCase() === ALL_STOCKS) return;
         const lotValue = lotValueForSymbol(symbol);
-        ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'emaLotValue'].forEach(function(id) {
+        ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'obLotValue', 'emaLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
@@ -428,6 +443,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (typeof cancelRtpOptimise === 'function') cancelRtpOptimise();
         if (typeof cancelScOptimise === 'function') cancelScOptimise();
         if (typeof cancelPcOptimise === 'function') cancelPcOptimise();
+        if (typeof cancelObRun === 'function') cancelObRun();
+        if (typeof cancelObOptimise === 'function') cancelObOptimise();
 
         const intervalSelect = document.getElementById('interval');
         const startDateInput = document.getElementById('startDate');
@@ -445,6 +462,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const scParamsRow   = document.getElementById('secondCandleParamsRow');
         const scLotRow      = document.getElementById('secondCandleLotRow');
         const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
+        const obParamsRow   = document.getElementById('optionBreakoutParamsRow');
+        const obLotRow      = document.getElementById('optionBreakoutLotRow');
+        const obOptPanel    = document.getElementById('optionBreakoutOptimisePanel');
         const expParamsRow  = document.getElementById('expiryBreakoutParamsRow');
         const tmfParamsRow  = document.getElementById('thirtyMinFakeoutParamsRow');
         const tmfOptPanel   = document.getElementById('thirtyMinFakeoutOptimisePanel');
@@ -464,6 +484,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
         if (scOptPanel)    scOptPanel.style.display    = 'none';
+        if (obParamsRow)   obParamsRow.style.display   = 'none';
+        if (obLotRow)      obLotRow.style.display      = 'none';
+        if (obOptPanel)    obOptPanel.style.display    = 'none';
         if (expParamsRow)  expParamsRow.style.display  = 'none';
         if (tmfParamsRow)  tmfParamsRow.style.display  = 'none';
         if (tmfOptPanel)   tmfOptPanel.style.display   = 'none';
@@ -488,7 +511,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -526,6 +549,25 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intervalSelect) intervalSelect.value = '30second';
             if (startDateInput) startDateInput.value = '2017-01-01';
             updateScInvestment();
+
+        } else if (val === 'option_breakout') {
+            if (obParamsRow) obParamsRow.style.display = 'grid';
+            if (obLotRow)    obLotRow.style.display    = 'grid';
+            // No timeframe picker: the rule IS a 30-second rule. Its "2nd
+            // candle" is 09:15:30–09:16:00, and on any other bar size that
+            // phrase names a different window — so a coarser bar would be a
+            // different strategy, not a cheaper version of this one. The server
+            // pins it too (_OB_INTERVAL); the select is still set so an earlier
+            // strategy's choice can't leak into a shared payload.
+            if (intFg) intFg.style.display = 'none';
+            if (intervalSelect) intervalSelect.value = '30second';
+            // The Start/End dates are the only thing that decides how much is
+            // run. Two weeks by default: enough sessions to read, cheap enough
+            // to be quick on a cold cache.
+            const obEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = daysAgoLocal(14);
+            if (obEnd)          obEnd.value          = localToday();
+            updateObInvestment();
 
         } else if (val === 'expiry_breakout') {
             if (expParamsRow) expParamsRow.style.display = 'grid';
@@ -626,6 +668,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
+    // 30-Sec Option Breakout investment display
+    window.updateObInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('obLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('obInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
     // 2-Min EMA Scalp Pullback investment display
     window.updateSpInvestment = function() {
         const lots  = Math.max(1, parseInt(document.getElementById('spLots')?.value || 1));
@@ -660,8 +710,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // ── Status filter: narrows the strategy dropdown to one maturity bucket ──
     const strategyStatusSelect = document.getElementById('strategyStatusSelect');
     const STRATEGY_STATUS = {
-        success: ['rtp', 'second_candle', 'expiry_breakout', 'thirty_min_fakeout',
-                  'swing_momentum', 'ema_pullback'],
+        success: ['rtp', 'second_candle', 'option_breakout', 'expiry_breakout',
+                  'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         testing: ['scalp_pullback', 'pivot_confluence'],
         failure: ['vwap'],
     };
@@ -768,6 +818,13 @@ document.addEventListener('DOMContentLoaded', function() {
             await runExpiryScan();
             return;
         }
+        // Backgrounded on the server — see the endpoint's own note. It reports
+        // progress instead of blocking, so it cannot ride the shared
+        // fetch-and-render path below.
+        if (_strat === 'option_breakout') {
+            await runOptionBreakout();
+            return;
+        }
         const symbol = symbolSearch.value.toUpperCase();
         if (_strat !== 'swing_momentum' && _strat !== 'thirty_min_fakeout' && !symbol) {
             window.showNotification('Please select a symbol', 'warning');
@@ -797,6 +854,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // backtest run, but collapse their grids so the results take focus.
         setCollapsed(document.querySelector('#rtpOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#secondCandleOptimisePanel .opt-header'), true);
+        setCollapsed(document.querySelector('#optionBreakoutOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#scalpPullbackOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#pivotConfluenceOptimisePanel .opt-header'), true);
         if (smOptPanel)     smOptPanel.style.display     = 'none';
@@ -987,6 +1045,323 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // ── 30-Sec Option Breakout — start + poll ───────────────────────────
+    // The server fetches one contract's premiums per Breeze request at 1.5
+    // req/s, so a run is minutes, not seconds. It answers with a task id and
+    // this walks it: every poll says which contract just landed, because a
+    // silent three-minute spinner is indistinguishable from a hung request.
+    function cancelObRun() {
+        _obRun += 1;
+        if (_obAbort) {
+            try { _obAbort.abort(); } catch (e) { /* noop */ }
+            _obAbort = null;
+        }
+        _hideOptLoader();
+    }
+
+    async function runOptionBreakout() {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const payload = {
+            symbol:       symbol,
+            start_date:   document.getElementById('startDate')?.value,
+            end_date:     document.getElementById('endDate')?.value,
+            candle_index: parseInt(document.getElementById('obCandleIndex')?.value || 2),
+            rr_ratio:     parseFloat(document.getElementById('obRrRatio')?.value || 2),
+            // 0 is meaningful — it puts the stop exactly on the range low.
+            sl_buffer:    parseFloat(document.getElementById('obSlBuffer')?.value ?? 1),
+            legs:         document.getElementById('obLegs')?.value || 'both',
+        };
+        const obExit = (document.getElementById('obExitTime')?.value || '15:25').split(':');
+        payload.exit_hour   = parseInt(obExit[0] || 15);
+        payload.exit_minute = parseInt(obExit[1] || 25);
+
+        const myRun = ++_obRun;
+        resultsArea.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader('Running option backtest', 'Naming the contracts…');
+
+        try {
+            _obAbort = new AbortController();
+            const resp = await fetch('/api/backtest/option-breakout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: _obAbort.signal,
+            });
+            const data = await resp.json();
+            if (myRun !== _obRun) return;
+            if (!data.success || !data.task_id) {
+                _hideOptLoader();
+                window.showNotification(data.error || 'Option backtest failed', 'error');
+                return;
+            }
+            _pollOptionBreakout(data.task_id, Date.now(), myRun);
+        } catch (err) {
+            if (myRun !== _obRun) return;      // cancelled — not a failure
+            console.error('Option breakout error:', err);
+            _hideOptLoader();
+            window.showNotification('Option backtest request failed', 'error');
+        }
+    }
+
+    function _pollOptionBreakout(taskId, startMs, myRun) {
+        // 30 sessions × 2 legs at ~33s a session is the worst case the Days
+        // field allows; the cap sits well past it so a slow-but-alive run is
+        // never mistaken for a dead one.
+        const MAX_WAIT_MS = 45 * 60 * 1000;
+
+        function tick() {
+            if (myRun !== _obRun) return;      // cancelled / superseded
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                _hideOptLoader();
+                window.showNotification(
+                    'The option backtest is taking unusually long — it keeps running on '
+                    + 'the server, and the sessions it already fetched are cached, so '
+                    + 'running it again will be much faster.', 'warning');
+                return;
+            }
+
+            fetch(`/api/backtest/option-breakout/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _obRun) return;
+                    if (data.status === 'running') {
+                        const total = data.legs_total || 0;
+                        const done  = data.legs_done  || 0;
+                        const bar   = total ? `${done}/${total} contracts` : 'starting…';
+                        _showOptLoader('Running option backtest',
+                                       `${data.elapsed || 0}s elapsed · ${bar}`
+                                       + (data.stage ? ` · ${data.stage}` : ''));
+                        setTimeout(tick, 2000);
+                        return;
+                    }
+                    _obAbort = null;
+                    _hideOptLoader();
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Option backtest failed', 'error');
+                        const ph = document.getElementById('btRightPlaceholder');
+                        if (ph) ph.style.display = '';
+                        return;
+                    }
+                    if (data.warning) window.showNotification(data.warning, 'warning');
+                    displayResults(data);
+                })
+                .catch(err => {
+                    if (myRun !== _obRun) return;
+                    console.error('Option breakout poll error:', err);
+                    setTimeout(tick, 3000);    // transient network error — retry
+                });
+        }
+
+        setTimeout(tick, 1500);
+    }
+
+    // ── 30-Sec Option Breakout — Find Best Params ───────────────────────
+    // Sweeps range candle # × SL:Target × SL buffer × legs on the one timeframe
+    // this strategy has. The sessions are the same ones a plain run walks and
+    // the server fetches them once, so the sweep costs what a run costs — the
+    // premiums are the expensive part, the 144-combo grid is not.
+    function _obOptMoney() {
+        const lots     = Math.max(1, parseInt(document.getElementById('obLots')?.value     || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('obLotValue')?.value || 65));
+        return { lots, lotValue };
+    }
+    function _obOptBrokerage(r, lots) { return calcBrokeragePerTrade(lots) * (r.total_trades || 0); }
+    function _obOptNetRs(r, lots, lotValue) { return (r.total_pnl || 0) * lotValue * lots - _obOptBrokerage(r, lots); }
+
+    const OB_OPT_COLS = [
+        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Candle',        key: 'candle_index',  fmt: r => r.candle_index },
+        { label: 'Legs',          key: 'legs',          fmt: r => `<span style="white-space:nowrap">${r.legs}</span>` },
+        { label: 'SL:Target',     key: 'rr_ratio',      fmt: r => `1:${r.rr_ratio}` },
+        // The parameter no other strategy here has: how far below the range
+        // low the stop sits, in premium rupees.
+        { label: 'Buffer (₹)',    key: 'sl_buffer',     fmt: r => (r.sl_buffer ?? 0).toFixed(1) },
+        { label: 'Trades',        key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',      fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'total_pnl',     fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
+        { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _obOptMoney(); const v = _obOptNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _obOptMoney(); const b = _obOptBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,            fmt: () => '' },   // Use button
+    ];
+
+    function applyObOptResult(r) {
+        const candle   = document.getElementById('obCandleIndex');
+        const rr       = document.getElementById('obRrRatio');
+        const buffer   = document.getElementById('obSlBuffer');
+        const legs     = document.getElementById('obLegs');
+        if (candle) candle.value = r.candle_index;
+        if (rr)     rr.value     = r.rr_ratio;
+        if (buffer) buffer.value = r.sl_buffer;
+        if (legs) legs.value = r.legs === 'CE only' ? 'ce' : (r.legs === 'PE only' ? 'pe' : 'both');
+        if (window.showNotification) {
+            window.showNotification(
+                `Applied: candle ${r.candle_index} · 1:${r.rr_ratio}`
+                + ` · buffer ₹${r.sl_buffer} · ${r.legs}`
+                + `  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success');
+        }
+    }
+
+    function renderObOptResults(data) {
+        const panel     = document.getElementById('optionBreakoutOptimisePanel');
+        const metaEl    = document.getElementById('obOptMeta');
+        const recalcBtn = document.getElementById('obRecalcOptBtn');
+
+        if (metaEl) {
+            // The session window is the headline here in a way it is not on the
+            // other boards: this one describes a handful of named days, so a
+            // combo's rank means nothing without knowing how few.
+            let meta = `${data.combos_kept ?? 0} of ${data.total_combos_tested} combos`
+                     + ` · ${data.symbol} · 30 second`;
+            if (data.days_scanned) meta += ` · ${data.days_scanned} sessions`;
+            if (data.sessions)     meta += ` (${data.sessions})`;
+            meta += ' · option premium basis';
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        _mountSingleOptGrid('obOptGrid', data.results || [], OB_OPT_COLS,
+            'total_pnl', applyObOptResult, {
+                win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
+                net_pnl_inr: r => { const { lots, lotValue } = _obOptMoney(); return _obOptNetRs(r, lots, lotValue); },
+                brokerage_inr: r => { const { lots } = _obOptMoney(); return _obOptBrokerage(r, lots); },
+            });
+
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyObOptResult(data.best);
+    }
+
+    function cancelObOptimise() {
+        _obOptRun += 1;
+        if (_obOptAbort) {
+            try { _obOptAbort.abort(); } catch (e) { /* noop */ }
+            _obOptAbort = null;
+        }
+        _hideOptLoader();
+    }
+
+    async function runObOptimise(recalculate) {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const panel     = document.getElementById('optionBreakoutOptimisePanel');
+        const recalcBtn = document.getElementById('obRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        _showOptLoader('Finding best params…', 'Naming the contracts…');
+
+        const myRun = ++_obOptRun;
+        const obExit = (document.getElementById('obExitTime')?.value || '15:25').split(':');
+        try {
+            _obOptAbort = new AbortController();
+            const resp = await fetch('/api/backtest/option-breakout/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol,
+                    start_date:  document.getElementById('startDate')?.value,
+                    end_date:    document.getElementById('endDate')?.value,
+                    legs:        document.getElementById('obLegs')?.value || 'both',
+                    exit_hour:   parseInt(obExit[0] || 15),
+                    exit_minute: parseInt(obExit[1] || 25),
+                    recalculate,
+                }),
+                signal: _obOptAbort.signal,
+            });
+            const data = await resp.json();
+            if (myRun !== _obOptRun) return;
+            // A cached board comes back finished, with no task to poll.
+            if (data.success && data.status === 'complete') {
+                _obOptFinish(data, activeBtn, origText);
+                return;
+            }
+            if (!data.success || !data.task_id) {
+                _obOptFinish(null, activeBtn, origText);
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                return;
+            }
+            _pollObOptimise(data.task_id, Date.now(), myRun, activeBtn, origText);
+        } catch (err) {
+            if (myRun !== _obOptRun) return;      // cancelled — not a failure
+            console.error('Option breakout optimise error:', err);
+            _obOptFinish(null, activeBtn, origText);
+            window.showNotification('Optimisation request failed', 'error');
+        }
+    }
+
+    function _obOptFinish(data, activeBtn, origText) {
+        _obOptAbort = null;
+        if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        _hideOptLoader();
+        if (!data) return;
+        // A board built on fewer sessions than were asked for is not a shorter
+        // answer, it is a different one — say so instead of letting the meta
+        // line's session count pass unnoticed.
+        if (data.warning) window.showNotification(data.warning, 'warning');
+        renderObOptResults(data);
+    }
+
+    function _pollObOptimise(taskId, startMs, myRun, activeBtn, origText) {
+        // A warm sweep is seconds and a cold one over a long range is minutes;
+        // the ceiling sits well clear of the worst case either way.
+        const MAX_WAIT_MS = 45 * 60 * 1000;
+
+        function tick() {
+            if (myRun !== _obOptRun) return;      // cancelled / superseded
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                _obOptFinish(null, activeBtn, origText);
+                window.showNotification(
+                    'The sweep is taking unusually long — it keeps running on the server '
+                    + 'and caches its result, so running it again will load the finished '
+                    + 'board.', 'warning');
+                return;
+            }
+
+            fetch(`/api/backtest/option-breakout/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _obOptRun) return;
+                    if (data.status === 'running') {
+                        const total = data.legs_total || 0;
+                        const done  = data.legs_done  || 0;
+                        _showOptLoader('Finding best params…',
+                                       `${data.elapsed || 0}s elapsed`
+                                       + (total ? ` · ${done}/${total} contracts` : '')
+                                       + (data.stage ? ` · ${data.stage}` : ''));
+                        setTimeout(tick, 2000);
+                        return;
+                    }
+                    if (!data.success || data.status === 'error') {
+                        _obOptFinish(null, activeBtn, origText);
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    _obOptFinish(data, activeBtn, origText);
+                })
+                .catch(err => {
+                    if (myRun !== _obOptRun) return;
+                    console.error('Option breakout optimise poll error:', err);
+                    setTimeout(tick, 3000);       // transient network error — retry
+                });
+        }
+
+        setTimeout(tick, 1500);
+    }
+
+    const obRecalcBtn = document.getElementById('obRecalcOptBtn');
+    if (obRecalcBtn) obRecalcBtn.addEventListener('click', () => runObOptimise(true));
+
     // ── Monthly Expiry Breakout — FILTER mode ───────────────────────────
     // No symbol/dates/SL/Target: scans every F&O stock's 1-hour candles
     // from Jan 1 (this year) to today for a touch-then-close-beyond the
@@ -1167,9 +1542,13 @@ document.addEventListener('DOMContentLoaded', function() {
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
         const isPc   = strategySelect && strategySelect.value === 'pivot_confluence';
+        // 30-Sec Option Breakout is single-symbol and points-based as well, but
+        // its points are PREMIUM points of a real contract — so Lot Value here
+        // is the lot size, not a ₹/index-point conversion.
+        const isOb   = strategySelect && strategySelect.value === 'option_breakout';
         // 2nd-candle / Scalp Pullback / Pivot Confluence / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
-        const moneyLotsId    = isSc ? 'scLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : (isEma ? 'emaLots'     : 'vwapLots')));
-        const moneyLotValId  = isSc ? 'scLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue')));
+        const moneyLotsId    = isSc ? 'scLots'     : (isOb ? 'obLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : (isEma ? 'emaLots'     : 'vwapLots'))));
+        const moneyLotValId  = isSc ? 'scLotValue' : (isOb ? 'obLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue'))));
 
         // Candle Breakout booked on the option premium: the ₹ cards below are
         // unchanged (Lot Value ₹/pt multiplies either basis) — this only
@@ -1215,7 +1594,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const pnlUnitEl = document.getElementById('statTotalPnlUnit');
         if (pnlUnitEl) pnlUnitEl.textContent = isMultiSymbol
             ? `gross, before brokerage · ${summary.total_trades || 0} entries`
-            : (isScOption ? 'option premium points' : 'points');
+            : ((isScOption || isOb) ? 'option premium points' : 'points');
 
         const outcomeEl = document.getElementById('statOutcome');
         outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
@@ -1294,7 +1673,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
+        } else if ((isVwap || isSc || isOb || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1350,6 +1729,31 @@ document.addEventListener('DOMContentLoaded', function() {
             // option basis every "pts" on this screen is a PREMIUM point of a
             // modelled leg, so the model's assumptions belong next to them
             // rather than only in the checkbox's tooltip.
+            // 30-Sec Option Breakout: say what the run actually covered. The
+            // day count is the headline number here in a way it is nowhere else
+            // — the range asks for sessions and a cold run may not afford all
+            // of them, and without this the table would just look short.
+            if (isOb) {
+                const subtitle = document.getElementById('btSubtitle');
+                if (subtitle) {
+                    const legs = summary.legs_with_data ?? 0;
+                    let sub = 'P&L basis: option premium (recorded ATM CE/PE candles, not modelled)'
+                        + `  ·  ${summary.days_scanned ?? 0} session${summary.days_scanned === 1 ? '' : 's'}`
+                        + `  ·  ${legs}/${summary.legs_scanned ?? 0} contracts with data`
+                        + `  ·  ${summary.both_legs_days ?? 0} day${summary.both_legs_days === 1 ? '' : 's'} both legs fired`;
+                    // Why the run was quick, and — the day it is not — why not.
+                    // The rule usually decides inside the first fifteen minutes,
+                    // so it buys a fraction of each session; a figure near the
+                    // maximum means the legs ran late and really were read in full.
+                    if (summary.slices_max) {
+                        const pct = Math.round(100 - (summary.slices_bought * 100 / summary.slices_max));
+                        sub += `  ·  read ${summary.slices_bought}/${summary.slices_max}`
+                             + ` session slices (${pct}% skipped)`;
+                    }
+                    subtitle.textContent = sub;
+                }
+            }
+
             if (isSc) {
                 const subtitle = document.getElementById('btSubtitle');
                 if (subtitle) {
@@ -1416,13 +1820,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc || isSp || isPc || isEma)
+        const lots2     = (isVwap || isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc || isSp || isPc || isEma)
+        const lotValue2 = (isVwap || isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc || isSp || isPc || isTmf || isEma;
+        const isMoney     = isRtp || isVwap || isSc || isOb || isSp || isPc || isTmf || isEma;
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
@@ -1885,6 +2289,34 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
     ];
 
+    // 30-Sec Option Breakout is option-native: every price on a row is a
+    // PREMIUM, so the generic Entry/Exit Price columns are relabelled rather
+    // than joined by a second pair. The Type column goes too — both legs are
+    // BOUGHT, so "Long" on every row says nothing — and the leg that replaces
+    // it carries the same bullish/bearish colour Type used to: a CE is the
+    // upside bet, a PE the downside one.
+    const OB_TRADES_COLS = [
+        TRADES_COLS[0],                                     // Entry Time
+        { label: 'Leg', sortable: true,
+          sortValue: t => `${t.option_type || ''}${t.strike || 0}`,
+          render: (_, t) => DataGrid.badge(
+              `${t.strike || '—'} ${t.option_type || ''}`.trim(),
+              t.option_type === 'PE' ? 'neg' : 'pos'),
+          // Where the strike came from, which is the one input the row cannot
+          // show: the session open picked it off the ladder.
+          title: (_, t) => (t.spot_open ? `Open ${t.spot_open}` : '')
+                         + (t.expiry ? `  ·  expiry ${t.expiry}` : '') },
+        { ...TRADES_COLS[2], label: 'Entry Prem' },
+        TRADES_COLS[3],                                     // Exit Time
+        { ...TRADES_COLS[4], label: 'Exit Prem' },
+        { key: 'sl_price', label: 'SL', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'target_price', label: 'Target', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        TRADES_COLS[5],                                     // Result
+        { ...TRADES_COLS[6], label: 'P&L (prem)' },
+    ];
+
     // EMA Confluence books its money on the monthly future, so Entry/Exit
     // Price above are the CONTRACT's — these say which contract that was, how
     // many times the position was carried forward, and what those extra orders
@@ -2031,6 +2463,9 @@ document.addEventListener('DOMContentLoaded', function() {
             columns = multi
                 ? [...columns.slice(0, -4), EMA_FUTURES_COLS[0], EMA_FUTURES_COLS[1], ...columns.slice(-4)]
                 : [...columns, ...EMA_FUTURES_COLS];
+        } else if (!multi && lastData.summary && lastData.summary.pnl_basis === 'option_premium') {
+            // Option-native run — its own column set entirely, not a splice.
+            columns = OB_TRADES_COLS;
         } else if (!multi && lastData.summary && lastData.summary.pnl_basis === 'option') {
             // Leg / premiums / index P&L go in front of the P&L column, which
             // stays last and is now the premium's.
@@ -3484,6 +3919,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (strat === 'swing_momentum') _runSmOptimise(false);
         else if (strat === 'vwap')      runVwapOptimise(false);
         else if (strat === 'second_candle') runScOptimise(false);
+        else if (strat === 'option_breakout') runObOptimise(false);
         else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);
         else if (strat === 'ema_pullback') runEmaOptimise(false);
         else if (strat === 'scalp_pullback') runSpOptimise(false);

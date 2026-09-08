@@ -189,6 +189,37 @@ def _round_to_tick(price: float, tick: float, mode: str) -> float:
     return round(ticks * tick, 2)
 
 
+def _provider_tag(provider: Any) -> str:
+    """Which instrument vocabulary `provider` speaks: 'fyers', 'icici' or 'kite'.
+
+    What separates these providers is not the brand but how they ADDRESS an
+    instrument: Fyers and ICICI both take a symbol string ('NSE:SBIN-EQ'),
+    Kite wants a numeric instrument token. ICICI delegates its symbol-master
+    duties to the Fyers master, so it hands back Fyers-shaped tokens and must
+    be fed Fyers-shaped ones — the old `hasattr(provider, 'fyers')` test called
+    Breeze "Kite" and fed it a bare 'SBIN', which resolves to no contract at
+    all. With ALGO_TMF_DATA_PROVIDER=ICICI that meant every stock came back
+    with zero candles and the whole algo sat at 'no_setup' all day.
+
+    The two symbol providers still get distinct tags, not one boolean: the
+    minute-candle store namespaces its cache files by tag, and each broker's
+    bars belong in their own file. Mirrors _provider_tag/_speaks_symbols in
+    app/routes/api.py.
+    """
+    from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+    from trading_app.service.icici_data_service import IciciDataServiceAdapter
+    if isinstance(provider, IciciDataServiceAdapter):
+        return 'icici'
+    if isinstance(provider, FyersDataServiceAdapter) or hasattr(provider, 'fyers'):
+        return 'fyers'
+    return 'kite'
+
+
+def _speaks_symbols(provider: Any) -> bool:
+    """True when `provider` is addressed by symbol string, not a Kite token."""
+    return _provider_tag(provider) != 'kite'
+
+
 def _thirty_min_engine():
     """Deferred import — the engine module has no Flask/app dependency, but
     importing lazily here still avoids any import-order surprises at
@@ -421,19 +452,19 @@ class TMFAlgo:
         from trading_app.service.provider_logic import get_data_provider
         return get_data_provider(user=self.username, context='algo_tmf')
 
-    def _fetch_today_candles(self, provider: Any, is_fyers: bool, symbol: str) -> Optional[pd.DataFrame]:
+    def _fetch_today_candles(self, provider: Any, is_symbol_provider: bool, symbol: str) -> Optional[pd.DataFrame]:
         from trading_app.Backtest.minute_candle_store import get_minute_history
         today_str = date.today().isoformat()
-        spot_token = f'NSE:{symbol}-EQ' if is_fyers else symbol
-        provider_tag = 'fyers' if is_fyers else 'kite'
+        spot_token = f'NSE:{symbol}-EQ' if is_symbol_provider else symbol
+        provider_tag = _provider_tag(provider)
         try:
             return get_minute_history(provider, spot_token, symbol, today_str, today_str, provider_tag=provider_tag)
         except Exception as e:
             logger.warning(f"[TMF] {symbol}: today-candle fetch failed: {e}")
             return None
 
-    def _get_ltp_batch(self, provider: Any, symbols: List[str], is_fyers: bool) -> Dict[str, float]:
-        tokens = [f'NSE:{s}-EQ' if is_fyers else s for s in symbols]
+    def _get_ltp_batch(self, provider: Any, symbols: List[str], is_symbol_provider: bool) -> Dict[str, float]:
+        tokens = [f'NSE:{s}-EQ' if is_symbol_provider else s for s in symbols]
         try:
             data = provider.ltp(tokens) or {}
         except Exception as e:
@@ -449,12 +480,12 @@ class TMFAlgo:
 
     # ── Signal detection ─────────────────────────────────────────────────
 
-    def _scan_one(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any],
+    def _scan_one(self, provider: Any, is_symbol_provider: bool, symbol: str, s: Dict[str, Any],
                    capital_per_trade: float, max_sl_risk: Optional[float]) -> None:
         from trading_app.Backtest.tmf_symbol_universe import TMF_SYMBOL_DEFAULTS, TMF_EQUITY_LEVERAGE
         _prepare_df, _resample_30min, _detect_setup, _SESSION_START_MIN, _ = _thirty_min_engine()
 
-        df = self._fetch_today_candles(provider, is_fyers, symbol)
+        df = self._fetch_today_candles(provider, is_symbol_provider, symbol)
         if df is None or df.empty:
             s['phase'] = 'no_setup'
             return
@@ -512,14 +543,14 @@ class TMFAlgo:
         logger.info(f"[TMF] {symbol}: setup found — {direction.upper()} "
                     f"trigger={trigger} sl={sl_level} (tick {tick}, SL risk ₹{sl_risk:,.0f})")
 
-    def _compute_target(self, provider: Any, is_fyers: bool, symbol: str,
+    def _compute_target(self, provider: Any, is_symbol_provider: bool, symbol: str,
                          direction: str, entry_price: float) -> Optional[float]:
         """Target = the day's session Low/High *up to the entry fill* —
         forward-computable (unlike the backtest's full-day hindsight
         target), clamped to never be less favourable than the entry price
         itself. Returns None if that clamp leaves no usable room (skip the
         Target leg for this trade; SL + Time Exit still apply)."""
-        df = self._fetch_today_candles(provider, is_fyers, symbol)
+        df = self._fetch_today_candles(provider, is_symbol_provider, symbol)
         if df is None or df.empty:
             return None
         tick = self._tick_size_for(symbol)
@@ -649,7 +680,7 @@ class TMFAlgo:
             logger.warning(f"[TMF] order {order_id}: final fill lookup failed: {e}")
         return 0, None
 
-    def _check_entry_fill(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any],
+    def _check_entry_fill(self, provider: Any, is_symbol_provider: bool, symbol: str, s: Dict[str, Any],
                            orderbooks: Dict[int, Dict[str, Any]], now_mins: int, cutoff_mins: int) -> None:
         give_up = self._entry_order_expired(s, now_mins, cutoff_mins)
 
@@ -707,7 +738,7 @@ class TMFAlgo:
 
         direction   = s['direction']
         entry_price = live_positions[0]['entry_price']
-        target_level = self._compute_target(provider, is_fyers, symbol, direction, entry_price)
+        target_level = self._compute_target(provider, is_symbol_provider, symbol, direction, entry_price)
         s['entry_price']  = entry_price
         s['target_level'] = target_level
 
@@ -1061,7 +1092,7 @@ class TMFAlgo:
                 s['phase'] = 'done'
 
     def _rearm_exit_legs(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any], svc: Any, idx: int,
-                          qty: int, provider: Any = None, is_fyers: bool = False) -> None:
+                          qty: int, provider: Any = None, is_symbol_provider: bool = False) -> None:
         """Cancel the leg's SL/Target orders and place them again for `qty` —
         used whenever the real open quantity has moved away from what the
         existing orders are sized for (entry still filling, or part of the
@@ -1078,7 +1109,7 @@ class TMFAlgo:
             sl_res = svc.place_equity_sl_order(symbol, exit_txn, qty, trigger_price=s['sl_level'], product='MIS')
             bp['sl_order_id'] = str(sl_res['order_id']) if sl_res.get('success') else None
         if s.get('target_level') is None and provider is not None:
-            s['target_level'] = self._compute_target(provider, is_fyers, symbol, direction, bp['entry_price'])
+            s['target_level'] = self._compute_target(provider, is_symbol_provider, symbol, direction, bp['entry_price'])
         if s.get('target_level') is not None:
             tgt_res = svc.place_equity_order(symbol, exit_txn, qty, price=s['target_level'], product='MIS')
             bp['target_order_id'] = str(tgt_res['order_id']) if tgt_res.get('success') else None
@@ -1148,7 +1179,7 @@ class TMFAlgo:
                 s['phase'] = 'done'
 
     def _reconcile_orphaned_positions(self, state: Dict[str, Any], force_square_off: bool,
-                                       provider: Any = None, is_fyers: bool = False,
+                                       provider: Any = None, is_symbol_provider: bool = False,
                                        now_mins: int = 0, cutoff_mins: int = 0) -> None:
         """Cross-check every active broker's REAL open MIS positions
         against this app's own state. Anything the broker shows as open
@@ -1201,7 +1232,7 @@ class TMFAlgo:
                         tracked_bp['entry_price'] = pos['average_price']
                         s['entry_price']          = pos['average_price']
                         self._rearm_exit_legs(symbol, s, tracked_bp, svc, idx, real_qty,
-                                               provider=provider, is_fyers=is_fyers)
+                                               provider=provider, is_symbol_provider=is_symbol_provider)
                     elif not force_square_off and real_qty < tracked_qty:
                         # The opposite case, and it is NOT an entry problem: part
                         # of the position has already GONE OUT — an exit leg
@@ -1228,7 +1259,7 @@ class TMFAlgo:
                                                    open_qty, tracked_qty)
                         if open_qty > 0:
                             self._rearm_exit_legs(symbol, s, tracked_bp, svc, idx, open_qty,
-                                                   provider=provider, is_fyers=is_fyers)
+                                                   provider=provider, is_symbol_provider=is_symbol_provider)
                     continue
 
                 qty = abs(pos['quantity'])
@@ -1276,7 +1307,7 @@ class TMFAlgo:
                     # it has to be computed now or the position is left with
                     # only an SL leg and no Target order at the broker.
                     if s.get('target_level') is None and provider is not None:
-                        s['target_level'] = self._compute_target(provider, is_fyers, symbol, direction, pos['average_price'])
+                        s['target_level'] = self._compute_target(provider, is_symbol_provider, symbol, direction, pos['average_price'])
                     if s.get('target_level') is not None:
                         tgt_res = svc.place_equity_order(symbol, exit_txn, qty, price=s['target_level'], product='MIS')
                         bp['target_order_id'] = str(tgt_res['order_id']) if tgt_res.get('success') else None
@@ -1289,7 +1320,7 @@ class TMFAlgo:
 
     # ── Main loop ────────────────────────────────────────────────────────
 
-    def _tick(self, provider: Any, is_fyers: bool, state: Dict[str, Any], capital_per_trade: float,
+    def _tick(self, provider: Any, is_symbol_provider: bool, state: Dict[str, Any], capital_per_trade: float,
                cutoff_mins: int, algo_active: bool, now_mins: int,
                max_sl_risk: Optional[float] = None) -> None:
         stocks = state['stocks']
@@ -1300,7 +1331,7 @@ class TMFAlgo:
                 if s['phase'] != 'pending_scan':
                     continue
                 try:
-                    self._scan_one(provider, is_fyers, symbol, s, capital_per_trade, max_sl_risk)
+                    self._scan_one(provider, is_symbol_provider, symbol, s, capital_per_trade, max_sl_risk)
                 except Exception as e:
                     logger.warning(f"[TMF] {symbol}: scan failed: {e}")
 
@@ -1313,7 +1344,7 @@ class TMFAlgo:
         # in_position need it purely so Stock Status can show the stock's current
         # value and the running P&L on an open position.
         mark_syms = watching_syms + pending_syms + inpos_syms
-        ltps = self._get_ltp_batch(provider, mark_syms, is_fyers) if mark_syms else {}
+        ltps = self._get_ltp_batch(provider, mark_syms, is_symbol_provider) if mark_syms else {}
         for symbol in mark_syms:
             ltp = ltps.get(symbol)
             if ltp is not None:
@@ -1351,7 +1382,7 @@ class TMFAlgo:
             orderbooks = {idx: svc.get_orderbook_by_id() for idx, svc in self._broker_list}
             for symbol in pending_syms:
                 try:
-                    self._check_entry_fill(provider, is_fyers, symbol, stocks[symbol], orderbooks, now_mins, cutoff_mins)
+                    self._check_entry_fill(provider, is_symbol_provider, symbol, stocks[symbol], orderbooks, now_mins, cutoff_mins)
                 except Exception as e:
                     logger.warning(f"[TMF] {symbol}: entry-fill check failed: {e}")
             for symbol in inpos_syms:
@@ -1374,7 +1405,7 @@ class TMFAlgo:
                 self._last_reconcile_ts = now_ts
                 try:
                     self._reconcile_orphaned_positions(state, force_square_off=False,
-                                                         provider=provider, is_fyers=is_fyers,
+                                                         provider=provider, is_symbol_provider=is_symbol_provider,
                                                          now_mins=now_mins, cutoff_mins=cutoff_mins)
                 except Exception as e:
                     logger.error(f"[TMF] reconciliation failed: {e}", exc_info=True)
@@ -1410,7 +1441,10 @@ class TMFAlgo:
                 logger.error("[TMF] Data provider unavailable — aborting for today")
                 return
 
-            is_fyers = hasattr(provider, 'fyers')
+            provider_tag = _provider_tag(provider)
+            is_symbol_provider = provider_tag != 'kite'
+            logger.info(f"[TMF] Data provider: {provider_tag} "
+                        f"({type(provider).__name__}) — symbol-addressed: {is_symbol_provider}")
 
             state = self._load_state()
             if state.get('date') != date.today().isoformat():
@@ -1445,7 +1479,7 @@ class TMFAlgo:
                 if now_mins >= _HARD_STOP_MIN:
                     break
                 try:
-                    self._tick(provider, is_fyers, state, capital_per_trade, cutoff_mins,
+                    self._tick(provider, is_symbol_provider, state, capital_per_trade, cutoff_mins,
                                 algo_active, now_mins, max_sl_risk)
                 except Exception as e:
                     logger.error(f"[TMF] tick error: {e}", exc_info=True)

@@ -230,6 +230,12 @@ def test_trim_to_atm_keeps_the_ladder_around_the_middle():
 
 def _adapter_with(rows, monkeypatch):
     """An inert adapter whose symbol master is the given instrument rows."""
+    # The quote cache is process-global on purpose (provider_logic rebuilds the
+    # adapter per request and shouldn't throw the data away), and quote() now
+    # SERVES from it within _QUOTE_TTL_SEC. Two tests in this file quote the
+    # same contract, so without this each would inherit the other's price.
+    with ids._QUOTE_LOCK:
+        ids._QUOTE_CACHE.clear()
     adapter = ids.IciciDataServiceAdapter(api_key="test")
     monkeypatch.setattr(adapter._symbols, 'instruments',
                         lambda exchange=None: rows if exchange == 'NFO' else [])
@@ -439,3 +445,137 @@ def test_icici_without_credentials_never_reaches_the_adapter(provider_env, monke
     monkeypatch.setattr(ids, 'IciciDataServiceAdapter', _LiveAdapter)
     provider = pl.get_data_provider(user='Mine')
     assert provider.kwargs['broker'] == 'fyers'
+
+
+# ── Quote budget: the read-through cache ──────────────────────────────────
+
+def test_a_repeat_quote_inside_the_ttl_costs_no_breeze_request(loaded_master, monkeypatch):
+    """Six algo threads poll the same NIFTY spot on a 1s loop. Before the
+    read-through cache each poll was its own Breeze request, which is how a
+    ~100/min budget went to duplicates and the daily quota died before noon."""
+    adapter = _adapter_with([], monkeypatch)
+    monkeypatch.setattr(adapter, '_resolve', lambda s: {
+        'stock_code': s, 'exchange_code': 'NSE', 'product_type': 'cash',
+        'expiry_date': None, 'right': None, 'strike_price': None, 'symbol': s})
+    calls = []
+    monkeypatch.setattr(adapter, '_get_quote_row',
+                        lambda info: calls.append(info['symbol']) or {'ltp': 100.0})
+
+    assert adapter.ltp(['NSE:SBIN-EQ'])['NSE:SBIN-EQ']['last_price'] == 100.0
+    assert adapter.ltp(['NSE:SBIN-EQ'])['NSE:SBIN-EQ']['last_price'] == 100.0
+    assert adapter.ltp(['NSE:SBIN-EQ', 'NSE:SBIN-EQ'])            # deduped
+    assert len(calls) == 1
+
+
+def test_max_age_zero_always_refetches(loaded_master, monkeypatch):
+    adapter = _adapter_with([], monkeypatch)
+    monkeypatch.setattr(adapter, '_resolve', lambda s: {
+        'stock_code': s, 'exchange_code': 'NSE', 'product_type': 'cash',
+        'expiry_date': None, 'right': None, 'strike_price': None, 'symbol': s})
+    calls = []
+    monkeypatch.setattr(adapter, '_get_quote_row',
+                        lambda info: calls.append(info['symbol']) or {'ltp': 100.0})
+
+    adapter.quote(['NSE:SBIN-EQ'], max_age=0)
+    adapter.quote(['NSE:SBIN-EQ'], max_age=0)
+    assert len(calls) == 2
+
+
+# ── An index's option root is not its spot body ───────────────────────────
+
+def test_index_spot_body_maps_to_its_option_root():
+    """'NSE:NIFTY50-INDEX' carries the body NIFTY50; the F&O master files its
+    options under NIFTY. Equity roots pass through untouched."""
+    assert ids._option_root('NIFTY50') == 'NIFTY'
+    assert ids._option_root('NIFTYBANK') == 'BANKNIFTY'
+    assert ids._option_root('SBIN') == 'SBIN'
+
+
+def test_chain_rows_carry_a_tradable_symbol(loaded_master, monkeypatch):
+    """Every chain entry needs a symbol: the Second Candle algo skips any
+    strike without one, so an unmapped root silently costs it the whole chain
+    even when the premiums are perfectly good."""
+    adapter = _adapter_with([], monkeypatch)
+    monkeypatch.setattr(adapter, '_nearest_expiry', lambda *a: '2026-09-08T06:00:00.000Z')
+    monkeypatch.setattr(adapter, '_chain_rows',
+                        lambda code, exch, exp, right: {'23850': {'ltp': 90.0}})
+    seen_roots = []
+    monkeypatch.setattr(adapter, 'find_option_symbol',
+                        lambda root, strike, ot, **kw:
+                            seen_roots.append(root) or f'NSE:{root}269082{int(strike)}{ot}')
+
+    raw = adapter.get_option_chain_raw('NSE:NIFTY50-INDEX', strikecount=0)
+    assert seen_roots and set(seen_roots) == {'NIFTY'}
+    assert all(e['symbol'] for e in raw.values())
+
+
+# ── Daily-quota failover: quotes move to Fyers, candles do not ────────────
+
+@pytest.fixture(autouse=True)
+def _reset_quota_flag():
+    with ids._QUOTA_LOCK:
+        ids._QUOTA_EXHAUSTED_ON = None
+    yield
+    with ids._QUOTA_LOCK:
+        ids._QUOTA_EXHAUSTED_ON = None
+
+
+def test_only_the_daily_quota_error_sets_the_flag():
+    assert ids._note_quota_error('Limit exceed: API call per day: ') is True
+    assert ids._quota_exhausted() is True
+    with ids._QUOTA_LOCK:
+        ids._QUOTA_EXHAUSTED_ON = None
+    assert ids._note_quota_error('Limit exceed: API call per minute') is False
+    assert ids._note_quota_error('Session expired') is False
+    assert ids._quota_exhausted() is False
+
+
+def test_a_price_breeze_will_not_serve_comes_from_fyers(loaded_master, monkeypatch):
+    """Over quota Breeze refuses as a {'Status': 5} body on some endpoints and
+    as a non-JSON response on others, so the failover keys off the missing
+    price rather than off recognising the error."""
+    adapter = _adapter_with([], monkeypatch)
+    monkeypatch.setattr(adapter, '_resolve', lambda s: {
+        'stock_code': s, 'exchange_code': 'NSE', 'product_type': 'cash',
+        'expiry_date': None, 'right': None, 'strike_price': None, 'symbol': s})
+    class _OverQuota:                      # the SDK cannot parse Breeze's reply
+        def get_quotes(self, **kw):
+            raise ValueError('Expecting value: line 1 column 1 (char 0)')
+    adapter.breeze = _OverQuota()
+    monkeypatch.setattr(ids, '_fyers_quotes',
+                        lambda syms: {s: {'last_price': 23766.7} for s in syms})
+
+    got = adapter.ltp(['NSE:NIFTY50-INDEX'])
+    assert got['NSE:NIFTY50-INDEX']['last_price'] == 23766.7
+
+
+def test_a_stale_cache_entry_never_beats_a_live_fyers_price(loaded_master, monkeypatch):
+    adapter = _adapter_with([], monkeypatch)
+    monkeypatch.setattr(adapter, '_resolve', lambda s: {
+        'stock_code': s, 'exchange_code': 'NSE', 'product_type': 'cash',
+        'expiry_date': None, 'right': None, 'strike_price': None, 'symbol': s})
+    monkeypatch.setattr(adapter, '_get_quote_row', lambda info: {'ltp': 100.0})
+    assert adapter.ltp(['NSE:SBIN-EQ'])['NSE:SBIN-EQ']['last_price'] == 100.0
+
+    monkeypatch.setattr(adapter, '_get_quote_row', lambda info: None)   # Breeze goes quiet
+    monkeypatch.setattr(ids, '_fyers_quotes', lambda syms: {s: {'last_price': 111.0} for s in syms})
+    assert adapter.quote(['NSE:SBIN-EQ'], max_age=0)['NSE:SBIN-EQ']['last_price'] == 111.0
+
+
+def test_candles_stay_on_breeze_when_quotes_have_failed_over(loaded_master, monkeypatch):
+    """The quota ceiling is on the quote endpoints; history keeps answering,
+    and Fyers intraday history is what ICICI was brought in to replace."""
+    adapter = _adapter_with([], monkeypatch)
+    ids._note_quota_error('Limit exceed: API call per day: ')
+    monkeypatch.setattr(ids, '_fyers_quotes',
+                        lambda syms: pytest.fail('history must not go to Fyers'))
+    seen = {}
+    monkeypatch.setattr(adapter, '_history_for_info',
+                        lambda info, *a, **kw: seen.setdefault('root', info['root']) or [{'close': 1}])
+    monkeypatch.setattr(adapter, '_resolve', lambda s: {
+        'root': 'NIFTY', 'stock_code': s, 'exchange_code': 'NSE',
+        'product_type': 'cash', 'expiry_date': None, 'right': None,
+        'strike_price': None, 'symbol': s})
+
+    assert adapter.historical_data('NSE:NIFTY50-INDEX', '2026-09-07', '2026-09-07', 'minute')
+    assert seen['root'] == 'NIFTY'

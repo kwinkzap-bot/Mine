@@ -26,7 +26,8 @@
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
                 <option value="vwap">📈 C/P VWAP Strategy</option>
-                <option value="second_candle" selected>🕒 Candle Breakout</option>
+                <option value="second_candle">🕒 Candle Breakout</option>
+                <option value="option_breakout" selected>🎯 30-Sec Option Breakout</option>
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
                 <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
@@ -248,6 +249,62 @@
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="scInvestmentDisplay" class="investment-display">₹50,000</div>
+                </div>
+            </div>
+
+            <!-- 30-Sec Option Breakout params — see
+                 src/trading_app/Backtest/option_breakout_engine.py. Unlike
+                 every other strategy here the signal lives on the OPTION's own
+                 candles, so there is no Direction (both legs are BOUGHT) and no
+                 index basis to switch to. -->
+            <div id="optionBreakoutParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="obCandleIndex">Range Candle #</label>
+                    <input type="number" id="obCandleIndex" value="2" min="1" max="20" step="1"
+                           title="Which 30-second candle of the session is the breakout range. The rule is the 2nd — 09:15:30 to 09:16:00 — read on each strike's own series.">
+                </div>
+                <div class="form-group">
+                    <label for="obRrRatio">SL : Target</label>
+                    <select id="obRrRatio" title="Target = Entry + this × (Entry − SL), measured in premium points.">
+                        <option value="1">1 : 1</option>
+                        <option value="1.5">1 : 1.5</option>
+                        <option value="2" selected>1 : 2</option>
+                        <option value="3">1 : 3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="obSlBuffer">SL Buffer (₹)</label>
+                    <input type="number" id="obSlBuffer" value="1" min="0" max="20" step="0.5"
+                           title="The stop sits this far BELOW the range candle's low — the rule's &quot;candle low − 1&quot;. In premium rupees, not index points.">
+                </div>
+                <div class="form-group">
+                    <label for="obLegs">Legs</label>
+                    <select id="obLegs" title="Both watches the ATM CE and PE independently, so a day on which both break out takes both trades — which is the point of watching the pair.">
+                        <option value="both" selected>CE &amp; PE</option>
+                        <option value="ce">CE only</option>
+                        <option value="pe">PE only</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="obExitTime">Cut-off Time</label>
+                    <input type="time" id="obExitTime" value="15:25">
+                </div>
+            </div>
+
+            <!-- 30-Sec Option Breakout position sizing -->
+            <div id="optionBreakoutLotRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="obLots">Lots</label>
+                    <input type="number" id="obLots" value="1" min="1" max="50" step="1" oninput="updateObInvestment()">
+                </div>
+                <div class="form-group">
+                    <label for="obLotValue">Lot Value (₹/pt)</label>
+                    <input type="number" id="obLotValue" value="65" min="1" step="1" oninput="updateObInvestment()"
+                           title="₹ per premium point for one lot. NIFTY's 65 is the same figure every other strategy on this screen uses, so their ₹ columns read against each other.">
+                </div>
+                <div class="form-group">
+                    <label>Total Investment</label>
+                    <div id="obInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -869,6 +926,20 @@
                 </div>
                 <!-- One sortable grid per timeframe, built by renderScOptResults() -->
                 <div id="scOptGrids"></div>
+            </div>
+
+            <!-- 30-Sec Option Breakout Optimise results panel. ONE grid, not the
+                 per-timeframe stack the RTP / 2nd-candle panels carry: this
+                 strategy has a single timeframe (see _OB_INTERVAL). -->
+            <div id="optionBreakoutOptimisePanel" style="display:none;">
+                <div class="opt-header" data-collapse="#obOptGrid">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ Option Breakout Best Params</h4>
+                        <button id="obRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="obOptMeta"></small>
+                </div>
+                <div id="obOptGrid"></div>
             </div>
 
             <!-- Scalp Pullback Optimise results panel — one grid per timeframe -->
