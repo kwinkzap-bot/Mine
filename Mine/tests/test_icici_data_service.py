@@ -124,6 +124,36 @@ def test_breeze_expiry_is_an_instant_not_a_date():
     assert ids._breeze_expiry(date(2026, 9, 29)) == "2026-09-29T06:00:00.000Z"
 
 
+def test_one_second_is_raw_and_thirty_second_still_aggregates():
+    """The 1-second key must not disturb the 30-second one built off it.
+
+    Factor 1 is what makes _history_for_info pass bar_seconds=None into
+    _second_history, which is what skips _resample and returns Breeze's base
+    series untouched. A factor of 30 on the same base interval is the
+    30-second bar the live algos trade off — if adding the raw key ever
+    changed that entry, every 30-second signal candle would move.
+    """
+    assert ids._INTERVAL_MAP['1second'] == ('1second', 1)
+    assert ids._INTERVAL_MAP['30second'] == ('1second', 30)
+
+
+def test_flush_second_windows_only_drops_that_symbols_raw_windows():
+    """The tape flushes its own 1-second windows so they cannot evict the
+    aggregated day caches the live 30-second algos depend on."""
+    ids._CHUNK_CACHE.clear()
+    ids._chunk_cache_candles = 0
+    ids._chunk_cache_put('NSE:AFUT:1second:2026-09-09T09:15:09:30', [{'x': 1}])
+    ids._chunk_cache_put('NSE:AFUT:30s:2026-09-09', [{'x': 2}])
+    ids._chunk_cache_put('NSE:BFUT:1second:2026-09-09T09:15:09:30', [{'x': 3}])
+
+    assert ids.flush_second_windows('NSE:AFUT') == 1
+    assert 'NSE:AFUT:30s:2026-09-09' in ids._CHUNK_CACHE          # untouched
+    assert 'NSE:BFUT:1second:2026-09-09T09:15:09:30' in ids._CHUNK_CACHE
+    assert ids._chunk_cache_candles == 2                          # count kept honest
+    ids._CHUNK_CACHE.clear()
+    ids._chunk_cache_candles = 0
+
+
 def test_every_app_interval_maps_to_a_breeze_one():
     """A missing interval returns [] at runtime, which reads as 'no data'."""
     breeze_intervals = {'1second', '1minute', '5minute', '30minute', '1day'}

@@ -189,6 +189,7 @@
 /api/swing-trade/stocks	api.swing_trade_stocks	GET,HEAD,OPTIONS	True
 /api/symbol-metadata	api.get_symbol_metadata	GET,HEAD,OPTIONS	True
 /api/symbols	api.get_symbols	GET,HEAD,OPTIONS	True
+/api/time-and-sales	api.time_and_sales	GET,HEAD,OPTIONS	True
 /api/token-status	api.token_status	GET,HEAD,OPTIONS	True
 /api/underlying-price	api.get_underlying_price	GET,HEAD,OPTIONS	True
 /api/vega/history	api.vega_history	GET,HEAD,OPTIONS	True

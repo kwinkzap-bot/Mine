@@ -1,0 +1,140 @@
+/* Time and Sales tape.
+   A tape is a narrow, dense thing — stretching three columns across a 1400px
+   viewport puts a hand's width of dead space between a price and its quantity
+   and makes the two hard to read as one row. The layout is capped and the
+   spare width goes to a session rail instead. */
+
+.tas-wrap { padding: 4px 0 12px; }
+
+/* ── Toolbar ─────────────────────────────────────────────────────── */
+.tas-topbar {
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; margin-bottom: 12px;
+}
+.tas-title {
+    font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .5px; color: var(--color-text);
+}
+.tas-topbar select,
+.tas-topbar input {
+    padding: 5px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 12.5px;
+}
+.tas-topbar select:focus,
+.tas-topbar input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px var(--color-accent-dim);
+}
+.tas-topbar input { width: 82px; }
+.tas-filter {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--color-text-2);
+}
+
+.tas-chip {
+    margin-left: auto; padding: 3px 10px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px;
+}
+.tas-chip::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+}
+.tas-chip-live { background: color-mix(in srgb, var(--color-pos) 12%, transparent); color: var(--color-pos); }
+.tas-chip-warn { background: color-mix(in srgb, var(--color-warning) 12%, transparent); color: var(--color-warning); }
+.tas-chip-idle { background: color-mix(in srgb, var(--color-text-3) 15%, transparent); color: var(--color-text-2); }
+/* Only a live feed pulses; a closed market holding steady should look steady. */
+.tas-chip-live::before { animation: tas-pulse 2s ease-in-out infinite; }
+@keyframes tas-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+
+/* ── Layout: tape + session rail ─────────────────────────────────── */
+.tas-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 480px) minmax(220px, 290px);
+    gap: 16px;
+    align-items: start;
+}
+@media (max-width: 900px) {
+    .tas-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The tape scrolls inside its own card so the page never grows with it. */
+#tasGrid .dg-scroll { max-height: 60vh; }
+
+/* Figures must line up column-wise; proportional digits make a price column
+   jitter as the last digit changes. */
+.tas-c-time, .tas-c-price, .tas-c-qty {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+}
+.tas-c-time { color: var(--color-text-2); font-size: 12px; }
+#tasGrid .dg-table .dg-td { padding-top: 6px; padding-bottom: 6px; }
+.tas-c-price { font-size: 13.5px; }
+
+/* Backfilled rows are aggregated seconds, not single prints — they read as
+   history rather than as tape. */
+.tas-row-bar { opacity: .58; }
+.tas-agg { font-style: italic; }
+/* Where the live tape stops and the backfilled session begins. */
+.tas-row-histstart > td { border-top: 2px solid var(--color-border) !important; }
+/* The newest print gets a brief accent so a glance finds it. */
+.tas-row-new > td { animation: tas-flash 1.1s ease-out; }
+@keyframes tas-flash {
+    from { background: var(--color-accent-dim); }
+    to   { background: transparent; }
+}
+
+/* ── Session rail ────────────────────────────────────────────────── */
+.tas-rail-card { padding-bottom: 4px; }
+
+.tas-tiles {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border-bottom: 1px solid var(--color-border-sub);
+}
+.tas-tile {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 11px 12px;
+}
+.tas-tile + .tas-tile { border-left: 1px solid var(--color-border-sub); }
+.tas-tile-k {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--color-text-3); font-weight: 600;
+}
+.tas-tile-v {
+    font-size: 15px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text);
+}
+
+.tas-flow { padding: 12px; border-bottom: 1px solid var(--color-border-sub); }
+.tas-flow-hdr {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--color-text-3); font-weight: 600; margin-bottom: 7px;
+}
+.tas-flow-pct { color: var(--color-text-2); }
+.tas-flow-bar {
+    height: 7px; border-radius: 4px; overflow: hidden;
+    background: color-mix(in srgb, var(--color-neg) 55%, transparent);
+}
+.tas-flow-buy {
+    display: block; height: 100%;
+    background: var(--color-pos);
+    transition: width .35s ease;
+}
+.tas-flow-legend {
+    display: flex; justify-content: space-between;
+    margin-top: 7px; font-size: 11.5px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.tas-rail-note {
+    margin: 0; padding: 11px 12px;
+    font-size: 11px; line-height: 1.55; color: var(--color-text-3);
+}
+.tas-rail-note b { color: var(--color-text-2); font-weight: 600; }

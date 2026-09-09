@@ -1734,6 +1734,10 @@ document.addEventListener('DOMContentLoaded', function() {
             // — the range asks for sessions and a cold run may not afford all
             // of them, and without this the table would just look short.
             if (isOb) {
+                // The sizing the trades table's ₹ columns price against —
+                // frozen here so they keep agreeing with the cards above even
+                // if the Lots boxes are edited before the next run.
+                lastData.ob_money = { lots: vLots, lotValue: vLotVal };
                 const subtitle = document.getElementById('btSubtitle');
                 if (subtitle) {
                     const legs = summary.legs_with_data ?? 0;
@@ -2294,10 +2298,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // than joined by a second pair. The Type column goes too — both legs are
     // BOUGHT, so "Long" on every row says nothing — and the leg that replaces
     // it carries the same bullish/bearish colour Type used to: a CE is the
-    // upside bet, a PE the downside one.
+    // upside bet, a PE the downside one. The tail turns those premium points
+    // into money at the run's own sizing: gross ₹, the round-trip brokerage,
+    // and the net the row actually banked.
     const OB_TRADES_COLS = [
         TRADES_COLS[0],                                     // Entry Time
-        { label: 'Leg', sortable: true,
+        { label: 'Strike', sortable: true,
           sortValue: t => `${t.option_type || ''}${t.strike || 0}`,
           render: (_, t) => DataGrid.badge(
               `${t.strike || '—'} ${t.option_type || ''}`.trim(),
@@ -2314,8 +2320,34 @@ document.addEventListener('DOMContentLoaded', function() {
         { key: 'target_price', label: 'Target', sortable: true,
           format: v => (v || 0).toFixed(2) },
         TRADES_COLS[5],                                     // Result
-        { ...TRADES_COLS[6], label: 'P&L (prem)' },
+        { ...TRADES_COLS[6], label: 'P&L (Points)' },
+        { label: 'P&L (₹)', sortable: true,
+          sortValue: t => _obRowMoney(t).gross,
+          format: (_, t) => DataGrid.inr(_obRowMoney(t).gross),
+          tone:   (_, t) => DataGrid.sign(_obRowMoney(t).gross) },
+        { label: 'Brokerage (₹)', sortable: true,
+          sortValue: t => _obRowMoney(t).brokerage,
+          format: (_, t) => '-₹' + Math.round(_obRowMoney(t).brokerage).toLocaleString('en-IN'),
+          title: 'Flat NIFTY round-trip charge (entry + exit) for the lot count in the Lots box' },
+        { label: 'Final P&L (₹)', sortable: true, strong: true,
+          sortValue: t => _obRowMoney(t).net,
+          format: (_, t) => DataGrid.inr(_obRowMoney(t).net),
+          tone:   (_, t) => DataGrid.sign(_obRowMoney(t).net) },
     ];
+
+    // What one row's premium points are worth in money. The sizing comes from
+    // the run that produced the table (frozen into `lastData.ob_money` when the
+    // ₹ cards were filled) rather than from whatever the Lots boxes hold
+    // now — a re-sort must not quietly reprice the table against cards that
+    // still read the old lot count. Brokerage is the flat NIFTY round trip for
+    // that lot count, the same charge the Net P&L card and the optimiser board
+    // subtract, so Final P&L is the only figure here a broker statement matches.
+    function _obRowMoney(t) {
+        const { lots, lotValue } = (lastData && lastData.ob_money) || _obOptMoney();
+        const gross     = (Number(t.pnl) || 0) * lotValue * lots;
+        const brokerage = calcBrokeragePerTrade(lots);
+        return { gross, brokerage, net: gross - brokerage };
+    }
 
     // EMA Confluence books its money on the monthly future, so Entry/Exit
     // Price above are the CONTRACT's — these say which contract that was, how

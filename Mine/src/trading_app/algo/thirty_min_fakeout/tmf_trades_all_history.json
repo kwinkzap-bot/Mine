@@ -1,5 +1,23 @@
 [
   {
+    "symbol": "TRENT",
+    "direction": "SELL",
+    "qty": 178,
+    "entry_price": 2805.6252808988766,
+    "exit_price": 2825.0,
+    "sl_price": 2825.0,
+    "target_price": 2782.0,
+    "pnl": -3448.7,
+    "reason": "SL Hit",
+    "entry_time": "2026-09-09T12:08:20.714776",
+    "exit_time": "2026-09-09T12:32:46.863752",
+    "broker_idx": 1,
+    "entry_order_id": "2097575318365069312",
+    "sl_order_id": "2097575342268407808",
+    "target_order_id": "2097575342926913536",
+    "date": "2026-09-09"
+  },
+  {
     "symbol": "CANBK",
     "direction": "SELL",
     "qty": 4018,

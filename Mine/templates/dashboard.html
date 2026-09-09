@@ -16,6 +16,7 @@
      nothing applies until an element opts in by carrying that class. -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/algo.css') }}?v={{ sv('css/algo.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/finance.css') }}?v={{ sv('css/finance.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/time_and_sales.css') }}?v={{ sv('css/time_and_sales.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -31,6 +32,7 @@
     <button class="dash-tab" id="dash-tab-markets"     onclick="dashSwitch('markets')">🏢 Markets</button>
     <button class="dash-tab" id="dash-tab-contracts"   onclick="dashSwitch('contracts')">📜 Contracts</button>
     <button class="dash-tab" id="dash-tab-finance"     onclick="dashSwitch('finance')">💰 Finance</button>
+    <button class="dash-tab" id="dash-tab-time-sales"  onclick="dashSwitch('time-sales')">🎞️ Time &amp; Sales</button>
 </div>
 
 <!-- ── Finance panel (Google Sheet: 'Mine') ───────────────────────── -->
@@ -43,6 +45,29 @@
     </div>
     <div id="finBody">
       <div class="fin-msg">Select the Finance tab to load data.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Time and Sales panel (trade tape) ───────────────────────── -->
+<div class="dash-panel" id="dash-time-sales-panel">
+  <div class="tas-wrap">
+    <div class="tas-topbar">
+      <span class="tas-title">🎞️ Time &amp; Sales</span>
+      <select id="tasRoot" aria-label="Underlying">
+        <option value="NIFTY" selected>NIFTY</option>
+        <option value="BANKNIFTY">BANKNIFTY</option>
+        <option value="SENSEX">SENSEX</option>
+      </select>
+      <select id="tasContract" aria-label="Contract"><option>loading…</option></select>
+      <label class="tas-filter" for="tasMinQty">⌕ min qty
+        <input type="number" id="tasMinQty" min="0" step="65" placeholder="0">
+      </label>
+      <span class="tas-chip tas-chip-idle" id="tasChip">idle</span>
+    </div>
+    <div class="tas-layout">
+      <div id="tasGrid"></div>
+      <div id="tasRail"></div>
     </div>
   </div>
 </div>
@@ -317,7 +342,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['pcr', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'contracts', 'finance'];
+const _DASH_TABS = ['pcr', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'contracts', 'finance', 'time-sales'];
 
 const _IFRAME_TABS = ['trading', 'orders', 'portfolio', 'markets', 'contracts'];
 
@@ -342,6 +367,13 @@ function dashSwitch(tab, pushState) {
     }
     if (tab === 'finance') {
         if (!window._finLoaded) financeLoad();
+    }
+    if (tab === 'time-sales') {
+        if (!window._tasLoaded) tasInit(); else tasScheduleLoop(0);
+    } else if (window._tasLoaded) {
+        // Unlike the other tabs, this one polls every second. Leaving it
+        // running behind Portfolio would poll until the browser is closed.
+        tasStopLoop();
     }
     if (_IFRAME_TABS.includes(tab)) {
         const f = document.getElementById('dash-' + tab + '-frame');
@@ -1361,4 +1393,5 @@ function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
 <script src="{{ url_for('static', filename='js/pcr.js') }}?v={{ sv('js/pcr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/vega.js') }}?v={{ sv('js/vega.js') }}"></script>
 <script src="{{ url_for('static', filename='js/finance.js') }}?v={{ sv('js/finance.js') }}"></script>
+<script src="{{ url_for('static', filename='js/time_and_sales.js') }}?v={{ sv('js/time_and_sales.js') }}"></script>
 {% endblock %}

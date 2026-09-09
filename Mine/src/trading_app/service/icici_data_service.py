@@ -196,6 +196,11 @@ from trading_app.service.fyers_data_service import (  # noqa: E402  (cycle-free:
 # the app asks for is built by aggregating the next-finest one that divides it.
 #   app interval -> (breeze interval, how many of them make one bar)
 _INTERVAL_MAP: Dict[str, Tuple[str, int]] = {
+    # Raw, unaggregated 1-second bars. Factor 1 makes _history_for_info pass
+    # bar_seconds=None into _second_history, which is what skips _resample and
+    # returns the base series untouched. Used by the Time and Sales tape to
+    # reconstruct the session before the live feed was subscribed.
+    '1second':  ('1second', 1),
     '30second': ('1second', 30),
     'minute':   ('1minute', 1),
     '1minute':  ('1minute', 1),
@@ -1398,6 +1403,30 @@ def _chunk_cache_put(key: str, candles: List[Dict[str, Any]]) -> None:
         while _chunk_cache_candles > _CHUNK_CACHE_MAX_CANDLES and _CHUNK_CACHE:
             oldest = next(iter(_CHUNK_CACHE))
             _chunk_cache_candles -= len(_CHUNK_CACHE.pop(oldest))
+
+
+def flush_second_windows(symbol: str) -> int:
+    """Drop `symbol`'s raw 1-second windows from the chunk cache. Returns the
+    number of entries removed.
+
+    One trading day of raw 1-second bars is ~22,500 candles against a 150,000
+    candle cap, so a couple of taped symbols would occupy a third of the cache
+    and evict — oldest-first — the aggregated 30-second day caches that the
+    live 30-second algos and Replay depend on. Those would then be re-fetched
+    from a broker with a 5,000/day ceiling that has been exhausted mid-session
+    before. A caller that has already consumed its 1-second bars (and keeps its
+    own copy of the result) calls this so the cache goes back to serving the
+    algos.
+    """
+    global _chunk_cache_candles
+    prefix = f"{symbol}:1second:"
+    with _HIST_LOCK:
+        doomed = [k for k in _CHUNK_CACHE if k.startswith(prefix)]
+        for key in doomed:
+            _chunk_cache_candles -= len(_CHUNK_CACHE.pop(key))
+    if doomed:
+        logger.debug(f"[ICICI] flushed {len(doomed)} 1-second windows for {symbol}")
+    return len(doomed)
 
 
 def _as_date(value: Any) -> Optional[dt_date]:

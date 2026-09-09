@@ -16476,6 +16476,81 @@ def get_finance_summary():
 
 # ── Error handlers ────────────────────────────────────────────────────────────
 
+@api_bp.route('/time-and-sales', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def time_and_sales() -> EndpointResponse:
+    """The trade tape for one instrument: Time | Price | Quantity.
+
+    Query params: symbol (Fyers string, required), since (last seq the client
+    holds), limit (default 500, capped 2000), contracts=1 to list the futures
+    the picker can choose from instead of returning rows.
+
+    This reads the in-memory tape and nothing else, so the 1 Hz poll behind it
+    costs the broker nothing — the collector's websocket is what talks to
+    Fyers, and it does so once per app, not once per client. The only side
+    effect is marking the symbol hot, which is what keeps its subscription
+    alive and winds it down again when the tab is closed.
+
+    Auth is the blueprint-wide check_user_authentication before_request hook;
+    no per-route decorator is needed and check_auth() is deliberately not
+    called here (it resolves a provider on every request, which is pure
+    overhead for an endpoint that only reads memory).
+    """
+    from trading_app.service import time_and_sales as tas
+
+    if request.args.get('contracts'):
+        root = (request.args.get('root') or 'NIFTY').upper()
+        try:
+            provider = get_data_provider(user='Mine')
+            contracts = provider.list_future_contracts(root) or []
+        except Exception as e:
+            logger.warning(f"[TimeAndSales] contract list failed for {root}: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 502
+        return jsonify({'success': True, 'root': root, 'contracts': contracts})
+
+    symbol = (request.args.get('symbol') or '').strip()
+    if not symbol:
+        return jsonify({'success': False, 'error': 'symbol is required'}), 400
+
+    try:
+        since = int(request.args.get('since') or 0)
+    except ValueError:
+        since = 0
+    try:
+        # The ceiling is the store's own cap: the tape is served over loopback,
+        # where a whole session is ~850KB and costs milliseconds, so a client
+        # that wants to scroll the full day just asks for it rather than
+        # paging. The store is bounded, so this cannot grow without limit.
+        limit = max(1, min(tas.MAX_ROWS_PER_SYMBOL,
+                           int(request.args.get('limit') or 500)))
+    except ValueError:
+        limit = 500
+    try:
+        min_qty = max(0, int(request.args.get('min_qty') or 0))
+    except ValueError:
+        min_qty = 0
+
+    tas.register(symbol)
+    rows, truncated = tas.rows_since(symbol, since, limit, min_qty)
+    state = tas.status(symbol)
+    state.update(tas.stats(symbol))
+
+    # A client whose cursor is ahead of ours is holding rows from before a
+    # restart (seqs reset with the process). Telling it to reset is better than
+    # silently returning nothing forever.
+    stale_cursor = since > state['next_seq']
+
+    return jsonify({
+        'success': True,
+        'symbol': symbol,
+        'rows': rows,
+        'truncated': truncated or stale_cursor,
+        'server_time': int(datetime.now().timestamp()),
+        **state,
+    })
+
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""
