@@ -648,6 +648,69 @@
         loadBook();
     }
 
+    /**
+     * Exit all: cancel what this page has resting, then square off what it is
+     * holding. One request — the server does both passes in order, because a
+     * resting stop cancelled after the position is closed is a naked entry
+     * waiting to trigger.
+     *
+     * Scoped to this page. The server sizes each exit from this page's own
+     * records and caps it at what the broker actually shows open, so an OI
+     * Profile position on the same strike, in the same account, is not part of
+     * it — and neither is a quantity already closed by hand at the terminal.
+     *
+     * Two presses, and the first one only arms: this button is beside a Cancel
+     * all it does not do the same thing as, and it is the one that reaches
+     * positions.
+     */
+    let exitArmTimer = null;
+
+    async function exitAll(btn) {
+        if (!btn._armed) {
+            btn._armed = true;
+            btn.textContent = 'Confirm exit?';
+            btn.classList.add('op-armed');
+            clearTimeout(exitArmTimer);
+            exitArmTimer = setTimeout(() => {
+                btn._armed = false;
+                btn.textContent = 'Exit all';
+                btn.classList.remove('op-armed');
+            }, 3000);
+            return;
+        }
+
+        btn._armed = false;
+        clearTimeout(exitArmTimer);
+        btn.classList.remove('op-armed');
+        btn.disabled = true;
+        btn.textContent = 'Exiting…';
+
+        try {
+            const res = await fetch(`${API}/exit-all`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+            });
+            const r = await res.json();
+            // Counts either way: a partial exit did place orders, and a
+            // message that only said "failed" would hide them.
+            const parts = [];
+            if (r.cancelled_orders) parts.push(`${r.cancelled_orders} cancelled`);
+            if (r.exited_positions) parts.push(`${r.exited_positions} squared off`);
+            if (!parts.length && r.success) parts.push('nothing open from this page');
+            const errs = r.errors || (r.error ? [r.error] : []);
+            toast(`Exit: ${parts.join(', ')}`
+                  + (errs.length ? `\n• ${errs.slice(0, 3).join('\n• ')}` : ''),
+                  r.success ? 'success' : 'error');
+        } catch (e) {
+            toast(`Exit error: ${e.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Exit all';
+            state.bookSig = null;
+            loadBook();
+        }
+    }
+
     // ── wiring ───────────────────────────────────────────────────────
 
     function segment(hostId, onPick) {
@@ -737,6 +800,7 @@
             submitRow(e.target.closest('.op-po'), false);
         });
         $('opCancelAll').addEventListener('click', (e) => cancelAll(e.currentTarget));
+        $('opExitAll').addEventListener('click', (e) => exitAll(e.currentTarget));
 
         // The ⓘ opens on hover from CSS alone; this is the tap path, and the
         // ways back out of it — the same button, Escape, or a press anywhere

@@ -1932,9 +1932,12 @@ async function oipRSPlaceSLOrders(btn, side) {
 
 async function oipRSExitAllOrders(btn) {
     // Double-click confirm: first click arms, second click within 3s executes.
-    // NOTE: /api/order/exit-all is account-wide (no strike/strategy scoping),
-    // same endpoint Opt Prem's own EXIT button calls — intentional, it's a
-    // global panic-button reachable from either block.
+    // NOTE: /api/order/exit-all is scoped to this SCREEN, not to this block and
+    // not to the account: it cancels and squares off what OI Profile placed
+    // (strategy 'intrinsic'), whichever block placed it. Same endpoint Opt
+    // Prem's own EXIT button calls — intentional, one screen, one exit. The
+    // Order Placement pad's positions are not reachable from here; that page
+    // has its own EXIT.
     if (!btn._exitArmed) {
         btn._exitArmed = true;
         const prev = btn.innerText;
@@ -1966,13 +1969,15 @@ async function oipRSExitAllOrders(btn) {
             }
         });
         const r = await res.json();
+        // The counts print either way: a partial exit did place orders, and a
+        // message that only said "failed" would hide them.
+        const summary = (r.summary || []).map(s =>
+            `${s.broker}_${s.instance}: ${s.cancelled_orders} Cancelled, ${s.exited_positions} Exited`
+        ).join(' | ');
         if (r.success) {
-            const summary = (r.summary || []).map(s =>
-                `${s.broker}_${s.instance}: ${s.cancelled_orders} Cancelled, ${s.exited_positions} Exited`
-            ).join(' | ');
-            showNotification(`Exit complete: ${summary || 'Done'}`, 'success');
+            showNotification(`Exit complete: ${summary || 'Nothing open from this screen'}`, 'success');
         } else {
-            showNotification(`Exit failed: ${r.error || 'Unknown error'}`, 'error');
+            showNotification(`Exit incomplete: ${summary || 'nothing exited'}\n${r.error || 'Unknown error'}`, 'error');
         }
     } catch (e) {
         showNotification(`Exit error: ${e.message}`, 'error');

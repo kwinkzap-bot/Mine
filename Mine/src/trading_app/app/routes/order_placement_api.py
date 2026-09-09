@@ -16,10 +16,17 @@ the only things that can move or remove that order afterwards are the price and
 cancel buttons on the page itself.
 
 **Its own orders only.** Every record written here carries ``strategy='op'``,
-and the listing, edit and cancel routes below all filter on it. The pending
-strip on the page is therefore this page's own book: an order placed from OI
-Profile or by an algo is neither listed nor editable from here, and the
+and the listing, edit, cancel and exit routes below all filter on it. The
+pending strip on the page is therefore this page's own book: an order placed
+from OI Profile or by an algo is neither listed nor editable from here, and the
 generic ``/api/orders`` grid still shows everything as before.
+
+**Its own exit.** ``/exit-all`` cancels what this page has resting and squares
+off what its own records add up to holding — the pad's EXIT button. It is the
+counterpart of the OI Profile screen's ``/api/order/exit-all``, which is scoped
+the same way to its own ``strategy='intrinsic'`` records; neither button
+reaches the other panel's positions, and neither is an account-wide
+liquidation.
 """
 
 import time as _time
@@ -730,3 +737,31 @@ def cancel_order(order_id: str):
         return jsonify({'success': True, 'summary': (broker_result or {}).get('summary', [])})
     except Exception as e:
         return _fail(e, 'cancel_order')
+
+
+@order_placement_bp.route('/exit-all', methods=['POST'])
+@require_user_auth
+def exit_all():
+    """Close this page's book: cancel what is resting, flatten what is held.
+
+    Scoped to this page and nothing else. The shared ``route_scoped_exit``
+    reads the store for records carrying ``strategy='op'`` — which is only ever
+    written here — cancels the ones still resting at their brokers, and then
+    squares off the net position those records add up to, per broker instance
+    and per contract.
+
+    An OI Profile position, an algo's position, or one opened by hand at the
+    terminal is untouched, even when it is the same strike on the same account:
+    the quantity exited is what this page's own records account for, capped by
+    what the broker actually shows open.
+    """
+    from trading_app.app.routes.api import route_scoped_exit
+
+    try:
+        result = route_scoped_exit(_user(), dict(session), OP_STRATEGY,
+                                   log_tag='OrderPlacement exit')
+        # Always 200: a partial exit is a real outcome, and the page reads the
+        # per-broker summary either way rather than a status code.
+        return jsonify(result)
+    except Exception as e:
+        return _fail(e, 'exit_all')

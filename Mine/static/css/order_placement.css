@@ -396,6 +396,21 @@
     border-color: var(--color-neg);
 }
 
+/* Two small buttons in one header: only the first claims the free space, or
+   the pair would drift apart with the gap between them growing to fill it. */
+.op-btn-sm + .op-btn-sm {
+    margin-left: 0;
+}
+
+/* Exit all, first press. It looks like the thing it is about to do until it
+   times out — a filled danger button, not the outline it rests as. */
+.op-armed,
+.op-armed:hover:not(:disabled) {
+    color: #fff;
+    background: var(--color-neg);
+    border-color: var(--color-neg);
+}
+
 /* The review bar. It is the only thing between the pad and a broker, so
    it is loud on purpose and it repeats the order in full. */
 .op-confirm {

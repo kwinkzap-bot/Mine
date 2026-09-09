@@ -2346,6 +2346,11 @@ function oipAutoFillHighLow() {
 let _exitArmTimer = null;
 
 async function oipExitAllOrders(btn) {
+    // Scoped to this screen: /api/order/exit-all cancels the orders THIS page
+    // placed (strategy 'intrinsic') and squares off the position they add up
+    // to. It is no longer an account-wide liquidation — the Order Placement
+    // pad has its own EXIT over its own 'op' records, and a position with no
+    // record in today's store is not reachable from either button.
     // Double-click confirm: first click arms, second click within 3s executes
     if (!btn._exitArmed) {
         btn._exitArmed = true;
@@ -2380,13 +2385,15 @@ async function oipExitAllOrders(btn) {
             }
         });
         const r = await res.json();
+        // The counts print either way: a partial exit did place orders, and a
+        // message that only said "failed" would hide them.
+        const summary = (r.summary || []).map(s =>
+            `${s.broker}_${s.instance}: ${s.cancelled_orders} Cancelled, ${s.exited_positions} Exited`
+        ).join(' | ');
         if (r.success) {
-            const summary = (r.summary || []).map(s =>
-                `${s.broker}_${s.instance}: ${s.cancelled_orders} Cancelled, ${s.exited_positions} Exited`
-            ).join(' | ');
-            showNotification(`Exit complete: ${summary || 'Done'}`, 'success');
+            showNotification(`Exit complete: ${summary || 'Nothing open from this screen'}`, 'success');
         } else {
-            showNotification(`Exit failed: ${r.error || 'Unknown error'}`, 'error');
+            showNotification(`Exit incomplete: ${summary || 'nothing exited'}\n${r.error || 'Unknown error'}`, 'error');
         }
     } catch (e) {
         console.error('[Exit] Error:', e);

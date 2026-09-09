@@ -7231,423 +7231,45 @@ def split_quantity_by_freeze_limit(symbol: str, total_qty: int, provider) -> lis
 
 @api_bp.route('/order/exit-all', methods=['POST'])
 def exit_all_orders() -> EndpointResponse:
-    """Exit all executed orders and cancel all pending orders for all active brokers."""
+    """Exit everything the OI Profile screen placed — and only that.
+
+    This used to be the account-wide panic button: every active broker, and
+    every position named in the shared BotOrderTracker registry, whichever
+    screen had put it there. That made the two hand-fired panels inseparable —
+    pressing EXIT here also flattened the Order Placement pad's positions, and
+    there was no way to close one book without closing the other.
+
+    It is now scoped the same way every other button on this screen is: by the
+    'intrinsic' strategy key that every OI Profile order carries into
+    MineOrderStore. The pad has its own EXIT at
+    ``/api/order-placement/exit-all``, over its own 'op' records.
+
+    The consequence is worth stating plainly: this no longer closes a position
+    that has no record in today's store — an algo's, one opened by hand at the
+    broker, or one carried over from a previous session. Those were never this
+    screen's to close, and reaching them from here is exactly what stopped it
+    being a per-screen exit.
+    """
     try:
         _username = session.get('username', 'Mine')
-        from trading_app.app.utils.user_env import UserEnvManager
-        from trading_app.app.utils.order_tracker import BotOrderTracker
 
+        # Before anything is cancelled: a running auto-exit monitor holds a
+        # SELL it will fire on its own target, and one firing after the exit
+        # below would sell a position that is already flat.
         try:
             from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
             IntrinsicOrderManager.stop_all_for_user(_username)
         except Exception as _stop_err:
             logger.warning(f"[Exit-All] Could not stop intrinsic monitors: {_stop_err}")
 
-        targets = []
-        for i in range(1, 21):
-            b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
-            if not b_type:
-                continue  # slot not configured
-            if not is_broker_active(_username, i):
-                logger.info(f"[Exit-All] Skipping broker {i} ({b_type}): Active=False")
-                continue
-            
-            # Special handling for 'kite' which is an alias for 'zerodha_1'
-            if b_type == 'kite':
-                targets.append({'type': 'zerodha', 'instance': i})
-            else:
-                targets.append({'type': b_type, 'instance': i})
-
-        logger.info(f"[Exit-All] Targeting {len(targets)} active broker instances for user '{_username}': {targets}")
-
-        if not targets:
-            return jsonify({'success': False, 'error': 'No active brokers found for exit'}), 400
-
-        # Get symbols tracked by the bot for this user (global across accounts)
-        bot_symbols = BotOrderTracker.get_symbols(_username)
-        normalized_bot_symbols = [str(s).strip().upper() for s in bot_symbols] if bot_symbols else []
-        logger.info(f"[Exit-All] Bot Registry Symbols: {normalized_bot_symbols}")
-
-        exit_results = []
-        
-        for target in targets:
-            broker_type = target['type']
-            instance = target['instance']
-            broker_res = {'broker': broker_type, 'instance': instance, 'cancelled_orders': 0, 'exited_positions': 0, 'errors': []}
-            
-            try:
-                # 1. Handle Zerodha
-                if broker_type == 'zerodha' or broker_type.startswith('zerodha_'):
-                    kite = get_kite(instance=instance)
-                    if not kite:
-                        err_msg = f"Failed to initialize Zerodha instance {instance}. Check if API Key/Token is expired."
-                        logger.error(f"[Zerodha] {err_msg}")
-                        broker_res['errors'].append(err_msg)
-                    else:
-                        logger.info(f"[Zerodha] Starting exit-all for instance {instance}")
-                        
-                        try:
-                            orders = kite.orders()
-                            pending_statuses = ['OPEN', 'OPEN PENDING', 'MODIFY PENDING', 'TRIGGER PENDING', 'AMO REQ RECEIVED']
-                            for order in orders:
-                                if order['status'] in pending_statuses:
-                                    tsym = str(order.get('tradingsymbol', '')).strip().upper()
-                                    is_bot_tracked = (not normalized_bot_symbols) or (tsym in normalized_bot_symbols)
-                                    
-                                    if not is_bot_tracked:
-                                        logger.info(f"[Zerodha] Instance {instance} | SKIPPING Cancellation {tsym}: Not in Bot Registry.")
-                                        continue
-                                    
-                                    try:
-                                        kite.cancel_order(variety=order['variety'], order_id=order['order_id'])
-                                        broker_res['cancelled_orders'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Cancel {order['order_id']} failed: {e}")
-                        except Exception as e:
-                            logger.error(f"[Zerodha] Error fetching orders: {e}")
-                            broker_res['errors'].append(f"Error fetching orders: {e}")
-                        
-                        # Identify account for logging
-                        try:
-                            profile = kite.profile()
-                            kite_user_id = profile.get('user_id', 'Unknown')
-                            active_segments = profile.get('segments', [])
-                            logger.info(f"[Zerodha] Account Verified: Instance {instance} (User ID: {kite_user_id}) | Active Segments: {active_segments} | Bot symbols: {bot_symbols}")
-                            
-                            # Check if NFO is in segments
-                            if 'nse_fo' not in [s.lower() for s in active_segments] and 'nfo' not in [s.lower() for s in active_segments]:
-                                logger.warning(f"[Zerodha] WARNING: Instance {instance} (User {kite_user_id}) does not seem to have F&O (NFO) segment active for API trading!")
-                        except Exception as profile_err:
-                            err_msg = f"Could not verify profile for Zerodha instance {instance}: {profile_err}"
-                            logger.error(f"[Zerodha] {err_msg}")
-                            broker_res['errors'].append(err_msg)
-                            # We continue anyway as we have the kite instance, but this is a red flag
-                            logger.info(f"[Zerodha] Instance {instance} (Profile Failed) | Bot symbols: {bot_symbols}")
-                        
-                        # Exit Positions
-                        try:
-                            pos_response = kite.positions()
-                            net_positions = pos_response.get('net', [])
-                            day_positions = pos_response.get('day', [])
-                            
-                            # Combine positions to ensure nothing is missed (unique by tradingsymbol)
-                            all_positions = {p['tradingsymbol']: p for p in (day_positions + net_positions)}.values()
-                            
-                            logger.info(f"[Zerodha] Instance {instance} | Found {len(all_positions)} total unique positions.")
-                        
-                            # Log all found symbols for deep analysis
-                            raw_syms = [p.get('tradingsymbol') for p in all_positions]
-                            logger.info(f"[Zerodha] Instance {instance} | RAW POSITIONS: {raw_syms}")
-                            logger.info(f"[Zerodha] Instance {instance} | BOT REGISTRY: {normalized_bot_symbols}")
-
-                            from trading_app.service.kite_order_services import KiteService
-                            kite_svc = KiteService(kite_instance=kite)
-
-                            for pos in all_positions:
-                                tsym = str(pos.get('tradingsymbol', '')).strip().upper()
-                                qty = pos.get('quantity', 0)
-                                product = str(pos.get('product', '')).strip().upper()
-                                exchange = str(pos.get('exchange', '')).strip().upper()
-
-                                logger.info(f"[Zerodha] Instance {instance} | Analyzing: {tsym} | Qty: {qty} | Product: {product} | Exchange: {exchange}")
-
-                                # 1. Bot Tracking Check
-                                # If registry is enabled, we only exit what's in the registry.
-                                # If registry is empty, we exit everything (full liquidation mode).
-                                is_bot_tracked = (not normalized_bot_symbols) or (tsym in normalized_bot_symbols)
-
-                                if not is_bot_tracked:
-                                    logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: Not in Bot Registry.")
-                                    continue
-
-                                # 2. CNC Check
-                                if product == 'CNC':
-                                    logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: CNC/Delivery position.")
-                                    continue
-
-                                if qty == 0:
-                                    logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: Zero quantity.")
-                                    continue
-
-                                logger.info(f"[Zerodha] Instance {instance} | TARGET FOUND: {tsym} | Qty: {qty}")
-
-                                try:
-                                    side = 'SELL' if qty > 0 else 'BUY'
-                                    abs_qty = abs(int(qty))
-                                    qty_chunks = split_quantity_by_freeze_limit(pos['tradingsymbol'], abs_qty, kite)
-                                    logger.info(f"[Zerodha] Exiting {pos['tradingsymbol']}: Total quantity {abs_qty} (Side: {side}, Product: {pos['product']}) split into chunks: {qty_chunks}")
-
-                                    for chunk_qty in qty_chunks:
-                                        order_id = kite_svc._safe_place_order(
-                                            variety='regular',
-                                            exchange=pos['exchange'],
-                                            tradingsymbol=pos['tradingsymbol'],
-                                            transaction_type=side,
-                                            quantity=chunk_qty,
-                                            order_type='MARKET',
-                                            product=pos['product'],
-                                            market_protection=-1
-                                        )
-                                        logger.info(f"[Zerodha] Instance {instance} | Exit MARKET order placed with protection: {order_id} (Qty: {chunk_qty})")
-                                    broker_res['exited_positions'] += 1
-
-                                except Exception as e:
-                                    logger.error(f"[Zerodha] Position exit failed for {pos['tradingsymbol']}: {e}")
-                                    broker_res['errors'].append(f"Exit {pos['tradingsymbol']} failed: {e}")
-                            
-                        except Exception as e:
-                            logger.error(f"[Zerodha] Error fetching positions: {e}")
-                            broker_res['errors'].append(f"Error fetching positions: {e}")
-
-                # 2. Handle Fyers
-                elif broker_type == 'fyers':
-                    fyers_at = session.get(f'fyers_{instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{instance}_ACCESS_TOKEN')
-                    fyers_id = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_APP_ID')
-                    if fyers_at:
-                        from trading_app.service.fyers_order_services import FyersOrderService
-                        fyers_service = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
-                        
-                        # Cancel Pending Orders
-                        order_book = fyers_service.get_orderbook()
-                        if order_book.get('success'):
-                            # Fyers V3 Status: 6=Pending, 4=Transit, 1=Cancelled, 2=Filled, 5=Rejected
-                            for order in order_book.get('orders', []):
-                                if order.get('status') in [6, 4]: 
-                                    fsym = str(order.get('symbol', '')).strip().upper()
-                                    alt_sym = fsym.split(':')[-1] if ':' in fsym else fsym
-                                    is_bot_tracked = (not normalized_bot_symbols) or (fsym in normalized_bot_symbols) or (alt_sym in normalized_bot_symbols)
-                                    
-                                    if not is_bot_tracked:
-                                        logger.info(f"[Fyers] Skipping Cancellation for non-bot order: {fsym}")
-                                        continue
-                                        
-                                    try:
-                                        fyers_service.cancel_order(order['id'])
-                                        broker_res['cancelled_orders'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Cancel {order['id']} failed: {e}")
-                        
-                        # Exit Positions
-                        pos_book = fyers_service.get_positions()
-                        if pos_book.get('success'):
-                            for pos in pos_book.get('positions', []):
-                                fsym = str(pos.get('symbol', '')).strip().upper()
-                                alt_sym = fsym.split(':')[-1] if ':' in fsym else fsym
-                                net_qty = pos.get('netQty', 0)
-                                product = pos.get('productType', '')
-
-                                # Skip if not bot-tracked
-                                is_bot_tracked = (not normalized_bot_symbols) or (fsym in normalized_bot_symbols) or (alt_sym in normalized_bot_symbols)
-                                if not is_bot_tracked:
-                                    logger.info(f"[Fyers] Skipping non-bot position: {fsym}")
-                                    continue
-
-                                # Skip CNC positions
-                                if product == 'CNC':
-                                    logger.info(f"[Fyers] Skipping CNC position {fsym}")
-                                    continue
-
-                                # Skip Equity positions (usually end with -EQ in Fyers)
-                                if '-EQ' in fsym:
-                                    logger.info(f"[Fyers] Skipping Equity position {fsym}")
-                                    continue
-
-                                if net_qty == 0:
-                                    continue
-
-                                try:
-                                    # Use correct Fyers side: 1=BUY, 2=SELL
-                                    side = fyers_service.SIDE_SELL if net_qty > 0 else fyers_service.SIDE_BUY
-
-                                    abs_qty = abs(int(net_qty))
-                                    qty_chunks = split_quantity_by_freeze_limit(fsym, abs_qty, fyers_service)
-                                    logger.info(f"[Fyers] Exiting {fsym}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
-
-                                    for chunk_qty in qty_chunks:
-                                        fyers_service.place_order(
-                                            symbol=pos['symbol'],
-                                            side=side,
-                                            quantity=chunk_qty,
-                                            order_type=2,
-                                            product_type=pos['productType']
-                                        )
-                                    broker_res['exited_positions'] += 1
-                                except Exception as e:
-                                    broker_res['errors'].append(f"Exit {fsym} failed: {e}")
-
-                # 3. Handle Kotak Neo
-                elif broker_type == 'kotak':
-                    kotak_at = session.get(f'kotak_{instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{instance}_ACCESS_TOKEN')
-                    if kotak_at:
-                        from trading_app.service.kotak_order_services import KotakOrderService
-                        kotak_service = KotakOrderService(access_token=kotak_at)
-                        # Re-inject cached trading tokens
-                        kotak_service.trading_token = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_TRADING_TOKEN')
-                        kotak_service.trading_sid = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_TRADING_SID')
-                        kotak_service.server_id = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_SERVER_ID')
-                        kotak_service.inject_trading_tokens()
-
-                        # Cancel Pending Orders
-                        order_book = kotak_service.get_orderbook()
-                        if order_book.get('success'):
-                            for order in order_book.get('orders', []):
-                                if order.get('ordSt') in ['open', 'pending', 'modify', 'trigger_pending']:
-                                    ksym = str(order.get('trdSym', '')).strip().upper()
-                                    is_bot_tracked = (not normalized_bot_symbols) or (ksym in normalized_bot_symbols)
-                                    
-                                    if not is_bot_tracked:
-                                        logger.info(f"[Kotak] Skipping Cancellation for non-bot order: {ksym}")
-                                        continue
-                                        
-                                    try:
-                                        kotak_service.cancel_order(order.get('nOrdNo'))
-                                        broker_res['cancelled_orders'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Cancel {order.get('nOrdNo')} failed: {e}")
-                        
-                        # Exit Positions
-                        pos_book = kotak_service.get_positions()
-                        if pos_book.get('success'):
-                            for pos in pos_book.get('positions', []):
-                                ksym = str(pos.get('trdSym', '')).strip().upper()
-                                net_qty = float(pos.get('flNetQty', pos.get('netQty', 0)))
-                                product = pos.get('prod', '')
-
-                                # Skip if not bot-tracked
-                                is_bot_tracked = (not normalized_bot_symbols) or (ksym in normalized_bot_symbols)
-                                if not is_bot_tracked:
-                                    logger.info(f"[Kotak] Skipping non-bot position: {ksym}")
-                                    continue
-
-                                # Skip CNC positions
-                                if product == 'CNC':
-                                    logger.info(f"[Kotak] Skipping CNC position {ksym}")
-                                    continue
-
-                                # Target only F&O segments (nse_fo, bse_fo, mcx_fo)
-                                exseg = str(pos.get('exseg', '')).lower()
-                                if 'fo' not in exseg:
-                                    logger.info(f"[Kotak] Skipping non-F&O position {ksym} ({exseg})")
-                                    continue
-
-                                if net_qty == 0:
-                                    continue
-
-                                try:
-                                    side = 'SELL' if net_qty > 0 else 'BUY'
-
-                                    abs_qty = abs(int(net_qty))
-                                    qty_chunks = split_quantity_by_freeze_limit(ksym, abs_qty, kotak_service)
-                                    logger.info(f"[Kotak] Exiting {ksym}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
-
-                                    for chunk_qty in qty_chunks:
-                                        kotak_service.place_order(
-                                            tradingsymbol=pos['trdSym'],
-                                            transaction_type=side,
-                                            quantity=chunk_qty,
-                                            price=0.0,
-                                            order_type='MKT',
-                                            product_type=pos['prod'],
-                                            exchange_segment=pos['exseg']
-                                        )
-                                    broker_res['exited_positions'] += 1
-                                except Exception as e:
-                                    broker_res['errors'].append(f"Exit {ksym} failed: {e}")
-
-                # 4. Handle Dhan
-                elif broker_type == 'dhan':
-                    dhan_at = session.get(f'dhan_{instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{instance}_ACCESS_TOKEN')
-                    dhan_cid = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_CLIENT_ID')
-                    if dhan_at:
-                        from trading_app.service.dhan_order_services import DhanOrderService
-                        dhan_service = DhanOrderService(access_token=dhan_at, client_id=dhan_cid)
-                        
-                        # Cancel Pending Orders
-                        order_book = dhan_service.get_order_book()
-                        
-                        if order_book.get('success'):
-                            for order in order_book.get('orders', []):
-                                if order.get('orderStatus') in ['PENDING', 'TRANSIT', 'MODIFY_PENDING']:
-                                    dsym = str(order.get('tradingSymbol', '')).strip().upper()
-                                    is_bot_tracked = (not normalized_bot_symbols) or (dsym in normalized_bot_symbols)
-                                    
-                                    if not is_bot_tracked:
-                                        logger.info(f"[Dhan] Skipping Cancellation for non-bot order: {dsym}")
-                                        continue
-                                        
-                                    try:
-                                        dhan_service.cancel_order(order['orderId'])
-                                        broker_res['cancelled_orders'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Cancel {order['orderId']} failed: {e}")
-                        
-                        # Exit Positions
-                        pos_book = dhan_service.get_positions()
-                        if pos_book.get('success'):
-                            for pos in pos_book.get('positions', []):
-                                dsym = str(pos.get('tradingSymbol', '')).strip().upper()
-                                net_qty = pos.get('netQty', 0)
-                                product = pos.get('productType', '')
-
-                                # Skip if not bot-tracked
-                                is_bot_tracked = (not normalized_bot_symbols) or (dsym in normalized_bot_symbols)
-                                if not is_bot_tracked:
-                                    logger.info(f"[Dhan] Skipping non-bot position: {dsym}")
-                                    continue
-
-                                # Skip CNC positions
-                                if product == 'CNC':
-                                    logger.info(f"[Dhan] Skipping CNC position {dsym}")
-                                    continue
-
-                                # Target only F&O segments
-                                exseg = str(pos.get('exchangeSegment', '')).upper()
-                                if 'FNO' not in exseg and 'COMM' not in exseg and 'CURR' not in exseg:
-                                    logger.info(f"[Dhan] Skipping non-Derivatives position {dsym} ({exseg})")
-                                    continue
-
-                                if net_qty == 0:
-                                    continue
-
-                                try:
-                                    side = 'SELL' if net_qty > 0 else 'BUY'
-
-                                    abs_qty = abs(int(net_qty))
-                                    qty_chunks = split_quantity_by_freeze_limit(dsym, abs_qty, dhan_service)
-                                    logger.info(f"[Dhan] Exiting {dsym}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
-
-                                    for chunk_qty in qty_chunks:
-                                        dhan_service.place_order(
-                                            security_id=pos['securityId'],
-                                            transaction_type=side,
-                                            quantity=chunk_qty,
-                                            order_type='MARKET',
-                                            product_type=pos['productType'],
-                                            exchange_segment=pos['exchangeSegment']
-                                        )
-                                    broker_res['exited_positions'] += 1
-                                except Exception as e:
-                                    broker_res['errors'].append(f"Exit {dsym} failed: {e}")
-
-            except Exception as broker_err:
-                broker_res['errors'].append(str(broker_err))
-                logger.error(f"Exit-All failed for {broker_type}_{instance}: {broker_err}")
-                
-            exit_results.append({
-                'broker': broker_type,
-                'instance': instance,
-                'cancelled_orders': broker_res['cancelled_orders'],
-                'exited_positions': broker_res['exited_positions'],
-                'errors': broker_res['errors']
-            })
-
-        return jsonify({
-            'success': True,
-            'summary': exit_results
-        })
+        result = route_scoped_exit(_username, dict(session), 'intrinsic',
+                                   log_tag='OI-Profile exit')
+        # Always 200: a partial exit is a real outcome, and the page reads the
+        # per-broker summary either way rather than a status code.
+        return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Global Exit-All failed: {e}", exc_info=True)
+        logger.error(f"OI Profile Exit-All failed: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -8580,6 +8202,369 @@ def _reconcile_open_orders(username, session_data, order_id=None, force=False):
                     f"{order.get('option_type')}: OPEN → {status}")
 
     return changed
+
+
+# ── Route-scoped exit ───────────────────────────────────────────────────────
+# "Exit all" used to mean one thing for the whole account: every active broker,
+# every position the shared BotOrderTracker registry had ever heard of, no
+# matter which screen put it there. With two hand-fired panels routing on their
+# own flags — OI Profile on BROKER_N_INTRINSIC_ACTIVE, the Order Placement pad
+# on BROKER_N_OP_ACTIVE — that one button was the last place the two screens
+# were not separate: pressing EXIT on OI Profile flattened the pad's positions
+# too, and there was no way to close one panel's book without closing the
+# other's.
+#
+# These helpers give each screen an exit that reaches exactly what that screen
+# placed. The scope comes from MineOrderStore, whose every record carries the
+# strategy key of the screen that wrote it ('intrinsic' for OI Profile, 'op'
+# for the Order Placement pad), and never from the account-wide registry.
+#
+# What it deliberately does NOT cover: a position this screen did not place
+# (an algo's, another panel's, one opened by hand at the broker) and one whose
+# record is not in today's store (placed before midnight, or lost with the
+# file). Those were never this button's to close, and squaring them off from
+# here is what made the old one unusable as a per-screen exit.
+
+
+def _position_matches(pos_symbol, underlying, strike, option_type) -> bool:
+    """Is this broker position row the contract we are looking for?
+
+    Four brokers spell one option four ways — ``NIFTY25SEP24800CE`` at Kite,
+    ``NSE:NIFTY25SEP24800CE`` at Fyers, ``NIFTY-Sep2025-24800-CE`` at Dhan —
+    so the comparison is made on the two ends that survive every format:
+    the underlying it starts with and the ``<strike><CE|PE>`` it ends with.
+    Matching on the whole string instead would mean four symbol builders here,
+    each able to miss a position that is really open.
+    """
+    import re
+
+    s = re.sub(r'[^A-Z0-9]', '', str(pos_symbol or '').upper())
+    root = str(underlying or '').upper()
+    if not s or not root:
+        return False
+    # 'NSE:' / 'BSE:' prefixes only — never strip one off an underlying that
+    # legitimately starts with those letters.
+    for prefix in ('NSE', 'BSE', 'NFO', 'BFO', 'MCX'):
+        if s.startswith(prefix) and not s.startswith(root):
+            s = s[len(prefix):]
+            break
+    # startswith is what keeps NIFTY off a BANKNIFTY position: 'BANKNIFTY…'
+    # does not start with 'NIFTY', so the two chains can never be confused.
+    return s.startswith(root) and s.endswith(f'{int(strike)}{str(option_type).upper()}')
+
+
+def _broker_positions(kind, client):
+    """Every open position at one broker instance, in one shape.
+
+    ``[{'symbol', 'net_qty', 'product', 'raw'}]``, or **None** when the book
+    could not be read. None is not an empty book: an exit that cannot see what
+    is held must not place anything, because "no positions" and "the position
+    request failed" would otherwise both mean "nothing to close".
+    """
+    try:
+        rows = []
+        if kind == 'kite':
+            book = client.positions() or {}
+            # net wins over day for the same symbol — the same merge the
+            # account-wide exit has always used.
+            merged = {p.get('tradingsymbol'): p
+                      for p in ((book.get('day') or []) + (book.get('net') or []))}
+            for p in merged.values():
+                rows.append({'symbol': p.get('tradingsymbol'),
+                             'net_qty': int(p.get('quantity') or 0),
+                             'product': str(p.get('product') or '').upper(),
+                             'raw': p})
+        elif kind == 'fyers':
+            book = client.get_positions() or {}
+            if not book.get('success'):
+                return None
+            for p in book.get('positions') or []:
+                rows.append({'symbol': p.get('symbol'),
+                             'net_qty': int(p.get('netQty') or 0),
+                             'product': str(p.get('productType') or '').upper(),
+                             'raw': p})
+        elif kind == 'dhan':
+            book = client.get_positions() or {}
+            if not book.get('success'):
+                return None
+            for p in book.get('positions') or []:
+                rows.append({'symbol': p.get('tradingSymbol'),
+                             'net_qty': int(p.get('netQty') or 0),
+                             'product': str(p.get('productType') or '').upper(),
+                             'raw': p})
+        else:  # kotak
+            book = client.get_positions() or {}
+            if not book.get('success'):
+                return None
+            for p in book.get('positions') or []:
+                rows.append({'symbol': p.get('trdSym'),
+                             'net_qty': int(float(p.get('flNetQty', p.get('netQty', 0)) or 0)),
+                             'product': str(p.get('prod') or '').upper(),
+                             'raw': p})
+        return rows
+    except Exception as e:
+        logger.warning(f"[exit-scoped] {kind} position book fetch failed: {e}")
+        return None
+
+
+def _place_exit_leg(kind, client, pos, side, qty):
+    """One MARKET order closing ``qty`` of an existing position row.
+
+    Built from the broker's own position row rather than from a symbol we
+    rebuild: the row already carries the identifiers each SDK wants (Dhan's
+    securityId, Kotak's exchange segment, everyone's product type), and using
+    them means the exit can only ever land on the contract the broker says is
+    open. Quantity is split by the exchange freeze limit, same as every other
+    exit path.
+    """
+    sym = pos.get('symbol') or ''
+    raw = pos.get('raw') or {}
+    ids = []
+    for chunk in split_quantity_by_freeze_limit(sym, int(qty), client):
+        if kind == 'kite':
+            from trading_app.service.kite_order_services import KiteService
+            ids.append(KiteService(kite_instance=client)._safe_place_order(
+                variety='regular',
+                exchange=raw.get('exchange'),
+                tradingsymbol=raw.get('tradingsymbol') or sym,
+                transaction_type=side,
+                quantity=chunk,
+                order_type='MARKET',
+                product=raw.get('product'),
+                market_protection=-1,
+            ))
+        elif kind == 'fyers':
+            res = client.place_order(
+                symbol=raw.get('symbol') or sym,
+                side=(client.SIDE_SELL if side == 'SELL' else client.SIDE_BUY),
+                quantity=chunk, order_type=2,
+                product_type=raw.get('productType') or 'INTRADAY')
+            ids.append((res or {}).get('order_id'))
+        elif kind == 'dhan':
+            res = client.place_order(
+                security_id=raw.get('securityId'),
+                transaction_type=side, quantity=chunk, order_type='MARKET',
+                product_type=raw.get('productType') or 'INTRADAY',
+                exchange_segment=raw.get('exchangeSegment') or 'NSE_FNO')
+            ids.append((res or {}).get('order_id'))
+        else:  # kotak
+            res = client.place_order(
+                tradingsymbol=raw.get('trdSym') or sym,
+                transaction_type=side, quantity=chunk, price=0.0,
+                order_type='MKT', product_type=raw.get('prod'),
+                exchange_segment=raw.get('exseg'))
+            ids.append((res or {}).get('order_id'))
+    return ids
+
+
+def _leg_instance(leg, broker):
+    instance = leg.get('instance')
+    if instance is None:
+        tail = str(broker).rsplit('_', 1)[-1]
+        instance = int(tail) if tail.isdigit() else 1
+    return int(instance)
+
+
+def _accepted_legs(order):
+    """``[(broker, instance, quantity)]`` for the legs a broker accepted.
+
+    Both stored shapes are read: the dispatcher's summary nests its broker
+    reply under 'result', while ``dispatch_stop_to_brokers`` spreads it at the
+    top level. A single-leg record whose leg never recorded a quantity falls
+    back to the record's own, which is that leg's quantity by definition.
+    """
+    legs = [leg for leg in (order.get('broker_order_ids') or []) if isinstance(leg, dict)]
+    out = []
+    for leg in legs:
+        res = leg.get('result') if isinstance(leg.get('result'), dict) else leg
+        if not res.get('success'):
+            continue
+        broker = (leg.get('broker') or leg.get('broker_type') or '').strip().lower()
+        if not broker:
+            continue
+        qty = int(leg.get('quantity') or res.get('quantity') or 0)
+        if qty <= 0 and len(legs) == 1:
+            qty = int(order.get('quantity') or 0)
+        if qty <= 0:
+            continue
+        out.append((broker, _leg_instance(leg, broker), qty))
+    return out
+
+
+def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
+    """Cancel and flatten only what one screen placed. Never anything else.
+
+    Two passes, in this order:
+
+    1. **Cancel** every still-resting order of this strategy, at every broker
+       it reached. Stops go first for a reason: a resting SL-M left behind
+       after the position is squared off is a naked entry waiting to trigger.
+    2. **Flatten** the net position this strategy holds, per broker instance
+       and per contract, with a MARKET order on the other side.
+
+    The size of that market order is the smaller of two numbers — what this
+    screen's own records say it is holding, and what the broker says is
+    actually open. The store alone is not enough: if the position was closed by
+    hand at the terminal, selling "our" quantity again opens a naked short. The
+    broker alone is not enough either: its net says nothing about which screen
+    opened it. The overlap is the only quantity that is both ours and real.
+
+    Returns a plain dict — safe to call from a route or a background thread.
+    """
+    from trading_app.app.utils.mine_order_store import MineOrderStore
+
+    # Fresh statuses first: a LIMIT the broker filled ten seconds ago is a
+    # position to exit, not an order to cancel, and the store cannot know that
+    # on its own.
+    try:
+        _reconcile_open_orders(username, session_data, force=True)
+    except Exception as e:
+        logger.warning(f"[{log_tag}] status sweep skipped: {e}")
+
+    def ours():
+        return [o for o in MineOrderStore.get_today_orders()
+                if (o.get('strategy') or '') == strategy]
+
+    tally = {}
+
+    def row(broker, instance):
+        return tally.setdefault((broker, instance),
+                                {'broker': broker, 'instance': instance,
+                                 'cancelled_orders': 0, 'exited_positions': 0,
+                                 'errors': []})
+
+    errors = []
+
+    # ── 1. cancel what is still resting ─────────────────────────────────
+    for order in ours():
+        if order.get('status') not in MineOrderStore.EDITABLE_STATUSES:
+            continue
+
+        if not order.get('broker_order_ids'):
+            # A Mine-mode LIMIT that never left the app — the backend monitor
+            # is the only thing holding it, and dropping the record stops it.
+            MineOrderStore.cancel_order(order['id'])
+            row('app', 0)['cancelled_orders'] += 1
+            continue
+
+        label = f"{order.get('strike')}{order.get('option_type')}"
+        result = _cancel_order_at_brokers(order.get('broker_order_ids'), username, session_data)
+        leg_errors = []
+        for leg in result.get('summary') or []:
+            broker = (leg.get('broker') or '').strip().lower()
+            instance = int(leg.get('instance') or 0)
+            leg_res = leg.get('result') or {}
+            if leg_res.get('success'):
+                row(broker, instance)['cancelled_orders'] += 1
+            elif leg_res.get('error'):
+                row(broker, instance)['errors'].append(str(leg_res['error']))
+                leg_errors.append(f'{broker}_{instance}: {leg_res["error"]}')
+
+        if result.get('success'):
+            MineOrderStore.cancel_order(order['id'])
+            # Cancelled at one broker and refused at another is not a clean
+            # exit: that leg is still resting, and only saying so here makes
+            # it visible on the screen that pressed the button.
+            if leg_errors:
+                errors.append(f'Cancel {label}: {leg_errors[0]}')
+        else:
+            # A refused cancel usually means it filled while we were reading —
+            # ask the broker, so the fill is counted as a position below
+            # instead of being left open behind a cancel that can only fail.
+            try:
+                _reconcile_open_orders(username, session_data, order_id=order['id'], force=True)
+            except Exception as e:
+                logger.warning(f"[{log_tag}] re-sync of {order['id']} failed: {e}")
+            # Still open after asking the broker: the cancel really did fail.
+            # Anything else means it had already finished, which is not an
+            # error — it is the position pass below picking the fill up.
+            if MineOrderStore.get_order(order['id']).get('status') in MineOrderStore.EDITABLE_STATUSES:
+                errors.append(f"Cancel {label}: {result.get('error') or 'failed'}")
+
+    # ── 2. what this screen is still holding ────────────────────────────
+    # (broker, instance) -> {(symbol, strike, option_type): signed quantity}
+    exposure = {}
+    for order in ours():
+        if order.get('status') != 'EXECUTED':
+            continue
+        sign = 1 if str(order.get('action') or '').upper() == 'BUY' else -1
+        contract = (str(order.get('symbol') or '').upper(),
+                    int(order.get('strike') or 0),
+                    str(order.get('option_type') or '').upper())
+        if not contract[0] or not contract[1] or contract[2] not in ('CE', 'PE'):
+            continue
+        for broker, instance, qty in _accepted_legs(order):
+            book = exposure.setdefault((broker, instance), {})
+            book[contract] = book.get(contract, 0) + sign * qty
+
+    logger.info(f"[{log_tag}] strategy={strategy}: net exposure { {f'{b}_{i}': v for (b, i), v in exposure.items()} }")
+
+    # ── 3. flatten it, per broker ───────────────────────────────────────
+    for (broker, instance), book in exposure.items():
+        open_contracts = {c: q for c, q in book.items() if q}
+        if not open_contracts:
+            continue
+
+        kind, client = _broker_client(broker, instance, username, session_data)
+        if not kind:
+            msg = f'{broker}_{instance}: {client}'
+            row(broker, instance)['errors'].append(str(client))
+            errors.append(msg)
+            continue
+
+        positions = _broker_positions(kind, client)
+        if positions is None:
+            msg = f'{broker}_{instance}: position book unavailable — nothing exited'
+            row(broker, instance)['errors'].append('Position book unavailable')
+            errors.append(msg)
+            continue
+
+        for (underlying, strike, option_type), net in open_contracts.items():
+            label = f'{underlying} {strike}{option_type}'
+            match = next((p for p in positions
+                          if _position_matches(p.get('symbol'), underlying, strike, option_type)), None)
+            if not match:
+                logger.info(f"[{log_tag}] {broker}_{instance} {label}: nothing open at the broker")
+                continue
+            if match.get('product') == 'CNC':
+                logger.info(f"[{log_tag}] {broker}_{instance} {label}: CNC/delivery — left alone")
+                continue
+
+            held = int(match.get('net_qty') or 0)
+            if held == 0 or (held > 0) != (net > 0):
+                logger.info(f"[{log_tag}] {broker}_{instance} {label}: already flat "
+                            f"(ours {net}, broker {held})")
+                continue
+
+            qty = min(abs(net), abs(held))
+            side = 'SELL' if net > 0 else 'BUY'
+            try:
+                ids = _place_exit_leg(kind, client, match, side, qty)
+                row(broker, instance)['exited_positions'] += 1
+                logger.info(f"[{log_tag}] {broker}_{instance} {label}: {side} {qty} "
+                            f"(ours {abs(net)}, broker {abs(held)}) → {ids}")
+            except Exception as e:
+                logger.error(f"[{log_tag}] {broker}_{instance} {label} exit failed: {e}")
+                row(broker, instance)['errors'].append(f'Exit {label} failed: {e}')
+                errors.append(f'{broker}_{instance} {label}: {e}')
+
+    summary = [tally[k] for k in sorted(tally)]
+    cancelled = sum(r['cancelled_orders'] for r in summary)
+    exited = sum(r['exited_positions'] for r in summary)
+    logger.info(f"[{log_tag}] strategy={strategy}: {cancelled} cancelled, {exited} exited, "
+                f"{len(errors)} error(s)")
+
+    return {
+        # An exit that reached nothing because there was nothing to reach is a
+        # success; one that hit an error on the way is not.
+        'success': not errors,
+        'strategy': strategy,
+        'cancelled_orders': cancelled,
+        'exited_positions': exited,
+        'summary': summary,
+        'errors': errors,
+        'error': errors[0] if errors else None,
+    }
 
 
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,

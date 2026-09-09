@@ -173,6 +173,14 @@
                 title="Cancel every resting order from this page, at every broker">
           Cancel all
         </button>
+        <!-- Cancel all only pulls resting orders; this also squares off what
+             this page is holding. Scoped to this page: an OI Profile position
+             or an algo's is untouched, even on the same strike and the same
+             account. Two presses, like every other way out of here. -->
+        <button class="op-btn op-btn-danger op-btn-sm" id="opExitAll" type="button"
+                title="Cancel this page's resting orders and square off the positions it placed">
+          Exit all
+        </button>
       </header>
       <div class="op-pending" id="opPending"></div>
 
