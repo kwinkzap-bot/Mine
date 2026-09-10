@@ -1,7 +1,7 @@
 """Build the app's URL map without starting anything.
 
 `create_app()` is off limits here: it calls `init_extensions` ->
-`init_scheduler`, which registers 24 cron jobs and immediately restarts the
+`init_scheduler`, which registers 25 cron jobs and immediately restarts the
 eight live algos (`app/__init__.py:27` -> `extensions.py:83` ->
 `scheduler.py:1186`). Importing this module during market hours would place
 real orders.

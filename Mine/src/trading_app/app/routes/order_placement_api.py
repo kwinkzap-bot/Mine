@@ -299,14 +299,34 @@ def contract():
 def config():
     """Which brokers this page can reach, and how each of them is sized."""
     try:
+        from trading_app.app.order_placement.op_signal_engine import op_signal_lots
+
         user = _user()
         targets = op_targets(user)
+
+        # Signal mode is sized and gated separately, and the pad says so before
+        # anything is armed: a broker with no BROKER_N_OP_SIGNAL_LOTS, or one
+        # whose type cannot hold a stop, takes no part in a signal even though
+        # it takes every single order this page places.
+        for t in targets:
+            lots = op_signal_lots(user, t['instance'])
+            can_stop = t['type'] in ('zerodha', 'kite', 'fyers')
+            t['signal_lots'] = lots
+            t['signal_entry_lots'] = (lots * 3) if lots else None
+            t['signal_ready'] = bool(lots) and can_stop
+            t['signal_blocked'] = (
+                None if t['signal_ready']
+                else (f"{t['type']} cannot hold a stop-loss order" if not can_stop
+                      else f"BROKER_{t['instance']}_OP_SIGNAL_LOTS is not set"))
+
         return jsonify({
             'success': True,
             'enabled': bool(targets),
             'brokers': targets,
             'symbols': list(OP_SYMBOLS),
             'flag': 'BROKER_N_OP_ACTIVE',
+            'signal_enabled': any(t['signal_ready'] for t in targets),
+            'signal_flag': 'BROKER_N_OP_SIGNAL_LOTS',
         })
     except Exception as e:
         return _fail(e, 'config')
@@ -755,13 +775,221 @@ def exit_all():
     the quantity exited is what this page's own records account for, capped by
     what the broker actually shows open.
     """
+    from trading_app.app.order_placement.op_signal_engine import stop_all_signals
     from trading_app.app.routes.api import route_scoped_exit
 
     try:
         result = route_scoped_exit(_user(), dict(session), OP_STRATEGY,
                                    log_tag='OrderPlacement exit')
+        # The orders are gone; the engine has to be told, or it keeps managing
+        # legs that are no longer there and re-places a stop over a position
+        # that has just been squared off.
+        result['signals_stopped'] = stop_all_signals(_user(), dict(session),
+                                                     reason='Exit all')
         # Always 200: a partial exit is a real outcome, and the page reads the
         # per-broker summary either way rather than a status code.
         return jsonify(result)
     except Exception as e:
         return _fail(e, 'exit_all')
+
+
+# ── signal mode ──────────────────────────────────────────────────────────
+# The pad's second mode. Where /order places one order and walks away, a signal
+# is a whole trade handed over at once: an entry stop, and a plan for what to
+# do when it fills. The engine in app/order_placement owns everything after
+# arming; these routes are the way in and the way out.
+#
+# What a signal places is still ordinary orders. Every leg is a MineOrderStore
+# record carrying strategy='op' — plus a signal_id and a leg name — so the
+# price box, the ✕, the reconciliation sweep and Exit all on this page all
+# reach a signal's legs without knowing signals exist.
+
+
+def _signal_plan_from_payload(payload: dict) -> dict:
+    """A plan from pasted text, from typed fields, or from text the user edited.
+
+    The text is the normal way in and the fields are what the review bar shows;
+    when both arrive the fields win, because they are what was on screen when
+    the button was pressed.
+    """
+    from trading_app.app.order_placement.signal_text import parse_signal
+
+    plan, text = {}, (payload.get('text') or '').strip()
+    if text:
+        plan = parse_signal(text)
+        if 'error' in plan:
+            return plan
+        plan['source_text'] = text
+
+    for key in ('symbol', 'option_type', 'action'):
+        if payload.get(key):
+            plan[key] = str(payload[key]).upper().strip()
+    if payload.get('strike') not in (None, ''):
+        plan['strike'] = payload['strike']
+    for key in ('entry', 'stop'):
+        if payload.get(key) not in (None, ''):
+            plan[key] = payload[key]
+    if payload.get('targets'):
+        plan['targets'] = payload['targets']
+    if payload.get('expiry'):
+        plan['expiry'] = payload['expiry']
+
+    if not plan:
+        return {'error': 'Paste the signal text, or fill the fields in'}
+
+    try:
+        plan['strike'] = int(plan.get('strike') or 0)
+        plan['entry'] = float(plan.get('entry') or 0)
+        plan['stop'] = float(plan.get('stop') or 0)
+        plan['targets'] = [float(t) for t in (plan.get('targets') or [])]
+    except (TypeError, ValueError):
+        return {'error': 'The strike, entry, stop and targets must all be numbers'}
+
+    plan.setdefault('action', 'BUY')
+    return plan
+
+
+def _describe_signal(plan: dict, user: str) -> dict:
+    """What arming this plan would send, per broker, before anything is sent."""
+    from trading_app.app.order_placement.op_signal_engine import op_signal_lots
+
+    out = []
+    for t in op_targets(user):
+        lots = op_signal_lots(user, t['instance'])
+        ready = bool(lots) and t['type'] in ('zerodha', 'kite', 'fyers')
+        out.append({**t, 'signal_lots': lots,
+                    'signal_entry_lots': (lots * 3) if lots else None,
+                    'signal_ready': ready})
+    return {'brokers': out,
+            'targets_resting': plan.get('targets', [])[:2],
+            # Said plainly because it is the one part of the plan that is not
+            # protected by an order at the exchange.
+            'target_3_watched': (plan.get('targets') or [None, None, None])[2]}
+
+
+@order_placement_bp.route('/signal/parse', methods=['POST'])
+@require_user_auth
+def parse_signal_text():
+    """Read a pasted tip and say what would happen — without placing anything.
+
+    The validation runs here too, and its message comes back beside the plan
+    rather than instead of it: the page shows what it read AND why it will not
+    arm, which is the only way to see that a refusal is about the expiry and
+    not about the strike.
+    """
+    from trading_app.app.order_placement.op_signal_engine import validate_plan
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        plan = _signal_plan_from_payload(payload)
+        if 'error' in plan:
+            return jsonify({'success': False, 'error': plan['error']}), 200
+
+        user = _user()
+        symbol = str(plan.get('symbol') or '').upper()
+        meta = _chain_meta(symbol) if symbol in OP_SYMBOLS else {}
+        ltp = (option_ltp(symbol, plan['strike'], plan['option_type'])
+               if symbol in OP_SYMBOLS and plan.get('strike') else None)
+
+        problem = validate_plan(user, plan, chain_meta=meta, ltp=ltp)
+        return jsonify({
+            'success': True,
+            'plan': {**plan, 'expiry': str(plan['expiry']) if plan.get('expiry') else None},
+            'chain': meta, 'ltp': ltp,
+            'armable': problem is None,
+            'error': problem,
+            **_describe_signal(plan, user),
+        })
+    except Exception as e:
+        return _fail(e, 'parse_signal_text')
+
+
+@order_placement_bp.route('/signal', methods=['POST'])
+@require_user_auth
+def arm_signal_route():
+    """Arm a signal: place the entry stop at every sized broker.
+
+    Nothing but the entry goes out now. The stop and the targets are attached
+    by the engine when — and only when — the entry actually fills, because
+    until then there is no position for them to protect and a resting sell
+    would be a naked short.
+    """
+    from trading_app.app.order_placement.op_signal_engine import arm_signal, validate_plan
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        plan = _signal_plan_from_payload(payload)
+        if 'error' in plan:
+            return jsonify({'success': False, 'error': plan['error']}), 400
+
+        user = _user()
+        symbol = str(plan.get('symbol') or '').upper()
+        meta = _chain_meta(symbol) if symbol in OP_SYMBOLS else {}
+        ltp = (option_ltp(symbol, plan['strike'], plan['option_type'])
+               if symbol in OP_SYMBOLS and plan.get('strike') else None)
+
+        # Checked here and not only on the page, for the same reason /order is:
+        # the page is one caller of this route, and a ladder that is wrong is
+        # wrong at four brokers at once.
+        problem = validate_plan(user, plan, chain_meta=meta, ltp=ltp)
+        if problem:
+            return jsonify({'success': False, 'error': problem}), 400
+
+        result = arm_signal(user, dict(session), plan)
+        return jsonify(result), (200 if result.get('success') else 400)
+    except Exception as e:
+        return _fail(e, 'arm_signal')
+
+
+@order_placement_bp.route('/signals', methods=['GET'])
+@require_user_auth
+def list_signals():
+    """Today's signals, each with the leg records it placed.
+
+    The legs are the same records the pending strip lists, handed back grouped
+    by signal so the page can show a ladder as one thing without having to
+    guess which orders belong together.
+    """
+    from trading_app.app.order_placement.op_signal_engine import (is_running,
+                                                                  remember_session,
+                                                                  signal_records)
+    from trading_app.app.order_placement.op_signal_store import OpSignalStore
+
+    try:
+        # Kept so the engine's thread can reach Fyers and Kotak, which read
+        # their tokens from the session. In memory only — never written to the
+        # plan file.
+        remember_session(_user(), dict(session))
+
+        signals = sorted(OpSignalStore.get_today(),
+                         key=lambda s: s.get('created_at', 0), reverse=True)
+        for s in signals:
+            s['legs'] = sorted(signal_records(s['id']),
+                               key=lambda o: o.get('created_at', 0))
+        return jsonify({'success': True, 'signals': signals,
+                        'engine_running': is_running()})
+    except Exception as e:
+        return _fail(e, 'list_signals')
+
+
+@order_placement_bp.route('/signals/<signal_id>/cancel', methods=['POST'])
+@require_user_auth
+def cancel_signal_route(signal_id: str):
+    """Stand one signal down: cancel its resting legs, square off what it holds.
+
+    Scoped to this signal's own records. Another signal on the same strike, and
+    anything the single-order pad placed, is untouched — which is what makes
+    this different from Exit all.
+    """
+    from trading_app.app.order_placement.op_signal_engine import cancel_signal
+    from trading_app.app.order_placement.op_signal_store import OpSignalStore
+
+    try:
+        if not OpSignalStore.get(signal_id):
+            return jsonify({'success': False, 'error': 'No such signal'}), 404
+        result = cancel_signal(signal_id, _user(), dict(session))
+        # Always 200: a partial stand-down is a real outcome, and the page
+        # reads the summary either way.
+        return jsonify(result)
+    except Exception as e:
+        return _fail(e, 'cancel_signal')

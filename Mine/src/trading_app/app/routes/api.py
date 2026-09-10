@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time as _time
 import uuid
@@ -8153,6 +8154,36 @@ def _resolve_order_at_brokers(order, username, session_data, books=None):
     return 'OPEN', None, filled_qty
 
 
+def leg_fills(order, username, session_data, books=None):
+    """What one stored order did at EACH of its brokers, kept apart.
+
+    ``{(broker, instance): (status, avg_price, filled_qty)}``, and a leg the
+    order book cannot answer for is simply absent — unknown, never "gone".
+
+    ``_resolve_order_at_brokers`` above collapses the same information into one
+    triple for the record, which is what the listing and the pending strip
+    want. A signal ladder cannot use that: it sizes each account's stop and
+    targets from what THAT account filled, and two accounts trading 20 lots and
+    4 lots do not fill alike — or at the same moment, or at the same price.
+    """
+    legs = _broker_order_legs(order.get('broker_order_ids'))
+    if not legs:
+        return {}
+
+    books = books if books is not None else {}
+    out = {}
+    for leg in legs:
+        cache_key = (leg['broker'], leg['instance'])
+        if cache_key not in books:
+            kind, client = _broker_client(leg['broker'], leg['instance'],
+                                          username, session_data)
+            books[cache_key] = _broker_order_book(kind, client) if kind else {}
+        row = books[cache_key].get(str(leg['order_id']))
+        if row:
+            out[cache_key] = row
+    return out
+
+
 def _reconcile_open_orders(username, session_data, order_id=None, force=False):
     """Write back what the brokers say about every still-open broker order.
 
@@ -8162,10 +8193,14 @@ def _reconcile_open_orders(username, session_data, order_id=None, force=False):
     """
     from trading_app.app.utils.mine_order_store import MineOrderStore
 
-    if not force and order_id is None:
+    if order_id is None:
         with _order_sync_lock:
-            if (_time.time() - _order_sync_last['ts']) < _ORDER_SYNC_TTL_S:
+            if not force and (_time.time() - _order_sync_last['ts']) < _ORDER_SYNC_TTL_S:
                 return 0
+            # Stamped on a forced sweep too. The signal engine forces one every
+            # few seconds; without the stamp the page's own 5s poll would fetch
+            # every order book a second time, for an answer the engine has just
+            # written back. A sweep is a sweep whoever asked for it.
             _order_sync_last['ts'] = _time.time()
 
     candidates = [
@@ -8391,8 +8426,8 @@ def _accepted_legs(order):
     return out
 
 
-def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
-    """Cancel and flatten only what one screen placed. Never anything else.
+def exit_selected_records(username, session_data, select, log_tag='exit'):
+    """Cancel and flatten exactly the orders ``select()`` names. Nothing else.
 
     Two passes, in this order:
 
@@ -8409,6 +8444,16 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     broker alone is not enough either: its net says nothing about which screen
     opened it. The overlap is the only quantity that is both ours and real.
 
+    ``select() -> list[record]`` is called fresh at the start of each pass
+    rather than once, so pass 2 sees the statuses pass 1 has just written back
+    — a cancel refused because the order had already filled becomes a position
+    to flatten within the same call.
+
+    ``route_scoped_exit`` below is the whole-screen caller. The Order
+    Placement signal engine is the other one: it hands in one signal's own leg
+    records, so cancelling a signal leaves the same page's single-mode
+    positions alone.
+
     Returns a plain dict — safe to call from a route or a background thread.
     """
     from trading_app.app.utils.mine_order_store import MineOrderStore
@@ -8422,8 +8467,22 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
         logger.warning(f"[{log_tag}] status sweep skipped: {e}")
 
     def ours():
-        return [o for o in MineOrderStore.get_today_orders()
-                if (o.get('strategy') or '') == strategy]
+        return select() or []
+
+    def stops_first(order):
+        """Cancel resting stops before resting limits.
+
+        A signal in flight has both: an SL-M covering the position and target
+        limits above it. Cancel a target first and the stop is briefly the
+        only resting order — harmless. Cancel the stop first and a target may
+        still fill on the way out — also harmless. The order that is NOT
+        harmless is leaving a stop resting after the position is flat, because
+        a triggered SL-M with nothing to sell is a fresh short. So stops go
+        first, and this says so in code rather than relying on the creation
+        order happening to match.
+        """
+        kind = str(order.get('order_type') or order.get('type') or '').upper()
+        return 0 if kind.startswith('SL') else 1
 
     tally = {}
 
@@ -8436,7 +8495,7 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     errors = []
 
     # ── 1. cancel what is still resting ─────────────────────────────────
-    for order in ours():
+    for order in sorted(ours(), key=stops_first):
         if order.get('status') not in MineOrderStore.EDITABLE_STATUSES:
             continue
 
@@ -8497,7 +8556,7 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
             book = exposure.setdefault((broker, instance), {})
             book[contract] = book.get(contract, 0) + sign * qty
 
-    logger.info(f"[{log_tag}] strategy={strategy}: net exposure { {f'{b}_{i}': v for (b, i), v in exposure.items()} }")
+    logger.info(f"[{log_tag}] net exposure { {f'{b}_{i}': v for (b, i), v in exposure.items()} }")
 
     # ── 3. flatten it, per broker ───────────────────────────────────────
     for (broker, instance), book in exposure.items():
@@ -8551,14 +8610,13 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     summary = [tally[k] for k in sorted(tally)]
     cancelled = sum(r['cancelled_orders'] for r in summary)
     exited = sum(r['exited_positions'] for r in summary)
-    logger.info(f"[{log_tag}] strategy={strategy}: {cancelled} cancelled, {exited} exited, "
+    logger.info(f"[{log_tag}] {cancelled} cancelled, {exited} exited, "
                 f"{len(errors)} error(s)")
 
     return {
         # An exit that reached nothing because there was nothing to reach is a
         # success; one that hit an error on the way is not.
         'success': not errors,
-        'strategy': strategy,
         'cancelled_orders': cancelled,
         'exited_positions': exited,
         'summary': summary,
@@ -8567,15 +8625,56 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     }
 
 
+def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
+    """One screen's whole book: cancel what it has resting, flatten what it holds.
+
+    The scope is the strategy key every MineOrderStore record carries — the key
+    of the screen that wrote it. An OI Profile position, an algo's, or one
+    opened by hand at the terminal is untouched, even when it is the same
+    strike on the same account.
+    """
+    from trading_app.app.utils.mine_order_store import MineOrderStore
+
+    def ours():
+        return [o for o in MineOrderStore.get_today_orders()
+                if (o.get('strategy') or '') == strategy]
+
+    result = exit_selected_records(username, session_data, ours, log_tag=log_tag)
+    return {**result, 'strategy': strategy}
+
+
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
                                quantity=None, tradingsymbol_override=None, expiry_override=None,
-                               limit_price=None, sec_id=None):
+                               limit_price=None, sec_id=None, lots_for=None, gate=None):
     """Dispatch an order to all configured brokers. Safe to call from background threads.
 
     session_data: pass dict(session) from a route, or {} from a background thread (falls back to UserEnvManager).
     Returns a plain dict (not a Flask Response).
+
+    ``quantity`` is a count of LOTS, not units, and it is one number for every
+    broker at once. That is right for a whole-position order and wrong for a
+    ladder leg: the Order Placement signal mode sells a third of each account's
+    own size at each target, and the accounts are not sized alike.
+
+        lots_for(instance) -> int
+
+    is the per-broker hook for exactly that, the same shape
+    ``dispatch_stop_to_brokers`` already takes. It is mutually exclusive with
+    ``quantity``: two sizes that disagree cannot both be honoured, and the one
+    that loses goes to a broker as a real order at the wrong size.
+    
+    ``gate(instance, broker_type) -> bool`` narrows the fan-out, the same hook
+    ``dispatch_stop_to_brokers`` takes and for the same reason: a signal's two
+    accounts fill at different moments, so each one's targets are placed when
+    THAT account fills and must reach only that account. Without it a target
+    armed for broker 1 would also go out at broker 2, which is still waiting
+    for its entry — a naked short on an account holding nothing.
     """
     from trading_app.app.utils.user_env import UserEnvManager
+
+    if lots_for is not None and quantity is not None:
+        raise ValueError('_dispatch_order_to_brokers: pass lots_for or quantity, '
+                         'not both — they would silently disagree on size')
 
     # Auto-exit (target = entry+10 monitor) is opt-in: manual orders from the OI Profile
     # screen must never be exited by the app unless the user enables INTRINSIC_AUTO_EXIT.
@@ -8631,6 +8730,13 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): OP_ACTIVE not enabled")
                 continue
 
+        # The caller's own narrowing, applied after every flag: a gate can
+        # only ever take brokers away from the routing, never add one that the
+        # BROKER_N_*_ACTIVE flags left out.
+        if gate is not None and not gate(i, b_type):
+            logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): gated out by caller")
+            continue
+
         if b_type == 'zerodha':
             targets.append({'type': f'zerodha_{i}', 'instance': i})
         elif b_type in ['kotak', 'kotak_neo']:
@@ -8681,7 +8787,16 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[OP] Skipping broker {_active_instance} ({broker}) because BROKER_N_OP_ACTIVE is FALSE")
                 return {'success': False, 'error': f'Order Placement orders for {broker} are DISABLED in config'}, 403
 
-        order_lots = quantity
+        if gate is not None:
+            # The same vocabulary the routing loop above hands it: 'zerodha',
+            # not the 'zerodha_3' this layer uses internally. A gate that had
+            # to know which of the two it was being asked about would be a gate
+            # that silently says no in one of the two places.
+            if not gate(_active_instance, re.sub(r'_\d+$', '', broker)):
+                return {'success': False,
+                        'error': f'Broker {broker} is not in scope for this order'}, 403
+
+        order_lots = lots_for(_active_instance) if lots_for is not None else quantity
 
         if strategy in ('oix', 'op') and not order_lots:
             # Same precedence the intrinsic path uses: per-broker size first,

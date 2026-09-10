@@ -59,6 +59,21 @@
         <span class="op-card-sub" id="opContract">—</span>
       </header>
 
+      <!-- Two modes, one pad. SIGNAL is the default: it is what this page is
+           mostly used for, and it is the safer of the two to land on — it
+           needs a whole ladder parsed and validated before its second press
+           can do anything, where SINGLE is one press away from a live order.
+           SINGLE is the original behaviour, one order placed and left alone.
+           Switching never carries a half-typed ticket across: the review bar
+           is disarmed on every switch. -->
+      <div class="op-field">
+        <label>Mode</label>
+        <div class="op-seg op-seg-mode" id="opMode" role="group" aria-label="Order mode">
+          <button type="button" data-value="single">Single</button>
+          <button type="button" data-value="signal" class="active">Signal</button>
+        </div>
+      </div>
+
       <div class="op-field">
         <label for="opSymbol">Underlying</label>
         <div class="op-row">
@@ -101,7 +116,7 @@
         </div>
       </div>
 
-      <div class="op-field">
+      <div class="op-field op-single-only" hidden>
         <label>Order type</label>
         <!-- STOP is an SL-M: it rests on a trigger rather than on a price.
              SELL STOP is the exit stop that caps a loss; BUY STOP is a stop
@@ -121,7 +136,7 @@
       <!-- One price box for both: a LIMIT rests at it, a STOP triggers on it.
            The label and the hint below say which, so the number on screen is
            never the wrong kind of number without saying so. -->
-      <div class="op-field" id="opPriceField" hidden>
+      <div class="op-field op-single-only" id="opPriceField" hidden>
         <label for="opLimitPrice" id="opPriceLabel">Limit price</label>
         <div class="op-row">
           <span class="op-rupee">₹</span>
@@ -142,6 +157,46 @@
 
            No size field either, deliberately: one number typed here would go
            to every broker alike, and these accounts are not sized alike. -->
+
+      <!-- ── the ladder ──────────────────────────────────────────────
+           Filled in by the paste above, and editable afterwards: the numbers
+           that go to the broker are the ones on screen, not the ones in the
+           text. Every edit re-checks against the live chain, so a strike off
+           the step or a stale entry is refused before the review bar appears.
+
+           Target 3 is marked because it is the one leg with no order behind
+           it. The stop and the first two targets rest at the broker; the third
+           is a level the app watches, and it needs the app alive. -->
+      <div class="op-signal-only op-ladder" id="opLadder">
+        <div class="op-ladder-grid">
+          <div class="op-field">
+            <label for="opSigEntry">Entry <span class="op-lab-sub">stop</span></label>
+            <input type="number" id="opSigEntry" class="op-input" step="0.05" min="0"
+                   inputmode="decimal" autocomplete="off" placeholder="0.00">
+          </div>
+          <div class="op-field">
+            <label for="opSigStop">Stop-loss</label>
+            <input type="number" id="opSigStop" class="op-input op-in-sl" step="0.05" min="0"
+                   inputmode="decimal" autocomplete="off" placeholder="0.00">
+          </div>
+          <div class="op-field">
+            <label for="opSigT1">Target 1 <span class="op-lab-sub">rests</span></label>
+            <input type="number" id="opSigT1" class="op-input op-in-tgt" step="0.05" min="0"
+                   inputmode="decimal" autocomplete="off" placeholder="0.00">
+          </div>
+          <div class="op-field">
+            <label for="opSigT2">Target 2 <span class="op-lab-sub">rests</span></label>
+            <input type="number" id="opSigT2" class="op-input op-in-tgt" step="0.05" min="0"
+                   inputmode="decimal" autocomplete="off" placeholder="0.00">
+          </div>
+          <div class="op-field">
+            <label for="opSigT3">Target 3 <span class="op-lab-sub op-lab-watch">watched</span></label>
+            <input type="number" id="opSigT3" class="op-input op-in-tgt" step="0.05" min="0"
+                   inputmode="decimal" autocomplete="off" placeholder="0.00">
+          </div>
+        </div>
+        <p class="op-hint" id="opSignalPlan"></p>
+      </div>
 
       <!-- Two presses, always. The pad lives on the page rather than behind a
            dialog, so the first press must not be the one that reaches a
@@ -166,6 +221,18 @@
          or are cancelled: the price box and the ✕ are the only things that
          can move them, and they are never more than a glance away. -->
     <section class="op-card op-book">
+      <!-- Live signals, above the strip rather than inside it: a signal's legs
+           are ordinary orders and still appear below, but which orders belong
+           to which trade is not something a flat list can show. -->
+      <div class="op-signals-wrap" id="opSignalsWrap" hidden>
+        <header class="op-card-hd">
+          <span>Signals</span>
+          <span class="op-count" id="opSignalCount">0</span>
+          <span class="op-engine" id="opEngine" title="The engine watching these signals"></span>
+        </header>
+        <div class="op-signals" id="opSignals"></div>
+      </div>
+
       <header class="op-card-hd">
         <span>Pending orders</span>
         <span class="op-count" id="opPendingCount">0</span>

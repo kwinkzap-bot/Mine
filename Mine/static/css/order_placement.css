@@ -775,3 +775,179 @@
         text-align: right;
     }
 }
+
+/* ── signal mode ──────────────────────────────────────────────────────────
+   The pad's second mode. It reuses the contract fields above it and adds two
+   things: the pasted tip, and the ladder read out of it. */
+
+.op-seg-mode button[data-value="signal"].active {
+  background: var(--color-info, #3b82f6);
+  color: #fff;
+}
+
+.op-textarea {
+  min-height: 92px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.op-hint-err { color: var(--color-danger, #dc2626); }
+
+.op-ladder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.op-ladder-grid .op-field { margin: 0; }
+
+/* Every label is two lines, whether or not it has a sub-label. "Target 3" is
+   the only one long enough to wrap on its own, and letting it do that pushes
+   its input half a line below the rest of the row. */
+.op-ladder-grid label {
+  display: block;
+  min-height: 2.3em;
+  line-height: 1.15;
+}
+
+.op-ladder-grid .op-lab-sub { display: block; }
+
+/* .op-input is sized by the flex rows it normally sits in; dropped into a grid
+   cell it falls back to a number input's intrinsic width and spills out of its
+   column. min-width:0 is the half that matters — without it the cell refuses
+   to shrink below that intrinsic width and the whole grid widens. */
+.op-ladder-grid .op-input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Which numbers are which, without having to read the labels twice. */
+.op-in-sl { border-left: 3px solid var(--color-danger, #dc2626); }
+.op-in-tgt { border-left: 3px solid var(--color-success, #16a34a); }
+
+.op-lab-sub {
+  font-weight: 400;
+  opacity: .6;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+/* Target 3 is the one leg with no order behind it. The label says so in the
+   form, and the review bar says it again before anything is armed. */
+.op-lab-watch {
+  color: var(--color-warning, #d97706);
+  opacity: 1;
+}
+
+/* ── live signals ─────────────────────────────────────────────────────── */
+
+.op-signals-wrap { margin-bottom: 4px; }
+
+.op-engine {
+  margin-left: auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  opacity: .5;
+}
+
+.op-engine.is-on {
+  opacity: 1;
+  color: var(--color-success, #16a34a);
+}
+
+.op-engine.is-on::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+}
+
+.op-sig {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-left: 3px solid var(--color-info, #3b82f6);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: var(--card-bg, transparent);
+}
+
+.op-sig--done {
+  border-left-color: var(--border-color, #e5e7eb);
+  opacity: .55;
+}
+
+.op-sig-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.op-sig-contract { font-weight: 600; }
+
+.op-sig-ladder {
+  font-size: 11px;
+  opacity: .7;
+  font-variant-numeric: tabular-nums;
+}
+
+.op-sig-phase,
+.op-sig-x { margin-left: auto; }
+
+.op-sig-phase {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  opacity: .6;
+}
+
+.op-sig-broker {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  padding: 2px 0;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+}
+
+.op-sig-bname {
+  min-width: 88px;
+  font-weight: 500;
+}
+
+.op-sig-stage {
+  opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The stages worth spotting from across the room: in a trade, and out of one
+   because the stop was hit. */
+.op-sig-live .op-sig-stage,
+.op-sig-t1_done .op-sig-stage,
+.op-sig-t2_done .op-sig-stage { color: var(--color-success, #16a34a); opacity: 1; }
+.op-sig-flat .op-sig-stage,
+.op-sig-dead .op-sig-stage { opacity: .5; }
+
+.op-sig-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  opacity: .5;
+}
+
+@media (max-width: 600px) {
+  .op-ladder-grid { grid-template-columns: repeat(2, 1fr); }
+  .op-sig-broker { flex-wrap: wrap; }
+  .op-sig-bname { min-width: 0; }
+}

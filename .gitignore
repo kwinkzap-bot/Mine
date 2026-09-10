@@ -17,6 +17,7 @@ Mine/src/trading_app/app/utils/mine_orders.json
 Mine/src/trading_app/app/utils/bot_orders.json
 Mine/src/trading_app/app/utils/rtp_opt_cache.json
 Mine/src/trading_app/app/utils/sm_opt_cache.json
+Mine/src/trading_app/app/order_placement/op_signals.json
 
 # Scratch / throwaway scripts
 Mine/scratch/

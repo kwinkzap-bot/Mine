@@ -694,3 +694,123 @@ def test_the_direction_rule_itself(client=None):
     # No price, no opinion.
     assert op.stop_direction_error('BUY', 130, None) is None
     assert op.stop_direction_error('BUY', 130, 0) is None
+
+
+# ── signal legs are ordinary orders ──────────────────────────────────────
+# The whole point of writing every signal leg as a strategy='op' record is that
+# the routes above need no case for them. These are the tests that say so — if
+# one of them starts failing, a signal's stop has stopped being editable or
+# stopped being reachable by Exit all, which is worse than the feature not
+# existing.
+
+def signal_leg(store, leg='SL', **over):
+    record = {'symbol': 'NIFTY', 'strike': 24850, 'option_type': 'CE',
+              'action': 'SELL', 'strategy': 'op', 'order_type': 'SL-M',
+              'type': 'SL-M', 'price': 175.0, 'trigger_price': 175.0,
+              'quantity': 225, 'status': 'OPEN', 'source': 'orderplacement',
+              'signal_id': 'sig-abc123', 'leg': leg,
+              'broker_order_ids': [{'broker': 'zerodha', 'instance': 1,
+                                    'result': {'success': True, 'order_id': 'x1'}}]}
+    record.update(over)
+    return MineOrderStore.add_order(record)
+
+
+def test_a_signals_stop_can_be_moved_from_the_pending_strip(client, env, store,
+                                                            monkeypatch):
+    """A leg is a record like any other, so the price box already reaches it."""
+    moved = {}
+
+    def modify(legs, username, session_data, price=None, quantity=None, trigger_price=None):
+        moved.update({'price': price, 'trigger_price': trigger_price})
+        return {'success': True, 'summary': []}
+
+    monkeypatch.setattr(api, '_modify_order_at_brokers', modify)
+    record = signal_leg(store, 'SL')
+
+    res = client.put(f"/api/order-placement/orders/{record['id']}/price",
+                     json={'price': 188})
+    assert res.status_code == 200
+    # An SL-M's number is its trigger, not a limit — the same rule that keeps a
+    # hand-placed stop from being turned into a resting LIMIT.
+    assert moved == {'price': None, 'trigger_price': 188}
+    assert record['trigger_price'] == 188
+
+
+def test_a_signals_target_can_be_cancelled_from_the_pending_strip(client, env, store,
+                                                                  monkeypatch):
+    monkeypatch.setattr(api, '_cancel_order_at_brokers',
+                        lambda *a, **k: {'success': True, 'summary': []})
+    record = signal_leg(store, 'T2', order_type='LIMIT', type='LIMIT', price=213.0)
+
+    res = client.delete(f"/api/order-placement/orders/{record['id']}")
+    assert res.status_code == 200
+    assert record['status'] == 'CANCELLED'
+
+
+def test_signal_legs_are_listed_by_the_pending_strip(client, env, store):
+    signal_leg(store, 'SL')
+    signal_leg(store, 'T1', order_type='LIMIT', type='LIMIT', price=206.0)
+    res = client.get('/api/order-placement/orders')
+    legs = {o['leg'] for o in res.get_json()['pending']}
+    assert legs == {'SL', 'T1'}
+
+
+def test_exit_all_stands_the_engine_down_as_well_as_cancelling(client, env, store,
+                                                               monkeypatch):
+    """Cancelling the orders is not enough on its own: an engine that has not
+    been told would re-place a stop over a position just squared off."""
+    called = {}
+
+    monkeypatch.setattr(api, 'route_scoped_exit',
+                        lambda *a, **k: {'success': True, 'cancelled_orders': 2,
+                                         'exited_positions': 1, 'summary': [],
+                                         'errors': []})
+    def stop_all(user, session, reason=''):
+        called['reason'] = reason
+        return 3
+
+    monkeypatch.setattr(
+        'trading_app.app.order_placement.op_signal_engine.stop_all_signals', stop_all)
+
+    res = client.post('/api/order-placement/exit-all')
+    assert res.status_code == 200
+    assert res.get_json()['signals_stopped'] == 3
+    assert called['reason'] == 'Exit all'
+
+
+# ── the dispatcher's new seams ───────────────────────────────────────────
+
+def test_the_dispatcher_refuses_a_size_and_a_sizer_together(env):
+    """Two sizes that disagree cannot both be honoured, and the one that loses
+    reaches a broker as a real order at the wrong size."""
+    with pytest.raises(ValueError, match='not both'):
+        api._dispatch_order_to_brokers(
+            symbol='NIFTY', strike=24850, option_type='CE', action='BUY',
+            strategy='op', username='test-user', session_data={},
+            quantity=2, lots_for=lambda i: 1)
+
+
+def test_the_dispatcher_gate_narrows_the_routing_to_one_account(env):
+    """Broker 1 is the only OP-active account, and a gate naming broker 2
+    must therefore reach nobody — a signal arms each account's ladder off that
+    account's own fill, so a target must land at one broker and no other."""
+    result = api._dispatch_order_to_brokers(
+        symbol='NIFTY', strike=24850, option_type='CE', action='SELL',
+        strategy='op', username='test-user', session_data={},
+        limit_price=206.0, lots_for=lambda i: 1, gate=lambda i, b: i == 2)
+    assert result['success'] is False
+    assert 'No broker' in result['error']
+
+
+def test_the_dispatcher_gate_can_only_narrow_never_widen(env):
+    """A gate takes brokers away; it can never add one the flags left out.
+
+    Broker 3 has BROKER_3_OP_ACTIVE=true but BROKER_3_ACTIVE=false, so a gate
+    saying yes to everything must still not reach it.
+    """
+    result = api._dispatch_order_to_brokers(
+        symbol='NIFTY', strike=24850, option_type='CE', action='SELL',
+        strategy='op', username='test-user', session_data={},
+        limit_price=206.0, lots_for=lambda i: 1, gate=lambda i, b: True)
+    reached = {b.get('instance') for b in (result.get('summary') or [])}
+    assert 3 not in reached

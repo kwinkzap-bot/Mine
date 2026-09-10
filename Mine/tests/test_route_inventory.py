@@ -75,7 +75,7 @@ def test_route_counts_per_blueprint():
         prefix = rule.endpoint.split(".")[0]
         counts[prefix] = counts.get(prefix, 0) + 1
     assert counts == {"api": 177, "pages": 24, "auth": 16, "oi_crossover": 10,
-                      "order_placement": 7, "watchlist": 16, "static": 1}
+                      "order_placement": 11, "watchlist": 16, "static": 1}
 
 
 def test_icici_callback_bounces_a_cross_site_post_to_a_get():

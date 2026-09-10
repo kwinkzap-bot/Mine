@@ -87,6 +87,9 @@
         orderType: 'SL-M',
         armed: false,       // the review bar is showing the order about to go
         bookSig: null,
+        mode: 'signal',     // 'signal' arms a ladder; 'single' places one order
+        plan: null,         // the last server reading of the pasted tip
+        signalSig: null,
     };
 
     // ── config: who this page can reach ──────────────────────────────
@@ -436,7 +439,8 @@
         state.armed = false;
         $('opConfirm').hidden = true;
         $('opConfirmSend').disabled = false;
-        $('opConfirmSend').textContent = 'Place order';
+        $('opConfirmSend').textContent =
+            state.mode === 'signal' ? 'Arm signal' : 'Place order';
     }
 
     async function send() {
@@ -475,6 +479,301 @@
             btn.textContent = 'Retry';
             setMsg(e.message, 'err');
         }
+    }
+
+    // ── signal mode ──────────────────────────────────────────────────
+    // A tip pasted here becomes one entry stop and a plan. Nothing on this
+    // side parses the text or decides whether it is armable: both are asked of
+    // /signal/parse, because this page is one caller of the arm route and a
+    // parser bug here would be a live order at the wrong strike.
+
+    /** The active button's value in one of the pad's segments. */
+    function segValue(hostId) {
+        return $(hostId).querySelector('button.active')?.dataset.value || '';
+    }
+
+    /** Set a segment from the parsed tip, through its own click handler so the
+     *  state it keeps and the redraws it triggers all happen as usual. */
+    function setSeg(hostId, value) {
+        const btn = [...$(hostId).querySelectorAll('button')]
+            .find(b => b.dataset.value === value);
+        if (btn && !btn.classList.contains('active')) btn.click();
+    }
+
+    const SIG_FIELDS = { entry: 'opSigEntry', stop: 'opSigStop' };
+    const SIG_TARGETS = ['opSigT1', 'opSigT2', 'opSigT3'];
+
+    function setMode(mode) {
+        state.mode = mode === 'signal' ? 'signal' : 'single';
+        const signal = state.mode === 'signal';
+        document.querySelectorAll('.op-signal-only')
+            .forEach(el => { el.hidden = !signal; });
+        document.querySelectorAll('.op-single-only')
+            .forEach(el => { el.hidden = signal; });
+        if (!signal) renderPriceField();          // it owns its own hidden state
+        $('opMode').querySelectorAll('button').forEach(b =>
+            b.classList.toggle('active', b.dataset.value === state.mode));
+        $('opPlace').textContent = signal ? 'Review signal' : 'Review order';
+        document.body.classList.toggle('op-signal-mode', signal);
+        // Never carry a half-typed ticket across a mode switch: what the
+        // review bar is showing is not what the other mode would send.
+        disarm();
+        setMsg('');
+        if (signal) readSignal();
+    }
+
+    /** The ladder as it stands on screen, whatever the text says. */
+    function signalForm() {
+        const num = id => {
+            const v = parseFloat($(id).value);
+            return Number.isFinite(v) && v > 0 ? v : null;
+        };
+        const targets = SIG_TARGETS.map(num).filter(v => v !== null);
+        return {
+            text: $('opSignalText').value || '',
+            symbol: $('opSymbol').value,
+            strike: parseInt($('opStrike').value, 10) || null,
+            option_type: segValue('opOptionType'),
+            action: segValue('opAction'),
+            entry: num(SIG_FIELDS.entry),
+            stop: num(SIG_FIELDS.stop),
+            targets: targets.length ? targets : null,
+        };
+    }
+
+    function fillSignalForm(plan) {
+        if (!plan) return;
+        if (plan.symbol && [...$('opSymbol').options].some(o => o.value === plan.symbol))
+            $('opSymbol').value = plan.symbol;
+        if (plan.strike) $('opStrike').value = plan.strike;
+        if (plan.option_type) setSeg('opOptionType', plan.option_type);
+        if (plan.action) setSeg('opAction', plan.action);
+        if (plan.entry) $(SIG_FIELDS.entry).value = plan.entry;
+        if (plan.stop) $(SIG_FIELDS.stop).value = plan.stop;
+        (plan.targets || []).forEach((t, i) => { if (SIG_TARGETS[i]) $(SIG_TARGETS[i]).value = t; });
+        renderContract();
+    }
+
+    /** Ask the server what it makes of the tip, and why it would refuse it. */
+    async function readSignal({ fromText = false } = {}) {
+        if (state.mode !== 'signal') return;
+        const body = signalForm();
+        if (!body.text.trim() && !body.entry) {
+            $('opSignalRead').textContent = '';
+            $('opSignalPlan').textContent = '';
+            state.plan = null;
+            return;
+        }
+        // A paste is read as TEXT ALONE. Sending the fields alongside it lets
+        // whatever the pad happened to be showing win — paste a CE tip onto a
+        // pad left on PE and the server is told PE, which is a live order on
+        // the wrong contract that looks entirely correct on screen.
+        // An edit made afterwards is the opposite case and is read as the
+        // fields, so correcting a number is not undone by the tip above it.
+        const payload = fromText ? { text: body.text } : body;
+
+        try {
+            const res = await fetch(`${API}/signal/parse`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+                body: JSON.stringify(payload),
+            });
+            const r = await res.json();
+            if (!r.success) {
+                state.plan = null;
+                $('opSignalRead').textContent = r.error || 'Could not read that';
+                $('opSignalRead').className = 'op-hint op-hint-err';
+                $('opSignalPlan').textContent = '';
+                return;
+            }
+            state.plan = r;
+            if (fromText) fillSignalForm(r.plan);
+
+            const p = r.plan || {};
+            $('opSignalRead').textContent =
+                `${p.action} ${p.symbol} ${p.strike} ${p.option_type}`
+                + (p.expiry ? ` · ${p.expiry}` : '')
+                + (r.ltp ? ` · premium ₹${money(r.ltp)}` : '');
+            $('opSignalRead').className = 'op-hint';
+            renderSignalPlan(r);
+        } catch (e) {
+            $('opSignalRead').textContent = e.message;
+            $('opSignalRead').className = 'op-hint op-hint-err';
+        }
+    }
+
+    /** What arming would do, per broker — and why it would not. */
+    function renderSignalPlan(r) {
+        const el = $('opSignalPlan');
+        if (r.error) {
+            el.innerHTML = `<span class="op-hint-err">${esc(r.error)}</span>`;
+            return;
+        }
+        const ready = (r.brokers || []).filter(b => b.signal_ready);
+        if (!ready.length) {
+            el.innerHTML = '<span class="op-hint-err">No broker is sized for signal mode — '
+                + 'set <code>BROKER_N_OP_SIGNAL_LOTS</code></span>';
+            return;
+        }
+        const where = ready.map(b =>
+            `${esc(b.name)} <em>${esc(b.signal_entry_lots)} lots</em>`).join(' · ');
+        el.innerHTML =
+            `Entry stop now at ${where}. On fill: stop, then targets 1 and 2 rest at the `
+            + `broker. Target 3 (₹${money(r.target_3_watched)}) is watched by the app.`;
+    }
+
+    async function reviewSignal() {
+        await readSignal();
+        const r = state.plan;
+        if (!r) { setMsg('Paste a signal first', 'err'); return; }
+        if (r.error) { setMsg(r.error, 'err'); return; }
+
+        const p = r.plan || {};
+        const ready = (r.brokers || []).filter(b => b.signal_ready);
+        const t = p.targets || [];
+        $('opConfirmText').innerHTML =
+            `<b class="op-${String(p.action).toLowerCase()}">${esc(p.action)}</b> `
+            + `${esc(p.symbol)} ${esc(p.strike)} ${esc(p.option_type)} · `
+            + `STOP ENTRY — triggers at ₹${money(p.entry)}<br>`
+            + `<span class="op-confirm-where">Going out now: the entry only, at `
+            + `${ready.map(b => `${esc(b.name)} ×${esc(b.signal_entry_lots)}`).join(', ')}.</span>`
+            + `<span class="op-confirm-where">On fill: stop ₹${money(p.stop)}, `
+            + `T1 ₹${money(t[0])} and T2 ₹${money(t[1])} rest at the broker; `
+            + `T3 ₹${money(t[2])} is watched by the app.</span>`;
+        $('opConfirm').hidden = false;
+        $('opConfirmSend').textContent = 'Arm signal';
+        state.armed = true;
+        setMsg('');
+        $('opConfirmSend').focus();
+    }
+
+    async function sendSignal() {
+        const btn = $('opConfirmSend');
+        btn.disabled = true;
+        btn.textContent = 'Arming…';
+        try {
+            const res = await fetch(`${API}/signal`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+                body: JSON.stringify(signalForm()),
+            });
+            const r = await res.json();
+            if (!r.success) throw new Error(r.error || 'Signal refused');
+            disarm();
+            const ok = (r.summary || []).filter(b => b.success);
+            setMsg(`Signal armed — entry stop resting at ${ok.length} broker`
+                   + `${ok.length === 1 ? '' : 's'}. The stop and targets go on when it fills.`,
+                   'ok');
+            toast('Signal armed', 'success');
+            state.signalSig = state.bookSig = null;
+            loadSignals();
+            loadBook();
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+            setMsg(e.message, 'err');
+        }
+    }
+
+    // ── live signals ─────────────────────────────────────────────────
+
+    const STAGE_TEXT = {
+        PENDING_ENTRY: 'waiting for the trigger',
+        LIVE: 'in — stop and targets working',
+        T1_DONE: 'target 1 booked · stop at entry',
+        T2_DONE: 'target 2 booked · stop at target 1',
+        FLAT: 'out',
+        NO_FILL: 'never triggered',
+        DEAD: 'refused',
+    };
+
+    function signalCard(s) {
+        const slots = Object.values(s.brokers || {});
+        const live = slots.filter(b => !['FLAT', 'NO_FILL', 'DEAD'].includes(b.stage));
+        const t = s.targets || [];
+        const rows = slots.map(b => {
+            const stage = STAGE_TEXT[b.stage] || String(b.stage || '').toLowerCase();
+            const fill = b.entry_fill ? ` · in at ₹${money(b.entry_fill)}` : '';
+            const held = b.open_qty ? ` · ${esc(b.open_qty)} held` : '';
+            const stop = b.stop_level ? ` · stop ₹${money(b.stop_level)}` : '';
+            return `<div class="op-sig-broker op-sig-${esc(String(b.stage || '').toLowerCase())}">`
+                 + `<span class="op-sig-bname">${esc(b.name || `Broker ${b.instance}`)}</span>`
+                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${stop}</span></div>`;
+        }).join('');
+
+        const done = ['DONE', 'CANCELLED', 'FAILED'].includes(s.phase);
+        return `<article class="op-sig${done ? ' op-sig--done' : ''}" data-id="${esc(s.id)}">`
+            + `<header class="op-sig-hd">`
+            + `<span class="op-sig-contract">${esc(s.action)} ${esc(s.symbol)} `
+            + `${esc(s.strike)}${esc(s.option_type)}</span>`
+            + `<span class="op-sig-ladder">₹${money(s.entry)} · SL ₹${money(s.stop)} · `
+            + `${t.map(v => `₹${money(v)}`).join(' → ')}</span>`
+            + (done
+                ? `<span class="op-sig-phase">${esc(String(s.phase).toLowerCase())}</span>`
+                : `<button class="op-btn op-btn-danger op-btn-sm op-sig-x" type="button"
+                           title="Cancel this signal's resting legs and square off what it holds"
+                           >Stand down</button>`)
+            + `</header>${rows}`
+            + (live.length ? '' : '<p class="op-sig-note">Nothing left working.</p>')
+            + `</article>`;
+    }
+
+    async function loadSignals() {
+        let data;
+        try {
+            const res = await fetch(`${API}/signals`);
+            if (!res.ok) return;
+            data = await res.json();
+        } catch (_) { return; }
+        if (!data.success) return;
+
+        const signals = data.signals || [];
+        // Same redraw guard as the book: a card rebuilt under a press eats it.
+        const sig = JSON.stringify([data.engine_running, signals.map(s =>
+            [s.id, s.phase, Object.values(s.brokers || {}).map(b => [b.stage, b.open_qty,
+                                                                    b.stop_level])])]);
+        if (sig === state.signalSig) return;
+        state.signalSig = sig;
+
+        $('opSignalsWrap').hidden = !signals.length;
+        $('opSignalCount').textContent = signals.length;
+        const running = data.engine_running;
+        $('opEngine').textContent = running ? 'watching' : '';
+        $('opEngine').className = 'op-engine' + (running ? ' is-on' : '');
+        $('opSignals').innerHTML = signals.map(signalCard).join('');
+    }
+
+    async function standDown(btn) {
+        const card = btn.closest('.op-sig');
+        // Two presses, like every other way out of a position on this page.
+        if (btn.dataset.armed !== '1') {
+            btn.dataset.armed = '1';
+            btn.textContent = 'Confirm?';
+            btn.classList.add('op-armed');
+            setTimeout(() => {
+                if (!btn.isConnected || btn.dataset.armed !== '1') return;
+                btn.dataset.armed = '0';
+                btn.textContent = 'Stand down';
+                btn.classList.remove('op-armed');
+            }, 3000);
+            return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Standing down…';
+        try {
+            const res = await fetch(`${API}/signals/${card.dataset.id}/cancel`,
+                                    { method: 'POST', headers: { 'X-CSRFToken': csrf() } });
+            const r = await res.json();
+            toast(r.success
+                ? `Signal stood down — ${r.cancelled_orders} cancelled, `
+                  + `${r.exited_positions} squared off`
+                : (r.error || 'Stand-down incomplete'), r.success ? 'success' : 'error');
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+        state.signalSig = state.bookSig = null;
+        loadSignals();
+        loadBook();
     }
 
     // ── the book: what this page placed, still on this page ──────────
@@ -768,9 +1067,34 @@
         $('opLtp').addEventListener('click', fillLtp);
         $('opLimitPrice').addEventListener('input', disarm);
 
-        $('opPlace').addEventListener('click', review);
+        // Both presses route by mode. Neither review() nor reviewSignal() can
+        // reach a broker; only the second press does, and only through the one
+        // sender its own mode owns.
+        $('opPlace').addEventListener('click',
+            () => (state.mode === 'signal' ? reviewSignal() : review()));
         $('opConfirmCancel').addEventListener('click', () => { disarm(); setMsg(''); });
-        $('opConfirmSend').addEventListener('click', send);
+        $('opConfirmSend').addEventListener('click',
+            () => (state.mode === 'signal' ? sendSignal() : send()));
+
+        segment('opMode', setMode);
+
+        // A paste is read as text and fills the fields below it. Debounced,
+        // because every keystroke otherwise costs a quote and a chain read.
+        let readTimer = null;
+        const scheduleRead = (fromText) => {
+            clearTimeout(readTimer);
+            readTimer = setTimeout(() => readSignal({ fromText }), 350);
+        };
+        $('opSignalText').addEventListener('input', () => { disarm(); scheduleRead(true); });
+        // An edit to a ladder number is read as the fields, so correcting a
+        // price on screen is not undone by the tip sitting above it.
+        [SIG_FIELDS.entry, SIG_FIELDS.stop, ...SIG_TARGETS].forEach(id =>
+            $(id).addEventListener('input', () => { disarm(); scheduleRead(false); }));
+
+        $('opSignals').addEventListener('click', (e) => {
+            const btn = e.target.closest('.op-sig-x');
+            if (btn) standDown(btn);
+        });
 
         // Enter never places an order: it only ever gets as far as the review
         // bar, which is the same first press the button gives.
@@ -778,7 +1102,7 @@
             if (e.key !== 'Enter') return;
             if (e.target.closest('.op-confirm')) return;
             e.preventDefault();
-            review();
+            if (state.mode === 'signal') reviewSignal(); else review();
         });
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
@@ -827,16 +1151,24 @@
         });
 
         $('opReload').addEventListener('click', () => {
-            state.bookSig = null;
+            state.bookSig = state.signalSig = null;
             loadConfig();
             loadContract();
             loadBook();
+            loadSignals();
         });
 
-        renderPriceField();
+        // Paints the default mode's fields and disarms — the markup already
+        // ships in this state, so this is about state, not a redraw.
+        setMode(state.mode);
         loadConfig().then(loadContract);
         loadBook();
-        setInterval(() => { if (!document.hidden) loadBook(); }, POLL_MS);
+        loadSignals();
+        setInterval(() => {
+            if (document.hidden) return;
+            loadBook();
+            loadSignals();
+        }, POLL_MS);
     }
 
     function stepStrike(dir) {

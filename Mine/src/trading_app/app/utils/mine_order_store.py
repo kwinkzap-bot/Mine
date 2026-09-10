@@ -27,11 +27,30 @@ class MineOrderStore:
 
     @staticmethod
     def _save(orders: list):
+        """Write the book atomically: temp file, fsync, then os.replace.
+
+        A plain open(..,'w') truncates the real file before the new bytes are
+        written, so a crash mid-write leaves a half-JSON book — and _load()
+        answers a parse error with an empty list. That is every order for
+        every screen, for seven days, gone quietly. Rare when one click meant
+        one rewrite; not rare once a background state machine rewrites this on
+        a timer. Same helper, and the same reasoning, as the Second Candle
+        algo's _atomic_write_json.
+        """
+        tmp = f"{_STORAGE_FILE}.{os.getpid()}.tmp"
         try:
-            with open(_STORAGE_FILE, 'w') as f:
+            with open(tmp, 'w') as f:
                 json.dump(orders, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, _STORAGE_FILE)
         except Exception as e:
             logger.error(f"[MineOrderStore] Save error: {e}")
+            # The previous book is still intact on disk; leave no debris.
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     @staticmethod
     def add_order(order_data: dict) -> dict:

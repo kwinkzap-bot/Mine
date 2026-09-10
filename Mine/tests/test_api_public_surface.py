@@ -24,10 +24,17 @@ EXPECTED_SIGNATURES = {
         "(kite_service, data_provider, is_fyers: bool, symbol: str, strike: int, "
         "opt_type: str, expiry_type: str = 'nearest')"
     ),
+    # `lots_for` added for the Order Placement signal ladder: `quantity` is one
+    # lot count for every broker at once, and a target leg has to sell a share
+    # of each account's own size. Keyword-only in practice and mutually
+    # exclusive with `quantity` — the dispatcher raises if both are passed.
+    # `gate` narrows the fan-out to one account, so a target armed when broker 1
+    # fills does not also go out at broker 2, which is still waiting for its own
+    # entry and holds nothing to sell.
     "_dispatch_order_to_brokers": (
         "(symbol, strike, option_type, action, strategy, username, session_data, "
         "quantity=None, tradingsymbol_override=None, expiry_override=None, "
-        "limit_price=None, sec_id=None)"
+        "limit_price=None, sec_id=None, lots_for=None, gate=None)"
     ),
     "split_quantity_by_freeze_limit": "(symbol: str, total_qty: int, provider) -> list",
     # `context` widened from a single name to an ordered chain (str still

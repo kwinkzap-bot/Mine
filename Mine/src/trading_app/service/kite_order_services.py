@@ -747,7 +747,13 @@ class KiteService:
             return min(valid_expiries)
         return None
 
-    def place_option_order(self, symbol: str, strike: int, option_type: str, transaction_type: str, quantity: int, product: str = 'NRML', tradingsymbol: Optional[str] = None, price: Optional[float] = None) -> Dict[str, Any]:
+    def place_option_order(self, symbol: str, strike: int, option_type: str, transaction_type: str, quantity: int, product: str = 'NRML', tradingsymbol: Optional[str] = None, price: Optional[float] = None, tag: Optional[str] = None) -> Dict[str, Any]:
+        # `tag` is _safe_place_order's idempotency key, exposed to callers here
+        # so a caller with its own durable state can find an order it placed
+        # but never got to record. The Order Placement signal engine tags each
+        # ladder leg with its signal; on a restart it looks the tag up rather
+        # than guessing from the order book, which carries no way to tell one
+        # of its own legs from a hand-placed order at the same strike.
         try:
             ts = tradingsymbol or self.get_option_symbol(symbol, strike, option_type)
             if not ts:
@@ -773,7 +779,8 @@ class KiteService:
                     price=price,
                     product=mapped_product,
                     variety=self.kite.VARIETY_REGULAR,
-                    market_protection=-1 if not price else None
+                    market_protection=-1 if not price else None,
+                    tag=tag
                 )
                 return {'success': True, 'order_id': order_id, 'price': price or 0, 'response': {'order_id': order_id}}
             except Exception as e:
@@ -815,7 +822,8 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place option order: {e}")
             return {'success': False, 'error': str(e)}
 
-    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML', transaction_type: str = 'SELL') -> Dict[str, Any]:
+    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML', transaction_type: str = 'SELL', tag: Optional[str] = None) -> Dict[str, Any]:
+        # See place_option_order: `tag` is the caller's idempotency key.
         try:
             logging.info(f"[KiteService] Placing SL order: {transaction_type} {tradingsymbol} x {quantity} @ trigger {trigger_price} ({product})")
             mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
@@ -838,7 +846,8 @@ class KiteService:
                 trigger_price=float(trigger_price),
                 product=mapped_product,
                 variety=self.kite.VARIETY_REGULAR,
-                market_protection=-1  # -1 enables automatic market protection
+                market_protection=-1,  # -1 enables automatic market protection
+                tag=tag
             )
             return {'success': True, 'order_id': order_id, 'response': {'order_id': order_id}}
         except Exception as e:
