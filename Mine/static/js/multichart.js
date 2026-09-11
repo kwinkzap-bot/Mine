@@ -33,7 +33,7 @@
         cream:  { bg: '#ffffff', text: '#7c7267', grid: 'rgba(180,83,9,0.05)' },
         ocean:  { bg: '#ffffff', text: '#475569', grid: 'rgba(2,132,199,0.05)' },
     };
-    const UP = '#26a69a', DOWN = '#ef5350';
+    const UP = '#1b9981', DOWN = '#f23645';      // candle / volume / axis-tag colours
     const ANCHOR_LABEL = { day: 'Daily CPR', week: 'Weekly CPR', month: 'Monthly CPR', year: 'Yearly CPR' };
 
     const state = {
