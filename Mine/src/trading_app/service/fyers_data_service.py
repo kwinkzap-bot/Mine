@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Dict, Any, Optional, Union
 import requests
 import re
@@ -1295,13 +1295,12 @@ class FyersDataServiceAdapter:
         and cross-exchange for its OI backfill — deliberately left separate.)
         """
         root_upper = root.strip().upper()
-        from datetime import date as _date
         if exchange is None:
             exchange = 'BFO' if root_upper in _BSE_FUTURE_ROOTS else 'NFO'
         # SENSEX is listed as BSESENSEX in some masters — accept either.
         roots = _BSE_FUTURE_ROOTS.get(root_upper, [root_upper])
         instruments = self.instruments(exchange)  # Uses 1-hour cache
-        today = _date.today()
+        today = date.today()
 
         matches = []
         for inst in instruments:
