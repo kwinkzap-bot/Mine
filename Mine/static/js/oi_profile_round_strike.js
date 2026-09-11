@@ -986,7 +986,13 @@ function oipRSInitCharts() {
     // near-horizontal levels stacked across the pane that is a column of large
     // dots following the cursor, obscuring the candles it is meant to help read.
     // The crosshair line and the axis labels already say where the cursor is.
-    const addStepSeries = (style, title, visible) => oipRSChart.chart.addSeries(LightweightCharts.LineSeries, {
+    //
+    // Each is a pixel-snapped level line (TradingViewChart.addCrispLine): a
+    // LineSeries lands on a fractional row and a 1px level smears into two or
+    // three, while these sit on one row, as the Multichart panes draw theirs.
+    // Same setData / applyOptions surface; the name goes in a tag at the pane
+    // edge and the value on the axis.
+    const addStepSeries = (style, title, visible) => TradingViewChart.addCrispLine(oipRSChart.chart, {
         color: style.color, lineWidth: style.width, lineStyle: style.lineStyle, title, visible,
         priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
         autoscaleInfoProvider: () => null
@@ -1800,13 +1806,16 @@ async function oipRSPlaceOrder(side, action, btn) {
     const mode = document.getElementById('oipRSOrderMode')?.value || 'broker';
     const rawLimit = parseFloat(document.getElementById('oipRSLimitPrice')?.value);
     const limitPrice = rawLimit && !isNaN(rawLimit) && rawLimit > 0 ? rawLimit : null;
-    // From the dropdown, not inferred from the price box being filled — see the
-    // same change in oipPlaceOrder (oi_profile.js).
-    const orderType = document.getElementById('oipRSOrderType')?.value || 'MARKET';
+    // The dropdown offers LMT (default) and STOP only — there is no MKT entry.
+    // LMT with the price box left blank is the market order; a filled box is a
+    // limit at that price. STOP always needs its trigger. (The main toolbar's
+    // oipPlaceOrder keeps its explicit MKT entry.)
+    const selected = document.getElementById('oipRSOrderType')?.value || 'LIMIT';
+    const orderType = selected === 'LIMIT' && !limitPrice ? 'MARKET' : selected;
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
 
-    if (orderType !== 'MARKET' && !limitPrice) {
-        showNotification(`Enter a ${orderType === 'STOP' ? 'trigger' : 'limit'} price first.`, 'error');
+    if (orderType === 'STOP' && !limitPrice) {
+        showNotification('Enter a trigger price first.', 'error');
         return;
     }
 
@@ -1840,8 +1849,8 @@ async function oipRSPlaceOrder(side, action, btn) {
         return;
     }
 
-    // MARKET means market — a leftover number in the price box must not turn it
-    // into a limit order.
+    // orderType is MARKET only when the box was blank, so this is null exactly
+    // for market orders.
     const sendPrice = orderType === 'LIMIT' ? limitPrice : null;
 
     btn.disabled = true;

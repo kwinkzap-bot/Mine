@@ -1008,7 +1008,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     // Remove ALL Baseline series before any setData triggers a render — LC renders every
     // attached series on each setData call, and uninitialized/stale Baseline renderers
     // will throw "Value is null".
-    Object.values(oipCprSeriesMap).forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
+    Object.values(oipCprSeriesMap).forEach(s => { try { TradingViewChart.removeSeries(oipOIChart, s); } catch(e) {} });
     oipCprSeriesMap = {};
     _oipPrecalcDone = false;
     oipInvalidateVisCache();
@@ -2357,10 +2357,10 @@ function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, lineSt
         });
         fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const top = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth, lineStyle, ...shared });
+        const top = TradingViewChart.addCrispLine(chart, { color: borderCol, lineWidth, lineStyle, ...shared });
         top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const bottom = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth, lineStyle, ...shared });
+        const bottom = TradingViewChart.addCrispLine(chart, { color: borderCol, lineWidth, lineStyle, ...shared });
         bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
         return { chart, fill, top, bottom };
@@ -2373,7 +2373,7 @@ function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, lineSt
 function _oipRemoveBoxSeries(box) {
     if (!box) return;
     ['fill', 'top', 'bottom'].forEach(k => {
-        if (box[k]) { try { box.chart.removeSeries(box[k]); } catch (_) {} }
+        if (box[k]) { try { TradingViewChart.removeSeries(box.chart, box[k]); } catch (_) {} }
     });
 }
 

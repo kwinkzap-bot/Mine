@@ -163,8 +163,10 @@
             const bar = param && param.seriesData && param.seriesData.get(series);
             showOhlc(pane, bar || lastBar(pane));
         });
-        pane.countdown = makeCountdownPrimitive(pane);
-        series.attachPrimitive(pane.countdown);
+        pane.countdown = TradingViewChart.attachCountdown(chart, series, {
+            interval: () => pane.tf, lastBar: () => lastBar(pane), countdown: () => setting('countdown'),
+            upColor: UP, downColor: DOWN,
+        });
         pane.seq = 0;
         return pane;
     }
@@ -391,64 +393,10 @@
     document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(0); });
 
     /* ── bar-close countdown on the price axis ───────────────────────────── */
-    // TradingView's "00:25" under the last price: seconds until this pane's
-    // forming bar closes. A v5 series primitive can hand the price axis a
-    // label of its own, so it sits directly beneath the built-in last-value
-    // tag in the same colour and reads as one block. Refreshed once a second
-    // while the bar is live; blank between sessions.
-    const SESSION_OPEN_S = 9 * 3600 + 15 * 60, SESSION_CLOSE_S = 15 * 3600 + 30 * 60;
-    const nowIst = () => Math.floor(Date.now() / 1000) + 19800;
-
-    function barCloseAt(pane) {
-        const b = lastBar(pane);
-        if (!b) return null;
-        const day = b.time - (b.time % 86400);
-        if (pane.tf === 'day') return day + SESSION_CLOSE_S;
-        return Math.min(b.time + MineCPR.SECONDS[pane.tf], day + SESSION_CLOSE_S);
-    }
-
-    function countdownText(pane) {
-        const b = lastBar(pane), close = barCloseAt(pane), now = nowIst();
-        if (!b || close == null || now < b.time || now >= close) return '';
-        const left = close - now;
-        const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), sec = left % 60;
-        const p2 = n => String(n).padStart(2, '0');
-        return h ? `${h}:${p2(m)}:${p2(sec)}` : `${p2(m)}:${p2(sec)}`;
-    }
-
-    function makeCountdownPrimitive(pane) {
-        let requestUpdate = null, price = '', text = '';
-        // Both rows are ours — the series' own last-value tag is switched off
-        // — so they share one colour and one width and read as a single block,
-        // the way TradingView draws it. The countdown is padded with figure
-        // spaces (digit-width) to the price's digit count so its box matches.
-        const y = () => { const b = lastBar(pane); const c = b && pane.series.priceToCoordinate(b.close); return c == null ? -100 : c; };
-        const back = () => { const b = lastBar(pane); return b && b.close < b.open ? DOWN : UP; };
-        const priceView = {
-            coordinate: y, text: () => price, textColor: () => '#ffffff', backColor: back,
-            visible: () => !!price, tickVisible: () => true,
-        };
-        const countView = {
-            coordinate: () => y() + 16, text: () => text, textColor: () => '#ffffff', backColor: back,
-            visible: () => !!text, tickVisible: () => false,
-        };
-        return {
-            attached(p) { requestUpdate = p.requestUpdate; },
-            detached() { requestUpdate = null; },
-            updateAllViews() {
-                const b = lastBar(pane);
-                price = b ? pane.series.priceFormatter().format(b.close) : '';
-                const cd = setting('countdown') ? countdownText(pane) : '';
-                const pad = Math.max(0, price.length - cd.length);
-                text = cd ? '\u2007'.repeat(Math.ceil(pad / 2)) + cd + '\u2007'.repeat(Math.floor(pad / 2)) : '';
-            },
-            priceAxisViews: () => [priceView, countView],
-            paneViews: () => [],
-            refresh() { if (requestUpdate) requestUpdate(); },
-        };
-    }
-
-    setInterval(() => { for (const pane of state.panes) if (pane.countdown) pane.countdown.refresh(); }, 1000);
+    // Drawn by TradingViewChart.attachCountdown (components/tradingview-chart.js),
+    // the shared price + countdown block every chart in the app uses. Each
+    // pane hands it its own forming bar and timeframe; the setting only
+    // switches the countdown row.
 
     /* ── crosshair link across timeframes ────────────────────────────────── */
     // The bar of `pane` containing `when` — the last one that had started by
@@ -582,99 +530,23 @@
     }
 
     /* ── indicators popup ────────────────────────────────────────────────── */
-    // Gates name the tfInfo flag that must hold on a pane for the item to draw
-    // there; the tag turns green while any pane qualifies.
-    const IND_SPEC = [
+    // The Mine CPR list itself (MineCPR.SPEC, rendered by MineCPR.renderSettings)
+    // is shared with the OI Profile main chart; this page prepends its own
+    // 'Chart' section for the two settings that are not Pine inputs.
+    const PAGE_SPEC = [
         { title: 'Chart', items: [
             { key: 'futVolume', label: 'Future volume (current expiry)', color: UP },
             { key: 'countdown', label: 'Bar-close countdown on price axis' },
         ] },
-        { title: 'CPR', items: [
-            { key: 'cpr', label: 'CPR — P / BC / TC', color: MineCPR.COLORS.cpr },
-            { key: 'shadow', label: 'CPR shadow', sub: true },
-            { key: 'kind', type: 'select', label: 'Type', options: [['camarilla', 'Camarilla'], ['traditional', 'Traditional'], ['fibonacci', 'Fibonacci']] },
-            { key: 'pivotTf', type: 'select', label: 'Pivots timeframe', options: [['auto', 'Auto'], ['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']] },
-            { key: 'pivotsBack', type: 'number', label: 'Pivots back', min: 1, max: 200 },
-            { key: 'dailyBased', label: 'Use daily-based values' },
-            { key: 'camR3S3', label: 'R3 / S3 (Camarilla)', color: MineCPR.COLORS.cam },
-            { row: 'R levels', keys: ['r1', 'r2', 'r3', 'r4'], color: MineCPR.COLORS.r, note: 'Traditional / Fibonacci' },
-            { row: 'S levels', keys: ['s1', 's2', 's3', 's4'], color: MineCPR.COLORS.s },
-            { key: 'pdhR1Box', label: 'PDH ↔ R1 box', color: MineCPR.COLORS.pdhBox },
-            { key: 'pdlS1Box', label: 'PDL ↔ S1 box', color: MineCPR.COLORS.pdlBox },
-            { key: 'histPdhl', label: 'PDH / PDL lines', color: MineCPR.COLORS.pdhl },
-            { key: 'virgin', label: 'Highlight virgin CPR', color: MineCPR.COLORS.virginFill },
-            { key: 'virginExtend', label: 'Extend until touched', sub: true },
-            { key: 'futureCpr', label: 'Future CPR (dashed)' },
-            { key: 'labels', label: 'Level labels' },
-        ] },
-        { title: 'Multi CPR', gate: 'showMCPR', gateLabel: '≤15m', items: [
-            { key: 'multiCpr', label: 'Multi CPR' },
-            { key: 'mcpr15', label: '15 min', sub: true, color: MineCPR.COLORS.mcpr15 },
-            { key: 'mcpr30', label: '30 min', sub: true, color: MineCPR.COLORS.mcpr30 },
-            { key: 'mcpr60', label: '1 hour', sub: true, color: MineCPR.COLORS.mcpr60 },
-        ] },
-        { title: 'Moving averages', items: [
-            { key: 'emaAll', label: 'Show EMAs' },
-            { key: 'ema9', label: 'EMA 9', sub: true, color: MineCPR.COLORS.ema9 },
-            { key: 'ema20', label: 'EMA 20', sub: true, color: MineCPR.COLORS.ema20 },
-            { key: 'ema50', label: 'EMA 50', sub: true, color: MineCPR.COLORS.ema50 },
-            { key: 'ema100', label: 'EMA 100', sub: true, color: MineCPR.COLORS.ema100 },
-            { key: 'ema200', label: 'EMA 200', sub: true, color: '#6b7280' },
-        ] },
-        { title: 'VWAP', gate: 'showVwap', gateLabel: '≤15m', items: [
-            { key: 'vwapCur', label: 'Current VWAP', color: MineCPR.COLORS.vwapCur },
-            { key: 'vwapPrev', label: 'Previous VWAP', color: MineCPR.COLORS.vwapPrev },
-            { key: 'vwapAvg3', label: 'Avg 3 VWAP', color: MineCPR.COLORS.vwapAvg3 },
-            { key: 'vwapLabels', label: 'VWAP price labels', sub: true },
-        ] },
-        { title: 'Boxes', items: [
-            { key: 'box5m', label: '2nd 5-min candle box', color: MineCPR.COLORS.box5m, gate: 'show5mBox', gateLabel: '≤5m' },
-            { key: 'box1m', label: '2nd 1-min candle box', color: MineCPR.COLORS.box1m, gate: 'show1mBox', gateLabel: '≤1m' },
-            { key: 'mondayBox', label: 'Monday H/L box', gate: 'showMonday', gateLabel: '≤1h' },
-            { key: 'mondayWeeksBack', type: 'number', label: 'Weeks back', min: 1, max: 500, sub: true },
-        ] },
     ];
-
-    function gateTag(flag, label) {
-        return flag ? `<span class="mc-gate" data-gate="${flag}">${label}</span>` : '';
-    }
-    const swatch = c => c ? `<i class="mc-sw" style="background:${c}"></i>` : '';
 
     function buildIndicatorsPopup() {
         const popup = $('mcIndPopup');
-        let html = '<div class="mc-ind-head">Indicators · Mine CPR</div>';
-        for (const sec of IND_SPEC) {
-            html += `<div class="mc-ind-section"><div class="mc-ind-title">${sec.title}${gateTag(sec.gate, sec.gateLabel)}</div>`;
-            for (const it of sec.items) {
-                if (it.row) {
-                    html += `<div class="mc-ind-row">${swatch(it.color)}<span>${it.row}</span>` +
-                        it.keys.map(k => `<label><input type="checkbox" data-key="${k}" ${setting(k) ? 'checked' : ''}>${k.toUpperCase()}</label>`).join('') +
-                        `</div>`;
-                } else if (it.type === 'select') {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><select data-key="${it.key}">` +
-                        it.options.map(([v, l]) => `<option value="${v}" ${setting(it.key) === v ? 'selected' : ''}>${l}</option>`).join('') +
-                        `</select></label>`;
-                } else if (it.type === 'number') {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}" max="${it.max}" value="${setting(it.key)}"></label>`;
-                } else {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><input type="checkbox" data-key="${it.key}" ${setting(it.key) ? 'checked' : ''}>${swatch(it.color)}<span>${it.label}</span>${gateTag(it.gate, it.gateLabel)}</label>`;
-                }
-            }
-            html += '</div>';
-        }
-        popup.innerHTML = html;
+        popup.innerHTML = '<div class="mc-ind-head">Indicators · Mine CPR</div>' +
+            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC));
 
-        popup.addEventListener('change', e => {
-            const el = e.target, key = el.dataset.key;
-            if (!key) return;
-            let v;
-            if (el.type === 'checkbox') v = el.checked;
-            else if (el.type === 'number') { v = Math.max(+el.min, Math.min(+el.max, parseInt(el.value, 10) || +el.min)); el.value = v; }
-            else v = el.value;
-            state.settings[key] = v;
-            save();
-            for (const pane of state.panes) { applyIndicators(pane); paintVolume(pane); }
-        });
+        MineCPR.bindSettings(popup, (key, v) => { state.settings[key] = v; save(); },
+            () => { for (const pane of state.panes) { applyIndicators(pane); paintVolume(pane); } });
 
         const btn = $('mcIndBtn');
         btn.addEventListener('click', e => { e.stopPropagation(); popup.hidden = !popup.hidden; btn.classList.toggle('on', !popup.hidden); refreshGateTags(); });
@@ -686,11 +558,7 @@
     }
 
     function refreshGateTags() {
-        const infos = state.panes.map(p => MineCPR.tfInfo(p.tf));
-        document.querySelectorAll('#mcIndPopup .mc-gate').forEach(tag => {
-            const flag = tag.dataset.gate;
-            tag.classList.toggle('live', infos.some(i => i[flag]));
-        });
+        MineCPR.refreshGates($('mcIndPopup'), state.panes.map(p => MineCPR.tfInfo(p.tf)));
     }
 
     /* ── theme ───────────────────────────────────────────────────────────── */

@@ -449,24 +449,23 @@ window.MineCPR = (function () {
     function makePrimitive() {
         const state = { elements: [], series: null, chart: null, requestUpdate: null };
 
-        // Everything is snapped to the device-pixel grid, the way Lightweight
-        // Charts' own renderers do it: a 1px line drawn at a fractional y
+        // Everything is snapped to the device-pixel grid through the shared
+        // kit (TradingViewChart.crisp): a 1px line drawn at a fractional y
         // straddles two physical pixels and anti-aliases into a smeared 2px,
-        // and box edges blur the same way. Solid lines are filled rectangles
-        // (crisp by construction); only dashes need a stroke, at a half-pixel
-        // centre for odd widths. Fills go down first, then every line on
-        // top, so an edge is never softened by a later fill.
+        // and box edges blur the same way. Fills go down first, then every
+        // line on top, so an edge is never softened by a later fill.
         const renderer = {
             draw(target) {
                 const { series, chart, elements } = state;
                 if (!series || !chart || !elements.length) return;
+                const crisp = window.TradingViewChart && window.TradingViewChart.crisp;
+                if (!crisp) return;
                 const ts = chart.timeScale();
                 target.useBitmapCoordinateSpace(scope => {
                     const ctx = scope.context, hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
                     const W = scope.bitmapSize.width;
                     const half = Math.max(1, (ts.options().barSpacing || 6) / 2);
                     const yOf = p => { if (p == null || !isFinite(p)) return null; const c = series.priceToCoordinate(p); return c === null ? null : Math.round(c * vr); };
-                    const px = n => Math.max(1, Math.round(n));
 
                     // Horizontal span in device pixels, or null when off-screen.
                     const spanOf = e => {
@@ -494,14 +493,7 @@ window.MineCPR = (function () {
                         if (y1 === null || y2 === null) continue;
                         const top = Math.min(y1, y2), bottom = Math.max(y1, y2), h = Math.max(1, bottom - top);
                         if (e.fill) { ctx.fillStyle = e.fill; ctx.fillRect(left, top, right - left, h); }
-                        if (e.stroke) {
-                            const w = px((e.strokeWidth || 1) * vr);
-                            ctx.fillStyle = e.stroke;
-                            ctx.fillRect(left, top, right - left, w);                 // top
-                            ctx.fillRect(left, bottom - w, right - left, w);          // bottom
-                            ctx.fillRect(left, top, w, h);                            // left
-                            if (!e.extendRight) ctx.fillRect(right - w, top, w, h);   // right
-                        }
+                        if (e.stroke) crisp.border(ctx, left, top, right, bottom, crisp.width(e.strokeWidth, vr), e.stroke, e.extendRight);
                     }
                     // pass 2 — lines and their labels
                     for (const e of elements) {
@@ -510,17 +502,8 @@ window.MineCPR = (function () {
                         const [left, right] = span;
                         const y = yOf(e.y);
                         if (y === null) continue;
-                        const w = px((e.width || 1) * vr);
-                        if (e.dash) {
-                            ctx.strokeStyle = e.color; ctx.lineWidth = w;
-                            ctx.setLineDash(e.dash.map(d => Math.round(d * hr)));
-                            const yy = y + (w % 2 ? 0.5 : 0);
-                            ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(right, yy); ctx.stroke();
-                            ctx.setLineDash([]);
-                        } else {
-                            ctx.fillStyle = e.color;
-                            ctx.fillRect(left, y - Math.floor(w / 2), right - left, w);
-                        }
+                        const w = crisp.width(e.width, vr);
+                        crisp.hline(ctx, left, right, y, w, e.color, e.dash && e.dash.map(d => Math.round(d * hr)));
                         if (e.label) {
                             ctx.fillStyle = e.color;
                             ctx.fillText(e.label, Math.max(left, 0) + 3 * hr, y - 1 * vr);
@@ -600,5 +583,115 @@ window.MineCPR = (function () {
         if (pane.primitive) { try { pane.series.detachPrimitive(pane.primitive); } catch (e) {} pane.primitive = null; }
     }
 
-    return { DEFAULTS, COLORS, SECONDS, tfInfo, compute, attach, detach, aggregate, periodKey, dayKey, sessionStart };
+    /* ── settings popup: one spec, one builder, every page ───────────────── */
+    // The indicator list as the user sees it — the Pine inputs grouped the way
+    // the script's settings dialog groups them. Multichart and the OI Profile
+    // main chart render the same list from here, so an indicator added to the
+    // engine appears on both pages by adding one row.
+    //
+    // `gate` names the tfInfo flag a pane needs for the item to draw there;
+    // refreshGates() lights the tag while any live pane qualifies.
+    const SPEC = [
+        { title: 'CPR', items: [
+            { key: 'cpr', label: 'CPR — P / BC / TC', color: COLORS.cpr },
+            { key: 'shadow', label: 'CPR shadow', sub: true },
+            { key: 'kind', type: 'select', label: 'Type', options: [['camarilla', 'Camarilla'], ['traditional', 'Traditional'], ['fibonacci', 'Fibonacci']] },
+            { key: 'pivotTf', type: 'select', label: 'Pivots timeframe', options: [['auto', 'Auto'], ['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']] },
+            { key: 'pivotsBack', type: 'number', label: 'Pivots back', min: 1, max: 200 },
+            { key: 'dailyBased', label: 'Use daily-based values' },
+            { key: 'camR3S3', label: 'R3 / S3 (Camarilla)', color: COLORS.cam },
+            { row: 'R levels', keys: ['r1', 'r2', 'r3', 'r4'], color: COLORS.r, note: 'Traditional / Fibonacci' },
+            { row: 'S levels', keys: ['s1', 's2', 's3', 's4'], color: COLORS.s },
+            { key: 'pdhR1Box', label: 'PDH ↔ R1 box', color: COLORS.pdhBox },
+            { key: 'pdlS1Box', label: 'PDL ↔ S1 box', color: COLORS.pdlBox },
+            { key: 'histPdhl', label: 'PDH / PDL lines', color: COLORS.pdhl },
+            { key: 'virgin', label: 'Highlight virgin CPR', color: COLORS.virginFill },
+            { key: 'virginExtend', label: 'Extend until touched', sub: true },
+            { key: 'futureCpr', label: 'Future CPR (dashed)' },
+            { key: 'labels', label: 'Level labels' },
+        ] },
+        { title: 'Multi CPR', gate: 'showMCPR', gateLabel: '≤15m', items: [
+            { key: 'multiCpr', label: 'Multi CPR' },
+            { key: 'mcpr15', label: '15 min', sub: true, color: COLORS.mcpr15 },
+            { key: 'mcpr30', label: '30 min', sub: true, color: COLORS.mcpr30 },
+            { key: 'mcpr60', label: '1 hour', sub: true, color: COLORS.mcpr60 },
+        ] },
+        { title: 'Moving averages', items: [
+            { key: 'emaAll', label: 'Show EMAs' },
+            { key: 'ema9', label: 'EMA 9', sub: true, color: COLORS.ema9 },
+            { key: 'ema20', label: 'EMA 20', sub: true, color: COLORS.ema20 },
+            { key: 'ema50', label: 'EMA 50', sub: true, color: COLORS.ema50 },
+            { key: 'ema100', label: 'EMA 100', sub: true, color: COLORS.ema100 },
+            { key: 'ema200', label: 'EMA 200', sub: true, color: '#6b7280' },
+        ] },
+        { title: 'VWAP', gate: 'showVwap', gateLabel: '≤15m', items: [
+            { key: 'vwapCur', label: 'Current VWAP', color: COLORS.vwapCur },
+            { key: 'vwapPrev', label: 'Previous VWAP', color: COLORS.vwapPrev },
+            { key: 'vwapAvg3', label: 'Avg 3 VWAP', color: COLORS.vwapAvg3 },
+            { key: 'vwapLabels', label: 'VWAP price labels', sub: true },
+        ] },
+        { title: 'Boxes', items: [
+            { key: 'box5m', label: '2nd 5-min candle box', color: COLORS.box5m, gate: 'show5mBox', gateLabel: '≤5m' },
+            { key: 'box1m', label: '2nd 1-min candle box', color: COLORS.box1m, gate: 'show1mBox', gateLabel: '≤1m' },
+            { key: 'mondayBox', label: 'Monday H/L box', gate: 'showMonday', gateLabel: '≤1h' },
+            { key: 'mondayWeeksBack', type: 'number', label: 'Weeks back', min: 1, max: 500, sub: true },
+        ] },
+    ];
+
+    const gateTag = (flag, label) => flag ? `<span class="mc-gate" data-gate="${flag}">${label}</span>` : '';
+    const swatch = c => c ? `<i class="mc-sw" style="background:${c}"></i>` : '';
+
+    // HTML for `sections` (default: SPEC) with each control showing get(key).
+    // Styles live in css/components/mine_cpr.css.
+    function renderSettings(get, sections) {
+        let html = '';
+        for (const sec of sections || SPEC) {
+            html += `<div class="mc-ind-section"><div class="mc-ind-title">${sec.title}${gateTag(sec.gate, sec.gateLabel)}</div>`;
+            for (const it of sec.items) {
+                if (it.row) {
+                    html += `<div class="mc-ind-row">${swatch(it.color)}<span>${it.row}</span>` +
+                        it.keys.map(k => `<label><input type="checkbox" data-key="${k}" ${get(k) ? 'checked' : ''}>${k.toUpperCase()}</label>`).join('') +
+                        `</div>`;
+                } else if (it.type === 'select') {
+                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><select data-key="${it.key}">` +
+                        it.options.map(([v, l]) => `<option value="${v}" ${get(it.key) === v ? 'selected' : ''}>${l}</option>`).join('') +
+                        `</select></label>`;
+                } else if (it.type === 'number') {
+                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}" max="${it.max}" value="${get(it.key)}"></label>`;
+                } else {
+                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><input type="checkbox" data-key="${it.key}" ${get(it.key) ? 'checked' : ''}>${swatch(it.color)}<span>${it.label}</span>${gateTag(it.gate, it.gateLabel)}</label>`;
+                }
+            }
+            html += '</div>';
+        }
+        return html;
+    }
+
+    // One change listener for every control rendered above: coerces the value
+    // (numbers clamped to their min/max), hands it to set(key, value), then
+    // onChange(). Rendered controls are found by data-key, so the container
+    // may hold other, page-specific controls too — those are left alone.
+    function bindSettings(container, set, onChange) {
+        container.addEventListener('change', e => {
+            const el = e.target, key = el.dataset && el.dataset.key;
+            if (!key) return;
+            let v;
+            if (el.type === 'checkbox') v = el.checked;
+            else if (el.type === 'number') { v = Math.max(+el.min, Math.min(+el.max, parseInt(el.value, 10) || +el.min)); el.value = v; }
+            else v = el.value;
+            set(key, v);
+            if (onChange) onChange(key, v);
+        });
+    }
+
+    // Light each gate tag whose tfInfo flag holds on any of `infos`.
+    function refreshGates(container, infos) {
+        container.querySelectorAll('.mc-gate').forEach(tag => {
+            const flag = tag.dataset.gate;
+            tag.classList.toggle('live', infos.some(i => i[flag]));
+        });
+    }
+
+    return { DEFAULTS, COLORS, SECONDS, SPEC, tfInfo, compute, attach, detach, aggregate, periodKey, dayKey, sessionStart,
+             renderSettings, bindSettings, refreshGates };
 })();

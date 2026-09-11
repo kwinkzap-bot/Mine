@@ -126,6 +126,11 @@ const _OIP_LINE_DEFAULTS = {
     // (see the flag below) — a neutral grey, so a flat histogram reads as
     // size only and never as a direction the candles don't agree with.
     volFlat: { color: '#8a8f98' },
+    // A bar that holds a single Time & Sales print at or above the server's
+    // RS_BIG_PRINT_QTY (8,000 contracts) — Round Strike's future volume only.
+    // Painted solid, whatever the candle did, so the print is impossible to
+    // miss in a 20%-tall band.
+    volBig: { color: '#2563eb' },
     // Banknifty's overlay defaults to the PE chart's candle colours (violet up,
     // dark down), which also keeps it clear of the green/red pair above — the
     // two histograms share a price scale and overlap. PE's down colour is
@@ -217,7 +222,7 @@ const _OIP_VOL_COLOR_KEYS = {
     nifty:     ['volUp', 'volDn', 'volFlat'],
     banknifty: ['bnfVolUp', 'bnfVolDn', 'bnfVolFlat'],
 };
-const _OIP_VOL_COLOR_KEY_SET = new Set(Object.values(_OIP_VOL_COLOR_KEYS).flat());
+const _OIP_VOL_COLOR_KEY_SET = new Set([...Object.values(_OIP_VOL_COLOR_KEYS).flat(), 'volBig']);
 // The overlay's up/down/flat hues, WITHOUT an alpha suffix — the painter
 // appends that, since it is per-bar once intensity shading is on.
 function oipVolumeBarColors(kind) {
@@ -359,6 +364,7 @@ const _oipInvertedVolSeries = new WeakSet();
 
 function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
     const { up, down, flat } = oipVolumeBarColors(kind);
+    const big = oipGetLineColor('volBig');
     const byDirection = oipVolDirColorOn();
     const alphas = intensity ? _oipVolIntensityAlphas(bars) : null;
     const sign = _oipInvertedVolSeries.has(series) ? -1 : 1;
@@ -366,7 +372,9 @@ function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
         series.setData(bars.map((b, i) => ({
             time: b.time,
             value: sign * b.value,
-            color: (byDirection ? (b.up ? up : down) : flat) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
+            // A big-print bar is blue and solid: neither the direction split
+            // nor the intensity fade applies, so it reads at a glance.
+            color: b.big ? big : (byDirection ? (b.up ? up : down) : flat) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
         })));
     } catch (e) {}
 }
@@ -382,14 +390,18 @@ function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
 // _oipVolIntensityAlphas.
 function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty', intensity = false) {
     if (!series) return;
-    const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
+    // `big` is the server's tag for a bar holding a Time & Sales print at or
+    // above its threshold (see _rs_tag_big_prints in routes/api.py); only the
+    // live Round Strike future_volume carries it.
+    const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time), { vol: Number(v.volume || 0), big: !!v.big }]));
     const bars = [];
     if (futVolMap.size) {
         (refCandles || []).forEach(c => {
             if (!c || c.open === undefined || c.close === undefined) return; // skip whitespace-only bars
             const t = Number(c.time);
             if (!futVolMap.has(t)) return;
-            bars.push({ time: t, value: futVolMap.get(t), up: Number(c.close) >= Number(c.open) });
+            const v = futVolMap.get(t);
+            bars.push({ time: t, value: v.vol, up: Number(c.close) >= Number(c.open), big: v.big });
         });
     }
     _oipVolBarCache.set(series, { kind, bars, intensity });
@@ -1464,10 +1476,15 @@ function _oipCprSignature(daysData) {
     return `${daysData.length}|${f[0]}|${l[l.length - 1]}|${_oipActiveInterval()}`;
 }
 
+// Level lines are pixel-snapped (TradingViewChart.addCrispLine) — a flat
+// LineSeries lands on a fractional row and smears; these sit on one row of
+// pixels, the way the Multichart panes draw theirs. Same setData / update /
+// applyOptions surface, so the renderer and the replay stepper above are
+// none the wiser; only removal has to go through TradingViewChart.removeSeries.
 function _oipCprLineSeries(key) {
     const k = `line_${key}`;
     if (!oipCprSeriesMap[k]) {
-        oipCprSeriesMap[k] = oipOIChart.addSeries(LightweightCharts.LineSeries, {
+        oipCprSeriesMap[k] = TradingViewChart.addCrispLine(oipOIChart, {
             lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
             autoscaleInfoProvider: () => null
         });
@@ -1516,7 +1533,7 @@ function _oipCprBoxSeries(idx, fill) {
 // — leaving stale period boxes behind would draw bands from the old range.
 function oipClearCprSeries() {
     Object.keys(oipCprSeriesMap).forEach(k => {
-        try { oipOIChart.removeSeries(oipCprSeriesMap[k]); } catch (e) {}
+        try { TradingViewChart.removeSeries(oipOIChart, oipCprSeriesMap[k]); } catch (e) {}
         delete oipCprSeriesMap[k];
     });
     _oipCprState = { sig: '', liveIdx: -1, maxTime: -1, boxCount: {}, boxFill: {}, extending: [] };
@@ -1811,14 +1828,15 @@ function oipDrawMultiCPR(candles, applyZ = true) {
         const style = oipGetLineStyle(s.styleKey);
         const col   = oipGetLineColor(s.styleKey);
         const wid   = oipGetLineWidth(s.styleKey);
+        // Pixel-snapped level lines — see _oipCprLineSeries.
         if (!oipMultiCprSeriesMap[s.tcKey]) {
-            oipMultiCprSeriesMap[s.tcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: wid, lineStyle: style, ...shared });
+            oipMultiCprSeriesMap[s.tcKey] = TradingViewChart.addCrispLine(oipOIChart, { color: col, lineWidth: wid, lineStyle: style, ...shared });
         }
         if (!oipMultiCprSeriesMap[s.ppKey]) {
-            oipMultiCprSeriesMap[s.ppKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: wid, lineStyle: style, ...shared });
+            oipMultiCprSeriesMap[s.ppKey] = TradingViewChart.addCrispLine(oipOIChart, { color: col, lineWidth: wid, lineStyle: style, ...shared });
         }
         if (!oipMultiCprSeriesMap[s.bcKey]) {
-            oipMultiCprSeriesMap[s.bcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: wid, lineStyle: style, ...shared });
+            oipMultiCprSeriesMap[s.bcKey] = TradingViewChart.addCrispLine(oipOIChart, { color: col, lineWidth: wid, lineStyle: style, ...shared });
         }
         // Series are cached and reused across redraws — always re-apply the
         // current color/width/style choice, not just at first creation.
@@ -1880,6 +1898,11 @@ function oipApplyZOrder() {
     if (typeof oip2ndCandle1mBox  !== 'undefined') pushBoxes(oip2ndCandle1mBox.oi);
     if (typeof oip2nd5mCandleBox  !== 'undefined') pushBoxes(oip2nd5mCandleBox.oi);
     if (typeof oipMondayBoxes     !== 'undefined') pushBoxes(oipMondayBoxes);
+
+    // Mine CPR's EMA / VWAP line series (main OI Profile page only; the
+    // levels themselves are a 'bottom' primitive and need no ordering).
+    if (typeof oipMinePane !== 'undefined' && oipMinePane && oipMinePane.lines)
+        Object.values(oipMinePane.lines).forEach(s => { if (s) lines.push(s); });
 
     // Reversal lines (kept above fills).
     (oip30mReversalSeries || []).forEach(s => { if (s) lines.push(s); });
@@ -2216,7 +2239,7 @@ function oipDrawAtmCeOiLines() {
 let oip30mReversalSeries = [];
 
 function oipClear30mReversalLines() {
-    oip30mReversalSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
+    oip30mReversalSeries.forEach(s => { try { TradingViewChart.removeSeries(oipOIChart, s); } catch(e) {} });
     oip30mReversalSeries = [];
 }
 
@@ -2382,7 +2405,7 @@ function oipDraw30mReversalLines(candles, recompute = true) {
             .filter(c => c.time >= time)
             .map(c => ({ time: c.time, value: level }));
         const future = futureTimes.map(t => ({ time: t, value: level }));
-        const s = oipOIChart.addSeries(LightweightCharts.LineSeries, {
+        const s = TradingViewChart.addCrispLine(oipOIChart, {
             color: oipGetLineColor('reversal30m'),
             lineWidth: oipGetLineWidth('reversal30m'),
             lineStyle: oipGetLineStyle('reversal30m'),
@@ -2436,7 +2459,7 @@ function _oipFutureTradingDays(fromTime, count) {
 let oip1DReversalSeries = [];
 
 function oipClear1DReversalLines() {
-    oip1DReversalSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
+    oip1DReversalSeries.forEach(s => { try { TradingViewChart.removeSeries(oipOIChart, s); } catch(e) {} });
     oip1DReversalSeries = [];
 }
 
@@ -2488,12 +2511,12 @@ function oipDraw1DReversalLines(candles) {
         ];
 
         // Top border
-        const topS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
+        const topS = TradingViewChart.addCrispLine(oipOIChart, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
         topS.setData(allTimes.map(t => ({ time: t, value: top })));
         oip1DReversalSeries.push(topS);
 
         // Bottom border
-        const botS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
+        const botS = TradingViewChart.addCrispLine(oipOIChart, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
         botS.setData(allTimes.map(t => ({ time: t, value: bottom })));
         oip1DReversalSeries.push(botS);
 
@@ -2508,7 +2531,7 @@ function oipDraw1DReversalLines(candles) {
         oip1DReversalSeries.push(fillS);
 
         // Center line
-        const cenS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
+        const cenS = TradingViewChart.addCrispLine(oipOIChart, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
         cenS.setData(allTimes.map(t => ({ time: t, value: center })));
         oip1DReversalSeries.push(cenS);
     });

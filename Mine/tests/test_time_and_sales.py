@@ -24,11 +24,19 @@ SYMBOL = 'NSE:TESTFUT'
 
 
 @pytest.fixture(autouse=True)
-def clean_tape():
-    """A fresh store per test, pinned to today so the rollover never fires."""
+def clean_tape(tmp_path):
+    """A fresh store per test, pinned to today so the rollover never fires.
+
+    The snapshot dir and the archive are pointed at tmp_path for EVERY test:
+    a top-up that stands down for the day now writes both, and the real
+    data/tape/ holds the only copy of days nobody can re-record.
+    """
     tas.reset()
     tas._tape_day = datetime.now(IST).date()
-    with mock.patch.object(tas, '_market_is_open', return_value=True):
+    tape_dir = tmp_path / 'tape'
+    with mock.patch.object(tas, '_market_is_open', return_value=True), \
+         mock.patch.object(tas, '_TAPE_DIR', str(tape_dir)), \
+         mock.patch.object(tas, '_ARCHIVE_DB', str(tape_dir / 'tape.db')):
         yield
     tas.reset()
 
@@ -586,3 +594,146 @@ def test_a_topup_stands_down_while_the_first_pass_owns_the_tape():
     with mock.patch.object(tas, '_topup') as spy:
         tas._maybe_topup(SYMBOL)
     spy.assert_not_called()
+
+
+# ── the archive ────────────────────────────────────────────────────────────
+
+def _archive_today():
+    tas.save_snapshot(force=True)
+    return tas.archive_snapshots()
+
+
+def _big(min_qty=1000, symbol=SYMBOL, days=None):
+    today = tas._today()
+    lo, hi = days or (today - timedelta(days=30), today)
+    return tas.archived_large_prints(symbol, min_qty, lo, hi)
+
+
+def test_the_days_tape_is_archived_for_good():
+    """What the pickle holds today, the archive holds forever — same rows,
+    keyed on the day the pickle was named for."""
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=6500, vol_traded_today=8000)
+    push(last_traded_time=1003, last_traded_qty=12000, vol_traded_today=20000)
+    assert _archive_today() == 3
+    out = _big(min_qty=1000)
+    assert [(r['ts'], r['qty']) for r in out] == [(1002, 6500), (1003, 12000)]
+    assert set(out[0]) == {'ts', 'price', 'qty', 'side', 'src'}   # same rows as large_prints
+    assert _big(min_qty=1000, days=(tas._today() + timedelta(days=1),) * 2) == []
+
+
+def test_an_unchanged_pickle_is_not_archived_twice():
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    assert _archive_today() == 1
+    gen = tas.archive_generation()
+    assert tas.archive_snapshots() == 0
+    assert tas.archive_generation() == gen                      # nothing written, no bump
+
+
+def test_a_rebuilt_tape_replaces_its_archived_day_rather_than_adding_to_it():
+    """A top-up renumbers every seq after its seam, so the same trades come
+    back under new keys. The archive must end up with the tape, not both."""
+    import os
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=65, vol_traded_today=2000)
+    push(last_traded_time=1900, last_traded_qty=9000, vol_traded_today=12000)
+    assert _archive_today() == 3
+    gen = tas.archive_generation()
+
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500), _bar(1002, 7000)])
+    tas.save_snapshot(force=True)
+    path = tas._snapshot_path(tas._today())
+    os.utime(path, (os.path.getmtime(path) + 5,) * 2)           # newer than the ledger
+    assert tas.archive_snapshots() == 3
+    assert tas.archive_generation() == gen + 1
+    assert [(r['ts'], r['qty'], r['src']) for r in _big(min_qty=1000)] == [
+        (1002, 7000, 'bar'), (1900, 9000, 'tick')]
+
+
+def test_an_old_format_pickle_archives_too(tmp_path):
+    """tape_2026-09-09.pkl predates cov_v/seen/epoch. Its rows are what matter."""
+    import pickle
+    day = tas._today() - timedelta(days=2)
+    tape_dir = tmp_path / 'tape'
+    tape_dir.mkdir(exist_ok=True)
+    blob = {'prints': {SYMBOL: [
+        {'ts': 1001, 'price': 100.0, 'qty': 9000, 'side': 'buy', 'side_rule': 'quote',
+         'src': 'tick', 'vol_delta': 9000, 'seq': 1}]},
+        'seq': {SYMBOL: 2}, 'last': {}, 'backfill': {}, 'high_ts': {}, 'coverage': {}}
+    with open(tape_dir / f'tape_{day.isoformat()}.pkl', 'wb') as fh:
+        pickle.dump(blob, fh)
+    assert tas.archive_snapshots() == 1
+    assert [r['ts'] for r in _big(min_qty=8000, days=(day, day))] == [1001]
+
+
+def test_prune_keeps_a_day_the_archive_has_not_taken(tmp_path):
+    """The pickle is the only copy of its day until the archive has read it."""
+    import pickle
+    tape_dir = tmp_path / 'tape'
+    tape_dir.mkdir(exist_ok=True)
+    row = {'ts': 1001, 'price': 100.0, 'qty': 65, 'side': 'buy', 'side_rule': 'quote',
+           'src': 'tick', 'vol_delta': 65, 'seq': 1}
+    old = tas._today() - timedelta(days=10)
+    older = tas._today() - timedelta(days=11)
+    for day in (old, older):
+        with open(tape_dir / f'tape_{day.isoformat()}.pkl', 'wb') as fh:
+            pickle.dump({'prints': {SYMBOL: [row]}}, fh)
+
+    tas.prune_snapshots(keep_days=5)
+    assert sorted(p.name for p in tape_dir.glob('tape_*.pkl')) == [
+        f'tape_{older.isoformat()}.pkl', f'tape_{old.isoformat()}.pkl']
+
+    tas.archive_snapshots()
+    tas.prune_snapshots(keep_days=5)
+    assert list(tape_dir.glob('tape_*.pkl')) == []
+    assert _big(min_qty=1, days=(older, old)) and len(_big(min_qty=1, days=(older, old))) == 2
+
+
+def test_standing_down_for_the_day_archives_the_tape():
+    """The moment the top-up knows the session is over is the moment the tape
+    is final — and the one trigger that does not need the app alive later."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    close_ts = tas._session_bounds(tas._today())[1]
+    tas._BACKFILL_HIGH_TS[SYMBOL] = close_ts - 60
+    push(last_traded_time=close_ts - 30, last_traded_qty=9000, vol_traded_today=9000)
+
+    after_close = datetime.fromtimestamp(close_ts + 3600, IST)
+    with mock.patch.object(tas, '_tape_day', tas._today()), \
+         mock.patch.object(tas, 'datetime') as clock:
+        clock.now.return_value = after_close
+        clock.fromtimestamp = datetime.fromtimestamp
+        clock.combine = datetime.combine
+        _topup_with([])
+    assert [r['qty'] for r in _big(min_qty=8000)] == [9000]
+
+
+def test_an_unreadable_archive_answers_empty_not_broken(tmp_path):
+    with mock.patch.object(tas, '_ARCHIVE_DB', str(tmp_path / 'nope' / 'tape.db')):
+        assert _big() == []
+
+
+# ── Round Strike's use of it ───────────────────────────────────────────────
+
+def test_round_strike_tags_the_bar_a_big_print_landed_in():
+    from trading_app.app.routes.api import _rs_tag_big_prints
+    ist = 19800
+    bars = [{'time': 1000 + ist, 'volume': 1}, {'time': 1060 + ist, 'volume': 1},
+            {'time': 1120 + ist, 'volume': 1}]
+    prints = [{'ts': 1005, 'qty': 8000}, {'ts': 1010, 'qty': 9500},   # same bar: max wins
+              {'ts': 1119, 'qty': 8100},                              # last second of bar 2
+              {'ts': 1200, 'qty': 8200}]                              # past the last bar
+    out = _rs_tag_big_prints(bars, prints, 'minute', ist)
+    assert [(b.get('big'), b.get('big_qty')) for b in out] == [
+        (True, 9500), (True, 8100), (None, None)]
+    assert _rs_tag_big_prints(bars, [], 'minute', ist) is bars      # untouched with nothing to tag
+
+
+def test_round_strike_builds_the_fyers_symbol_the_archive_is_keyed_on():
+    from trading_app.app.routes.api import _rs_fyers_future_symbol
+    from datetime import date
+    assert _rs_fyers_future_symbol('NIFTY', date(2026, 9, 29)) == 'NSE:NIFTY26SEPFUT'
+    assert _rs_fyers_future_symbol('BANKNIFTY', date(2027, 1, 28)) == 'NSE:BANKNIFTY27JANFUT'
+    assert _rs_fyers_future_symbol('SENSEX', date(2026, 12, 31)) == 'BSE:SENSEX26DECFUT'

@@ -136,63 +136,7 @@
     box-shadow: var(--shadow-card);
     font-size: 12px;
 }
-.mc-ind-head {
-    padding: 3px 12px 5px;
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--color-text-3);
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    border-bottom: 1px solid var(--color-border-sub);
-}
-.mc-ind-section + .mc-ind-section { border-top: 1px solid var(--color-border-sub); margin-top: 3px; padding-top: 3px; }
-.mc-ind-title {
-    display: flex; align-items: center; gap: 6px;
-    padding: 3px 12px 2px;
-    font-size: 10px; font-weight: 600;
-    color: var(--color-text-3);
-    text-transform: uppercase; letter-spacing: .05em;
-}
-.mc-ind-item {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 3px 12px;
-    cursor: pointer;
-    color: var(--color-text);
-    white-space: nowrap;
-    font-weight: 500;
-}
-.mc-ind-item:hover { background: var(--color-row-hover); }
-.mc-ind-item.sub { padding-left: 28px; font-size: 11px; }
-.mc-ind-item input[type="checkbox"] { width: 13px; height: 13px; margin: 0; accent-color: var(--color-accent); cursor: pointer; }
-.mc-ind-item select, .mc-ind-item input[type="number"] {
-    margin-left: auto;
-    height: 18px;
-    font-size: 10px;
-    padding: 0 3px;
-    color: var(--color-text);
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-}
-.mc-ind-item input[type="number"] { width: 54px; }
-.mc-ind-row { display: flex; align-items: center; gap: 10px; padding: 2px 12px 2px 28px; font-size: 11px; }
-.mc-ind-row label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
-.mc-ind-row input[type="checkbox"] { width: 12px; height: 12px; margin: 0; accent-color: var(--color-accent); }
-.mc-gate {
-    margin-left: auto;
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: .04em;
-    color: var(--color-text-3);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    padding: 0 4px;
-    line-height: 13px;
-}
-.mc-gate.live { color: var(--color-pos); border-color: currentColor; }
-.mc-sw { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+/* Section / item / gate styles: css/components/mine_cpr.css (shared with OI Profile). */
 
 /* ── grid + panes ────────────────────────────────────────────────────── */
 .mc-grid {

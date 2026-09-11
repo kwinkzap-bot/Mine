@@ -4,6 +4,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}?v={{ sv('css/oi_profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/mine_cpr.css') }}?v={{ sv('css/components/mine_cpr.css') }}">
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 <script
     src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
@@ -70,6 +71,8 @@
                                             title="Volume bar color on a down candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
                                             title="Volume bar color when Vol Direction Color is off">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig"
+                                            title="Bar holding a single Time &amp; Sales print of 8,000+ contracts (painted solid, live chart only)">
                                     </span>
                                 </label>
                                 <!-- Hangs from its own band at the top of this pane and reuses the
@@ -386,13 +389,14 @@
                             <option value="broker" selected>Broker</option>
                             <option value="mine">Mine</option>
                         </select>
-                        <select id="oipRSOrderType" class="oip-select oip-select--xs" title="Order Type">
-                            <option value="MARKET" selected>MKT</option>
-                            <option value="LIMIT">LMT</option>
+                        <!-- No MKT entry: LMT with an empty price box IS the market
+                             order (see oipRSPlaceOrder). STOP still needs a trigger. -->
+                        <select id="oipRSOrderType" class="oip-select oip-select--xs" title="Order Type — LMT with no price places at market">
+                            <option value="LIMIT" selected>LMT</option>
                             <option value="STOP">STOP</option>
                         </select>
                         <input type="number" id="oipRSLimitPrice" class="oip-input oip-input--price"
-                            placeholder="Price ₹" step="0.05" title="Limit / trigger price">
+                            placeholder="Price ₹ (blank = MKT)" step="0.05" title="Limit / trigger price — leave blank for a market order">
                         <div class="oip-order-side-group oip-order-side-group--ce">
                             <button class="oip-rs-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
                                 CE</button>
@@ -948,115 +952,18 @@
                                     title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
                                     <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
                                 </label>
-                                <div class="oip-ind-cpr-group">
-                                    <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowVwapGroup" checked>
-                                        <label for="oipShowVwapGroup" class="oip-ind-cpr-label">VWAP</label>
-                                        <span class="oip-cpr-expand" id="oipVwapExpandBtn">&#9658;</span>
-                                    </div>
-                                    <div class="oip-ind-cpr-sub hidden" id="oipVwapSub">
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShowCVWAP" checked><span
-                                                style="color:#3b82f6">CVWAP</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShowPVWAP" checked><span
-                                                style="color:#fdba74">PVWAP</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShow3AvgVWAP" checked><span
-                                                style="color:#ef4444">3-AVG_VWAP</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <div class="oip-ind-cpr-group">
-                                    <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowCpr">
-                                        <label for="oipShowCpr" class="oip-ind-cpr-label">CPR Levels</label>
-                                        <span class="oip-cpr-expand" id="oipCprExpandBtn">&#9658;</span>
-                                    </div>
-                                    <div class="oip-ind-cpr-sub hidden" id="oipCprSub">
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowPrevHL" checked><span
-                                                style="color:#ef07f9">Prev H / L</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowBand" checked><span
-                                                style="color:#00008B">PP / BC / TC</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowResistance" checked><span
-                                                style="color:#006400">R1 – R4</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowSupport" checked><span
-                                                style="color:#ff0000">S1 – S4</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span
-                                                style="color:#a020f0">Cum. R3 / S3</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowLabels"><span>Level Labels</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <div class="oip-ind-cpr-group">
-                                    <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowMultiCpr">
-                                        <label for="oipShowMultiCpr" class="oip-ind-cpr-label">Multi CPR</label>
-                                        <span class="oip-cpr-expand" id="oipMultiCprExpandBtn">&#9658;</span>
-                                    </div>
-                                    <div class="oip-ind-cpr-sub hidden" id="oipMultiCprSub">
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr15m" checked><span
-                                                style="color:#f97316">15 Min</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr30m" checked><span
-                                                style="color:#06b6d4">30 Min</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr1h" checked><span
-                                                style="color:#9c28b0">1 Hour</span>
-                                        </label>
-                                    </div>
-                                </div>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18
                                         ATM CE OI Lines</span>
                                 </label>
                             </div>
 
-                            <div class="oip-ind-section">
-                                <div class="oip-ind-section-title oip-ind-cpr-header" id="oipEmaHeader"
-                                    style="cursor:pointer; justify-content:space-between;">
-                                    Moving Averages (EMA)
-                                    <span class="oip-cpr-expand" id="oipEmaExpandBtn">&#9658;</span>
-                                </div>
-                                <div class="oip-ind-cpr-sub hidden" id="oipEmaSub">
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma9" checked>
-                                        <span style="color:#22c55e">EMA 9</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma20" checked>
-                                        <span style="color:#f97316">EMA 20</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma50" checked>
-                                        <span style="color:#ef4444">EMA 50</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma100">
-                                        <span style="color:#3b82f6">EMA 100</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma200" checked>
-                                        <span style="color:#888">EMA 200</span>
-                                    </label>
-                                </div>
-                            </div>
+                            <!-- Mine CPR — the same indicator set as /multichart (CPR, Multi
+                                 CPR, EMAs, VWAP, boxes), rendered from MineCPR.SPEC by
+                                 oipInitMineCpr in oi_profile.js. It replaced this popup's own
+                                 CPR Levels / Multi CPR / VWAP / EMA groups and the 2nd 5-min and
+                                 Monday boxes; everything below is OI-Profile-only and stays. -->
+                            <div id="oipMineCprSections"></div>
 
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Lines</div>
@@ -1095,14 +1002,6 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShow2ndCandle30s" checked><span
                                         style="color:#FFC800">2nd 30Sec Candle</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShow2nd5mCandle" checked><span
-                                        style="color:#00D2FF">2nd 5Min Candle</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowMondayBox"><span style="color:#d4ed0b">Monday H/L
-                                        Box</span>
                                 </label>
                             </div>
                         </div>
@@ -1275,6 +1174,7 @@
 <script src="{{ url_for('static', filename='js/oi_profile_open_orders.js') }}?v={{ sv('js/oi_profile_open_orders.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_shared.js') }}?v={{ sv('js/oi_profile_shared.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile.js') }}?v={{ sv('js/oi_profile.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v={{ sv('js/oi_profile_init.js') }}"></script>
 <script

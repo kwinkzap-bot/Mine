@@ -102,15 +102,8 @@ window.TradingViewChart = (function () {
     function createRayTool(chart, series, container, opts) {
         opts = opts || {};
         const rightOffset = opts.rightOffset != null ? opts.rightOffset : 20;
-        const RAY_INTERVAL_SECONDS = {
-            '30second': 30, minute: 60, '2minute': 120, '3minute': 180, '5minute': 300,
-            '15minute': 900, '30minute': 1800, '60minute': 3600, day: 86400, week: 604800, month: 2592000
-        };
-        function resolveTimeframe() {
-            return typeof opts.timeframe === 'function' ? opts.timeframe() : opts.timeframe;
-        }
         function buildRayPoints(startTime, price, lastRealTime) {
-            const step = RAY_INTERVAL_SECONDS[resolveTimeframe()] || 60;
+            const step = intervalSeconds(opts.timeframe);
             const base = (lastRealTime != null && lastRealTime > startTime) ? lastRealTime : startTime;
             const end = base + (rightOffset + 5) * step;
             return [{ time: startTime, value: price }, { time: end, value: price }];
@@ -569,6 +562,454 @@ window.TradingViewChart = (function () {
         return lines;
     }
 
+    /* ── interval vocabulary ─────────────────────────────────────────────── */
+    // The app-wide timeframe keys ('5minute', 'day', …) in seconds. Shared by
+    // the ray tool, the bar-close countdown and MineCPR.
+    const INTERVAL_SECONDS = {
+        '30second': 30, minute: 60, '2minute': 120, '3minute': 180, '5minute': 300,
+        '10minute': 600, '15minute': 900, '30minute': 1800, '60minute': 3600,
+        day: 86400, week: 604800, month: 2592000
+    };
+    function intervalSeconds(iv) {
+        if (typeof iv === 'function') iv = iv();
+        if (typeof iv === 'number' && isFinite(iv) && iv > 0) return iv;
+        return INTERVAL_SECONDS[iv] || 60;
+    }
+    const SESSION_OPEN_S = 9 * 3600 + 15 * 60, SESSION_CLOSE_S = 15 * 3600 + 30 * 60;
+    // Bars are on the app's fake-IST grid (IST clock stored as UTC seconds).
+    const nowIst = () => Math.floor(Date.now() / 1000) + 19800;
+
+    // Black or white, whichever reads on `color` — for text on a coloured tag.
+    function contrastText(color) {
+        const m = typeof color === 'string' && (color.match(/^#([0-9a-f]{6})/i) || color.match(/[\d.]+/g));
+        if (!m) return '#ffffff';
+        let r, g, b;
+        if (color[0] === '#') { const n = parseInt(m[1], 16); r = n >> 16 & 255; g = n >> 8 & 255; b = n & 255; }
+        else { r = +m[0]; g = +m[1]; b = +m[2]; }
+        return (0.299 * r + 0.587 * g + 0.114 * b) > 170 ? '#111111' : '#ffffff';
+    }
+
+    /* ── crisp: device-pixel-snapped drawing kit ─────────────────────────── */
+    // Lightweight Charts' own renderers snap to the bitmap grid; a 1px line
+    // drawn by a primitive at a fractional y straddles two physical pixels and
+    // anti-aliases into a smeared 2px — the blur that set our overlays apart
+    // from TradingView. Everything here takes DEVICE pixels (already
+    // multiplied by the pixel ratio) and integer widths. Solid lines are
+    // filled rectangles, crisp by construction; only dashes need a stroke,
+    // centred on a half pixel for odd widths.
+    const LINE_DASH = {
+        // LineStyle.Solid | Dotted | Dashed | LargeDashed | SparseDotted — the
+        // patterns LWC itself uses, scaled by the device-pixel line width.
+        0: () => [], 1: w => [w, w], 2: w => [2 * w, 2 * w], 3: w => [6 * w, 6 * w], 4: w => [w, 4 * w]
+    };
+    const crisp = {
+        width: (cssWidth, ratio) => Math.max(1, Math.round((cssWidth || 1) * ratio)),
+        dash: (style, w) => (LINE_DASH[style] || LINE_DASH[0])(w),
+        // Horizontal line from x1 to x2 at integer y, w device px thick.
+        hline(ctx, x1, x2, y, w, color, dash) {
+            if (x2 <= x1) return;
+            if (dash && dash.length) {
+                ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'butt';
+                ctx.setLineDash(dash);
+                const yy = y + (w % 2 ? 0.5 : 0);
+                ctx.beginPath(); ctx.moveTo(x1, yy); ctx.lineTo(x2, yy); ctx.stroke();
+                ctx.setLineDash([]);
+            } else {
+                ctx.fillStyle = color;
+                ctx.fillRect(x1, y - Math.floor(w / 2), x2 - x1, w);
+            }
+        },
+        // Sloped segment — nothing to snap, so it is an ordinary stroke.
+        segment(ctx, x1, y1, x2, y2, w, color, dash) {
+            ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'butt';
+            ctx.setLineDash(dash && dash.length ? dash : []);
+            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+            ctx.setLineDash([]);
+        },
+        // Box border, w device px, drawn as four filled bars; `openRight`
+        // leaves the right edge off for a box that runs to the pane edge.
+        border(ctx, left, top, right, bottom, w, color, openRight) {
+            const h = Math.max(1, bottom - top);
+            ctx.fillStyle = color;
+            ctx.fillRect(left, top, right - left, w);
+            ctx.fillRect(left, bottom - w, right - left, w);
+            ctx.fillRect(left, top, w, h);
+            if (!openRight) ctx.fillRect(right - w, top, w, h);
+        }
+    };
+
+    /* ── crisp line "series" ─────────────────────────────────────────────── */
+    // A LineSeries stand-in for level lines — CPR, reversal levels, box
+    // borders, previous-session VWAP: anything flat. Lightweight Charts draws
+    // a LineSeries at fractional coordinates, so a level ends up two or three
+    // pixels of smear; these are drawn by one primitive per chart through the
+    // kit above, so every flat run lands on one row of pixels. Sloped runs
+    // (the odd joining diagonal) are stroked normally.
+    //
+    // The handle speaks the ISeriesApi subset the pages already use —
+    // setData / update / applyOptions / options / data / setSeriesOrder /
+    // priceToCoordinate — so a caller swaps `chart.addSeries(LineSeries, o)`
+    // for `TradingViewChart.addCrispLine(chart, o)` and nothing else moves.
+    // Two things it cannot be: an argument to chart.removeSeries (use
+    // TradingViewChart.removeSeries, which takes either) or a crosshair
+    // source (there is no marker and no seriesData entry).
+    //
+    // One anchor LineSeries per chart carries every handle's timestamps as
+    // whitespace, so a line that runs past the last candle still stretches
+    // the time scale exactly as the real series did; the primitive hangs off
+    // it, and setSeriesOrder on any handle moves the anchor — the whole layer
+    // — in the z-stack.
+    const _crispLayers = new WeakMap();   // chart -> layer
+
+    function crispLayer(chart) {
+        let L = _crispLayers.get(chart);
+        if (L) return L;
+        const anchor = chart.addSeries(LightweightCharts.LineSeries, {
+            color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+            crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
+        });
+        L = { chart, anchor, handles: new Set(), times: new Set(), maxTime: -Infinity, ref: null,
+              pendingFull: false, pendingTimes: [], flushQueued: false, requestUpdate: null, axisViews: [] };
+
+        const lowerBound = (arr, key, x) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (key(arr[m]) < x) lo = m + 1; else hi = m; } return lo; };
+
+        // price -> y. The anchor carries no values, and a series without a
+        // first value cannot convert (LWC returns null), so the conversion
+        // borrows any valued series on the same price scale — the candles,
+        // normally. Re-resolved whenever the borrowed one stops answering.
+        const scaleId = () => (anchor.options() || {}).priceScaleId || 'right';
+        function findRef() {
+            try {
+                // The anchor's own pane only — a chart with sub-panes (the
+                // Round Strike ΔOI histograms) has other 'right' scales there.
+                let panes = [];
+                if (anchor.getPane) panes = [anchor.getPane()];
+                else if (chart.panes) panes = chart.panes().slice(0, 1);
+                for (const pane of panes) for (const s of pane.getSeries()) {
+                    if (s === anchor || s.__crisp) continue;
+                    if (((s.options() || {}).priceScaleId || 'right') !== scaleId()) continue;
+                    const d = s.data();
+                    if (d.length && d.some(p => p && (p.close != null || p.value != null))) return s;
+                }
+            } catch (e) { /* older API */ }
+            return null;
+        }
+        const yOf = price => {
+            if (price == null || !isFinite(price)) return null;
+            let c = null;
+            try { c = L.ref ? L.ref.priceToCoordinate(price) : null; } catch (e) { c = null; }
+            if (c == null) { L.ref = findRef(); try { c = L.ref ? L.ref.priceToCoordinate(price) : anchor.priceToCoordinate(price); } catch (e) { c = null; } }
+            return c == null ? null : c;
+        };
+
+        function lastValueOf(h) {
+            for (let i = h._pts.length - 1; i >= 0; i--) if (h._pts[i].value != null) return h._pts[i].value;
+            return null;
+        }
+
+        const linesView = {
+            zOrder: () => 'normal', update() {},
+            renderer: () => ({
+                draw(target) {
+                    const ts = chart.timeScale();
+                    const vr = ts.getVisibleRange();
+                    if (!vr || !L.handles.size) return;
+                    const from = typeof vr.from === 'number' ? vr.from : -Infinity;
+                    const to = typeof vr.to === 'number' ? vr.to : Infinity;
+                    target.useBitmapCoordinateSpace(scope => {
+                        const ctx = scope.context, hr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+                        ctx.save();
+                        for (const h of L.handles) {
+                            const o = h._o;
+                            if (!o.visible || !h._pts.length) continue;
+                            const runs = h._runList();
+                            const w = crisp.width(o.lineWidth, vpr), dash = crisp.dash(o.lineStyle, w);
+                            for (let i = lowerBound(runs, r => r.t2, from); i < runs.length && runs[i].t1 <= to; i++) {
+                                const r = runs[i];
+                                const cx1 = ts.timeToCoordinate(r.t1), cx2 = ts.timeToCoordinate(r.t2);
+                                if (cx1 == null || cx2 == null) continue;
+                                const x1 = Math.round(cx1 * hr), x2 = Math.round(cx2 * hr);
+                                if (r.seg) {
+                                    const y1 = yOf(r.v1), y2 = yOf(r.v2);
+                                    if (y1 == null || y2 == null) continue;
+                                    crisp.segment(ctx, x1, y1 * vpr, x2, y2 * vpr, w, o.color, dash);
+                                } else {
+                                    const y = yOf(r.v);
+                                    if (y == null) continue;
+                                    crisp.hline(ctx, x1, x2, Math.round(y * vpr), w, o.color, dash);
+                                }
+                            }
+                        }
+                        ctx.restore();
+                    });
+                }
+            })
+        };
+        // The level's name, in a tag at the pane's right edge on the line —
+        // TradingView's shape; the price itself sits on the axis (axisViews).
+        const labelsView = {
+            zOrder: () => 'top', update() {},
+            renderer: () => ({
+                draw(target) {
+                    if (!L.handles.size) return;
+                    target.useBitmapCoordinateSpace(scope => {
+                        const ctx = scope.context, hr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+                        const W = scope.bitmapSize.width;
+                        ctx.save();
+                        ctx.font = `${Math.round(10 * vpr)}px -apple-system, system-ui, sans-serif`;
+                        ctx.textBaseline = 'middle';
+                        for (const h of L.handles) {
+                            const o = h._o;
+                            if (!o.visible || !o.lastValueVisible || !o.title) continue;
+                            const v = lastValueOf(h);
+                            const y = yOf(v);
+                            if (y == null) continue;
+                            const tw = ctx.measureText(o.title).width, pad = 4 * hr, bh = Math.round(14 * vpr);
+                            const bw = Math.round(tw + 2 * pad), x = W - bw, cy = Math.round(y * vpr);
+                            ctx.fillStyle = o.color;
+                            ctx.fillRect(x, cy - (bh >> 1), bw, bh);
+                            ctx.fillStyle = contrastText(o.color);
+                            ctx.fillText(o.title, x + pad, cy);
+                        }
+                        ctx.restore();
+                    });
+                }
+            })
+        };
+        const primitive = {
+            attached(p) { L.requestUpdate = p.requestUpdate; },
+            detached() { L.requestUpdate = null; },
+            updateAllViews() {
+                const views = [];
+                for (const h of L.handles) {
+                    const o = h._o;
+                    if (!o.visible || !o.lastValueVisible) continue;
+                    const v = lastValueOf(h);
+                    if (v == null) continue;
+                    const text = anchor.priceFormatter().format(v);
+                    views.push({
+                        coordinate: () => { const c = yOf(v); return c == null ? -100 : c; },
+                        text: () => text, textColor: () => contrastText(o.color), backColor: () => o.color,
+                        visible: () => true, tickVisible: () => true
+                    });
+                }
+                L.axisViews = views;
+            },
+            paneViews: () => [linesView, labelsView],
+            priceAxisViews: () => L.axisViews,
+            autoscaleInfo: () => null
+        };
+        anchor.attachPrimitive(primitive);
+
+        // Time-scale bookkeeping: a batch of setData calls — fifteen CPR
+        // levels in one redraw — becomes one anchor setData, queued on a
+        // microtask; an update() with a fresh, later timestamp is one cheap
+        // anchor.update() instead.
+        function flush() {
+            L.flushQueued = false;
+            if (L.pendingFull) {
+                const set = new Set();
+                for (const h of L.handles) for (const p of h._pts) set.add(p.time);
+                const times = Array.from(set).sort((a, b) => a - b);
+                L.times = set; L.maxTime = times.length ? times[times.length - 1] : -Infinity;
+                try { anchor.setData(times.map(t => ({ time: t }))); } catch (e) { /* chart being torn down */ }
+            } else if (L.pendingTimes.length) {
+                const add = L.pendingTimes.filter(t => !L.times.has(t)).sort((a, b) => a - b);
+                for (const t of add) {
+                    if (t <= L.maxTime) { L.pendingFull = true; L.pendingTimes = []; return flush(); }
+                    try { anchor.update({ time: t }); } catch (e) { L.pendingFull = true; L.pendingTimes = []; return flush(); }
+                    L.times.add(t); L.maxTime = t;
+                }
+            }
+            L.pendingFull = false; L.pendingTimes = [];
+            if (L.requestUpdate) L.requestUpdate();
+        }
+        L.yOf = yOf;
+        L.touch = (full, time) => {
+            if (full) L.pendingFull = true; else if (time != null) L.pendingTimes.push(time);
+            if (!L.flushQueued) { L.flushQueued = true; queueMicrotask(flush); }
+        };
+        _crispLayers.set(chart, L);
+        return L;
+    }
+
+    // Points → sorted, de-duplicated {time[, value]} — lenient where LWC throws.
+    function normalisePoints(pts) {
+        const out = [];
+        for (const p of (pts || [])) {
+            if (!p || typeof p.time !== 'number' || !isFinite(p.time)) continue;
+            const v = p.value;
+            out.push(v == null || !isFinite(v) ? { time: p.time } : { time: p.time, value: +v });
+        }
+        out.sort((a, b) => a.time - b.time);
+        let w = 0;
+        for (let i = 0; i < out.length; i++) { if (w && out[w - 1].time === out[i].time) out[w - 1] = out[i]; else out[w++] = out[i]; }
+        out.length = w;
+        return out;
+    }
+
+    function addCrispLine(chart, options) {
+        const L = crispLayer(chart);
+        const h = {
+            __crisp: true,
+            _o: Object.assign({ color: '#2962ff', lineWidth: 1, lineStyle: 0, visible: true, title: '', lastValueVisible: false }, options || {}),
+            _pts: [], _runs: null,
+            // Maximal flat runs {t1, t2, v} and sloped joins {seg, t1, v1, t2, v2},
+            // in time order, broken at whitespace — computed once per data change.
+            _runList() {
+                if (this._runs) return this._runs;
+                const runs = [], pts = this._pts;
+                let cur = null;
+                for (let i = 0; i < pts.length; i++) {
+                    const p = pts[i];
+                    if (p.value == null) { cur = null; continue; }
+                    const prev = i ? pts[i - 1] : null;
+                    if (!prev || prev.value == null || !cur) { cur = { t1: p.time, t2: p.time, v: p.value }; runs.push(cur); continue; }
+                    if (prev.value === p.value) { cur.t2 = p.time; continue; }
+                    runs.push({ seg: true, t1: prev.time, v1: prev.value, t2: p.time, v2: p.value });
+                    cur = { t1: p.time, t2: p.time, v: p.value }; runs.push(cur);
+                }
+                return (this._runs = runs);
+            },
+            setData(pts) { this._pts = normalisePoints(pts); this._runs = null; L.touch(true); },
+            update(p) {
+                if (!p || typeof p.time !== 'number') return;
+                const np = normalisePoints([p])[0];
+                if (!np) return;
+                const pts = this._pts, n = pts.length;
+                if (!n || pts[n - 1].time < np.time) pts.push(np);
+                else if (pts[n - 1].time === np.time) pts[n - 1] = np;
+                else {
+                    let lo = 0, hi = n;
+                    while (lo < hi) { const m = (lo + hi) >> 1; if (pts[m].time < np.time) lo = m + 1; else hi = m; }
+                    if (lo < n && pts[lo].time === np.time) pts[lo] = np; else pts.splice(lo, 0, np);
+                }
+                this._runs = null;
+                L.touch(false, np.time);
+            },
+            data() { return this._pts; },
+            applyOptions(o) { Object.assign(this._o, o || {}); if (L.requestUpdate) L.requestUpdate(); },
+            options() { return Object.assign({}, this._o); },
+            seriesType() { return 'Line'; },
+            setSeriesOrder(n) { try { L.anchor.setSeriesOrder(n); } catch (e) {} },
+            seriesOrder() { try { return L.anchor.seriesOrder(); } catch (e) { return 0; } },
+            priceFormatter() { return L.anchor.priceFormatter(); },
+            priceToCoordinate(p) { return L.yOf(p); },
+            coordinateToPrice(c) { try { return (L.ref || L.anchor).coordinateToPrice(c); } catch (e) { return null; } },
+            priceScale() { return L.anchor.priceScale(); },
+            createPriceLine(o) { return L.anchor.createPriceLine(o); },
+            removePriceLine(l) { return L.anchor.removePriceLine(l); },
+            attachPrimitive(p) { return L.anchor.attachPrimitive(p); },
+            detachPrimitive(p) { return L.anchor.detachPrimitive(p); },
+            remove() { L.handles.delete(h); L.touch(true); }
+        };
+        L.handles.add(h);
+        return h;
+    }
+
+    // chart.removeSeries for real series and crisp handles alike.
+    function removeSeries(chart, s) {
+        if (!s) return;
+        if (s.__crisp) s.remove();
+        else chart.removeSeries(s);
+    }
+
+    /* ── bar-close countdown on the price axis ───────────────────────────── */
+    // TradingView's "00:25" under the last price: seconds until the forming
+    // bar closes. A v5 series primitive can hand the price axis labels of its
+    // own, so the series' built-in last-value tag is switched off and both
+    // rows — price, countdown — are drawn here in one colour and one width,
+    // reading as a single block. The countdown is padded with figure spaces
+    // (digit-width) to the price's digit count so its box matches. Refreshed
+    // once a second while the bar is live; blank between sessions, and blank
+    // on a replayed or historical bar, since its close is already past.
+    //
+    // opts: interval (key | seconds | fn) — required for the countdown;
+    //       lastBar (fn) — defaults to the series' own last OHLC bar;
+    //       countdown (bool | fn) — the countdown row, on by default;
+    //       upColor / downColor — default to the series' candle colours.
+    const _countdowns = new Set();
+    let _countdownTimer = null;
+
+    function barCloseAt(bar, secs) {
+        if (!bar || !isFinite(secs) || secs > 86400) return null;
+        const day = bar.time - (bar.time % 86400);
+        if (secs >= 86400) return day + SESSION_CLOSE_S;
+        return Math.min(bar.time + secs, day + SESSION_CLOSE_S);
+    }
+
+    function countdownText(bar, secs) {
+        const close = barCloseAt(bar, secs), now = nowIst();
+        if (!bar || close == null || now < bar.time || now >= close) return '';
+        const left = close - now;
+        const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+        const p2 = n => String(n).padStart(2, '0');
+        return h ? `${h}:${p2(m)}:${p2(s)}` : `${p2(m)}:${p2(s)}`;
+    }
+
+    function attachCountdown(chart, series, opts) {
+        opts = opts || {};
+        if (!chart || !series) return null;
+        try { series.applyOptions({ lastValueVisible: false }); } catch (e) {}
+        const flag = (v, dflt) => v == null ? dflt : (typeof v === 'function' ? !!v() : !!v);
+        const lastBar = () => {
+            if (opts.lastBar) return opts.lastBar();
+            const d = series.data();
+            for (let i = d.length - 1; i >= 0; i--) if (d[i] && d[i].close != null) return d[i];
+            return null;
+        };
+        const back = () => {
+            const b = lastBar(), o = series.options() || {};
+            const up = opts.upColor || o.upColor || '#26a69a', down = opts.downColor || o.downColor || '#ef5350';
+            return b && b.close < b.open ? down : up;
+        };
+        let requestUpdate = null, price = '', text = '', lastText = null;
+        const y = () => { const b = lastBar(); const c = b && series.priceToCoordinate(b.close); return c == null ? -100 : c; };
+        const priceView = {
+            coordinate: y, text: () => price, textColor: () => contrastText(back()), backColor: back,
+            visible: () => !!price, tickVisible: () => true
+        };
+        const countView = {
+            coordinate: () => y() + 16, text: () => text, textColor: () => contrastText(back()), backColor: back,
+            visible: () => !!text, tickVisible: () => false
+        };
+        const compute = () => {
+            const b = lastBar();
+            price = b ? series.priceFormatter().format(b.close) : '';
+            const cd = (b && flag(opts.countdown, true) && opts.interval != null) ? countdownText(b, intervalSeconds(opts.interval)) : '';
+            const pad = Math.max(0, price.length - cd.length);
+            text = cd ? '\u2007'.repeat(Math.ceil(pad / 2)) + cd + '\u2007'.repeat(Math.floor(pad / 2)) : '';
+        };
+        const primitive = {
+            attached(p) { requestUpdate = p.requestUpdate; },
+            detached() { requestUpdate = null; },
+            updateAllViews() { compute(); lastText = text; },
+            priceAxisViews: () => [priceView, countView],
+            paneViews: () => [],
+            // Only redraw when the countdown row actually changed — five
+            // charts on one page, one repaint a second each, adds up.
+            tick() { compute(); if (text !== lastText && requestUpdate) requestUpdate(); },
+            refresh() { if (requestUpdate) requestUpdate(); }
+        };
+        series.attachPrimitive(primitive);
+        const handle = {
+            refresh: () => primitive.refresh(),
+            detach() {
+                _countdowns.delete(primitive);
+                try { series.detachPrimitive(primitive); } catch (e) {}
+                if (!_countdowns.size && _countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
+            }
+        };
+        _countdowns.add(primitive);
+        if (!_countdownTimer) {
+            _countdownTimer = setInterval(() => {
+                if (document.hidden) return;
+                for (const p of _countdowns) { try { p.tick(); } catch (e) {} }
+            }, 1000);
+        }
+        return handle;
+    }
+
     /**
      * Public API
      */
@@ -936,6 +1377,15 @@ window.TradingViewChart = (function () {
 
             // Add "Scroll to Latest" button
             addScrollButton(chart, series, container);
+
+            // Price + bar-close countdown on the axis. A combined chart's PE
+            // series gets the same drawn tag (one look for both) but only the
+            // CE row counts down — the bar is the same bar.
+            const countdownHandles = [];
+            if (type !== 'LINE') {
+                countdownHandles.push(attachCountdown(chart, series, { interval: timeframe }));
+                if (peSeries) countdownHandles.push(attachCountdown(chart, peSeries, { interval: timeframe, countdown: false }));
+            }
 
             // Add cursor change on hover over candles/lines
 
@@ -1488,6 +1938,7 @@ window.TradingViewChart = (function () {
                     try {
                         this.clearPriceLines();
                         this.clearRays();
+                        countdownHandles.forEach(h => { try { h && h.detach(); } catch (e) {} });
                         chart.remove();
                     } catch (e) {
                         console.warn('[Chart] Error during cleanup:', e);
@@ -1526,7 +1977,35 @@ window.TradingViewChart = (function () {
          * @param {HTMLElement} container - chart's container element (for cursor + right-click removal)
          * @param {Object} [opts] - { timeframe, rightOffset, rayColor, onRayDrawn, onRayRemoved }
          */
-        attachRayTool: createRayTool
+        attachRayTool: createRayTool,
+
+        /**
+         * Utility: timeframe key -> seconds ('5minute' -> 300), shared vocabulary.
+         */
+        INTERVAL_SECONDS: INTERVAL_SECONDS,
+        intervalSeconds: intervalSeconds,
+
+        /**
+         * Utility: device-pixel-snapped canvas drawing kit for primitives —
+         * hline / segment / border / width / dash. See `crisp` above.
+         */
+        crisp: crisp,
+        contrastText: contrastText,
+
+        /**
+         * Utility: a pixel-snapped LineSeries stand-in for flat level lines.
+         * Returns a handle with the ISeriesApi subset the pages use; remove it
+         * with TradingViewChart.removeSeries(chart, handle).
+         */
+        addCrispLine: addCrispLine,
+        removeSeries: removeSeries,
+
+        /**
+         * Utility: price + bar-close countdown block on the price axis for any
+         * chart+series pair. Returns { refresh, detach }.
+         * @param {Object} opts - { interval, lastBar, countdown, upColor, downColor }
+         */
+        attachCountdown: attachCountdown
     };
 
     /**

@@ -38,14 +38,27 @@ nothing else from the app: no algo package, no order service, no scheduler. It
 never calls live_candle_fallback.record_tick/record_quote, so it cannot inject
 anything into the tick store behind `allow_synthetic` bars. It places no
 orders and has no code path that could. The only writes are its own module
-globals and its own pickle under data/tape/.
+globals, its own pickle under data/tape/ and the SQLite archive beside it.
+
+HISTORY
+-------
+The pickle is a restart snapshot: today's tape, parked so a LaunchAgent
+respawn does not drop the morning. It is not a history — only today's file is
+ever read back and old ones are pruned. `archive_snapshots` folds each day's
+finished pickle into data/tape/tape.db, one row per print, kept forever, which
+is what Round Strike reads to tag big prints on earlier days and replayed
+windows. The archive is only as complete as the tape was: a day nobody watched
+has no rows, and a day's rows are keyed on whatever contract was front month
+THAT day, not the one being charted now.
 """
 
 import logging
 import os
 import pickle
+import sqlite3
 import threading
 from collections import deque
+from contextlib import contextmanager
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from time import monotonic, sleep
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -63,6 +76,12 @@ MARKET_CLOSE = dt_time(15, 30)
 _TAPE_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'tape')
 _SNAPSHOT_EVERY_SEC = 30.0
 _last_snapshot_at = 0.0
+# The durable copy. Each day's pickle is folded in once it is final (see
+# archive_snapshots) and never pruned.
+_ARCHIVE_DB = os.path.join(_TAPE_DIR, 'tape.db')
+# Bumped on every archive write. Round Strike keys its cached response on it,
+# so a replayed window that was served untagged is rebuilt once the day lands.
+_ARCHIVE_GEN = 0
 
 # 09:15-15:30 at the measured ~0.2 prints/sec is ~4,500 rows; the cap is set
 # well above that so a genuinely busy day (or a busier instrument) still fits
@@ -760,6 +779,17 @@ def _topup(symbol: str) -> None:
         with _lock:
             _TOPUP_BUSY.discard(symbol)
             _TOPUP_AT[symbol] = monotonic() + delay
+        # Standing down for the day means the tape is final: history has been
+        # walked to the close and nothing will change it again. That is the
+        # moment to make it permanent — the 15:45 cron and the startup sweep
+        # only exist for the days this line never ran (tab closed early, or
+        # the process was down). Off the lock, on this thread.
+        if delay >= _DONE_FOR_THE_DAY:
+            try:
+                save_snapshot(force=True)
+                archive_snapshots()
+            except Exception as e:
+                logger.warning(f"[TimeAndSales] end-of-day archive of {symbol} failed: {e}")
 
 
 def _maybe_topup(symbol: str) -> None:
@@ -820,6 +850,28 @@ def rows_since(symbol: str, since: int = 0, limit: int = 500,
     if len(rows) > limit:
         return rows[-limit:], True
     return rows, False
+
+
+def large_prints(symbol: str, min_qty: int) -> List[Dict[str, Any]]:
+    """Every row on `symbol`'s tape with qty >= `min_qty`, oldest first.
+
+    For overlays that only need to know WHERE the big prints landed — the
+    Round Strike volume bars tint a bucket blue when one falls inside it —
+    rather than the tape itself. Rows are (ts, price, qty, side, src); `ts` is
+    a real epoch, so a caller on the app's fake-IST bar grid adds its offset.
+    Backfilled 1-second bars (src='bar') count too: a second that traded
+    8,000 lots is a big print whether or not the socket showed it as one.
+    Read straight off the deque — it never blocks the collector for long.
+    """
+    if not symbol or min_qty <= 0:
+        return []
+    with _lock:
+        dq = _PRINTS.get(symbol)
+        if not dq:
+            return []
+        return [{'ts': r['ts'], 'price': r['price'], 'qty': r['qty'],
+                 'side': r['side'], 'src': r['src']}
+                for r in dq if (r['qty'] or 0) >= min_qty]
 
 
 def view(symbol: str, since: int = 0, limit: int = 500, min_qty: int = 0,
@@ -1037,29 +1089,215 @@ def load_snapshot() -> int:
     return len(restored)
 
 
+def _snapshot_day(name: str) -> Optional[date]:
+    """The day a `tape_YYYY-MM-DD.pkl` filename names, or None for anything else."""
+    if not (name.startswith('tape_') and name.endswith('.pkl')):
+        return None
+    try:
+        return date.fromisoformat(name[len('tape_'):-len('.pkl')])
+    except ValueError:
+        return None
+
+
 def prune_snapshots(keep_days: int = 5) -> None:
-    """Drop snapshot files older than `keep_days` so the directory stays small."""
+    """Drop snapshot files older than `keep_days` so the directory stays small.
+
+    Only files the archive has already taken are dropped: a pickle is the sole
+    copy of its day until archive_snapshots has read it, and this runs under
+    _lock from _ensure_supervisor, so it reads the archive's ledger and never
+    does the archiving itself.
+    """
     try:
         cutoff = _today() - timedelta(days=keep_days)
+        archived = _archived_mtimes()
         for name in os.listdir(_TAPE_DIR):
-            if not (name.startswith('tape_') and name.endswith('.pkl')):
+            stamp = _snapshot_day(name)
+            if stamp is None or stamp >= cutoff:
                 continue
-            try:
-                stamp = date.fromisoformat(name[len('tape_'):-len('.pkl')])
-            except ValueError:
+            path = os.path.join(_TAPE_DIR, name)
+            if archived.get(stamp.isoformat(), -1.0) < os.path.getmtime(path):
+                logger.info(f"[TimeAndSales] keeping {name}: not archived yet")
                 continue
-            if stamp < cutoff:
-                os.remove(os.path.join(_TAPE_DIR, name))
+            os.remove(path)
     except FileNotFoundError:
         pass
     except Exception as e:
         logger.debug(f"[TimeAndSales] snapshot prune failed: {e}")
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Archive — the permanent copy
+# ──────────────────────────────────────────────────────────────────────────
+
+@contextmanager
+def _archive_conn():
+    """A connection to the archive, creating it on first use.
+
+    One short-lived connection per call, like the OI history store, committed
+    on a clean exit and always closed. WAL so Round Strike's request threads
+    can read while the archive thread writes.
+    """
+    os.makedirs(_TAPE_DIR, exist_ok=True)
+    conn = sqlite3.connect(_ARCHIVE_DB, timeout=10)
+    try:
+        _archive_schema(conn)
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def _archive_schema(conn: sqlite3.Connection) -> None:
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS prints (
+            symbol    TEXT    NOT NULL,
+            day       TEXT    NOT NULL,
+            ts        INTEGER NOT NULL,
+            seq       INTEGER NOT NULL,
+            price     REAL,
+            qty       INTEGER,
+            side      TEXT,
+            side_rule TEXT,
+            src       TEXT,
+            vol_delta INTEGER,
+            PRIMARY KEY (symbol, day, seq)
+        )""")
+    conn.execute('CREATE INDEX IF NOT EXISTS prints_sym_day_qty ON prints (symbol, day, qty)')
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS archive_runs (
+            symbol       TEXT NOT NULL,
+            day          TEXT NOT NULL,
+            rows         INTEGER,
+            source_mtime REAL,
+            archived_at  TEXT,
+            PRIMARY KEY (symbol, day)
+        )""")
+
+
+def _archived_mtimes() -> Dict[str, float]:
+    """day -> the oldest pickle mtime any of that day's symbols was archived from.
+
+    The minimum, because a pickle holds every symbol taped that day and it is
+    only safe to drop once each of them has been taken from this version of it.
+    """
+    if not os.path.exists(_ARCHIVE_DB):
+        return {}
+    try:
+        with _archive_conn() as conn:
+            rows = conn.execute(
+                'SELECT day, MIN(source_mtime) FROM archive_runs GROUP BY day').fetchall()
+        return {day: float(mt or 0.0) for day, mt in rows}
+    except Exception as e:
+        logger.debug(f"[TimeAndSales] archive ledger read failed: {e}")
+        return {}
+
+
+def archive_snapshots() -> int:
+    """Fold every snapshot on disk into the archive. Returns rows written.
+
+    Reads the pickles, not memory, so it serves past days and a process that
+    has only just started alike. A (symbol, day) is rewritten whenever its
+    pickle is newer than the copy the ledger records, as a delete-and-replace
+    in one transaction: a top-up rebuild renumbers every seq after its seam,
+    so rows cannot be upserted in place. Never called under _lock.
+    """
+    global _ARCHIVE_GEN
+    try:
+        names = sorted(os.listdir(_TAPE_DIR))
+    except FileNotFoundError:
+        return 0
+    written = 0
+    for name in names:
+        stamp = _snapshot_day(name)
+        if stamp is None:
+            continue
+        path = os.path.join(_TAPE_DIR, name)
+        try:
+            mtime = os.path.getmtime(path)
+            with open(path, 'rb') as fh:
+                blob = pickle.load(fh)
+        except Exception as e:
+            logger.warning(f"[TimeAndSales] archive skipped {name}: {e}")
+            continue
+        day = stamp.isoformat()
+        for symbol, rows in (blob.get('prints') or {}).items():
+            if not rows:
+                continue
+            try:
+                written += _archive_day(symbol, day, rows, mtime)
+            except Exception as e:
+                logger.warning(f"[TimeAndSales] archive of {symbol} {day} failed: {e}")
+    if written:
+        _ARCHIVE_GEN += 1
+        logger.info(f"[TimeAndSales] archived {written} rows into {_ARCHIVE_DB}")
+    return written
+
+
+def _archive_day(symbol: str, day: str, rows: List[Dict[str, Any]], mtime: float) -> int:
+    with _archive_conn() as conn:
+        prev = conn.execute(
+            'SELECT rows, source_mtime FROM archive_runs WHERE symbol=? AND day=?',
+            (symbol, day)).fetchone()
+        if prev and (prev[1] or 0.0) >= mtime:
+            return 0
+        if prev and prev[0] and len(rows) < prev[0] * 0.9:
+            # A shorter tape for a day already archived is not what a top-up
+            # produces — a reset or a failed restore is. Take it, since the
+            # pickle is the source of truth, but say so.
+            logger.warning(f"[TimeAndSales] archive of {symbol} {day} shrinks "
+                           f"{prev[0]} -> {len(rows)} rows")
+        conn.execute('DELETE FROM prints WHERE symbol=? AND day=?', (symbol, day))
+        conn.executemany(
+            'INSERT OR REPLACE INTO prints (symbol, day, ts, seq, price, qty, side, '
+            'side_rule, src, vol_delta) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            [(symbol, day, int(r['ts']), int(r['seq']), r.get('price'), r.get('qty'),
+              r.get('side'), r.get('side_rule'), r.get('src'), r.get('vol_delta'))
+             for r in rows])
+        conn.execute(
+            'INSERT OR REPLACE INTO archive_runs (symbol, day, rows, source_mtime, archived_at) '
+            'VALUES (?,?,?,?,?)',
+            (symbol, day, len(rows), mtime, datetime.now(IST).isoformat(timespec='seconds')))
+    return len(rows)
+
+
+def archive_generation() -> int:
+    """How many times the archive has been written to in this process."""
+    return _ARCHIVE_GEN
+
+
+def archived_large_prints(symbol: str, min_qty: int, from_day: date,
+                          to_day: date) -> List[Dict[str, Any]]:
+    """Every archived print of `symbol` at or above `min_qty` on the days in
+    [from_day, to_day], oldest first. Same rows as large_prints, so a caller
+    can concatenate the two. Empty, never an error, when the archive has
+    nothing or cannot be read — a chart without tags beats a chart that fails.
+    """
+    if not os.path.exists(_ARCHIVE_DB):
+        return []
+    try:
+        with _archive_conn() as conn:
+            rows = conn.execute(
+                'SELECT ts, price, qty, side, src FROM prints '
+                'WHERE symbol=? AND day BETWEEN ? AND ? AND qty >= ? ORDER BY ts',
+                (symbol, from_day.isoformat(), to_day.isoformat(), int(min_qty))).fetchall()
+    except Exception as e:
+        logger.debug(f"[TimeAndSales] archive read failed for {symbol}: {e}")
+        return []
+    return [{'ts': ts, 'price': price, 'qty': qty, 'side': side, 'src': src}
+            for ts, price, qty, side, src in rows]
+
+
 def reset(symbol: Optional[str] = None) -> None:
     """Drop the tape for one symbol, or all of them. Used by tests."""
     with _lock:
-        targets = [symbol] if symbol else list(_PRINTS)
+        if symbol:
+            targets = [symbol]
+        else:
+            # Every symbol any table knows, not just the ones holding rows —
+            # a backfill state set before a single print arrived would
+            # otherwise survive into the next test.
+            targets = set(_PRINTS) | set(_BACKFILL) | set(_SEQ) | set(_TOPUP_AT) | set(_SEEN)
         for s in targets:
             _PRINTS.pop(s, None)
             _SEQ.pop(s, None)

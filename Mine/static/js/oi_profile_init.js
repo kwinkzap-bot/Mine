@@ -51,6 +51,9 @@ window.oipInitSecondaryCharts = function() {
         [oipIntrinsicVolumeSeries, oipIntrinsicBnfVolumeSeries] = oipAddVolumeSeriesPair(
             oipIntrinsicChart.chart, 'oipIntVolume', showOptVolumeInt, showOptBnfVolumeInt);
 
+        // PVWAP / 3-AVG_VWAP are flat per-session levels and go through the
+        // pixel-snapped line (TradingViewChart.addCrispLine); VWAP and CVWAP
+        // move bar to bar and stay real LineSeries.
         // Plain VWAP (green/purple) + CVWAP/PVWAP/3-AVG_VWAP on the Options Premium
         // (Combined) chart — one of the 3 "option charts" controlled by the Opt
         // Indicator popup's own "VWAP" checkbox (see oipSyncVwapVisibility). Both
@@ -72,19 +75,19 @@ window.oipInitSecondaryCharts = function() {
             color: '#60a5fa', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
-        oipPvwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+        oipPvwapIntSeries = TradingViewChart.addCrispLine(oipIntrinsicChart.chart, {
             color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
-        oipPvwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+        oipPvwapIntPeSeries = TradingViewChart.addCrispLine(oipIntrinsicChart.chart, {
             color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
-        oipAvg3VwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+        oipAvg3VwapIntSeries = TradingViewChart.addCrispLine(oipIntrinsicChart.chart, {
             color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
-        oipAvg3VwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+        oipAvg3VwapIntPeSeries = TradingViewChart.addCrispLine(oipIntrinsicChart.chart, {
             color: '#f87171', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
@@ -137,15 +140,17 @@ window.oipInitSecondaryCharts = function() {
         // Previous-day reference lines: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2 —
         // all flat lines using the PRIOR trading day's values, drawn across the current session.
         // title + lastValueVisible label each line with its name and current value.
-        oipFixedCeHL2Series = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
+        // Flat, so pixel-snapped (TradingViewChart.addCrispLine) — the name
+        // sits in a tag at the pane edge, the value on the axis.
+        oipFixedCeHL2Series = TradingViewChart.addCrispLine(oipFixedChart.chart, {
             color: '#16a34a', lineWidth: 1, title: 'CE Avg',
             priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
         });
-        oipFixedPeHL2Series = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
+        oipFixedPeHL2Series = TradingViewChart.addCrispLine(oipFixedChart.chart, {
             color: '#7c3aed', lineWidth: 1, title: 'PE Avg',
             priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
         });
-        oipFixedCloseAvgSeries = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
+        oipFixedCloseAvgSeries = TradingViewChart.addCrispLine(oipFixedChart.chart, {
             color: '#000000', lineWidth: 1, title: 'CE & PE Avg',
             priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
         });
@@ -171,11 +176,11 @@ window.oipInitSecondaryCharts = function() {
         // own "VWAP" checkbox, not the main popup's CVWAP/PVWAP/3-AVG_VWAP sub-states.
         const showOptVwap = document.getElementById('oipShowVwapOpt')?.checked ?? false;
         oipCECvwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipCEPvwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipCEAvg3VwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipCEPvwapSeries = TradingViewChart.addCrispLine(oipCEChart.chart, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipCEAvg3VwapSeries = TradingViewChart.addCrispLine(oipCEChart.chart, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
         oipPECvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipPEPvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipPEAvg3VwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPEPvwapSeries = TradingViewChart.addCrispLine(oipPEChart.chart, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPEAvg3VwapSeries = TradingViewChart.addCrispLine(oipPEChart.chart, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
 
         oipInitPremiumSeries();
         

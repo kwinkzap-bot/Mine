@@ -1,4 +1,5 @@
 """API routes for trading data endpoints."""
+import bisect
 import json
 import logging
 import math
@@ -589,7 +590,8 @@ def resolve_standard_lot(symbol: str) -> Optional[int]:
         return None
 
 
-from trading_app.service.provider_logic import get_kite, get_data_provider, get_icici_adapter
+from trading_app.service.provider_logic import get_kite, get_data_provider, get_icici_adapter, get_fyers_adapter
+from trading_app.service import time_and_sales as _tas
 from trading_app.Backtest import ema_futures_pricing
 from trading_app.filters import futures_candle_store
 
@@ -12701,6 +12703,135 @@ def _rs_session_open(candles: list) -> float:
     return 0.0
 
 
+# A single Time & Sales print at or above this many contracts marks the volume
+# bar it landed in — the bar paints blue on the Round Strike chart, whatever the
+# candle's direction. One number for the whole feature: the server tags the
+# bars, the client only reads the tag (and shows the figure in the legend).
+RS_BIG_PRINT_QTY = 8000
+
+_RS_BAR_SECONDS = {
+    '30second': 30, 'minute': 60, '2minute': 120, '3minute': 180, '5minute': 300,
+    '10minute': 600, '15minute': 900, '30minute': 1800, '60minute': 3600, 'day': 86400,
+    'week': 7 * 86400, 'month': 31 * 86400,
+}
+
+_RS_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+_RS_FUT_SYMBOL_RE = re.compile(r'^(NSE|BSE):([A-Z0-9&-]+?)(\d{2})([A-Z]{3})FUT$')
+
+
+def _rs_fyers_future_symbol(root: str, expiry) -> str:
+    """The Fyers symbol of `root`'s monthly future expiring in `expiry`'s month.
+
+    'NSE:NIFTY26SEPFUT' — what the tape archive is keyed on, so a replayed
+    window can find the prints of the contract that was front month THEN
+    without a master that no longer lists it. Fixed month table rather than
+    %b: the format must not move with the process locale.
+    """
+    exch = 'BSE' if _rs_option_exchange(root) == 'BFO' else 'NSE'
+    return f'{exch}:{root.upper()}{expiry.strftime("%y")}{_RS_MONTHS[expiry.month - 1]}FUT'
+
+
+def _rs_check_future_symbol_format(root: str, master_symbol) -> None:
+    """Warn, once a day, if the master's front future does not round-trip
+    through _rs_fyers_future_symbol — the first sign that the format the replay
+    path builds has drifted from what the archive was actually keyed on."""
+    if not isinstance(master_symbol, str):
+        return
+    def _check():
+        m = _RS_FUT_SYMBOL_RE.match(master_symbol)
+        expected = None
+        if m and m.group(4) in _RS_MONTHS:
+            probe = datetime(2000 + int(m.group(3)), _RS_MONTHS.index(m.group(4)) + 1, 1)
+            expected = _rs_fyers_future_symbol(root, probe)
+        if expected != master_symbol:
+            logger.warning(f'[RoundStrike] future symbol {master_symbol!r} does not match the '
+                           f'{expected!r} the replay path would build — archived big prints '
+                           f'will not be found for replayed windows')
+        return True
+    _rs_cached(('rs-fut-symbol-format', root, master_symbol, datetime.now().strftime('%Y-%m-%d')),
+               86400.0, _check)
+
+
+def _rs_tape_symbol(symbol: str, fut_symbol, is_fyers: bool):
+    """The Fyers symbol the trade tape keys on for `symbol`'s front future.
+
+    The tape only speaks Fyers ('NSE:NIFTY26SEPFUT'). With Fyers as the data
+    provider that is the volume leg's own symbol; under Kite/ICICI the leg is a
+    token or an ICICI label, so the Fyers master is asked directly (cached for
+    the session like the volume token itself). None when Fyers is not
+    configured — the bars then simply carry no tag.
+    """
+    if is_fyers and isinstance(fut_symbol, str) and ':' in fut_symbol:
+        return fut_symbol
+    def _lookup():
+        adapter = get_fyers_adapter()
+        return adapter.find_future_symbol(symbol) if adapter else None
+    return _rs_cached(('rs-tape-symbol', symbol, datetime.now().strftime('%Y-%m-%d')), 3600.0, _lookup)
+
+
+def _rs_big_prints(tape_symbol, live: bool, from_day, to_day) -> list:
+    """Every print >= RS_BIG_PRINT_QTY of `tape_symbol` across [from_day, to_day].
+
+    Two sources, concatenated. The archive holds every finished day; on the
+    live chart the in-memory tape holds today, and registering it there keeps
+    the collector's websocket subscribed while the block polls, so the tape is
+    live for as long as the chart is. Today may come from both — the tagger
+    keeps a bar's largest print, so the overlap is harmless, and after a
+    post-close restart the archive is the only one that still has it.
+
+    Never registers on a replayed window: that would open a socket for a dead
+    contract and spend 25 Breeze requests backfilling a day that has no ticks.
+    The archive is immutable for finished days, so the read is held for ten
+    minutes and re-keyed on the archive generation so a day that lands later
+    is picked up rather than waiting out the TTL.
+    """
+    if not tape_symbol:
+        return []
+    prints: list = []
+    if live:
+        try:
+            _tas.register(tape_symbol)
+            prints.extend(_tas.large_prints(tape_symbol, RS_BIG_PRINT_QTY))
+        except Exception as exc:
+            logger.debug(f'[RoundStrike] live big-print lookup skipped for {tape_symbol}: {exc}')
+    archived = _rs_cached(
+        ('rs-archived-prints', tape_symbol, from_day, to_day, RS_BIG_PRINT_QTY, _tas.archive_generation()),
+        600.0, lambda: _tas.archived_large_prints(tape_symbol, RS_BIG_PRINT_QTY, from_day, to_day))
+    prints.extend(archived or [])
+    return prints
+
+
+def _rs_tag_big_prints(volume_bars: list, prints: list, interval: str, ist_offset: int) -> list:
+    """Mark each volume bar that contains one of `prints` (see _rs_big_prints).
+
+    A tagged bar gains `big: True` and `big_qty` (its largest print); untagged
+    bars are returned unchanged, so a client that never heard of the tag sees
+    exactly what it always did. Pure: no fetching, no registering.
+    """
+    if not volume_bars or not prints:
+        return volume_bars
+    secs = _RS_BAR_SECONDS.get(interval, 60)
+    # Bar time -> largest qualifying print, on the chart's fake-IST bar grid.
+    biggest: Dict[int, int] = {}
+    times = sorted(int(b['time']) for b in volume_bars)
+    for pr in prints:
+        t = int(pr['ts']) + ist_offset
+        # The bar whose [time, time + secs) window holds the print.
+        idx = bisect.bisect_right(times, t) - 1
+        if idx < 0:
+            continue
+        bar_t = times[idx]
+        if t >= bar_t + secs:
+            continue
+        q = int(pr['qty'] or 0)
+        if q > biggest.get(bar_t, 0):
+            biggest[bar_t] = q
+    if not biggest:
+        return volume_bars
+    return [dict(b, big=True, big_qty=biggest[int(b['time'])]) if int(b['time']) in biggest else b
+            for b in volume_bars]
+
+
 def _rs_trim_days(bars: list, days: int) -> list:
     """Keep only the last `days` TRADING days of `bars`.
 
@@ -12933,7 +13064,11 @@ def oi_profile_round_strike() -> EndpointResponse:
         # another. It is in the cache key too: OI-Profile and Replay share
         # _rs_response_cache, and they no longer necessarily share a broker.
         _rs_ctx = _oi_profile_page_context('round_strike')
-        cache_key = (symbol, interval, days, ce_strike, pe_strike, step, expiry_raw, as_of_raw, _want_header, _rs_ctx)
+        # The archive generation is in the key so a replayed window served
+        # before its day was archived is rebuilt with tags once it lands,
+        # instead of sitting untagged for the settled-window TTL.
+        cache_key = (symbol, interval, days, ce_strike, pe_strike, step, expiry_raw, as_of_raw,
+                     _want_header, _rs_ctx, _tas.archive_generation())
         # A settled expiry's answer is immutable, so it is held for the day
         # rather than rebuilt on the sub-second live cadence.
         # A window that closed in the past can never change again, so it is held
@@ -13308,6 +13443,24 @@ def oi_profile_round_strike() -> EndpointResponse:
             return [{'time': b['time'], 'volume': b['volume']} for b in bars]
 
         future_volume = _volume_series(future_vol)
+        # Tag the bars a >= RS_BIG_PRINT_QTY print landed in. Today's prints
+        # come from the in-memory tape, every earlier day's from the archive,
+        # so the live window's back days and replayed windows get tags too.
+        # The volume leg is ONE contract for the whole window (today's front
+        # month live, the end day's on replay) while each archived day was
+        # keyed on whatever was front month that day, so days before a monthly
+        # expiry inside the window carry no tags. That is correct, not a gap.
+        if future_volume:
+            if _historical:
+                _fut_expiry = _rs_front_future_expiry(symbol, _end_day, _icici) if _icici else None
+                _tape_symbol = _rs_fyers_future_symbol(symbol, _fut_expiry) if _fut_expiry else None
+            else:
+                _tape_symbol = _rs_tape_symbol(symbol, fut_symbol, _is_fyers_provider)
+                _rs_check_future_symbol_format(symbol, _tape_symbol)
+            future_volume = _rs_tag_big_prints(
+                future_volume,
+                _rs_big_prints(_tape_symbol, not _historical, from_date.date(), to_date.date()),
+                interval, ist_offset)
         banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
 
         oi_data      = (_rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}) if _want_header else {}
@@ -13400,6 +13553,7 @@ def oi_profile_round_strike() -> EndpointResponse:
             'pe_candles': pe_candles,
             'future_volume': future_volume,
             'future_symbol': fut_symbol,
+            'big_print_qty': RS_BIG_PRINT_QTY,
             'banknifty_volume': banknifty_volume,
             'banknifty_symbol': bnf_symbol,
             'strikes': strikes_list,

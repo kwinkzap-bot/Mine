@@ -112,6 +112,26 @@ class MarketScheduler:
             misfire_grace_time=300,
         )
 
+        # Time & Sales tape -> permanent archive. The tape archives itself the
+        # moment its history top-up stands down for the day, so this is the
+        # backstop for a day whose tab was closed before the close (the tape
+        # simply stopped, and nothing else would ever fold it in). 15:45 is
+        # well past the last top-up; :15 is a second no other job uses.
+        self.scheduler.add_job(
+            self._run_tape_archive_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=15,
+                minute=45,
+                second=15,
+                timezone='Asia/Kolkata',
+            ),
+            id='tape_archive',
+            name='Time & Sales Tape Archive',
+            replace_existing=True,
+            misfire_grace_time=600,
+        )
+
         # OI Crossover scan — every 3 minutes through the session. One Fyers
         # optionchain call per symbol across ~214 names, paced at 2.5 req/s to
         # stay under the endpoint's per-minute quota, takes ~102s; a 1-minute
@@ -1083,6 +1103,18 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"[HistoricOI Scheduler] Unexpected error: {e}", exc_info=True)
 
+    def _run_tape_archive_task(self):
+        """3:45 PM IST: park today's Time & Sales tape and fold it into the archive."""
+        try:
+            if not self.is_trading_day():
+                return
+            from trading_app.service import time_and_sales as tas
+            tas.save_snapshot(force=True)
+            rows = tas.archive_snapshots()
+            logger.info(f"[Tape Archive] {rows} rows archived")
+        except Exception as e:
+            logger.error(f"[Tape Archive] Unexpected error: {e}", exc_info=True)
+
     def _run_historic_oi_catchup(self):
         """Startup recovery: backfill any recent trading day whose 8 PM OI record
         was missed because the process wasn't alive at 20:00 IST.
@@ -1232,6 +1264,15 @@ class MarketScheduler:
         never blocks app startup and the catch-ups don't compete for the same
         rate-limited APIs at once. Each step is isolated so one failure doesn't
         skip the rest."""
+        # Tape archive first: local disk only and sub-second, and a replay
+        # served before it runs is cached untagged for the day.
+        try:
+            from trading_app.service import time_and_sales as tas
+            rows = tas.archive_snapshots()
+            if rows:
+                logger.info(f"[Startup Catchup] Tape archive folded in {rows} rows")
+        except Exception as e:
+            logger.error(f"[Startup Catchup] Tape archive step failed: {e}", exc_info=True)
         try:
             self._run_historic_oi_catchup()
         except Exception as e:

@@ -503,14 +503,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipVwapIntPeSeries) oipVwapIntPeSeries.applyOptions({ visible: show });
     });
 
-    oipElems.showVwapGroup?.addEventListener('change', () => oipSyncVwapVisibility());
-    oipElems.showCVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
-    oipElems.showPVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
-    oipElems.show3AvgVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
-
-    oipElems.showCpr?.addEventListener('change', () => {
-        if (oipOIData && oipOIData.candles) oipDrawCpr(oipOIData.candles);
-    });
+    // The main chart's VWAP / CPR / Multi CPR / EMA controls are the Mine CPR
+    // sections now — wired by oipInitMineCpr, not here.
 
     oipElems.showVolume?.addEventListener('change', (e) => {
         oipVolumeSeries?.applyOptions({ visible: e.target.checked });
@@ -520,29 +514,8 @@ document.addEventListener('DOMContentLoaded', () => {
         oipBnfVolumeSeries?.applyOptions({ visible: e.target.checked });
     });
 
-    [oipElems.showEma9, oipElems.showEma20, oipElems.showEma50, oipElems.showEma100, oipElems.showEma200].forEach(el => {
-        el?.addEventListener('change', () => oipUpdateEmaVisibility());
-    });
-
-    oipElems.showEMA?.addEventListener('change', e => {
-        oipUpdateEmaVisibility();
-    });
-
     ['oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => oipUpdateOptEmaVisibility());
-    });
-
-    ['oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
-     'oipCprShowLabels'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', () => {
-            if (oipOIData?.candles) oipDrawCpr(oipOIData.candles);
-        });
-    });
-
-    ['oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', () => {
-            if (oipOIData?.candles) oipDrawMultiCPR(oipOIData.candles);
-        });
     });
 
     document.getElementById('oipShowMaxPain')?.addEventListener('change', () => {
@@ -550,12 +523,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('oipShow2ndCandle30s')?.addEventListener('change', () => {
         if (oipOIData?.candles) oipDraw2ndCandle30sBox(oipOIData.candles);
-    });
-    document.getElementById('oipShow2nd5mCandle')?.addEventListener('change', () => {
-        if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles);
-    });
-    document.getElementById('oipShowMondayBox')?.addEventListener('change', () => {
-        if (oipOIData?.candles) oipDrawMondayBox(oipOIData.candles);
     });
     document.getElementById('oipShow30mReversalLines')?.addEventListener('change', () => {
         if (oipFullCandles) oipDraw30mReversalLines(oipFullCandles);
@@ -690,6 +657,85 @@ document.addEventListener('DOMContentLoaded', () => {
     oipSelectSymbol(oipSymbol);
 });
 
+/* ── Mine CPR on the main chart ───────────────────────────────
+ * The /multichart indicator set — CPR with its pivots, R/S levels, PDH/PDL
+ * boxes, virgin CPR, Multi CPR, EMAs, the three VWAPs, the 2nd-candle and
+ * Monday boxes — computed by components/mine_cpr.js from the main chart's
+ * candles and drawn on it through the same pane primitive the Multichart
+ * panes use. Its settings are MineCPR.DEFAULTS overlaid with what the user
+ * picked in the Indicators popup (rendered from MineCPR.SPEC into
+ * #oipMineCprSections), persisted under their own key.
+ *
+ * "Use daily-based values" wants the exchange's daily bars; those come from
+ * /api/multichart/candles?interval=day (the route Multichart's daily pane
+ * already uses), fetched once per symbol and refreshed after five minutes.
+ * Without them the engine falls back to the intraday candles' own period
+ * H/L/C, exactly as Multichart does before its daily rows arrive.
+ */
+const OIP_MINECPR_STORE_KEY = 'oip-minecpr-v1';
+const OIP_MINE_DAILY_TTL_MS = 5 * 60 * 1000;
+let oipMineCprSettings = {};
+let oipMinePane = null;                       // { chart, series, lines, primitive } for MineCPR.attach
+let oipMineDaily = { symbol: null, rows: [], at: 0, pending: null };
+
+const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key] : MineCPR.DEFAULTS[key];
+
+function oipInitMineCpr() {
+    if (typeof MineCPR === 'undefined' || !oipOIChart || !oipOISeries) return;
+    try { oipMineCprSettings = JSON.parse(localStorage.getItem(OIP_MINECPR_STORE_KEY) || '{}') || {}; }
+    catch (e) { oipMineCprSettings = {}; }
+    oipMinePane = { chart: oipOIChart, series: oipOISeries, lines: {}, primitive: null };
+
+    const host = document.getElementById('oipMineCprSections');
+    if (host && !host.dataset.built) {
+        host.dataset.built = '1';
+        host.innerHTML = MineCPR.renderSettings(oipMineSetting);
+        MineCPR.bindSettings(host, (key, v) => {
+            oipMineCprSettings[key] = v;
+            try { localStorage.setItem(OIP_MINECPR_STORE_KEY, JSON.stringify(oipMineCprSettings)); } catch (e) {}
+        }, () => oipApplyMineCpr());
+    }
+    // EMA 200 / Monday box colours follow the theme, as on Multichart.
+    window.addEventListener('themechanged', () => oipApplyMineCpr());
+}
+
+function oipApplyMineCpr() {
+    if (!oipMinePane) return;
+    const candles = oipOILastCandles || [];
+    try {
+        const result = MineCPR.compute(candles, oipInterval, oipMineDaily.rows, oipMineCprSettings);
+        MineCPR.attach(oipMinePane, result);
+    } catch (e) { console.warn('[OIP] Mine CPR:', e); }
+    const host = document.getElementById('oipMineCprSections');
+    if (host) MineCPR.refreshGates(host, [MineCPR.tfInfo(oipInterval)]);
+    if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
+    if (candles.length) oipLoadMineDaily();
+}
+
+// Daily bars for the pivots — one request per symbol, re-fetched after the
+// TTL; re-applies the indicators when a fresh set lands. A symbol the
+// Multichart route does not know (or a broker hiccup) just leaves the
+// intraday fallback in place.
+function oipLoadMineDaily() {
+    const d = oipMineDaily;
+    if (d.pending) return;
+    if (d.symbol === oipSymbol && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
+    const symbol = oipSymbol;
+    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day`, { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(body => {
+            d.pending = null;
+            if (symbol !== oipSymbol) return;
+            d.symbol = symbol; d.at = Date.now();
+            d.rows = (body && body.success && Array.isArray(body.daily)) ? body.daily : [];
+            if (d.rows.length && oipMinePane) {
+                try { MineCPR.attach(oipMinePane, MineCPR.compute(oipOILastCandles || [], oipInterval, d.rows, oipMineCprSettings)); } catch (e) {}
+                if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
+            }
+        })
+        .catch(() => { d.pending = null; d.symbol = symbol; d.at = Date.now(); d.rows = []; });
+}
+
 /* ── Main OI Profile chart: Horizontal Ray drawing tool ──────── */
 // Disarms the tool and resets the toolbar button — called after a ray is
 // drawn (single-shot arm, matches the Opt Prem / Round Strike Ray tools).
@@ -800,45 +846,12 @@ function oipInitCharts() {
             });
             oipInitMainRayTool();
         }
-        // CVWAP (current-session) + PVWAP (previous-session flat line) + 3-AVG_VWAP
-        oipCvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-            color: '#3b82f6', lineWidth: 2, title: '',
-            visible: oipElems.showCVWAP?.checked ?? false,
-            priceLineVisible: false, lastValueVisible: false,
-            autoscaleInfoProvider: () => null
-        });
-        oipPvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-            color: '#fdba74', lineWidth: 2, title: '',
-            visible: oipElems.showPVWAP?.checked ?? false,
-            priceLineVisible: false, lastValueVisible: false,
-            autoscaleInfoProvider: () => null
-        });
-        oipAvg3VwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-            color: '#ef4444', lineWidth: 2, title: '',
-            visible: oipElems.show3AvgVWAP?.checked ?? false,
-            priceLineVisible: false, lastValueVisible: false,
-            autoscaleInfoProvider: () => null
-        });
-
-        // Fixed EMA series matching Mine CPR Pine script
-        oipEma9Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma20Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma50Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-
-        /* 
-        oipMaxPainSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { 
-            color: '#2563eb', lineWidth: 2, 
-            lineStyle: 2, // Dashed
-            title: 'Max Pain History',
-            lastValueVisible: false,
-            priceLineVisible: false,
-            autoscaleInfoProvider: () => null
-        });
-        */
-
-
+        // VWAP / EMA / CPR / Multi CPR / boxes on this chart are the Mine CPR
+        // set (components/mine_cpr.js) — the same engine and settings list as
+        // /multichart. oipCvwapSeries & co. and oipEma*Series stay declared
+        // (null) for the code paths oi_indicators.js shares with the replay
+        // page, which still builds its own.
+        oipInitMineCpr();
 
         oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(() => oipRequestDraw());
         oipOIChart.timeScale().subscribeVisibleTimeRangeChange(() => oipRequestDraw());
@@ -851,6 +864,12 @@ function oipInitCharts() {
 
         if (typeof TradingViewChart !== 'undefined' && TradingViewChart.addScrollButton) {
             TradingViewChart.addScrollButton(oipOIChart, oipOISeries, elOI);
+        }
+        // Price + bar-close countdown block on the axis (shared with every
+        // other chart in the app). `interval` is a getter for the same reason
+        // the ray tool's is: the TF dropdown changes oipInterval in place.
+        if (typeof TradingViewChart !== 'undefined' && TradingViewChart.attachCountdown) {
+            TradingViewChart.attachCountdown(oipOIChart, oipOISeries, { interval: () => oipInterval });
         }
     }
     if (window.oipInitSecondaryCharts) window.oipInitSecondaryCharts();
@@ -1302,9 +1321,6 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                         oipOIChart.priceScale('right').applyOptions({ autoScale: true });
                     }
 
-                    if (oipCvwapSeries) oipCvwapSeries.setData(oipCalculateCVWAP(validCandles));
-                    if (oipPvwapSeries) oipPvwapSeries.setData(oipCalculatePVWAP(validCandles));
-                    if (oipAvg3VwapSeries) oipAvg3VwapSeries.setData(oipCalculateAvg3VWAP(validCandles));
                     oipUpdateVwapBiasCard(validCandles);
 
                     oipSetVolumeBars(oipVolumeSeries, data.future_volume, validCandles);
@@ -1319,19 +1335,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 oipOIChartReady = true;
             }
 
-            // Fixed EMAs — single-pass over candles for all 5 periods
-            if (oipEma9Series || oipEma20Series || oipEma50Series || oipEma100Series || oipEma200Series) {
-                const allEmas = oipCalculateAllEMAs(validCandles);
-                if (oipEma9Series) oipEma9Series.setData(allEmas.ema9);
-                if (oipEma20Series) oipEma20Series.setData(allEmas.ema20);
-                if (oipEma50Series) oipEma50Series.setData(allEmas.ema50);
-                if (oipEma100Series) oipEma100Series.setData(allEmas.ema100);
-                if (oipEma200Series) oipEma200Series.setData(allEmas.ema200);
-            }
-
-            oipUpdateEmaVisibility();
-            oipDrawCpr(validCandles);
-            oipDrawMultiCPR(validCandles);
+            // CPR / Multi CPR / EMAs / VWAP / boxes — the Mine CPR set, in one pass.
+            oipApplyMineCpr();
 
             // 9:18 ATM CE OI lines — always compute & cache (kept ready);
             // oipDrawAtmCeOiLines() only renders when the checkbox is on.
@@ -1354,9 +1359,10 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 oip30sSecondCandle.ce = [];
                 oip30sSecondCandle.pe = [];
                 // No option data in index view — draw OI-chart boxes only
+                // (the 2nd 5-min and Monday boxes on THIS chart are Mine CPR's;
+                // oipDraw2nd5mCandleBox only serves the option charts now).
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
-                oipDrawMondayBox(validCandles);
                 oipDraw30mReversalLines(validCandles);
                 oipDraw1DReversalLines(validCandles);
             } else {
@@ -1390,7 +1396,6 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
                 // Index-chart-only overlays.
-                oipDrawMondayBox(validCandles);
                 oipDraw30mReversalLines(validCandles);
                 oipDraw1DReversalLines(validCandles);
             }
@@ -2076,10 +2081,12 @@ function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, border
             fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
         }
 
-        const top = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: borderWidth, lineStyle, ...shared });
+        // Borders are pixel-snapped level lines (TradingViewChart.addCrispLine);
+        // _oipRemoveBoxSeries removes them through TradingViewChart.removeSeries.
+        const top = TradingViewChart.addCrispLine(chart, { color: borderCol, lineWidth: borderWidth, lineStyle, ...shared });
         top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const bottom = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: borderWidth, lineStyle, ...shared });
+        const bottom = TradingViewChart.addCrispLine(chart, { color: borderCol, lineWidth: borderWidth, lineStyle, ...shared });
         bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
         return { chart, fill, top, bottom };
@@ -2092,7 +2099,7 @@ function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, border
 function _oipRemoveBoxSeries(box) {
     if (!box) return;
     ['fill', 'top', 'bottom'].forEach(k => {
-        if (box[k]) { try { box.chart.removeSeries(box[k]); } catch (_) {} }
+        if (box[k]) { try { TradingViewChart.removeSeries(box.chart, box[k]); } catch (_) {} }
     });
 }
 
