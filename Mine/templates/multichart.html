@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Multichart{% endblock %}
+
+{% block head %}
+{{ super() }}
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}?v={{ sv('css/components/tradingview-chart.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/multichart.css') }}?v={{ sv('css/multichart.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="mc-page" id="mcPage">
+
+    <!-- One toolbar drives every pane: the symbol, the indicator set, the live state. -->
+    <div class="mc-toolbar">
+        <div class="mc-search-wrap">
+            <input type="search" id="mcSymbol" class="mc-search" autocomplete="off" spellcheck="false"
+                   placeholder="Symbol… ( / )" value="NIFTY" title="Search an index or F&O stock — applies to all four charts">
+            <div class="mc-suggest" id="mcSuggest" hidden></div>
+        </div>
+
+        <div class="mc-quote" id="mcQuote">
+            <span class="mc-ltp" id="mcLtp">—</span>
+            <span class="mc-chg" id="mcChg"></span>
+        </div>
+
+        <div class="mc-ind-wrap">
+            <button type="button" class="mc-btn" id="mcIndBtn" title="Indicators — the Mine CPR set, applied to all four charts">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>
+                Indicators
+            </button>
+            <div id="mcIndPopup" class="mc-ind-popup" hidden></div>
+        </div>
+
+        <div class="mc-spacer"></div>
+
+        <span class="mc-banner" id="mcBanner" hidden></span>
+        <span class="mc-live" id="mcLive" title="Live feed"><i class="mc-dot"></i><span id="mcLiveText">connecting</span></span>
+    </div>
+
+    <!-- 2×2 grid; a pane's ⛶ swaps the grid for that pane alone. -->
+    <div class="mc-grid" id="mcGrid"></div>
+
+    <!-- One pane. Cloned four times by multichart.js. -->
+    <template id="mcPaneTpl">
+        <div class="mc-pane">
+            <div class="mc-pane-head">
+                <select class="mc-tf" title="Timeframe"></select>
+                <span class="mc-pane-title"></span>
+                <span class="mc-ohlc"></span>
+                <span class="mc-pane-spacer"></span>
+                <span class="mc-pane-cpr" title="Pivot period CPR is anchored to on this timeframe"></span>
+                <button type="button" class="mc-max" title="Maximise / restore">⛶</button>
+            </div>
+            <div class="mc-chart"></div>
+        </div>
+    </template>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/multichart.js') }}?v={{ sv('js/multichart.js') }}"></script>
+{% endblock %}

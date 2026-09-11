@@ -153,6 +153,17 @@ def historic_oi():
     """Historic OI — standalone page."""
     return render_template('historic_oi.html')
 
+@pages_bp.route('/multichart')
+@require_user_auth
+def multichart():
+    """Multichart — one symbol on four live timeframes with the Mine CPR set.
+
+    No @login_required: the data comes from Fyers, not Kite, and the page's own
+    API answers 401 (auth_required) when that adapter is missing, which the
+    page turns into a banner instead of bouncing to the Zerodha login.
+    """
+    return render_template('multichart.html')
+
 @pages_bp.route('/replay')
 @require_user_auth
 @login_required

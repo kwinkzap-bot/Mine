@@ -1,0 +1,293 @@
+/* multichart.css — four live panes of one symbol. Compact by design: a 28px
+   toolbar, 22px pane headers, and the rest of the viewport is chart.
+   Colours come from the theme tokens in theme.css so the page follows the
+   body theme like every other page. */
+
+.mc-page {
+    --mc-ctl-h: 22px;
+    --mc-radius: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--color-text);
+    /* the grid's height is set by JS to fill the rest of the viewport */
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────── */
+.mc-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    min-height: 28px;
+    padding: 0 2px;
+}
+.mc-spacer, .mc-pane-spacer { flex: 1; }
+
+.mc-search-wrap { position: relative; width: 190px; flex-shrink: 0; }
+.mc-search {
+    width: 100%;
+    height: var(--mc-ctl-h);
+    padding: 0 8px;
+    font: 600 12px/1 Inter, system-ui, sans-serif;
+    letter-spacing: .02em;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--mc-radius);
+    outline: none;
+    box-sizing: border-box;
+}
+.mc-search:focus { border-color: var(--color-accent); }
+.mc-search::-webkit-search-cancel-button { display: none; }
+
+.mc-suggest {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 0;
+    min-width: 100%;
+    z-index: 300;
+    max-height: 340px;
+    overflow-y: auto;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-card);
+}
+.mc-sug {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 10px;
+    font-size: 12px;
+    text-align: left;
+    color: var(--color-text);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--color-border-sub);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.mc-sug:last-child { border-bottom: 0; }
+.mc-sug:hover, .mc-sug.active { background: var(--color-accent-dim); }
+.mc-sug-sym { font-weight: 700; }
+.mc-sug-kind { margin-left: auto; font-size: 9px; letter-spacing: .06em; color: var(--color-text-3); }
+.mc-sug-empty { padding: 8px 10px; color: var(--color-text-3); font-size: 11px; }
+
+.mc-quote { display: flex; align-items: baseline; gap: 6px; min-width: 0; white-space: nowrap; }
+.mc-ltp { font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.mc-chg { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mc-chg.up { color: var(--color-pos); }
+.mc-chg.dn { color: var(--color-neg); }
+
+.mc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: var(--mc-ctl-h);
+    padding: 0 9px;
+    font: 600 11px/1 Inter, system-ui, sans-serif;
+    color: var(--color-text-2);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--mc-radius);
+    cursor: pointer;
+}
+.mc-btn:hover, .mc-btn.on { color: var(--color-text); border-color: var(--color-accent); }
+
+.mc-live { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--color-text-3); white-space: nowrap; }
+.mc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-3); }
+.mc-live.open .mc-dot { background: var(--color-pos); box-shadow: 0 0 0 3px rgba(22, 163, 74, .18); }
+.mc-live.error .mc-dot { background: var(--color-neg); }
+.mc-live.closed .mc-dot { background: var(--color-warning); }
+
+.mc-banner {
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--color-warning);
+    background: rgba(217, 119, 6, .1);
+    border: 1px solid rgba(217, 119, 6, .35);
+    border-radius: var(--mc-radius);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 50vw;
+}
+
+/* ── indicators popup (same bones as the OI Profile one) ─────────────── */
+.mc-ind-wrap { position: relative; }
+.mc-ind-popup {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 400;
+    width: max-content;
+    min-width: 230px;
+    max-width: 340px;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    padding: 6px 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-card);
+    font-size: 12px;
+}
+.mc-ind-head {
+    padding: 3px 12px 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-3);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    border-bottom: 1px solid var(--color-border-sub);
+}
+.mc-ind-section + .mc-ind-section { border-top: 1px solid var(--color-border-sub); margin-top: 3px; padding-top: 3px; }
+.mc-ind-title {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 12px 2px;
+    font-size: 10px; font-weight: 600;
+    color: var(--color-text-3);
+    text-transform: uppercase; letter-spacing: .05em;
+}
+.mc-ind-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 12px;
+    cursor: pointer;
+    color: var(--color-text);
+    white-space: nowrap;
+    font-weight: 500;
+}
+.mc-ind-item:hover { background: var(--color-row-hover); }
+.mc-ind-item.sub { padding-left: 28px; font-size: 11px; }
+.mc-ind-item input[type="checkbox"] { width: 13px; height: 13px; margin: 0; accent-color: var(--color-accent); cursor: pointer; }
+.mc-ind-item select, .mc-ind-item input[type="number"] {
+    margin-left: auto;
+    height: 18px;
+    font-size: 10px;
+    padding: 0 3px;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+}
+.mc-ind-item input[type="number"] { width: 54px; }
+.mc-ind-row { display: flex; align-items: center; gap: 10px; padding: 2px 12px 2px 28px; font-size: 11px; }
+.mc-ind-row label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.mc-ind-row input[type="checkbox"] { width: 12px; height: 12px; margin: 0; accent-color: var(--color-accent); }
+.mc-gate {
+    margin-left: auto;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    color: var(--color-text-3);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 0 4px;
+    line-height: 13px;
+}
+.mc-gate.live { color: var(--color-pos); border-color: currentColor; }
+.mc-sw { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+
+/* ── grid + panes ────────────────────────────────────────────────────── */
+.mc-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 6px;
+    min-height: 360px;
+}
+.mc-grid.max { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.mc-grid.max .mc-pane:not(.maxed) { display: none; }
+
+.mc-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.mc-pane-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--mc-ctl-h);
+    padding: 0 6px 0 4px;
+    border-bottom: 1px solid var(--color-border-sub);
+    font-size: 11px;
+    color: var(--color-text-2);
+    flex-shrink: 0;
+}
+.mc-tf {
+    height: 18px;
+    font: 700 11px/1 Inter, system-ui, sans-serif;
+    padding: 0 2px;
+    color: var(--color-text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.mc-tf:hover, .mc-tf:focus { border-color: var(--color-border); outline: none; background: var(--color-surface); }
+.mc-pane-title { font-weight: 600; color: var(--color-text); }
+.mc-ohlc { font-variant-numeric: tabular-nums; color: var(--color-text-2); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-ohlc b { color: var(--color-text-3); font-weight: 600; margin-right: 1px; }
+.mc-ohlc.up { color: var(--color-pos); }
+.mc-ohlc.dn { color: var(--color-neg); }
+.mc-pane-cpr { font-size: 9px; letter-spacing: .05em; color: var(--color-text-3); text-transform: uppercase; }
+.mc-max {
+    width: 18px; height: 18px;
+    padding: 0;
+    font-size: 11px; line-height: 1;
+    color: var(--color-text-3);
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.mc-max:hover { color: var(--color-text); background: var(--color-row-hover); }
+.mc-chart { flex: 1; min-height: 0; position: relative; }
+.mc-pane.loading .mc-chart::after {
+    content: 'loading…';
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--color-text-3);
+    pointer-events: none;
+}
+.mc-pane.empty .mc-chart::after {
+    content: attr(data-empty);
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--color-text-3);
+    pointer-events: none;
+}
+
+/* The scroll-to-live button ships in oi_profile.css only; the chart module
+   creates it with this class, so it needs a home here too. */
+.mc-chart .tv-chart-scroll-btn {
+    position: absolute;
+    bottom: 26px; right: 64px;
+    width: 24px; height: 24px;
+    display: none; align-items: center; justify-content: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-2);
+    cursor: pointer;
+    z-index: 5;
+}
+.mc-chart .tv-chart-scroll-btn.show { display: flex; }
+.mc-chart .tv-chart-scroll-btn svg { width: 12px; height: 12px; }
+
+@media (max-width: 900px) {
+    .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(220px, 1fr)); }
+    .mc-search-wrap { width: 140px; }
+    .mc-quote { min-width: 0; }
+}
