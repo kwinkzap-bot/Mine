@@ -24,7 +24,7 @@
     const POLL_MS = { open: 2000, hidden: 10000, closed: 60000, error: 5000 };
     const REFRESH_MS = 5 * 60 * 1000;          // full re-fetch of every pane, heals gaps
     const RIGHT_OFFSET = 12;                   // bars of whitespace — Future CPR lives there
-    const INITIAL_BARS = 120;                  // bars on screen after a load — the zoom the charts open at
+    const INITIAL_BARS = 80;                   // bars on screen after a load — the zoom the charts open at
 
     const CHART_THEMES = {
         light:  { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },

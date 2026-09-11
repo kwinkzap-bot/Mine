@@ -312,10 +312,11 @@ window.MineCPR = (function () {
                 const lbl = S.labels;
                 const cprColor = COLORS.cpr;
                 // Pine's line/box objects never move the price scale — only
-                // plots do. The one exception kept here: the RUNNING period's
-                // band and Camarilla R3/S3, so the levels being traded against
-                // stay on screen. Everything historical scrolls like any object.
-                const sc = isLive;
+                // plots do — and neither does anything drawn here: on a gap
+                // day yesterday's levels sit hundreds of points from price,
+                // and pulling them on screen squashes the candles into a
+                // strip. The levels are one scroll away, as on TradingView.
+                const sc = false;
                 if (S.shadow) {
                     els.push({ kind: 'rect', x1, x2, extendRight, y1: bandHi, y2: bandLo,
                                fill: virgin ? withAlpha(COLORS.virginFill, S.virginTransp) : withAlpha(COLORS.cprFill, S.cprTransp),
@@ -503,8 +504,8 @@ window.MineCPR = (function () {
             detached() { state.series = null; state.chart = null; state.requestUpdate = null; },
             updateAllViews() {},
             paneViews: () => [paneView],
-            // Only elements flagged `scale` (the running period's CPR band and
-            // Camarilla R3/S3) join the autoscale, and only while on screen.
+            // Nothing is flagged `scale` today (see compute); the hook stays so
+            // a future element can opt in, and it only counts while on screen.
             //
             // An element's OWN span [x1, x2] is what counts, never its
             // right-hand extension: a virgin band from ten sessions ago that
