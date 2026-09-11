@@ -34,7 +34,7 @@ window.MineCPR = (function () {
         r1: false, r2: false, r3: false, r4: false,
         s1: false, s2: false, s3: false, s4: false,
         camR3S3: true,
-        pdhR1Box: true, pdlS1Box: true, histPdhl: false,
+        pdhR1Box: true, pdlS1Box: true, histPdhl: true,     // PDH/PDL on — the one default that departs from the script
         virgin: true, virginExtend: true, virginTransp: 65,
         futureCpr: false,
         labels: false,

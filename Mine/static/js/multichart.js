@@ -24,7 +24,7 @@
     const POLL_MS = { open: 2000, hidden: 10000, closed: 60000, error: 5000 };
     const REFRESH_MS = 5 * 60 * 1000;          // full re-fetch of every pane, heals gaps
     const RIGHT_OFFSET = 12;                   // bars of whitespace — Future CPR lives there
-    const INITIAL_BARS = 160;
+    const INITIAL_BARS = 120;                  // bars on screen after a load — the zoom the charts open at
 
     const CHART_THEMES = {
         light:  { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
@@ -69,7 +69,7 @@
             }));
         } catch (e) { /* storage blocked — the page still works */ }
     }
-    const PAGE_DEFAULTS = { countdown: true };   // page settings that are not Pine inputs
+    const PAGE_DEFAULTS = { countdown: true, futVolume: true };   // page settings that are not Pine inputs
     const setting = key => (key in state.settings) ? state.settings[key]
         : (key in PAGE_DEFAULTS) ? PAGE_DEFAULTS[key] : MineCPR.DEFAULTS[key];
 
@@ -121,7 +121,7 @@
             autoSize: true,
             rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 } },
             timeScale: { borderVisible: false, timeVisible: state.tfs[index] !== 'day', secondsVisible: false,
-                         rightOffset: RIGHT_OFFSET, barSpacing: 6, minBarSpacing: 1 },
+                         rightOffset: RIGHT_OFFSET, barSpacing: 8, minBarSpacing: 1 },
             localization: { timeFormatter: window.lwCrosshairTime, timezone: 'Etc/UTC' },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
             handleScale: { axisPressedMouseMove: true },
@@ -132,11 +132,20 @@
             // so the price and the countdown share one box.
             priceLineVisible: true, lastValueVisible: false,
         });
+        // Volume of the current-expiry future, in the bottom fifth on its own
+        // hidden scale — the index has no volume of its own, and reading the
+        // future's for a stock too keeps every symbol on the same footing.
+        const volume = chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: { type: 'volume' }, priceScaleId: 'vol',
+            lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+        });
+        chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
         if (window.TradingViewChart && TradingViewChart.addScrollButton) TradingViewChart.addScrollButton(chart, series, el);
 
         const pane = {
-            index, node, chart, series, el,
+            index, node, chart, series, volume, el,
             tf: state.tfs[index], candles: [], daily: [], lines: {}, primitive: null,
+            futVol: new Map(),        // bar time -> future volume, on this pane's grid
             titleEl: node.querySelector('.mc-pane-title'), ohlcEl: node.querySelector('.mc-ohlc'),
             cprEl: node.querySelector('.mc-pane-cpr'), sel,
         };
@@ -185,6 +194,7 @@
         pane.series.setData(candles);
         if (fit) fitWithRightPad(pane.chart, candles.length);
         applyIndicators(pane);
+        paintVolume(pane);
         showOhlc(pane, lastBar(pane));
     }
 
@@ -192,6 +202,31 @@
         const result = MineCPR.compute(pane.candles, pane.tf, pane.daily, state.settings);
         MineCPR.attach(pane, result);
         pane.cprEl.textContent = setting('cpr') && result.anchor ? (ANCHOR_LABEL[result.anchor] || '') : '';
+    }
+
+    // Histogram bars tinted by the spot candle's direction; blank when off.
+    function paintVolume(pane) {
+        if (!setting('futVolume') || !pane.futVol.size) { pane.volume.setData([]); return; }
+        const bars = [];
+        for (const c of pane.candles) {
+            const v = pane.futVol.get(c.time);
+            if (v == null) continue;
+            bars.push({ time: c.time, value: v, color: (c.close >= c.open ? UP : DOWN) + '66' });
+        }
+        pane.volume.setData(bars);
+    }
+
+    // Today's 1-minute future volume → this pane's buckets (summed).
+    function mergeVolume(pane, minuteVol) {
+        if (!minuteVol.length) return;
+        const secs = pane.tf === 'day' ? 86400 : MineCPR.SECONDS[pane.tf];
+        const t0 = minuteVol[0].time, dayT = t0 - (t0 % 86400);
+        const sums = new Map();
+        for (const v of minuteVol) {
+            const key = pane.tf === 'day' ? dayT : MineCPR.sessionStart(v.time) + Math.floor((v.time - MineCPR.sessionStart(v.time)) / secs) * secs;
+            sums.set(key, (sums.get(key) || 0) + (v.volume || 0));
+        }
+        for (const [t, v] of sums) pane.futVol.set(t, v);
     }
 
     async function loadPane(pane, seq) {
@@ -202,6 +237,7 @@
             const body = await getJSON(`/api/multichart/candles?symbol=${encodeURIComponent(state.symbol)}&interval=${pane.tf}`);
             if (seq !== pane.seq) return;                 // a newer load superseded this one
             pane.daily = body.daily || [];
+            pane.futVol = new Map((body.future_volume || []).map(v => [v.time, v.volume]));
             setCandles(pane, body.candles || [], true);
             if (!body.candles || !body.candles.length) {
                 pane.node.classList.add('empty');
@@ -272,7 +308,11 @@
             const body = await getJSON(`/api/multichart/live?symbol=${encodeURIComponent(symbol)}`, ctrl.signal);
             if (symbol !== state.symbol) return;          // symbol changed mid-flight; the new one rescheduled
             state.marketOpen = !!body.market_open;
-            for (const pane of state.panes) mergeLive(pane, body.candles || []);
+            for (const pane of state.panes) {
+                mergeLive(pane, body.candles || []);
+                mergeVolume(pane, body.future_volume || []);
+                paintVolume(pane);
+            }
             renderQuote(body.ltp);
             const stamp = new Date().toLocaleTimeString('en-IN', { hour12: false });
             if (state.marketOpen) setLive('open', `live ${stamp}`);
@@ -528,6 +568,7 @@
     // there; the tag turns green while any pane qualifies.
     const IND_SPEC = [
         { title: 'Chart', items: [
+            { key: 'futVolume', label: 'Future volume (current expiry)', color: UP },
             { key: 'countdown', label: 'Bar-close countdown on price axis' },
         ] },
         { title: 'CPR', items: [
@@ -614,7 +655,7 @@
             else v = el.value;
             state.settings[key] = v;
             save();
-            for (const pane of state.panes) applyIndicators(pane);
+            for (const pane of state.panes) { applyIndicators(pane); paintVolume(pane); }
         });
 
         const btn = $('mcIndBtn');

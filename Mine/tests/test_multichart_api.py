@@ -38,7 +38,17 @@ class FakeFyersDataServiceAdapter:
     def historical_data(self, symbol, from_date, to_date, interval, **kw):
         self.calls.append({'symbol': symbol, 'from': from_date, 'to': to_date,
                            'interval': interval, **kw})
+        if symbol.endswith('FUT'):
+            return list(self.future_rows)
         return list(self.rows)
+
+    future_rows = []
+    future = None          # what find_future_symbol answers; None = no contract
+
+    def find_future_symbol(self, root, exchange=None):
+        if isinstance(self.future, Exception):
+            raise self.future
+        return self.future
 
     def last_history_error(self):
         return self.error
@@ -65,6 +75,7 @@ def client():
 def fake(monkeypatch):
     adapter = FakeFyersDataServiceAdapter()
     monkeypatch.setattr(svc, 'provider', lambda: adapter)
+    monkeypatch.setattr(svc, '_future_cache', {})
     return adapter
 
 
@@ -129,7 +140,7 @@ def test_candles_bar_shape_fake_ist_grid_and_session_filter(client, fake):
 def test_candles_lookback_and_cache_ttl_per_interval(client, fake):
     fake.rows = [_row(2026, 9, 10, 10, 0)]
     client.get('/api/multichart/candles?symbol=RELIANCE&interval=60minute')
-    hist, daily = fake.calls
+    hist, daily = fake.calls[:2]
     today = date.today()
     assert hist['symbol'] == 'NSE:RELIANCE-EQ'
     assert hist['interval'] == '60minute'
@@ -144,7 +155,7 @@ def test_candles_daily_interval_reuses_its_own_rows(client, fake):
     # Fyers stamps daily bars 05:30 IST (midnight UTC); ICICI at midnight IST.
     fake.rows = [_row(2026, 9, 9, 5, 30, o=1, h=3, l=0.5, c=2), _row(2026, 9, 10, 0, 0)]
     body = client.get('/api/multichart/candles?symbol=NIFTY&interval=day').get_json()
-    assert len(fake.calls) == 1                      # no second fetch for daily
+    assert len(fake.calls) == 1                      # no second fetch for daily (and no future listed)
     assert len(body['candles']) == 2                 # no session filter on daily bars
     assert body['daily'][0] == {'date': '2026-09-09', 'o': 1, 'h': 3, 'l': 0.5, 'c': 2}
     # Both land on midnight of their day on the fake-IST grid, whatever the
@@ -186,6 +197,50 @@ def test_live_asks_for_todays_minute_bars_with_short_ttl(client, fake, monkeypat
 
 def test_live_requires_symbol(client):
     assert client.get('/api/multichart/live').status_code == 400
+
+
+# ── future volume ─────────────────────────────────────────────────────────
+
+def test_candles_carry_the_current_futures_volume(client, fake):
+    fake.rows = [_row(2026, 9, 10, 9, 15), _row(2026, 9, 10, 9, 18)]
+    fake.future = 'NSE:NIFTY26SEPFUT'
+    fake.future_rows = [_row(2026, 9, 10, 9, 15, v=1200), _row(2026, 9, 10, 9, 18, v=800),
+                        _row(2026, 9, 10, 15, 30, v=5)]     # auction bar dropped like any other
+    body = client.get('/api/multichart/candles?symbol=NIFTY&interval=3minute').get_json()
+    assert body['future_symbol'] == 'NSE:NIFTY26SEPFUT'
+    assert [v['volume'] for v in body['future_volume']] == [1200, 800]
+    assert body['future_volume'][0]['time'] == body['candles'][0]['time']   # same grid as the spot bars
+    fut = [c for c in fake.calls if c['symbol'].endswith('FUT')]
+    assert len(fut) == 1 and fut[0]['interval'] == '3minute' and fut[0]['allow_synthetic'] is False
+
+
+def test_future_volume_never_breaks_the_endpoint(client, fake):
+    fake.rows = [_row(2026, 9, 10, 9, 15)]
+    fake.future = RuntimeError('master download failed')
+    body = client.get('/api/multichart/candles?symbol=NIFTY&interval=minute').get_json()
+    assert body['success'] and body['future_symbol'] is None and body['future_volume'] == []
+    assert len(body['candles']) == 1
+
+
+def test_live_carries_todays_future_minute_volume(client, fake, monkeypatch):
+    monkeypatch.setattr(svc, 'market_open', lambda: True)
+    fake.rows = [_row(2026, 9, 10, 9, 15)]
+    fake.future = 'NSE:RELIANCE26SEPFUT'
+    fake.future_rows = [_row(2026, 9, 10, 9, 15, v=42)]
+    body = client.get('/api/multichart/live?symbol=RELIANCE').get_json()
+    assert body['future_volume'] == [{'time': body['candles'][0]['time'], 'volume': 42}]
+    fut = [c for c in fake.calls if c['symbol'].endswith('FUT')]
+    assert fut[0]['interval'] == 'minute' and fut[0]['cache_ttl'] == svc.LIVE_CACHE_TTL
+
+
+def test_future_symbol_resolves_once_per_root(client, fake):
+    fake.rows = [_row(2026, 9, 10, 9, 15)]
+    fake.future = 'NSE:NIFTY26SEPFUT'
+    calls = []
+    fake.find_future_symbol = lambda root, exchange=None: (calls.append(root), 'NSE:NIFTY26SEPFUT')[1]
+    client.get('/api/multichart/candles?symbol=NIFTY&interval=minute')
+    client.get('/api/multichart/live?symbol=NIFTY')
+    assert calls == ['NIFTY']
 
 
 # ── /symbols ──────────────────────────────────────────────────────────────

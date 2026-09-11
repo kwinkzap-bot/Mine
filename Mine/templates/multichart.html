@@ -12,8 +12,13 @@
 {% block content %}
 <div class="mc-page" id="mcPage">
 
-    <!-- One toolbar drives every pane: the symbol, the indicator set, the live state. -->
+    <!-- One toolbar drives every pane: the symbol, the indicator set, the live state.
+         Title on the left; everything that acts sits together on the right. -->
     <div class="mc-toolbar">
+        <div class="mc-title">📊 Multichart</div>
+        <span class="mc-banner" id="mcBanner" hidden></span>
+        <div class="mc-spacer"></div>
+
         <div class="mc-search-wrap">
             <input type="search" id="mcSymbol" class="mc-search" autocomplete="off" spellcheck="false"
                    placeholder="Symbol… ( / )" value="NIFTY" title="Search an index or F&O stock — applies to all four charts">
@@ -33,9 +38,6 @@
             <div id="mcIndPopup" class="mc-ind-popup" hidden></div>
         </div>
 
-        <div class="mc-spacer"></div>
-
-        <span class="mc-banner" id="mcBanner" hidden></span>
         <span class="mc-live" id="mcLive" title="Live feed"><i class="mc-dot"></i><span id="mcLiveText">connecting</span></span>
     </div>
 

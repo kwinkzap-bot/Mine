@@ -130,6 +130,52 @@ def symbols() -> List[Dict[str, str]]:
     return result
 
 
+# ── future volume ────────────────────────────────────────────────────────
+# The index carries no traded volume, so the chart's volume histogram is the
+# current-expiry FUTURE's — for a stock too, so every symbol reads the same
+# way. The contract resolves once per root and holds until the close.
+
+_future_cache: Dict[str, tuple] = {}
+_future_lock = threading.Lock()
+
+
+def future_symbol(adapter: Any, root: str) -> Optional[str]:
+    now = _time.time()
+    with _future_lock:
+        hit = _future_cache.get(root)
+        if hit and hit[1] > now:
+            return hit[0]
+    try:
+        sym = adapter.find_future_symbol(root)
+    except Exception as e:                      # a root with no listed future, or a master hiccup
+        logger.warning(f"[Multichart] future for {root} unresolved: {e}")
+        sym = None
+    close = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0).timestamp()
+    expires = close if now < close else now + 18 * 3600
+    with _future_lock:
+        _future_cache[root] = (sym, expires)
+    return sym
+
+
+def _volume_rows(bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{'time': b['time'], 'volume': b['volume']} for b in bars]
+
+
+def _future_volume(adapter: Any, root: str, start: str, end: str, interval: str,
+                   cache_ttl: float) -> tuple:
+    """(future_symbol, [{time, volume}]) — never raises; empty when unavailable."""
+    sym = future_symbol(adapter, root)
+    if not sym:
+        return None, []
+    try:
+        raw = adapter.historical_data(sym, start, end, interval, use_cache=True,
+                                      cache_ttl=cache_ttl, allow_synthetic=False)
+    except Exception as e:
+        logger.warning(f"[Multichart] future volume {sym} {interval} failed: {e}")
+        return sym, []
+    return sym, _volume_rows(_to_bars(raw, intraday=interval != 'day'))
+
+
 # ── candles ──────────────────────────────────────────────────────────────
 
 def _to_bars(raw: List[Dict[str, Any]], intraday: bool) -> List[Dict[str, Any]]:
@@ -199,6 +245,9 @@ def candles(symbol: str, interval: str) -> Dict[str, Any]:
         today.isoformat(), 'day', use_cache=True, cache_ttl=300.0,
     ) if interval != 'day' else raw
 
+    fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), start.isoformat(),
+                                            today.isoformat(), interval, HISTORY_CACHE_TTL)
+
     return {
         'success': True,
         'symbol': symbol.upper(),
@@ -207,6 +256,8 @@ def candles(symbol: str, interval: str) -> Dict[str, Any]:
         'seconds': INTERVALS[interval][1],
         'candles': _to_bars(raw, intraday=interval != 'day'),
         'daily': _daily_rows(daily_raw),
+        'future_symbol': fut_symbol,
+        'future_volume': fut_volume,
         'fetch_error': fetch_error,
     }
 
@@ -216,7 +267,8 @@ def live(symbol: str) -> Dict[str, Any]:
 
     Every pane re-buckets these into its own timeframe client-side (all NSE
     intraday buckets anchor on 09:15, so the aggregation is exact), which is
-    what keeps four live charts at one broker request per tick.
+    what keeps four live charts at two broker requests per tick — the spot
+    bars and the future's, for the volume histogram.
     """
     fy_symbol = resolve_symbol(symbol)
     adapter = provider()
@@ -226,11 +278,14 @@ def live(symbol: str) -> Dict[str, Any]:
         use_cache=True, cache_ttl=LIVE_CACHE_TTL, allow_synthetic=True,
     )
     bars = _to_bars(raw, intraday=True)
+    fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), today, today, 'minute', LIVE_CACHE_TTL)
     return {
         'success': True,
         'symbol': symbol.upper(),
         'fy_symbol': fy_symbol,
         'candles': bars,
+        'future_symbol': fut_symbol,
+        'future_volume': fut_volume,
         'ltp': bars[-1]['close'] if bars else None,
         'market_open': market_open(),
         'fetch_error': _fetch_error(adapter) if not raw else None,
