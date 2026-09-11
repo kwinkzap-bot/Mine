@@ -187,7 +187,13 @@
             });
         }
 
+        // One fetch on load so the badge is right, then poll only while the
+        // market is open (common.js isMarketOpen — NSE hours and holidays).
+        // Scans and order events are market-hours things; polling for them
+        // all evening is a request a minute for nothing.
         fetchNotifications();
-        pollTimer = setInterval(fetchNotifications, POLL_INTERVAL_MS);
+        pollTimer = setInterval(() => {
+            if (typeof window.isMarketOpen !== 'function' || window.isMarketOpen()) fetchNotifications();
+        }, POLL_INTERVAL_MS);
     });
 })();
