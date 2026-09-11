@@ -298,8 +298,26 @@
         state.pollTimer = setTimeout(tick, ms);
     }
 
+    // NSE hours in IST, holidays included (common.js); a local fallback for
+    // the harness, which does not load it. Nothing is fetched while closed.
+    function marketOpenNow() {
+        if (typeof window.isMarketOpen === 'function') return window.isMarketOpen();
+        const t = Math.floor(Date.now() / 1000) + 19800, d = new Date(t * 1000);
+        const dow = d.getUTCDay(), mins = d.getUTCHours() * 60 + d.getUTCMinutes();
+        return dow >= 1 && dow <= 5 && mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30;
+    }
+
     async function tick() {
         if (state.pollAbort) state.pollAbort.abort();
+        // Outside market hours there is nothing live to fetch: no /live call,
+        // no 5-minute history refresh — just a local re-check each minute so
+        // the loop wakes itself at the open.
+        if (!marketOpenNow()) {
+            state.marketOpen = false;
+            setLive('closed', `closed · ${new Date().toLocaleTimeString('en-IN', { hour12: false })}`);
+            schedule(POLL_MS.closed);
+            return;
+        }
         const ctrl = new AbortController();
         state.pollAbort = ctrl;
         const symbol = state.symbol;
@@ -316,7 +334,7 @@
             renderQuote(body.ltp);
             const stamp = new Date().toLocaleTimeString('en-IN', { hour12: false });
             if (state.marketOpen) setLive('open', `live ${stamp}`);
-            else setLive('closed', `closed · ${stamp}`);
+            else setLive('closed', `closed · ${stamp}`);   // server says closed (holiday it knows, we don't)
             if (body.fetch_error && !(body.candles || []).length) banner(`Live: ${body.fetch_error}`);
             next = document.hidden ? POLL_MS.hidden : (state.marketOpen ? POLL_MS.open : POLL_MS.closed);
             if (Date.now() - state.lastRefresh > REFRESH_MS) loadAll();
