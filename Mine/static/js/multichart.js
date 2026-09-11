@@ -49,6 +49,7 @@
         pollTimer: null,
         pollAbort: null,
         lastRefresh: 0,
+        hoverPane: null,
     };
 
     /* ── persistence ─────────────────────────────────────────────────────── */
@@ -405,16 +406,27 @@
     function linkCrosshairs() {
         let syncing = false;
         state.panes.forEach((pane, i) => {
+            // Only the pane under the pointer drives the others. Every live
+            // tick makes a chart re-fire its crosshair event, and a pane that
+            // was merely being synced would otherwise answer by pushing the
+            // hovered pane's line to the bar close — the crosshair "jumping to
+            // the candle" on each update.
+            pane.el.addEventListener('pointerenter', () => { state.hoverPane = i; });
+            pane.el.addEventListener('pointerleave', () => { if (state.hoverPane === i) state.hoverPane = null; });
+
             pane.chart.subscribeCrosshairMove(param => {
-                if (syncing) return;
+                if (syncing || state.hoverPane !== i) return;
                 syncing = true;
                 try {
                     const when = typeof param.time === 'number' ? param.time : null;
+                    // The horizontal line carries the hovered PRICE across the
+                    // panes — same instrument, same axis — not each bar's close.
+                    const price = param.point ? pane.series.coordinateToPrice(param.point.y) : null;
                     state.panes.forEach((other, j) => {
                         if (j === i) return;
                         const bar = when != null ? barAt(other, when) : null;
                         if (!bar) other.chart.clearCrosshairPosition();
-                        else other.chart.setCrosshairPosition(bar.close, bar.time, other.series);
+                        else other.chart.setCrosshairPosition(price != null ? price : bar.close, bar.time, other.series);
                     });
                 } finally { syncing = false; }
             });
