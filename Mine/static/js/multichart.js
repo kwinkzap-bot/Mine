@@ -127,7 +127,9 @@
         }, chartLayout()));
         const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
             upColor: UP, downColor: DOWN, borderVisible: false, wickUpColor: UP, wickDownColor: DOWN,
-            priceLineVisible: true, lastValueVisible: true,
+            // The last-value tag is drawn by the countdown primitive instead,
+            // so the price and the countdown share one box.
+            priceLineVisible: true, lastValueVisible: false,
         });
         if (window.TradingViewChart && TradingViewChart.addScrollButton) TradingViewChart.addScrollButton(chart, series, el);
 
@@ -356,22 +358,32 @@
     }
 
     function makeCountdownPrimitive(pane) {
-        let requestUpdate = null, text = '';
-        const view = {
-            // Just under the last-value tag: that label is ~16px tall at the
-            // pane's 10px axis font, so this one starts where it ends.
-            coordinate() { const b = lastBar(pane); const y = b && pane.series.priceToCoordinate(b.close); return y == null ? -100 : y + 16; },
-            text: () => text,
-            textColor: () => '#ffffff',
-            backColor() { const b = lastBar(pane); return b && b.close < b.open ? DOWN : UP; },
-            visible: () => !!text,
-            tickVisible: () => false,
+        let requestUpdate = null, price = '', text = '';
+        // Both rows are ours — the series' own last-value tag is switched off
+        // — so they share one colour and one width and read as a single block,
+        // the way TradingView draws it. The countdown is padded with figure
+        // spaces (digit-width) to the price's digit count so its box matches.
+        const y = () => { const b = lastBar(pane); const c = b && pane.series.priceToCoordinate(b.close); return c == null ? -100 : c; };
+        const back = () => { const b = lastBar(pane); return b && b.close < b.open ? DOWN : UP; };
+        const priceView = {
+            coordinate: y, text: () => price, textColor: () => '#ffffff', backColor: back,
+            visible: () => !!price, tickVisible: () => true,
+        };
+        const countView = {
+            coordinate: () => y() + 16, text: () => text, textColor: () => '#ffffff', backColor: back,
+            visible: () => !!text, tickVisible: () => false,
         };
         return {
             attached(p) { requestUpdate = p.requestUpdate; },
             detached() { requestUpdate = null; },
-            updateAllViews() { text = setting('countdown') ? countdownText(pane) : ''; },
-            priceAxisViews: () => [view],
+            updateAllViews() {
+                const b = lastBar(pane);
+                price = b ? pane.series.priceFormatter().format(b.close) : '';
+                const cd = setting('countdown') ? countdownText(pane) : '';
+                const pad = Math.max(0, price.length - cd.length);
+                text = cd ? '\u2007'.repeat(Math.ceil(pad / 2)) + cd + '\u2007'.repeat(Math.floor(pad / 2)) : '';
+            },
+            priceAxisViews: () => [priceView, countView],
             paneViews: () => [],
             refresh() { if (requestUpdate) requestUpdate(); },
         };
