@@ -78,7 +78,11 @@
 
 /* Backfilled rows are aggregated seconds, not single prints — they read as
    history rather than as tape. */
-.tas-row-bar { opacity: .58; }
+/* Σ rows are the body of the tape now that history keeps catching up, not the
+   exception they were when only the first fifteen minutes were backfilled — so
+   this reads as "settled, behind the live edge" rather than "greyed out". At
+   .58 a whole day of it was a wall of faint text. */
+.tas-row-bar { opacity: .82; }
 .tas-agg { font-style: italic; }
 /* Where the live tape stops and the backfilled session begins. */
 .tas-row-histstart > td { border-top: 2px solid var(--color-border) !important; }

@@ -8165,13 +8165,24 @@ def leg_fills(order, username, session_data, books=None):
     want. A signal ladder cannot use that: it sizes each account's stop and
     targets from what THAT account filled, and two accounts trading 20 lots and
     4 lots do not fill alike — or at the same moment, or at the same price.
+
+    One broker can hold SEVERAL legs of one order: an order over the exchange
+    freeze limit goes out as chunks, so a 30-lot entry is 27 + 3 at the same
+    account. Those are summed here, not overwritten.
+
+    The status rule also differs from ``_resolve_order_at_brokers``, on
+    purpose. There, anything filled makes the whole record EXECUTED, because a
+    partial fill is a real position the screens must show. Here the question is
+    "has this broker FINISHED", and the answer while one chunk is still resting
+    is no — reporting EXECUTED would arm a ladder over 27 lots and leave the
+    other 3 filling behind it, managed by nothing.
     """
     legs = _broker_order_legs(order.get('broker_order_ids'))
     if not legs:
         return {}
 
     books = books if books is not None else {}
-    out = {}
+    seen = {}
     for leg in legs:
         cache_key = (leg['broker'], leg['instance'])
         if cache_key not in books:
@@ -8180,7 +8191,23 @@ def leg_fills(order, username, session_data, books=None):
             books[cache_key] = _broker_order_book(kind, client) if kind else {}
         row = books[cache_key].get(str(leg['order_id']))
         if row:
-            out[cache_key] = row
+            seen.setdefault(cache_key, []).append(row)
+
+    out = {}
+    for cache_key, rows in seen.items():
+        statuses = [r[0] for r in rows]
+        filled = sum(int(r[2] or 0) for r in rows)
+        prices = [float(r[1]) for r in rows if r[1] and int(r[2] or 0) > 0]
+        avg = round(sum(prices) / len(prices), 2) if prices else None
+        if 'OPEN' in statuses:
+            status = 'OPEN'
+        elif filled > 0:
+            status = 'EXECUTED'
+        elif all(st == 'REJECTED' for st in statuses):
+            status = 'REJECTED'
+        else:
+            status = 'CANCELLED'
+        out[cache_key] = (status, avg, filled)
     return out
 
 
@@ -16583,8 +16610,9 @@ def time_and_sales() -> EndpointResponse:
     """The trade tape for one instrument: Time | Price | Quantity.
 
     Query params: symbol (Fyers string, required), since (last seq the client
-    holds), limit (default 500, capped 2000), contracts=1 to list the futures
-    the picker can choose from instead of returning rows.
+    holds), epoch (the tape revision that cursor belongs to), limit (default
+    500, capped 2000), contracts=1 to list the futures the picker can choose
+    from instead of returning rows.
 
     This reads the in-memory tape and nothing else, so the 1 Hz poll behind it
     costs the broker nothing — the collector's websocket is what talks to
@@ -16631,21 +16659,22 @@ def time_and_sales() -> EndpointResponse:
     except ValueError:
         min_qty = 0
 
-    tas.register(symbol)
-    rows, truncated = tas.rows_since(symbol, since, limit, min_qty)
-    state = tas.status(symbol)
-    state.update(tas.stats(symbol))
+    try:
+        # The tape's rebuild counter, echoed back from the last response. A
+        # top-up renumbers every seq after the seam it filled, so a cursor from
+        # an earlier epoch points somewhere else now; tas.view answers a
+        # mismatch with the whole tape and `truncated`.
+        raw_epoch = request.args.get('epoch')
+        client_epoch = int(raw_epoch) if raw_epoch not in (None, '') else None
+    except ValueError:
+        client_epoch = None
 
-    # A client whose cursor is ahead of ours is holding rows from before a
-    # restart (seqs reset with the process). Telling it to reset is better than
-    # silently returning nothing forever.
-    stale_cursor = since > state['next_seq']
+    tas.register(symbol)
+    state = tas.view(symbol, since, limit, min_qty, client_epoch)
 
     return jsonify({
         'success': True,
         'symbol': symbol,
-        'rows': rows,
-        'truncated': truncated or stale_cursor,
         'server_time': int(datetime.now().timestamp()),
         **state,
     })

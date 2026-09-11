@@ -74,6 +74,12 @@
         </div>
       </div>
 
+      <!-- What the server made of the ticket, and the contract's live premium.
+           Worth its line even though the numbers are typed in above: the
+           premium is what the entry-direction check is run against, so seeing
+           it is seeing why a stop entry would be refused. -->
+      <p class="op-hint op-signal-only" id="opSignalRead"></p>
+
       <div class="op-field">
         <label for="opSymbol">Underlying</label>
         <div class="op-row">
@@ -165,8 +171,11 @@
            the step or a stale entry is refused before the review bar appears.
 
            Target 3 is marked because it is the one leg with no order behind
-           it. The stop and the first two targets rest at the broker; the third
-           is a level the app watches, and it needs the app alive. -->
+           it. The stop, target 1 and target 2 rest at the broker as three
+           equal orders — so nothing more than the position is ever offered for
+           sale. Target 3's lot is the one the stop is holding, and it is sold
+           at market when the premium gets there, which needs the app alive
+           where the stop does not. -->
       <div class="op-signal-only op-ladder" id="opLadder">
         <div class="op-ladder-grid">
           <div class="op-field">

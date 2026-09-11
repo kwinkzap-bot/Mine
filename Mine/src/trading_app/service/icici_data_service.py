@@ -729,6 +729,57 @@ class IciciDataServiceAdapter:
         return self._history_for_info(info, from_date, to_date, interval, oi,
                                       use_cache, cache_ttl)
 
+    def historical_seconds_range(self, instrument_token: Union[int, str],
+                                 start: datetime, end: datetime,
+                                 max_requests: int = 8
+                                 ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Raw 1-second bars for an EXACT intraday range. Nothing is cached.
+
+        historical_data(day, day, '1second') is the wrong shape for a caller
+        that already holds most of a session and wants only the newest minute
+        of it: it walks all 25 of the day's windows every time. The chunk cache
+        hides that on the second call, but the tape flushes those windows
+        straight back out (a day of raw 1-second rows is ~22,500 candles
+        against a 150,000 cap, and what they evict is the aggregated 30-second
+        day caches the live algos read), so for that caller every re-ask really
+        does cost the full 25 requests. Asking for the minute that is missing
+        costs one.
+
+        Deliberately uncached in both directions: the caller keeps the rows,
+        and a still-forming second must never be frozen into a cache the algos
+        also read.
+
+        Returns (candles, complete). `complete` is False when `max_requests`
+        ran out before `end` was reached, so a caller catching up on hours of
+        history can resume from the last bar it got rather than assume it has
+        the lot.
+        """
+        _HIST_ERROR.msg = None
+        info = self._resolve(instrument_token)
+        if not info:
+            _HIST_ERROR.msg = f"{instrument_token} could not be mapped to an ICICI contract"
+            return [], False
+        if self.breeze is None:
+            _HIST_ERROR.msg = "breeze-connect not installed / no session"
+            return [], False
+
+        out: List[Dict[str, Any]] = []
+        cursor, spent, complete = start, 0, True
+        while cursor <= end:
+            if spent >= max_requests:
+                complete = False
+                break
+            # Breeze caps a response at _BREEZE_MAX_ROWS and treats to_date as
+            # inclusive, so a request spans at most _SECOND_WINDOW_SECONDS of
+            # 1-second bars — the same slicing _second_history uses.
+            stop = min(cursor + timedelta(seconds=_SECOND_WINDOW_SECONDS - 1), end)
+            out.extend(self._history_chunk(info, '1second', cursor, stop))
+            spent += 1
+            cursor = stop + timedelta(seconds=1)
+
+        out.sort(key=lambda c: c['date'])
+        return out, complete
+
     def historical_option(self, root: str, expiry: dt_date, strike: float,
                           option_type: str, from_date: str, to_date: str,
                           interval: str, exchange_code: str = 'NFO',

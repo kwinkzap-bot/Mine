@@ -1,5 +1,23 @@
 [
   {
+    "symbol": "LICI",
+    "direction": "BUY",
+    "qty": 1238,
+    "entry_price": 404.1802907915993,
+    "exit_price": 405.0,
+    "sl_price": 402.35,
+    "target_price": 407.4,
+    "pnl": 1014.8,
+    "reason": "Time Exit",
+    "entry_time": "2026-09-10T11:00:01.650638",
+    "exit_time": "2026-09-10T15:05:11.669829",
+    "broker_idx": 1,
+    "entry_order_id": "2097920510423130112",
+    "sl_order_id": "2097920543088369664",
+    "target_order_id": "2097920543558131712",
+    "date": "2026-09-10"
+  },
+  {
     "symbol": "TRENT",
     "direction": "SELL",
     "qty": 178,

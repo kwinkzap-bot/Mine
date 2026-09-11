@@ -39,6 +39,10 @@ let _tasMinQty  = 0;
 let _tasState   = {};
 let _tasPainted = false;
 let _tasWindow  = TAS_DOM_ROWS;
+// Which revision of the tape our cursor belongs to. History keeps catching up
+// over the live prints all session, and each catch-up renumbers every seq past
+// the seam it filled — so the cursor is only meaningful paired with this.
+let _tasEpoch   = null;
 
 const _tasFmt = n => Number(n).toLocaleString('en-IN');
 const _tasPrice = n => Number(n).toLocaleString('en-IN', {
@@ -133,10 +137,15 @@ function _tasRenderRail() {
              </div>
            </div>
            <p class="tas-rail-note">
-             <b>Feed</b> is the share of traded volume the live feed pins to an actual
-             print. The broker throttles it, so the rest traded between the snapshots we
-             are sent. Dimmed <b>Σ</b> rows are backfilled 1-second bars — one row per
-             second, quantity is every trade in that second combined.
+             Dimmed <b>Σ</b> rows are 1-second bars — one row per second, quantity is
+             every trade in that second combined. History catches up all session, so
+             the tape settles into Σ rows behind the last minute or so; the bright rows
+             above the rule are single live prints, the only thing that can answer for
+             seconds history has not reached yet.
+             <b>Feed</b> is the share of traded volume those live prints pin to an
+             actual trade — the broker throttles the stream, so the rest went through
+             between the snapshots we are sent, which is why a print's quantity is
+             never comparable with a Σ row's.
            </p>
          </div>`;
 }
@@ -182,8 +191,10 @@ function _tasRenderTape(opts) {
     // under their eyes must not move.
     const following = prevTop <= 4;
 
-    // Rows come newest-first, so the backfilled history sits at the bottom.
-    // Mark where it starts so the two are read as different things.
+    // Rows come newest-first, and history keeps catching up from below — so
+    // the seam sits near the TOP: above it are the live prints running ahead
+    // of the frontier, below it the Σ bars that have settled. Mark it, because
+    // the two are different measurements sharing a Qty column.
     const firstBar = shown.findIndex(r => r.src === 'bar');
 
     // Say how much of the tape is on screen, so a partial view never reads as
@@ -273,19 +284,23 @@ async function tasLoad() {
         // the cursor means each poll carries just the handful of new prints.
         const url = `/api/time-and-sales?symbol=${encodeURIComponent(_tasSymbol)}`
                   + `&since=${_tasCursor}&limit=${TAS_MAX_ROWS}`
+                  + (_tasEpoch != null ? `&epoch=${_tasEpoch}` : '')
                   + (_tasMinQty ? `&min_qty=${_tasMinQty}` : '');
         const res = await fetch(url);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'request failed');
 
         if (data.truncated && _tasCursor > 0) {
-            // We fell behind, or the server restarted and its sequence reset.
+            // We fell behind, the server restarted and its sequence reset, or
+            // history caught up over the prints we hold and renumbered them.
             // Rebuild from what it just sent rather than stitching onto a
-            // cursor that no longer means anything.
+            // cursor that no longer means anything — the server answers all
+            // three by sending the whole tape.
             _tasRows = [];
             _tasPainted = false;
             _tasWindow = TAS_DOM_ROWS;
         }
+        if (data.epoch != null) _tasEpoch = data.epoch;
         _tasState = data;
         if (data.rows.length) {
             _tasRows.push(...data.rows);
@@ -335,6 +350,7 @@ function tasSetSymbol(symbol) {
     _tasSymbol = symbol;
     _tasRows = [];
     _tasCursor = 0;
+    _tasEpoch = null;
     _tasState = {};
     _tasPainted = false;
     _tasWindow = TAS_DOM_ROWS;

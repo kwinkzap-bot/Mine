@@ -785,17 +785,6 @@
   color: #fff;
 }
 
-.op-textarea {
-  min-height: 92px;
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre;
-  overflow-wrap: normal;
-  overflow-x: auto;
-}
-
 .op-hint-err { color: var(--color-danger, #dc2626); }
 
 .op-ladder-grid {

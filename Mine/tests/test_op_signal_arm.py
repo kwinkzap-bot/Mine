@@ -234,18 +234,45 @@ def test_a_signal_never_guesses_a_size_from_the_single_order_lots(
         ENV['BROKER_1_OP_SIGNAL_LOTS'] = '1'
 
 
-def test_a_ladder_over_the_freeze_limit_is_refused(
-        client, env, signals, store, never_dispatched, monkeypatch):
-    """Neither dispatcher splits by the freeze limit, so 30 lots is a rejection
-    at the broker — after the stop has been sized against a fill that never
-    happened."""
+def test_a_ladder_over_the_freeze_limit_is_split_not_refused(
+        client, env, signals, store, stopped, monkeypatch):
+    """10 lots a target is a 30-lot entry, over the exchange's 27-lot cap.
+
+    Neither shared dispatcher splits by that cap, so the signal splits its own
+    legs: 27 + 3, two orders at the one account, both on the same record.
+    Refusing instead would cap this page at 9 lots a target for a limit the
+    exchange does not actually place on the position.
+    """
     monkeypatch.setitem(ENV, 'BROKER_1_OP_SIGNAL_LOTS', '10')
     try:
         res = arm(client)
-        assert res.status_code == 400
-        assert 'freeze limit' in res.get_json()['error']
+        assert res.status_code == 200, res.get_json()
+        assert [c['lots_for'](1) for c in stopped] == [27, 3]
+        # One record, both chunks on it — the ladder is sized from their sum.
+        assert len(store) == 1
+        assert len(store[0]['broker_order_ids']) == 2
+        assert sum(l['quantity'] for l in store[0]['broker_order_ids']) == 30 * 75
     finally:
         ENV['BROKER_1_OP_SIGNAL_LOTS'] = '1'
+
+
+def test_a_size_that_is_obviously_a_typo_is_still_refused(
+        client, env, signals, store, never_dispatched, monkeypatch):
+    monkeypatch.setitem(ENV, 'BROKER_1_OP_SIGNAL_LOTS', '9999')
+    try:
+        res = arm(client)
+        assert res.status_code == 400
+        assert 'typo, not a position' in res.get_json()['error']
+    finally:
+        ENV['BROKER_1_OP_SIGNAL_LOTS'] = '1'
+
+
+def test_a_normally_sized_signal_is_still_one_order_per_broker(
+        client, env, signals, store, stopped):
+    """The split must not turn every ordinary signal into several orders."""
+    arm(client)
+    assert [c['lots_for'](1) for c in stopped] == [3]
+    assert len(store[0]['broker_order_ids']) == 1
 
 
 def test_unreadable_text_is_refused_before_anything_else(

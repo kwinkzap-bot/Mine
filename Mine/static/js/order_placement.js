@@ -522,7 +522,7 @@
         if (signal) readSignal();
     }
 
-    /** The ladder as it stands on screen, whatever the text says. */
+    /** The ladder as it stands on screen. */
     function signalForm() {
         const num = id => {
             const v = parseFloat($(id).value);
@@ -530,7 +530,6 @@
         };
         const targets = SIG_TARGETS.map(num).filter(v => v !== null);
         return {
-            text: $('opSignalText').value || '',
             symbol: $('opSymbol').value,
             strike: parseInt($('opStrike').value, 10) || null,
             option_type: segValue('opOptionType'),
@@ -541,36 +540,21 @@
         };
     }
 
-    function fillSignalForm(plan) {
-        if (!plan) return;
-        if (plan.symbol && [...$('opSymbol').options].some(o => o.value === plan.symbol))
-            $('opSymbol').value = plan.symbol;
-        if (plan.strike) $('opStrike').value = plan.strike;
-        if (plan.option_type) setSeg('opOptionType', plan.option_type);
-        if (plan.action) setSeg('opAction', plan.action);
-        if (plan.entry) $(SIG_FIELDS.entry).value = plan.entry;
-        if (plan.stop) $(SIG_FIELDS.stop).value = plan.stop;
-        (plan.targets || []).forEach((t, i) => { if (SIG_TARGETS[i]) $(SIG_TARGETS[i]).value = t; });
-        renderContract();
-    }
-
-    /** Ask the server what it makes of the tip, and why it would refuse it. */
-    async function readSignal({ fromText = false } = {}) {
+    /** Ask the server what the ticket would do, and why it would refuse it.
+     *
+     *  Every check lives on the server, not here: this page is one caller of
+     *  the arm route, and a rule enforced only in this file is a rule a bad
+     *  request walks straight past.
+     */
+    async function readSignal() {
         if (state.mode !== 'signal') return;
-        const body = signalForm();
-        if (!body.text.trim() && !body.entry) {
+        const payload = signalForm();
+        if (!payload.entry) {
             $('opSignalRead').textContent = '';
             $('opSignalPlan').textContent = '';
             state.plan = null;
             return;
         }
-        // A paste is read as TEXT ALONE. Sending the fields alongside it lets
-        // whatever the pad happened to be showing win — paste a CE tip onto a
-        // pad left on PE and the server is told PE, which is a live order on
-        // the wrong contract that looks entirely correct on screen.
-        // An edit made afterwards is the opposite case and is read as the
-        // fields, so correcting a number is not undone by the tip above it.
-        const payload = fromText ? { text: body.text } : body;
 
         try {
             const res = await fetch(`${API}/signal/parse`, {
@@ -582,23 +566,22 @@
             if (!r.success) {
                 state.plan = null;
                 $('opSignalRead').textContent = r.error || 'Could not read that';
-                $('opSignalRead').className = 'op-hint op-hint-err';
+                $('opSignalRead').className = 'op-hint op-hint-err op-signal-only';
                 $('opSignalPlan').textContent = '';
                 return;
             }
             state.plan = r;
-            if (fromText) fillSignalForm(r.plan);
 
             const p = r.plan || {};
             $('opSignalRead').textContent =
                 `${p.action} ${p.symbol} ${p.strike} ${p.option_type}`
                 + (p.expiry ? ` · ${p.expiry}` : '')
                 + (r.ltp ? ` · premium ₹${money(r.ltp)}` : '');
-            $('opSignalRead').className = 'op-hint';
+            $('opSignalRead').className = 'op-hint op-signal-only';
             renderSignalPlan(r);
         } catch (e) {
             $('opSignalRead').textContent = e.message;
-            $('opSignalRead').className = 'op-hint op-hint-err';
+            $('opSignalRead').className = 'op-hint op-hint-err op-signal-only';
         }
     }
 
@@ -617,9 +600,15 @@
         }
         const where = ready.map(b =>
             `${esc(b.name)} <em>${esc(b.signal_entry_lots)} lots</em>`).join(' · ');
+        const per = ready.length === 1 ? `${esc(ready[0].signal_lots)} lot` : 'one leg';
+        // Spelled out because the sizing is the part that surprises: the stop
+        // is a leg like the targets, not cover for the whole position.
         el.innerHTML =
-            `Entry stop now at ${where}. On fill: stop, then targets 1 and 2 rest at the `
-            + `broker. Target 3 (₹${money(r.target_3_watched)}) is watched by the app.`;
+            `Entry stop now at ${where}. On fill it becomes three equal orders of `
+            + `${per} each — stop, target 1, target 2 — so nothing more than the `
+            + `position is ever offered for sale. Target 3 `
+            + `(₹${money(r.target_3_watched)}) rides with the stop and is watched `
+            + `by the app.`;
     }
 
     async function reviewSignal() {
@@ -637,9 +626,10 @@
             + `STOP ENTRY — triggers at ₹${money(p.entry)}<br>`
             + `<span class="op-confirm-where">Going out now: the entry only, at `
             + `${ready.map(b => `${esc(b.name)} ×${esc(b.signal_entry_lots)}`).join(', ')}.</span>`
-            + `<span class="op-confirm-where">On fill: stop ₹${money(p.stop)}, `
-            + `T1 ₹${money(t[0])} and T2 ₹${money(t[1])} rest at the broker; `
-            + `T3 ₹${money(t[2])} is watched by the app.</span>`;
+            + `<span class="op-confirm-where">On fill, three equal orders: stop `
+            + `₹${money(p.stop)}, T1 ₹${money(t[0])}, T2 ₹${money(t[1])}. `
+            + `T3 ₹${money(t[2])} rides with the stop, watched by the app. A stop `
+            + `hit cancels the targets and exits the rest at market.</span>`;
         $('opConfirm').hidden = false;
         $('opConfirmSend').textContent = 'Arm signal';
         state.armed = true;
@@ -1025,12 +1015,15 @@
     function init() {
         if (!$('opPlace')) return;
 
+        const reread = () => state.scheduleSignalRead && state.scheduleSignalRead();
+
         segment('opOptionType', v => {
             state.optionType = v;
             state.ltp = null;
             $('opLtpHint').textContent = '';
             renderContract();
             disarm();
+            reread();
         });
         segment('opAction', v => {
             state.action = v;
@@ -1038,6 +1031,7 @@
             // hint under the trigger has to follow the side.
             renderPriceField();
             disarm();
+            reread();
         });
         segment('opOrderType', v => {
             state.orderType = v;
@@ -1078,18 +1072,21 @@
 
         segment('opMode', setMode);
 
-        // A paste is read as text and fills the fields below it. Debounced,
-        // because every keystroke otherwise costs a quote and a chain read.
+        // Debounced: every keystroke otherwise costs a quote and a chain read,
+        // against a request budget shared with the chart feeds.
         let readTimer = null;
-        const scheduleRead = (fromText) => {
+        const scheduleRead = () => {
             clearTimeout(readTimer);
-            readTimer = setTimeout(() => readSignal({ fromText }), 350);
+            readTimer = setTimeout(readSignal, 350);
         };
-        $('opSignalText').addEventListener('input', () => { disarm(); scheduleRead(true); });
-        // An edit to a ladder number is read as the fields, so correcting a
-        // price on screen is not undone by the tip sitting above it.
+        state.scheduleSignalRead = scheduleRead;
         [SIG_FIELDS.entry, SIG_FIELDS.stop, ...SIG_TARGETS].forEach(id =>
-            $(id).addEventListener('input', () => { disarm(); scheduleRead(false); }));
+            $(id).addEventListener('input', () => { disarm(); scheduleRead(); }));
+        // The contract is half the ticket. Changing the strike or the side has
+        // to re-run the checks too, or the pad goes on showing a plan for the
+        // contract it was on a moment ago.
+        $('opStrike').addEventListener('input', scheduleRead);
+        $('opSymbol').addEventListener('change', scheduleRead);
 
         $('opSignals').addEventListener('click', (e) => {
             const btn = e.target.closest('.op-sig-x');

@@ -14,19 +14,29 @@ flag would trail the second account's stop up to an entry it has not made. So
 each broker gets its own slot in the plan, its own stage, and its own legs, and
 they are advanced independently.
 
-**Target 3 is not resting at the broker.** The stop covers the whole position
-and T1/T2 rest above it, which already means more sell quantity working than is
-held. Adding T3 to that widens the gap for the leg least likely to be reached.
-Instead T3 is a level this engine watches: when the premium touches it the stop
-is cancelled and the remainder is sold at market. The trade-off is honest and
-one-directional — T3 needs the app alive, the stop does not.
+**The stop is one leg's worth, not the whole position.** A three-lot signal
+rests three one-lot orders: the stop, target 1, target 2. Sell quantity working
+therefore equals quantity held, exactly — nothing here asks a broker for
+short-option margin on a long position, and there is no instant at which a
+triggering stop could sell a lot a target has already sold. That race is the
+one an emulated OCO ladder normally has to be defended against; this shape does
+not have it.
 
-**The stop is shrunk before anything else.** The moment T1 fills, the stop is
-covering more than is still held; an SL-M that triggers in that window sells
-what is no longer there and opens a short. So on seeing a target fill the very
-first broker call is the stop modify — new quantity and new trigger, one
-atomic change — and only then does anything else happen. The 30-second orphan
-sweep is the backstop for the window that remains.
+What it costs is that a stop hit is not the whole exit. The stop sells its own
+lot at the exchange, and the engine then cancels the remaining targets and
+sells the rest at market — a tick later, at whatever the market is by then. The
+alternative was a full-size stop, which exits everything at the exchange but
+rests twice the held quantity to do it.
+
+**Target 3 has no order either.** Its lot is the one the stop is holding: the
+runner rides with the stop trailing behind it, and when the premium touches
+target 3 the stop is cancelled and that lot is sold at market. So T3 needs the
+app alive; the stop does not.
+
+**The stop is allocated before the targets.** On a short fill that is the
+difference between a protected position with fewer targets and an unprotected
+one with more: two lots filled arms a stop and target 1, one lot arms a stop
+and nothing else.
 """
 
 import threading
@@ -159,18 +169,57 @@ def op_signal_lots(username, instance):
     return n if n > 0 else None
 
 
-def allocate(filled_lots: int, per_target: int, n_targets: int = 3) -> list:
-    """Lots for each target, greedily in order, out of what actually filled.
+# The exchange refuses a single F&O order above this many lots, and neither
+# shared dispatcher splits by it — split_quantity_by_freeze_limit exists but is
+# only reached on the way out, by _place_exit_leg. So a signal splits its own
+# legs on the way in. Kept as a lot count rather than borrowing that helper,
+# whose lot-size fallbacks are stale (NIFTY 25) and would over-split a leg it
+# could not price.
+_FREEZE_LOTS = 27
 
-    A three-lot plan that only filled two arms T1 and T2 and leaves no runner
-    for T3 — never a zero-lot leg, and never more sold than is held.
+
+def lot_chunks(lots: int) -> list:
+    """One leg's lots, split into orders the exchange will accept.
+
+    30 lots is 27 + 3. At or below the limit it is one order and nothing
+    changes, which is every leg on a normally-sized signal.
     """
-    out, left = [], int(filled_lots)
-    for _ in range(n_targets):
-        take = min(int(per_target), max(left, 0))
+    out, left = [], int(lots)
+    while left > 0:
+        take = min(left, _FREEZE_LOTS)
         out.append(take)
         left -= take
     return out
+
+
+def allocate(filled_lots: int, per_target: int):
+    """``(stop_lots, [t1_lots, t2_lots])`` out of what actually filled.
+
+    The three lots of a one-per-target signal become three resting orders of
+    one lot each: the stop, target 1, target 2. Resting sell quantity is then
+    exactly the quantity held — never more — which is what makes the whole
+    ladder placeable on a long option without asking for short-option margin.
+
+    Target 3 gets no order. Its lot is the one the STOP is holding: the runner
+    rides with the stop trailing behind it until either the stop fires or the
+    premium touches target 3, at which point the stop is cancelled and the lot
+    is sold at market.
+
+    The stop is allocated FIRST. On a short fill that is the difference between
+    a protected position with fewer targets and an unprotected one with more:
+    two lots filled arms a stop and target 1, and one lot filled arms a stop
+    and nothing else.
+    """
+    left = int(filled_lots)
+    stop_lots = min(int(per_target), max(left, 0))
+    left -= stop_lots
+
+    targets = []
+    for _ in range(2):                 # only T1 and T2 ever rest
+        take = min(int(per_target), max(left, 0))
+        targets.append(take)
+        left -= take
+    return stop_lots, targets
 
 
 # ── arming ────────────────────────────────────────────────────────────────
@@ -274,15 +323,14 @@ def validate_plan(username, plan, chain_meta=None, ltp=None) -> str:
                 + (f' ({", ".join(unsized)} are enabled but unsized)' if unsized else '')
                 + '. Signal mode will not guess a size from BROKER_N_OP_LOTS.')
 
-    # Neither dispatcher splits an order by the exchange freeze limit, so an
-    # entry over it is rejected at the broker after the stop has been sized
-    # against it. 27 lots is the cap the exit path already uses.
+    # No freeze-limit refusal: a leg over it is split into orders the exchange
+    # will take (see lot_chunks). What is still worth refusing is a size that
+    # cannot be a ladder at all.
     for t in sized:
         lots = op_signal_lots(username, t['instance'])
-        if lots * 3 > 27:
-            return (f"{t['name']} would enter {lots * 3} lots, over the 27-lot freeze "
-                    f"limit. Lower BROKER_{t['instance']}_OP_SIGNAL_LOTS to {27 // 3} "
-                    f"or less.")
+        if lots > 500:
+            return (f"BROKER_{t['instance']}_OP_SIGNAL_LOTS is {lots}, which would enter "
+                    f"{lots * 3} lots at {t['name']}. That is a typo, not a position.")
     return None
 
 
@@ -337,21 +385,26 @@ def arm_signal(username, session_data, plan) -> dict:
         lots = op_signal_lots(username, instance)
         entry_lots = lots * 3
 
-        try:
-            results = dispatch_stop_to_brokers(
-                symbol=symbol, strike=strike, option_type=option_type,
-                trigger_price=entry, action=action,
-                username=username, session_data=session_data,
-                standard_lot=lot_size,
-                gate=lambda i, _b, _want=instance: i == _want,
-                lots_for=lambda _i, _n=entry_lots: _n,
-                log_tag=f'OpSignal {signal_id} entry',
-            )
-        except Exception as e:
-            logger.error(f"[OpSignal] {signal_id} entry at broker {instance} failed: {e}",
-                         exc_info=True)
-            results = [{'broker': t['type'], 'instance': instance,
-                        'success': False, 'error': str(e)}]
+        # Over the freeze limit this is more than one order at the same
+        # account — 30 lots is 27 + 3 — and every chunk is recorded on the one
+        # entry record, which leg_fills sums back together.
+        results = []
+        for chunk in lot_chunks(entry_lots):
+            try:
+                results += dispatch_stop_to_brokers(
+                    symbol=symbol, strike=strike, option_type=option_type,
+                    trigger_price=entry, action=action,
+                    username=username, session_data=session_data,
+                    standard_lot=lot_size,
+                    gate=lambda i, _b, _want=instance: i == _want,
+                    lots_for=lambda _i, _n=chunk: _n,
+                    log_tag=f'OpSignal {signal_id} entry',
+                )
+            except Exception as e:
+                logger.error(f"[OpSignal] {signal_id} entry at broker {instance} "
+                             f"failed: {e}", exc_info=True)
+                results.append({'broker': t['type'], 'instance': instance,
+                                'success': False, 'error': str(e)})
 
         ok = [r for r in results if r.get('success')]
         error = next((r.get('error') for r in results if not r.get('success')), None)
@@ -478,32 +531,44 @@ def _settle_entry(signal, slot, username, session_data, books) -> None:
 
 def _arm_ladder(signal, slot, filled_lots, filled_qty, entry_fill,
                 username, session_data) -> None:
-    """Attach the stop and the two resting targets to a filled entry."""
+    """Attach the stop and the two resting targets to a filled entry.
+
+    Three lots become three orders of one lot: stop, target 1, target 2. What
+    is resting to sell is exactly what is held, so nothing here asks the broker
+    for short-option margin, and no window exists in which the stop covers more
+    than the position — the race that makes most emulated OCO ladders unsafe
+    simply cannot arise when the stop is one leg's worth.
+    """
     signal_id, instance = signal['id'], slot['instance']
-    alloc = allocate(filled_lots, slot['plan_lots'])
+    lot_size = int(signal.get('lot_size') or 1) or 1
+    stop_lots, alloc = allocate(filled_lots, slot['plan_lots'])
 
     OpSignalStore.update_broker(signal_id, instance, {
         'filled_lots': filled_lots, 'filled_qty': filled_qty,
         'entry_fill': entry_fill, 'open_qty': filled_qty,
+        'sl_lots': stop_lots, 'sl_qty': stop_lots * lot_size,
         'alloc': alloc, 'stop_level': float(signal['stop']),
         'stage': STAGE_LIVE,
     })
     logger.info(f"[OpSignal] {signal_id} broker {instance}: entry filled {filled_qty} "
                 f"({filled_lots} lots) at {entry_fill} — arming stop {signal['stop']} "
-                f"and targets {signal['targets']} split {alloc}")
+                f"x{stop_lots}, T1 {signal['targets'][0]} x{alloc[0]}, "
+                f"T2 {signal['targets'][1]} x{alloc[1]}; target 3 "
+                f"{signal['targets'][2]} rides with the stop")
 
     legs = dict(slot.get('legs') or {})
 
     # The stop first, always. Between the fill and the stop resting, the
     # position is naked; the targets can wait three more milliseconds.
-    sl_id = _place_stop_leg(signal, instance, filled_lots, float(signal['stop']),
-                            username, session_data)
-    if sl_id:
-        legs['SL'] = sl_id
+    if stop_lots > 0:
+        sl_id = _place_stop_leg(signal, instance, stop_lots, float(signal['stop']),
+                                username, session_data)
+        if sl_id:
+            legs['SL'] = sl_id
 
     for name, idx in (('T1', 0), ('T2', 1)):
         if alloc[idx] <= 0:
-            continue               # a short fill armed fewer targets than three
+            continue               # a short fill armed fewer targets
         leg_id = _place_target_leg(signal, instance, name, alloc[idx],
                                    float(signal['targets'][idx]),
                                    username, session_data)
@@ -519,21 +584,24 @@ def _place_stop_leg(signal, instance, lots, trigger, username, session_data):
     from trading_app.app.utils.mine_order_store import MineOrderStore
 
     side = exit_side(signal['action'])
-    try:
-        results = dispatch_stop_to_brokers(
-            symbol=signal['symbol'], strike=signal['strike'],
-            option_type=signal['option_type'],
-            trigger_price=trigger, action=side,
-            username=username, session_data=session_data,
-            standard_lot=int(signal['lot_size']),
-            gate=lambda i, _b, _want=instance: i == _want,
-            lots_for=lambda _i, _n=lots: _n,
-            log_tag=f"OpSignal {signal['id']} stop",
-        )
-    except Exception as e:
-        logger.error(f"[OpSignal] {signal['id']} broker {instance}: stop placement "
-                     f"failed: {e}", exc_info=True)
-        return None
+    results = []
+    for chunk in lot_chunks(lots):
+        try:
+            results += dispatch_stop_to_brokers(
+                symbol=signal['symbol'], strike=signal['strike'],
+                option_type=signal['option_type'],
+                trigger_price=trigger, action=side,
+                username=username, session_data=session_data,
+                standard_lot=int(signal['lot_size']),
+                gate=lambda i, _b, _want=instance: i == _want,
+                lots_for=lambda _i, _n=chunk: _n,
+                log_tag=f"OpSignal {signal['id']} stop",
+            )
+        except Exception as e:
+            logger.error(f"[OpSignal] {signal['id']} broker {instance}: stop placement "
+                         f"failed: {e}", exc_info=True)
+            results.append({'broker': signal.get('broker') or 'unknown',
+                            'instance': instance, 'success': False, 'error': str(e)})
 
     ok = [r for r in results if r.get('success')]
     if not ok:
@@ -565,25 +633,28 @@ def _place_target_leg(signal, instance, name, lots, limit_price, username, sessi
     from trading_app.app.utils.mine_order_store import MineOrderStore
 
     side = exit_side(signal['action'])
-    try:
-        result = _dispatch_order_to_brokers(
-            symbol=signal['symbol'], strike=signal['strike'],
-            option_type=signal['option_type'], action=side,
-            strategy=OP_STRATEGY, username=username, session_data=session_data,
-            limit_price=limit_price,
-            gate=lambda i, _b, _want=instance: i == _want,
-            lots_for=lambda _i, _n=lots: _n,
-        )
-    except Exception as e:
-        logger.error(f"[OpSignal] {signal['id']} broker {instance}: {name} placement "
-                     f"failed: {e}", exc_info=True)
-        return None
+    summary, last_error = [], None
+    for chunk in lot_chunks(lots):
+        try:
+            result = _dispatch_order_to_brokers(
+                symbol=signal['symbol'], strike=signal['strike'],
+                option_type=signal['option_type'], action=side,
+                strategy=OP_STRATEGY, username=username, session_data=session_data,
+                limit_price=limit_price,
+                gate=lambda i, _b, _want=instance: i == _want,
+                lots_for=lambda _i, _n=chunk: _n,
+            )
+            summary += result.get('summary') or []
+            last_error = result.get('error') or last_error
+        except Exception as e:
+            logger.error(f"[OpSignal] {signal['id']} broker {instance}: {name} placement "
+                         f"failed: {e}", exc_info=True)
+            last_error = str(e)
 
-    placed = [b for b in (result.get('summary') or [])
-              if (b.get('result') or {}).get('success')]
+    placed = [b for b in summary if (b.get('result') or {}).get('success')]
     if not placed:
         logger.warning(f"[OpSignal] {signal['id']} broker {instance}: {name} at "
-                       f"{limit_price} refused — {result.get('error')}")
+                       f"{limit_price} refused — {last_error}")
         return None
 
     record = MineOrderStore.add_order({
@@ -596,7 +667,7 @@ def _place_target_leg(signal, instance, name, lots, limit_price, username, sessi
         'quantity': sum(int(b.get('quantity') or 0) for b in placed),
         'status': 'OPEN', 'username': username, 'source': 'orderplacement',
         'signal_id': signal['id'], 'leg': name,
-        'broker_order_ids': result.get('summary', []),
+        'broker_order_ids': summary,
     })
     return record['id']
 
@@ -626,62 +697,69 @@ def _cancel_leg(order, username, session_data) -> bool:
     return False
 
 
-def _stop_needs_sync(sl, level, qty) -> bool:
-    """Is the resting stop already where it should be, and sized for it?"""
+def _stop_needs_sync(sl, level) -> bool:
+    """Is the resting stop's trigger already where it should be?
+
+    Only the trigger is ever asked to move. The stop is one leg's worth from
+    the moment it is placed, so a target booking does not change what it has
+    to cover — which is what removes the resize, and with it the window in
+    which a stop covers more than is held.
+    """
     if not _is_resting(sl):
         return False
     try:
-        return (abs(float(sl.get('trigger_price') or 0) - float(level)) > 1e-9
-                or int(sl.get('quantity') or 0) != int(qty))
+        return abs(float(sl.get('trigger_price') or 0) - float(level)) > 1e-9
     except (TypeError, ValueError):
         return True
 
 
-def _trail_stop(signal, slot, new_level, new_qty, username, session_data) -> None:
-    """Shrink the stop to what is still held and move its trigger up.
+def _trail_stop(signal, slot, new_level, username, session_data) -> None:
+    """Move the stop's trigger up behind a booked target.
 
-    One modify carrying both. Quantity is the half that matters: after a target
-    books, a stop still sized for the whole position sells more than is there.
+    Trigger only — never quantity. The stop was placed at one leg's worth and
+    stays there, so a target booking leaves it covering exactly the lot it
+    always covered. That is the whole reason this ladder can rest at a broker
+    at all: sell orders never add up to more than the position, so there is no
+    moment at which a triggering stop could sell something already sold.
 
-    A refused modify deliberately does **not** flatten. The old, wider stop is
-    still resting and the position is still protected; the modify is an
+    A refused move deliberately does **not** flatten. The stop is still resting
+    at the old, wider level and the position is still protected; the move is an
     improvement, and turning a failed improvement into a forced market exit
     would close a live trade over a rate limit.
 
     The retry is real, not aspirational: ``stop_level`` on the slot is the
-    level the stop is MEANT to be at, written the moment a target books
-    whether or not the broker accepted the move. Every tick compares it with
-    what is actually resting and calls this again, so a stop that could not be
-    moved at 11:04 is moved at 11:04:03.
+    level the stop is MEANT to be at, written the moment a target books whether
+    or not the broker accepted the move. Every tick compares it with what is
+    actually resting and calls this again, so a stop that could not be moved at
+    11:04 is moved at 11:04:03.
     """
     from trading_app.app.routes.api import _modify_order_at_brokers
     from trading_app.app.utils.mine_order_store import MineOrderStore
 
     signal_id, instance = signal['id'], slot['instance']
     sl = _record((slot.get('legs') or {}).get('SL'))
-    if not _is_resting(sl) or not _stop_needs_sync(sl, new_level, new_qty):
+    if not _stop_needs_sync(sl, new_level):
         return
 
+    # One call for every chunk of the stop: they all carry the same trigger and
+    # keep the size they were placed with, so there is nothing to deal out.
     try:
         result = _modify_order_at_brokers(sl.get('broker_order_ids'), username,
                                           session_data,
-                                          trigger_price=float(new_level),
-                                          quantity=int(new_qty) or None)
+                                          trigger_price=float(new_level))
     except Exception as e:
         logger.error(f"[OpSignal] {signal_id} broker {instance}: stop trail raised {e}")
         return
 
     if not result.get('success'):
         logger.warning(f"[OpSignal] {signal_id} broker {instance}: stop trail to "
-                       f"{new_level} x{new_qty} refused ({result.get('error')}) — the "
-                       f"previous stop is still resting, retrying next tick")
+                       f"{new_level} refused ({result.get('error')}) — the previous "
+                       f"stop is still resting, retrying next tick")
         return
 
     MineOrderStore.update_order(sl['id'], {'price': new_level,
-                                           'trigger_price': new_level,
-                                           'quantity': int(new_qty)})
-    logger.info(f"[OpSignal] {signal_id} broker {instance}: stop → {new_level} "
-                f"x{new_qty}")
+                                           'trigger_price': new_level})
+    logger.info(f"[OpSignal] {signal_id} broker {instance}: stop trigger → {new_level}")
 
 
 def _flatten_broker(signal, slot, username, session_data, reason) -> None:
@@ -775,7 +853,7 @@ def _check_ladder(signal, slot, ltp, username, session_data) -> None:
         slot['stop_level'] = float(new_level)
 
         if open_qty <= 0:
-            # Nothing left to protect — the stop is now the only sell order
+            # Nothing left to protect — the stop is the only sell order still
             # working, and it would open a short if it triggered.
             _cancel_leg(_record(legs.get('SL')), username, session_data)
             _flatten_broker(signal, slot, username, session_data,
@@ -784,11 +862,11 @@ def _check_ladder(signal, slot, ltp, username, session_data) -> None:
         logger.info(f"[OpSignal] {signal_id} broker {instance}: {name} booked {booked} "
                     f"— {open_qty} left, stop to {new_level}")
 
-    # The stop is moved once, here, rather than inside the loop. When a fast
-    # move fills T1 and T2 between two ticks the loop records both and this
-    # sends one modify straight to the final level and size — the intermediate
-    # stop would never have rested anywhere anyway, and asking the broker for
-    # it costs a call and a chance to be refused.
+    # The stop is moved once, below, rather than inside the loop. When a fast
+    # move fills T1 and T2 between two ticks the loop records both and the sync
+    # sends one modify straight to the final level — the intermediate trigger
+    # would never have rested anywhere anyway, and asking the broker for it
+    # costs a call and a chance to be refused.
 
     if open_qty <= 0:
         _flatten_broker(signal, slot, username, session_data, 'ladder complete')
@@ -802,10 +880,11 @@ def _check_ladder(signal, slot, ltp, username, session_data) -> None:
     # position.
     stop_level = slot.get('stop_level') or float(signal['stop'])
     sl = _record(legs.get('SL'))
-    if _stop_needs_sync(sl, stop_level, open_qty):
-        _trail_stop(signal, slot, stop_level, open_qty, username, session_data)
+    if _stop_needs_sync(sl, stop_level):
+        _trail_stop(signal, slot, stop_level, username, session_data)
     elif not sl and open_qty > 0:
-        lots_left = max(open_qty // lot_size, 1)
+        lots_left = min(int(slot.get('sl_lots') or 0) or lot_chunks(1)[0],
+                        max(open_qty // lot_size, 1))
         logger.warning(f"[OpSignal] {signal_id} broker {instance}: no stop on a live "
                        f"position — trying again")
         placed = _place_stop_leg(signal, instance, lots_left, float(stop_level),

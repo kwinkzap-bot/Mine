@@ -252,25 +252,63 @@ def test_stats_separate_single_prints_from_aggregated_bars():
     assert st['max_tick_qty'] == 65          # never conflated with the bar
 
 
-def test_a_restored_snapshot_recomputes_its_own_coverage(tmp_path):
-    """An older snapshot carries backfill volume in its stored total, which
-    would keep reporting ~100% all day. Deriving it from the rows heals it."""
-    push(last_traded_time=1001, last_traded_qty=100, vol_traded_today=1000)
-    push(last_traded_time=1002, last_traded_qty=100, vol_traded_today=6000)
+def _snapshot_roundtrip(tmp_path, mutate=None):
+    """Save, optionally corrupt the file the way an older build wrote it, restore."""
+    import pickle
     with mock.patch.object(tas, '_TAPE_DIR', str(tmp_path)):
         tas.save_snapshot(force=True)
-        rows_before = len(rows())
-        # A stale, inflated total of the kind the old code wrote.
-        with open(tas._snapshot_path(tas._today()), 'rb') as fh:
-            import pickle
-            blob = pickle.load(fh)
-        blob['coverage'] = {SYMBOL: [999999, 1000000]}
-        with open(tas._snapshot_path(tas._today()), 'wb') as fh:
-            pickle.dump(blob, fh)
+        path = tas._snapshot_path(tas._today())
+        if mutate is not None:
+            with open(path, 'rb') as fh:
+                blob = pickle.load(fh)
+            mutate(blob)
+            with open(path, 'wb') as fh:
+                pickle.dump(blob, fh)
         tas.reset()
         tas.load_snapshot()
+
+
+def test_a_pre_versioned_snapshot_recomputes_its_own_coverage(tmp_path):
+    """An older snapshot carries backfill volume in its stored total, which
+    would keep reporting ~100% all day. Deriving it from the rows heals it.
+
+    'cov_v' is what says a snapshot's totals already exclude bars. Dropping it
+    is what makes this file an old one — the totals alone cannot be told apart.
+    """
+    push(last_traded_time=1001, last_traded_qty=100, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=100, vol_traded_today=6000)
+    rows_before = len(rows())
+
+    def age_it(blob):
+        blob.pop('cov_v', None)
+        blob.pop('seen', None)
+        blob['coverage'] = {SYMBOL: [999999, 1000000]}   # the inflated total
+
+    _snapshot_roundtrip(tmp_path, age_it)
     assert len(rows()) == rows_before
     assert tas.coverage(SYMBOL) == pytest.approx(100 / 5000, rel=1e-3)
+    # The session counters are gone from an old file too, and are rebuilt from
+    # the rows — right for a tape no top-up has rebuilt, which is what it holds.
+    assert tas.stats(SYMBOL)['prints'] == 2
+
+
+def test_a_current_snapshot_keeps_the_totals_it_stored(tmp_path):
+    """After a top-up the live prints are gone from the rows, so rederiving
+    would measure the last minute of feed and call it the session. A snapshot
+    that says its totals are already bar-free is believed instead."""
+    push(last_traded_time=1001, last_traded_qty=100, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=100, vol_traded_today=6000)
+    before = tas.coverage(SYMBOL)
+    seen_before = tas.stats(SYMBOL)['prints']
+
+    # A top-up settles both prints into one Σ bar covering their seconds.
+    tas._rebuild(SYMBOL, tas._bar_rows(
+        [{'date': 1002, 'open': 10, 'close': 11, 'volume': 5000}]), 1002)
+    assert [r['src'] for r in rows()] == ['bar']
+
+    _snapshot_roundtrip(tmp_path)
+    assert tas.coverage(SYMBOL) == before
+    assert tas.stats(SYMBOL)['prints'] == seen_before == 2
 
 
 def test_a_client_can_ask_for_the_whole_session_in_one_call():
@@ -365,3 +403,186 @@ def test_the_day_rollover_clears_yesterdays_tape():
     tas._tape_day = datetime.now(IST).date() - timedelta(days=1)
     tas._roll_day_if_needed()
     assert rows() == []
+
+
+# ── history catching up over the live prints ───────────────────────────────
+#
+# The seam the backfill leaves is not a gap in TIME — the socket covers every
+# second after it — it is a change of UNIT. A backfilled row is one second of
+# the exchange's whole volume; a live row is one throttled snapshot's
+# last-traded-quantity. Measured on 2026-09-10 (NIFTY26SEPFUT) the medians were
+# 260 and 65, and of 4,084 live prints exactly one cleared a 1,000 filter that
+# 56 of 464 bars cleared. So the tape read as a wall of Σ rows from the open and
+# then almost nothing, and the fix is that history keeps catching up.
+
+def _topup_with(bars, complete=True):
+    """Run one top-up against a fake Breeze that answers with `bars`."""
+    fake = mock.Mock()
+    fake.historical_seconds_range.return_value = (bars, complete)
+    with mock.patch('trading_app.service.provider_logic.get_icici_adapter',
+                    return_value=fake):
+        tas._topup(SYMBOL)
+    return fake
+
+
+def _bar(ts, volume, open_=10, close=11):
+    return {'date': ts, 'open': open_, 'close': close, 'volume': volume}
+
+
+def test_a_topup_replaces_the_prints_whose_seconds_it_now_covers():
+    """Both would otherwise stand for the same trades — the print as itself,
+    and again inside the Σ bar. Appending is a double count, not a merge."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=65, vol_traded_today=2000)
+    push(last_traded_time=1900, last_traded_qty=65, vol_traded_today=3000)
+
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500), _bar(1002, 700)])
+
+    out = rows()
+    assert [(r['ts'], r['src'], r['qty']) for r in out] == [
+        (1001, 'bar', 500), (1002, 'bar', 700), (1900, 'tick', 65)]
+    # and the tape is still dense and ascending in BOTH seq and time
+    assert [r['seq'] for r in out] == [1, 2, 3]
+    assert out == sorted(out, key=lambda r: r['ts'])
+
+
+def test_a_print_ahead_of_the_frontier_is_left_alone():
+    """It is the only thing that can answer for a second history has not
+    reached, so the leading edge must survive every pass."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1500, last_traded_qty=65, vol_traded_today=1000)
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500)])
+    assert [(r['ts'], r['src']) for r in rows()] == [(1001, 'bar'), (1500, 'tick')]
+
+
+def test_a_topup_that_comes_back_empty_moves_nothing():
+    """Advancing the frontier on an empty answer would delete the live prints
+    covering those seconds and put nothing in their place — a real hole, made
+    by the code meant to close a cosmetic one."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([])
+    assert [(r['ts'], r['src']) for r in rows()] == [(1001, 'tick')]
+    assert tas._BACKFILL_HIGH_TS[SYMBOL] == 1000
+    assert tas._EPOCH.get(SYMBOL, 0) == 0
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_the_frontier_only_claims_the_ground_it_actually_fetched(complete):
+    """_rebuild deletes the live prints below the frontier, so a window Breeze
+    answered short of would delete prints and leave those seconds empty — a
+    real hole, made by the code closing a cosmetic one. True of a
+    budget-limited pass and of a short answer to a whole one alike."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500), _bar(1002, 700)], complete=complete)
+    assert tas._BACKFILL_HIGH_TS[SYMBOL] == 1002
+
+
+def test_a_partial_catchup_comes_straight_back_for_the_rest():
+    """A tab opened at 14:20 is five hours behind and catches up over several
+    passes; idling a minute between them would take until the close."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500)], complete=False)
+    assert tas._TOPUP_AT[SYMBOL] <= tas.monotonic() + 1
+
+
+def test_the_frontier_never_reaches_the_second_still_forming():
+    """Its bar is half-built, and no later pass would correct a partial volume
+    frozen into the tape."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        fake = _topup_with([_bar(1001, 500)])
+    _, end = fake.historical_seconds_range.call_args[0][1:3]
+    now = datetime.now(IST)
+    assert (now - end).total_seconds() >= tas._TOPUP_LAG_SEC
+
+
+def test_a_rebuild_tells_the_client_its_cursor_has_moved():
+    """Seqs are renumbered from 1, so a cursor from before the rebuild points
+    at different rows now. Stitching onto it silently corrupts the tape."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=65, vol_traded_today=2000)
+    held = tas.view(SYMBOL, 0, 500)
+    assert held['truncated'] is False
+
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500), _bar(1002, 700)])
+
+    stale = tas.view(SYMBOL, held['next_seq'], 500, 0, held['epoch'])
+    assert stale['truncated'] is True
+    assert stale['epoch'] != held['epoch']
+    assert len(stale['rows']) == 2                # the whole tape, not a delta
+
+    fresh = tas.view(SYMBOL, stale['next_seq'], 500, 0, stale['epoch'])
+    assert fresh['truncated'] is False and fresh['rows'] == []
+
+
+def test_the_print_count_survives_the_prints_being_replaced():
+    """It describes what the LIVE FEED saw all session — the number the Feed
+    percentage is about. Derived from the rows it would fall toward zero as
+    history caught up and report the last minute as the day."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=1002, last_traded_qty=910, vol_traded_today=2000)
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500), _bar(1002, 700)])
+    st = tas.stats(SYMBOL)
+    assert st['prints'] == 2                 # both, though neither is a row now
+    assert st['max_tick_qty'] == 910         # still explains an empty filter
+    assert st['bars'] == 2
+
+
+def test_flow_counts_every_row_exactly_once():
+    """Flow describes what the tape is SHOWING. Summing prints as well as the
+    Σ bars that now stand for their seconds would count those trades twice."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000,
+         bid_price=99.0, ask_price=100.0)                        # at the ask: a buy
+    push(last_traded_time=1900, last_traded_qty=65, vol_traded_today=2000,
+         bid_price=99.0, ask_price=100.0)
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500, open_=10, close=11)])       # a buy bar
+    st = tas.stats(SYMBOL)
+    assert st['flow_buy'] + st['flow_sell'] == 500 + 65
+
+
+def test_a_topup_stops_asking_once_the_session_is_over():
+    """The tab stays open after the close. At the retry rate that is a Breeze
+    request every five minutes, all evening, for a tape that cannot change."""
+    tas._BACKFILL[SYMBOL] = 'ready'
+    close_ts = tas._session_bounds(tas._today())[1]
+    tas._BACKFILL_HIGH_TS[SYMBOL] = close_ts - 60          # the last trade of the day
+
+    after_close = datetime.fromtimestamp(close_ts + 3600, IST)
+    with mock.patch.object(tas, '_tape_day', tas._today()), \
+         mock.patch.object(tas, 'datetime') as clock:
+        clock.now.return_value = after_close
+        clock.fromtimestamp = datetime.fromtimestamp
+        clock.combine = datetime.combine               # _session_bounds needs the real one
+        _topup_with([])                                    # nothing left to fetch
+    assert tas._TOPUP_AT[SYMBOL] >= tas.monotonic() + tas._TOPUP_BACKOFF_MAX
+
+
+def test_a_topup_stands_down_while_the_first_pass_owns_the_tape():
+    """The backfill lays down history from an empty store; a top-up merging
+    into one halfway built would race it."""
+    tas._BACKFILL[SYMBOL] = 'running'
+    with mock.patch.object(tas, '_topup') as spy:
+        tas._maybe_topup(SYMBOL)
+    spy.assert_not_called()

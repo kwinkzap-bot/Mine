@@ -814,3 +814,61 @@ def test_the_dispatcher_gate_can_only_narrow_never_widen(env):
         limit_price=206.0, lots_for=lambda i: 1, gate=lambda i, b: True)
     reached = {b.get('instance') for b in (result.get('summary') or [])}
     assert 3 not in reached
+
+
+# ── per-broker fills, when one broker holds several legs ─────────────────
+# An order over the exchange freeze limit goes out as chunks, so one account
+# can hold two legs of one record. leg_fills has to add those up rather than
+# let the second overwrite the first, and it has to call the pair FINISHED
+# only when both are.
+
+def _fills(monkeypatch, rows, legs):
+    monkeypatch.setattr(api, '_broker_client', lambda *a, **k: ('kite', object()))
+    monkeypatch.setattr(api, '_broker_order_book', lambda kind, client: rows)
+    order = {'broker_order_ids': [
+        {'broker': 'zerodha', 'instance': 1, 'result': {'success': True, 'order_id': o}}
+        for o in legs]}
+    return api.leg_fills(order, 'test-user', {})
+
+
+def test_two_chunks_at_one_broker_are_added_up(monkeypatch):
+    out = _fills(monkeypatch,
+                 {'a': ('EXECUTED', 193.0, 2025), 'b': ('EXECUTED', 193.5, 225)},
+                 ['a', 'b'])
+    status, avg, filled = out[('zerodha', 1)]
+    assert status == 'EXECUTED'
+    assert filled == 2250            # not 225, which is what overwriting gave
+    assert avg == 193.25
+
+
+def test_one_chunk_still_resting_means_the_broker_has_not_finished(monkeypatch):
+    """Reporting EXECUTED here would arm a ladder over 27 lots and leave the
+    other 3 filling behind it, managed by nothing."""
+    out = _fills(monkeypatch,
+                 {'a': ('EXECUTED', 193.0, 2025), 'b': ('OPEN', None, 0)},
+                 ['a', 'b'])
+    status, _avg, filled = out[('zerodha', 1)]
+    assert status == 'OPEN'
+    assert filled == 2025            # the partial is still reported
+
+
+def test_a_chunk_cancelled_after_a_partial_fill_is_still_a_position(monkeypatch):
+    out = _fills(monkeypatch,
+                 {'a': ('EXECUTED', 193.0, 2025), 'b': ('CANCELLED', None, 0)},
+                 ['a', 'b'])
+    assert out[('zerodha', 1)][0] == 'EXECUTED'
+    assert out[('zerodha', 1)][2] == 2025
+
+
+def test_every_chunk_rejected_is_a_rejection(monkeypatch):
+    out = _fills(monkeypatch,
+                 {'a': ('REJECTED', None, 0), 'b': ('REJECTED', None, 0)},
+                 ['a', 'b'])
+    assert out[('zerodha', 1)] == ('REJECTED', None, 0)
+
+
+def test_a_leg_the_order_book_cannot_answer_for_is_absent_not_gone(monkeypatch):
+    """Missing from the book is unknown. Reading it as CANCELLED would abandon
+    a live stop on a half-fetched book."""
+    out = _fills(monkeypatch, {}, ['a', 'b'])
+    assert out == {}

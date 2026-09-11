@@ -93,6 +93,28 @@ _SUPERVISOR_TICK_SEC = 5.0
 # so 90s of silence is far outside normal jitter.
 _STALL_SECONDS = 90.0
 
+# How often history is walked forward over the live prints it now covers. See
+# _topup for why it has to keep catching up all session rather than stopping
+# where the opening backfill did.
+#
+# Cost: one Breeze request per pass on a tape that is up to date, out of the
+# app-wide 5,000/day the live algos share, and only while a tab is actually
+# watching (HOT_TTL_SEC winds it down 45s after the last poll). A whole session
+# watched end to end is ~375 requests.
+_TOPUP_EVERY_SEC = 60.0
+# Breeze answers a failed window with nothing, and retrying it every minute
+# would spend the budget on an outage. Back off to this instead.
+_TOPUP_BACKOFF_MAX = 300.0
+# Never ask for the second still forming: its bar is half-built, and freezing a
+# partial volume into the tape is not something a later pass would correct.
+_TOPUP_LAG_SEC = 3
+# Windows per pass. A tab opened at 14:20 is five hours behind, and fetching
+# all of that in one pass would hold the fetch open for ~17s at Breeze's 1.5
+# req/s; instead it catches up over consecutive passes, oldest first.
+_TOPUP_MAX_REQUESTS = 8
+# Long enough to mean "not again today". The day rollover clears it.
+_DONE_FOR_THE_DAY = 6 * 3600.0
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Store
@@ -114,6 +136,19 @@ _BACKFILL: Dict[str, str] = {}
 _BACKFILL_HIGH_TS: Dict[str, int] = {}
 # Running totals for the honesty metric: attributed qty vs real volume moved.
 _COVERAGE: Dict[str, List[int]] = {}
+# symbol -> how many times its tape has been rebuilt. A top-up replaces live
+# prints with the Σ bars covering the same seconds, which renumbers every seq
+# after the seam — so a client's cursor stops meaning anything and it has to be
+# told to refetch rather than stitch onto a number that has moved under it.
+_EPOCH: Dict[str, int] = {}
+# symbol -> counters that must survive that rebuild. The rail's print count and
+# the empty-filter message describe what the LIVE FEED has seen all session,
+# which is no longer answerable from the rows once history has replaced them.
+_SEEN: Dict[str, Dict[str, int]] = {}
+# symbol -> monotonic() at which the next top-up may run, and the symbols one
+# is already running for.
+_TOPUP_AT: Dict[str, float] = {}
+_TOPUP_BUSY: set = set()
 
 _socket: Any = None
 _socket_started_at: float = 0.0
@@ -156,6 +191,9 @@ def _roll_day_if_needed() -> date:
             _BACKFILL.clear()
             _BACKFILL_HIGH_TS.clear()
             _COVERAGE.clear()
+            _EPOCH.clear()
+            _SEEN.clear()
+            _TOPUP_AT.clear()
             _subscribed.clear()
     return today
 
@@ -188,26 +226,25 @@ def _classify(price: float, bid: Optional[float], ask: Optional[float],
     return 'flat', 'tick'
 
 
-def _append(symbol: str, ts: int, price: float, qty: Optional[int],
-            side: str, side_rule: str, src: str, vol_delta: int) -> Dict[str, Any]:
-    """Append one row under the caller's lock and hand it back."""
-    seq = _SEQ.get(symbol, 0) + 1
-    _SEQ[symbol] = seq
-    row = {
-        'seq': seq,
-        'ts': int(ts),
-        'price': round(float(price), 2),
-        'qty': int(qty) if qty else None,
-        'side': side,
-        'side_rule': side_rule,
-        'src': src,
-        'vol_delta': int(vol_delta or 0),
-    }
-    dq = _PRINTS.get(symbol)
-    if dq is None:
-        dq = deque(maxlen=MAX_ROWS_PER_SYMBOL)
-        _PRINTS[symbol] = dq
-    dq.append(row)
+def _note_row(symbol: str, row: Dict[str, Any]) -> None:
+    """Fold one NEW row into the running session counters.
+
+    Called once per row when it first enters the tape, and never again — a
+    top-up renumbers rows it is keeping, and re-counting those would double
+    every figure here. Nothing in it is derivable from the tape afterwards,
+    which is the point: a top-up deletes the live prints whose seconds history
+    has since covered, and the rail must still be able to say how many prints
+    the feed actually saw.
+    """
+    seen = _SEEN.setdefault(symbol, {'prints': 0, 'max_tick_qty': 0,
+                                     'max_bar_qty': 0})
+    qty = row['qty'] or 0
+    if row['src'] == 'tick':
+        seen['prints'] += 1
+        seen['max_tick_qty'] = max(seen['max_tick_qty'], qty)
+    else:
+        seen['max_bar_qty'] = max(seen['max_bar_qty'], qty)
+
     # Coverage measures how much of the traded volume the LIVE feed manages to
     # attribute to an actual print, so only 'tick' rows count. A backfilled bar
     # carries its own second's volume as its quantity, so counting those would
@@ -218,11 +255,74 @@ def _append(symbol: str, ts: int, price: float, qty: Optional[int],
     # The first row of a session also has no previous cumulative volume, so its
     # vol_delta is 0; counting its qty would attribute against a denominator of
     # nothing and overstate the figure again.
-    if src == 'tick' and row['vol_delta'] > 0:
+    if row['src'] == 'tick' and row['vol_delta'] > 0:
         cov = _COVERAGE.setdefault(symbol, [0, 0])
-        cov[0] += row['qty'] or 0
+        cov[0] += qty
         cov[1] += row['vol_delta']
+
+
+def _append_row(symbol: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Append one seq-less row under the caller's lock and hand it back."""
+    seq = _SEQ.get(symbol, 0) + 1
+    _SEQ[symbol] = seq
+    row['seq'] = seq
+    dq = _PRINTS.get(symbol)
+    if dq is None:
+        dq = deque(maxlen=MAX_ROWS_PER_SYMBOL)
+        _PRINTS[symbol] = dq
+    dq.append(row)
+    _note_row(symbol, row)
     return row
+
+
+def _append(symbol: str, ts: int, price: float, qty: Optional[int],
+            side: str, side_rule: str, src: str, vol_delta: int) -> Dict[str, Any]:
+    """Append one row under the caller's lock and hand it back."""
+    return _append_row(symbol, {
+        'ts': int(ts),
+        'price': round(float(price), 2),
+        'qty': int(qty) if qty else None,
+        'side': side,
+        'side_rule': side_rule,
+        'src': src,
+        'vol_delta': int(vol_delta or 0),
+    })
+
+
+def _bar_rows(bars: List[Dict[str, Any]],
+              prev_side: str = 'flat') -> List[Dict[str, Any]]:
+    """ICICI 1-second OHLCV bars as seq-less tape rows.
+
+    A 1-second bar's volume is every trade in that second added together, so
+    these rows are aggregated and are marked src='bar'. They are never
+    presented as single prints.
+
+    Shared by the opening backfill and every top-up after it, so the two lay
+    down rows that are identical in every respect but when they were fetched —
+    a seam the reader can see is a seam in the data, not in the code.
+    """
+    out: List[Dict[str, Any]] = []
+    for bar in bars:
+        vol = int(bar.get('volume') or 0)
+        if vol <= 0:
+            continue                     # Breeze pads flat filler bars
+        stamp = bar.get('date')
+        ts = int(stamp.timestamp()) if hasattr(stamp, 'timestamp') else int(stamp)
+        close = bar.get('close')
+        if not close:
+            continue
+        op = bar.get('open') or close
+        if close > op:
+            side = 'buy'
+        elif close < op:
+            side = 'sell'
+        else:
+            side = prev_side or 'flat'
+        out.append({'ts': ts, 'price': round(float(close), 2), 'qty': vol,
+                    'side': side, 'side_rule': 'bar', 'src': 'bar',
+                    'vol_delta': vol})
+        prev_side = side
+    return out
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -420,6 +520,13 @@ def _supervisor_loop() -> None:
             elif _socket is not None:
                 _close_socket()
 
+            # Not gated on the market being open: the last minute before the
+            # bell is live prints like any other, and one pass after it is what
+            # settles them into Σ bars. _topup stops on its own once the
+            # frontier reaches the close.
+            for symbol in hot:
+                _maybe_topup(symbol)
+
             save_snapshot()
         except Exception as e:                   # never let the thread die
             logger.debug(f"[TimeAndSales] supervisor iteration failed: {e}")
@@ -447,9 +554,9 @@ def _ensure_supervisor() -> None:
 def _backfill(symbol: str) -> None:
     """Lay down today's session so far, so the tab is not empty on open.
 
-    A 1-second bar's volume is the sum of every trade in that second, so these
-    rows are aggregated and are marked src='bar'. They are never presented as
-    single prints.
+    This is the FIRST pass, not the only one: _topup keeps walking the same
+    history forward for the rest of the session. Everything about how a bar
+    becomes a row lives in _bar_rows, which both share.
     """
     try:
         from trading_app.service.provider_logic import get_icici_adapter
@@ -471,35 +578,23 @@ def _backfill(symbol: str) -> None:
                 _BACKFILL[symbol] = f'unavailable:{why or "no 1-second history"}'
             return
 
+        rows = _bar_rows(bars)
         with _lock:
             if _PRINTS.get(symbol):
                 # Something is already here (a snapshot restore, or a second
                 # tab racing us). Re-laying history would duplicate every row.
+                # Whatever it holds, _topup carries it forward from its own
+                # high-water mark, so nothing is lost by standing down.
                 _BACKFILL[symbol] = 'ready'
                 return
-            prev_close, prev_side = None, 'flat'
-            high_ts = 0
-            for bar in bars:
-                vol = int(bar.get('volume') or 0)
-                if vol <= 0:
-                    continue                     # Breeze pads flat filler bars
-                stamp = bar.get('date')
-                ts = int(stamp.timestamp()) if hasattr(stamp, 'timestamp') else int(stamp)
-                close = bar.get('close')
-                if not close:
-                    continue
-                op = bar.get('open') or close
-                if close > op:
-                    side, rule = 'buy', 'bar'
-                elif close < op:
-                    side, rule = 'sell', 'bar'
-                else:
-                    side, rule = (prev_side or 'flat'), 'bar'
-                _append(symbol, ts, close, vol, side, rule, 'bar', vol)
-                prev_close, prev_side, high_ts = close, side, max(high_ts, ts)
-            _BACKFILL_HIGH_TS[symbol] = high_ts
-            _LAST.setdefault(symbol, {'ltt': None, 'price': prev_close,
-                                      'side': prev_side, 'cum_vol': None})
+            for row in rows:
+                _append_row(symbol, row)
+            _BACKFILL_HIGH_TS[symbol] = rows[-1]['ts'] if rows else 0
+            _LAST.setdefault(symbol, {
+                'ltt': None,
+                'price': rows[-1]['price'] if rows else None,
+                'side': rows[-1]['side'] if rows else 'flat',
+                'cum_vol': None})
             _BACKFILL[symbol] = 'ready'
         logger.info(f"[TimeAndSales] backfilled {symbol} to seq {_SEQ.get(symbol)}")
 
@@ -518,6 +613,169 @@ def _backfill(symbol: str) -> None:
         logger.warning(f"[TimeAndSales] backfill of {symbol} failed: {e}")
         with _lock:
             _BACKFILL[symbol] = f'unavailable:{e}'
+
+
+def _session_bounds(day: date) -> Tuple[int, int]:
+    """Today's session open and close as epoch seconds."""
+    return (int(datetime.combine(day, MARKET_OPEN, IST).timestamp()),
+            int(datetime.combine(day, MARKET_CLOSE, IST).timestamp()))
+
+
+def _rebuild(symbol: str, bars: List[Dict[str, Any]], frontier: int) -> bool:
+    """Swap the Σ bars for `bars` in over the live prints they cover.
+
+    Under the lock, and in one shot, because a push landing halfway through
+    would be classified against a tape that is half old and half new.
+
+    Rows are renumbered from 1 rather than continuing the counter. Seq has to
+    stay dense and ascending in TIME order — the client renders the tape by
+    reversing it — and rows are being removed from the middle, so there is no
+    numbering that both continues and stays ordered. The epoch is what tells a
+    client its cursor no longer points where it thinks.
+    """
+    with _lock:
+        dq = _PRINTS.get(symbol)
+        settled = _BACKFILL_HIGH_TS.get(symbol, 0)
+        held = list(dq) if dq else []
+        # Below the old frontier is history we already trust; above the new one
+        # are the live prints running ahead of it. Everything between is what
+        # these bars replace — which is exactly the double-count that made
+        # appending them impossible.
+        #
+        # A print inside that span with no bar on its second is dropped rather
+        # than kept: `bars` is what history says traded there, and a row it has
+        # no second for would contradict the series it now sits in.
+        merged = ([r for r in held if r['ts'] <= settled]
+                  + bars
+                  + [r for r in held if r['ts'] > frontier])
+        if not merged:
+            return False
+        for row in bars:
+            _note_row(symbol, row)
+
+        fresh: Deque[Dict[str, Any]] = deque(maxlen=MAX_ROWS_PER_SYMBOL)
+        fresh.extend(merged)
+        for seq, row in enumerate(fresh, 1):     # after maxlen has done its trimming
+            row['seq'] = seq
+        _PRINTS[symbol] = fresh
+        _SEQ[symbol] = len(fresh)
+        _BACKFILL_HIGH_TS[symbol] = frontier
+        _EPOCH[symbol] = _EPOCH.get(symbol, 0) + 1
+        return True
+
+
+def _topup(symbol: str) -> None:
+    """Walk the Σ series forward over the live prints it now covers.
+
+    WHY THIS EXISTS
+    ---------------
+    The opening backfill stops wherever the tab was first opened and hands over
+    to the socket, and the two are not the same measurement. A backfilled row is
+    one second of the exchange's whole volume; a live row is one throttled
+    snapshot's last-traded-quantity. Measured on 2026-09-10, NIFTY26SEPFUT:
+
+        Σ bars   464 rows, 09:15-09:29, median qty   260, 56 cleared 1,000
+        prints 4,084 rows, 09:29-14:45, median qty    65,  1 cleared 1,000
+
+    So the Qty column silently changed meaning partway down the tape, and a
+    min-qty filter that reads sensibly against bars hid essentially every live
+    row below the seam — which is what a full day of tape looked like: a wall
+    of Σ rows from the open, then nothing until a lone 1,300-lot print hours
+    later. Aggregating the live feed into seconds does not fix it: it already
+    delivers ~1.0 rows per second and reaches only 21% of the session's
+    seconds, so its idea of "a second" is a fifth of the real one.
+
+    History is therefore authoritative and keeps catching up. The socket holds
+    only the last minute, ahead of the frontier, where nothing else can answer
+    yet.
+
+    Failure is deliberately inert: a Breeze hiccup leaves the frontier where it
+    is and the live prints in place, so the tape degrades to what it did before
+    this existed rather than going blank, and the next pass tries again.
+    """
+    delay = _TOPUP_EVERY_SEC
+    try:
+        with _lock:
+            day = _tape_day or _today()
+            settled = _BACKFILL_HIGH_TS.get(symbol, 0)
+        open_ts, close_ts = _session_bounds(day)
+        now_ts = int(datetime.now(IST).timestamp())
+        frontier = min(now_ts - _TOPUP_LAG_SEC, close_ts)
+        start_ts = max(settled + 1, open_ts)
+        if frontier < start_ts:
+            return                               # nothing has settled since
+
+        from trading_app.service.provider_logic import get_icici_adapter
+        adapter = get_icici_adapter('Mine')
+        if adapter is None:
+            delay = _TOPUP_BACKOFF_MAX
+            return
+
+        bars, complete = adapter.historical_seconds_range(
+            symbol,
+            datetime.fromtimestamp(start_ts, IST),
+            datetime.fromtimestamp(frontier, IST),
+            max_requests=_TOPUP_MAX_REQUESTS)
+        if not bars:
+            # Either Breeze refused, or the window genuinely held no trade. The
+            # frontier stays put either way: moving it on an empty answer would
+            # delete the live prints covering those seconds and put nothing in
+            # their place.
+            #
+            # Past the close with nothing left to fetch, that is not a retry —
+            # the session is over and those seconds will never fill. Standing
+            # down matters because the tab stays open: at the backoff rate this
+            # would be a Breeze request every five minutes until someone closed
+            # it, for a tape that cannot change again.
+            delay = (_DONE_FOR_THE_DAY if frontier >= close_ts
+                     else _TOPUP_BACKOFF_MAX)
+            return
+
+        rows = _bar_rows(bars)
+        if not rows:
+            # Breeze answered with nothing but flat filler bars — the same
+            # situation as an empty answer, and it stands down the same way.
+            delay = (_DONE_FOR_THE_DAY if frontier >= close_ts
+                     else _TOPUP_BACKOFF_MAX)
+            return
+        # The frontier only ever advances to the last bar actually returned,
+        # never to the second that was asked for. _rebuild deletes the live
+        # prints below it, so claiming a window Breeze answered short of would
+        # delete prints and leave the seconds they covered empty — turning a
+        # cosmetic seam into a real hole. Quiet seconds at the tail simply get
+        # re-asked next pass, which costs one request inside the window that
+        # was being fetched anyway.
+        reached = rows[-1]['ts']
+        if _rebuild(symbol, rows, reached):
+            logger.info(f"[TimeAndSales] topped {symbol} up to "
+                        f"{datetime.fromtimestamp(reached, IST):%H:%M:%S} "
+                        f"(+{len(rows)} bars, epoch {_EPOCH.get(symbol)})")
+        # Still behind: come straight back rather than idle a minute per pass.
+        if not complete:
+            delay = 0.0
+    except Exception as e:
+        logger.warning(f"[TimeAndSales] top-up of {symbol} failed: {e}")
+        delay = _TOPUP_BACKOFF_MAX
+    finally:
+        with _lock:
+            _TOPUP_BUSY.discard(symbol)
+            _TOPUP_AT[symbol] = monotonic() + delay
+
+
+def _maybe_topup(symbol: str) -> None:
+    """Start a top-up for `symbol` if one is due and none is already running."""
+    with _lock:
+        if symbol in _TOPUP_BUSY:
+            return
+        if _BACKFILL.get(symbol) != 'ready':
+            return                               # the first pass owns the tape
+        if _today().weekday() >= 5:
+            return                               # Breeze answers weekends with nothing
+        if monotonic() < _TOPUP_AT.get(symbol, 0.0):
+            return
+        _TOPUP_BUSY.add(symbol)
+    threading.Thread(target=_topup, args=(symbol,),
+                     name=f'tas-topup-{symbol}', daemon=True).start()
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -564,6 +822,35 @@ def rows_since(symbol: str, since: int = 0, limit: int = 500,
     return rows, False
 
 
+def view(symbol: str, since: int = 0, limit: int = 500, min_qty: int = 0,
+         client_epoch: Optional[int] = None) -> Dict[str, Any]:
+    """Everything one client poll needs, taken under a SINGLE lock.
+
+    Reading the rows and the epoch in two separate lock sections let a top-up
+    land between them: the client would be handed pre-rebuild rows stamped with
+    the post-rebuild epoch, believe it was current, and spend the rest of the
+    session stitching new rows onto a cursor pointing into a tape that had been
+    renumbered underneath it.
+
+    An epoch that does not match ours means exactly that renumbering happened,
+    so the answer is the whole tape again and `truncated`, which is the client's
+    existing signal to throw away what it holds and start from this response.
+    """
+    with _lock:
+        epoch = _EPOCH.get(symbol, 0)
+        rebuilt = client_epoch is not None and client_epoch != epoch
+        rows, over_limit = rows_since(symbol, 0 if rebuilt else since,
+                                      limit, min_qty)
+        state = status(symbol)
+        state.update(stats(symbol))
+        # A client whose cursor is ahead of ours is holding rows from before a
+        # restart (seqs reset with the process). Telling it to reset is better
+        # than silently returning nothing forever.
+        state['rows'] = rows
+        state['truncated'] = over_limit or rebuilt or since > state['next_seq']
+        return state
+
+
 def coverage(symbol: str) -> Optional[float]:
     """Fraction of traded volume the LIVE feed attributes to an actual print.
 
@@ -591,32 +878,34 @@ def stats(symbol: str) -> Dict[str, Any]:
     `max_tick_qty` and `max_bar_qty` are carried so the UI can explain an empty
     filter instead of just showing nothing: a single exchange print is a handful
     of lots, and only an aggregated 1-second bar reaches the thousands.
+
+    The counts come from _SEEN and the flow from the rows, and the split is not
+    arbitrary. A top-up deletes the live prints whose seconds history has since
+    covered, so `prints` derived from the rows would fall back toward zero as
+    the session went on and report the last minute of feed rather than the day.
+    Flow is the opposite case: it has to describe what the tape is SHOWING, and
+    summing the rows is what keeps a replaced print from being counted twice —
+    once as itself and again inside the Σ bar that now stands for its second.
     """
     with _lock:
         dq = list(_PRINTS.get(symbol) or ())
-    buy = sell = prints = bars = 0
-    max_tick = max_bar = 0
+        seen = dict(_SEEN.get(symbol) or {})
+    buy = sell = bars = 0
     for r in dq:
         qty = r['qty'] or 0
-        if r['src'] == 'tick':
-            prints += 1
-            if qty > max_tick:
-                max_tick = qty
-            if r['side'] == 'buy':
-                buy += qty
-            elif r['side'] == 'sell':
-                sell += qty
-        else:
+        if r['src'] != 'tick':
             bars += 1
-            if qty > max_bar:
-                max_bar = qty
+        if r['side'] == 'buy':
+            buy += qty
+        elif r['side'] == 'sell':
+            sell += qty
     return {
-        'prints': prints,
+        'prints': seen.get('prints', 0),
         'bars': bars,
         'flow_buy': buy,
         'flow_sell': sell,
-        'max_tick_qty': max_tick,
-        'max_bar_qty': max_bar,
+        'max_tick_qty': seen.get('max_tick_qty', 0),
+        'max_bar_qty': seen.get('max_bar_qty', 0),
         'last_price': dq[-1]['price'] if dq else None,
         'last_side': dq[-1]['side'] if dq else None,
     }
@@ -634,6 +923,7 @@ def status(symbol: str) -> Dict[str, Any]:
             'next_seq': _SEQ.get(symbol, 0),
             'rows_held': len(dq) if dq else 0,
             'coverage': coverage(symbol),
+            'epoch': _EPOCH.get(symbol, 0),
         }
 
 
@@ -657,7 +947,12 @@ def save_snapshot(force: bool = False) -> None:
         payload = {s: list(dq) for s, dq in _PRINTS.items()}
         blob = {'prints': payload, 'seq': dict(_SEQ), 'last': dict(_LAST),
                 'backfill': dict(_BACKFILL), 'high_ts': dict(_BACKFILL_HIGH_TS),
-                'coverage': {k: list(v) for k, v in _COVERAGE.items()}}
+                'coverage': {k: list(v) for k, v in _COVERAGE.items()},
+                'epoch': dict(_EPOCH),
+                'seen': {k: dict(v) for k, v in _SEEN.items()},
+                # Says the totals above already exclude backfilled bars, so a
+                # restore can trust them instead of rederiving. See load_snapshot.
+                'cov_v': 2}
     if not day or not payload:
         return
     try:
@@ -669,6 +964,24 @@ def save_snapshot(force: bool = False) -> None:
         os.replace(tmp, path)
     except Exception as e:
         logger.debug(f"[TimeAndSales] snapshot write failed: {e}")
+
+
+def _derive_seen(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Best-effort session counters for a snapshot written before they existed.
+
+    Only right for a tape no top-up has rebuilt — after one there is no way to
+    recover how many prints were deleted — but that is exactly the tape an old
+    snapshot holds.
+    """
+    seen = {'prints': 0, 'max_tick_qty': 0, 'max_bar_qty': 0}
+    for r in rows:
+        qty = r.get('qty') or 0
+        if r.get('src') == 'tick':
+            seen['prints'] += 1
+            seen['max_tick_qty'] = max(seen['max_tick_qty'], qty)
+        else:
+            seen['max_bar_qty'] = max(seen['max_bar_qty'], qty)
+    return seen
 
 
 def load_snapshot() -> int:
@@ -695,12 +1008,25 @@ def load_snapshot() -> int:
         _LAST.update(blob.get('last') or {})
         _BACKFILL.update(blob.get('backfill') or {})
         _BACKFILL_HIGH_TS.update(blob.get('high_ts') or {})
-        # Recompute coverage from the restored rows rather than trusting the
-        # stored totals. A snapshot written before backfilled bars were
-        # excluded carries their self-covering volume in its running sum, and
-        # restoring it would keep reporting ~100% for the rest of the day.
-        # Deriving it from the rows makes an older snapshot heal itself.
+        _EPOCH.update(blob.get('epoch') or {})
+
+        # Both of these were once derivable from the rows and no longer are: a
+        # top-up deletes the live prints whose seconds history has covered, so
+        # rederiving would count only the prints that happen to have survived
+        # and report a fraction of the session's feed.
+        stored_seen = blob.get('seen') or {}
+        trust_totals = blob.get('cov_v', 0) >= 2
         for sym, rows in restored.items():
+            if sym in stored_seen:
+                _SEEN[sym] = dict(stored_seen[sym])
+            else:
+                _SEEN[sym] = _derive_seen(rows)
+            if trust_totals and sym in (blob.get('coverage') or {}):
+                _COVERAGE[sym] = list(blob['coverage'][sym])
+                continue
+            # An older snapshot's stored total carries backfilled bars' own
+            # self-covering volume and would keep reporting ~100% all day.
+            # Deriving it from the rows makes that snapshot heal itself.
             attributed = moved = 0
             for r in rows:
                 if r.get('src') == 'tick' and (r.get('vol_delta') or 0) > 0:
@@ -741,3 +1067,6 @@ def reset(symbol: Optional[str] = None) -> None:
             _BACKFILL.pop(s, None)
             _BACKFILL_HIGH_TS.pop(s, None)
             _COVERAGE.pop(s, None)
+            _EPOCH.pop(s, None)
+            _SEEN.pop(s, None)
+            _TOPUP_AT.pop(s, None)

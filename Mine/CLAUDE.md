@@ -89,21 +89,46 @@ carrying `BROKER_N_OP_ACTIVE=true` and walks away, as it always did.
 
 ```
 NIFTY 23500 CE          entry  SL-M BUY, 3x lots, trigger 193
-BUY : 193               on fill  SL-M SELL 3 lots @175 + LIMIT 206 + LIMIT 213
-SL : 175                T1 fills  stop -> 2 lots @ the actual entry fill
-Target : 206,213,220    T2 fills  stop -> 1 lot @ T1's actual fill
+BUY : 193               on fill  SL-M SELL 1 lot @175 + LIMIT 1 lot @206
+SL : 175                                            + LIMIT 1 lot @213
+Target : 206,213,220    T1 fills  stop trigger -> the actual entry fill
+                        T2 fills  stop trigger -> T1's actual fill
+                        SL fills  cancel the targets, market-exit the rest
                         220 touched  cancel the stop, exit at market
 ```
 
-**Target 3 never rests at a broker.** It is a level `op_signal_engine` watches,
-so it needs the app alive; the stop does not. That is deliberate — resting a
-fourth sell order would widen the gap between sell quantity working and
-quantity held, for the leg least likely to be reached.
+**The stop is one leg's worth, not the whole position**, and **target 3 has no
+order at all** — its lot is the one the stop is holding. Three lots held means
+three resting sell orders of one lot each, so working sell quantity equals the
+position exactly. Two consequences:
+
+* No short-option margin is ever asked for, and the race that makes emulated
+  OCO ladders unsafe — a stop covering more than is held, briefly — cannot
+  arise, because the stop never covers more than its own lot.
+* A stop hit is not the whole exit. The stop sells its lot at the exchange;
+  the engine cancels the targets and sells the rest at market a tick later.
+  T3 likewise needs the app alive. The stop does not.
+
+The stop is allocated **before** the targets, so a short fill loses a target
+rather than its protection.
 
 Sizing is `BROKER_N_OP_SIGNAL_LOTS` — **lots per target leg**, so `=1` is a
 three-lot entry. There is no fallback to `BROKER_N_OP_LOTS`: that number sizes
 a whole single-mode order, and reading it as a per-target size would treble the
 position. A broker without the variable takes no part in a signal.
+
+Any leg over the 27-lot exchange freeze limit is **split** by `lot_chunks` —
+a 30-lot entry is 27 + 3, two orders at one account on one store record.
+Neither shared dispatcher splits by that cap (`split_quantity_by_freeze_limit`
+is only reached on the way out, by `_place_exit_leg`), so the engine does it.
+Two consequences that are easy to break:
+
+* `leg_fills` **sums** a broker's chunks and calls them finished only when
+  every chunk is terminal. Overwriting instead arms a ladder over 27 lots and
+  leaves the other 3 filling behind it, managed by nothing.
+* `_trail_stop` sends the trigger and **never a quantity**. A stop over the cap
+  is several orders; handing `_modify_order_at_brokers` a quantity would put
+  the whole figure on every chunk.
 
 Only Zerodha and Fyers can hold an SL-M (`dispatch_stop_to_brokers`), so a
 signal **refuses to arm at all** if any OP-enabled broker is Dhan or Kotak —
@@ -117,12 +142,12 @@ the way the other runtime files are.
 
 Two things in it are load-bearing and easy to break:
 
-* **The stop is shrunk before anything else** once a target books. Between the
-  fill and the resize, the stop covers more than is held, and an SL-M that
-  triggers there sells what is not there.
+* **The stop's quantity is never modified** — only its trigger. It was placed
+  at one leg's worth and stays there, which is what keeps working sell
+  quantity equal to the position through every target fill.
 * **`_reconcile_orphans` every 30s** flattens any account left on the wrong
-  side of the contract. It is the only thing that catches the race above, and
-  it is why the engine can be trusted to rest more sell quantity than it holds.
+  side of the contract. Nothing should be able to get there now, which is
+  exactly why it stays: it is the check that the invariant above still holds.
 
 Every leg is a normal `MineOrderStore` record with `strategy='op'` plus
 `signal_id` and `leg`, which is what keeps the price box, the ✕, the

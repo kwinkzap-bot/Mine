@@ -86,13 +86,22 @@ def broker(monkeypatch):
             {'broker': 'zerodha', 'instance': inst, 'quantity': k['lots_for'](inst) * LOT,
              'result': {'success': True, 'order_id': f't{inst}-{len(b.calls)}'}}]}
 
+    def _ids(legs):
+        out = []
+        for leg in legs or []:
+            oid = leg.get('order_id') or (leg.get('result') or {}).get('order_id')
+            if oid:
+                out.append(str(oid))
+        return out
+
     def modify(legs, username, session_data, price=None, quantity=None, trigger_price=None):
-        b.log('modify', trigger=trigger_price, quantity=quantity, price=price)
+        b.log('modify', trigger=trigger_price, quantity=quantity, price=price,
+              ids=_ids(legs))
         return ({'success': True, 'summary': []} if b.modify_ok
                 else {'success': False, 'error': 'trigger price should be lower than LTP'})
 
     def cancel(legs, username, session_data):
-        b.log('cancel', legs=legs)
+        b.log('cancel', ids=_ids(legs))
         return {'success': True, 'summary': []}
 
     def flatten(username, session_data, select, log_tag='exit'):
@@ -225,17 +234,35 @@ def test_a_filled_entry_attaches_the_stop_and_both_resting_targets(env, rows, br
     broker.entry_fills = {1: ('EXECUTED', 193.4, 3 * LOT), 2: ('OPEN', None, 0)}
     tick()
 
+    # The stop is ONE leg's worth, not the whole position.
     stops = [d for d in broker.of('stop') if d['action'] == 'SELL']
     assert len(stops) == 1
-    assert stops[0] == {'instance': 1, 'trigger': 175.0, 'lots': 3, 'action': 'SELL'}
+    assert stops[0] == {'instance': 1, 'trigger': 175.0, 'lots': 1, 'action': 'SELL'}
 
-    # Two targets rest; the third is a level the engine watches.
+    # Two targets rest; the third rides with the stop.
     assert [(d['price'], d['lots'], d['instance']) for d in broker.of('target')] == \
         [(206.0, 1, 1), (213.0, 1, 1)]
 
     s = slot(sid, 1)
     assert s['stage'] == 'LIVE' and s['entry_fill'] == 193.4
-    assert s['open_qty'] == 3 * LOT and s['alloc'] == [1, 1, 1]
+    assert s['open_qty'] == 3 * LOT
+    assert s['sl_lots'] == 1 and s['alloc'] == [1, 1]
+
+
+def test_resting_sell_quantity_never_exceeds_what_is_held(env, rows, broker):
+    """The property the whole shape exists for.
+
+    Three lots held, three resting sell orders of one lot each. Nothing here
+    asks a broker for short-option margin, and no tick exists in which a
+    triggering stop could sell a lot a target has already sold.
+    """
+    sid = arm()
+    broker.entry_fills = {1: ('EXECUTED', 193.0, 3 * LOT)}
+    tick()
+
+    resting = sum(d['lots'] for d in broker.of('stop') if d['action'] == 'SELL')
+    resting += sum(d['lots'] for d in broker.of('target'))
+    assert resting == 3 == slot(sid, 1)['filled_lots']
 
 
 def test_the_stop_is_placed_before_the_targets(env, rows, broker):
@@ -256,9 +283,22 @@ def test_a_partial_entry_fill_arms_a_shorter_ladder(env, rows, broker):
     sid = arm()
     broker.entry_fills = {1: ('EXECUTED', 193.0, 2 * LOT)}
     tick()
-    assert slot(sid, 1)['alloc'] == [1, 1, 0]
-    assert [d['lots'] for d in broker.of('target')] == [1, 1]
-    assert [d['lots'] for d in broker.of('stop') if d['action'] == 'SELL'] == [2]
+    # The stop is allocated first, so a short fill loses a target rather than
+    # its protection: stop 1 + T1 1 = the 2 lots actually held.
+    assert slot(sid, 1)['sl_lots'] == 1
+    assert slot(sid, 1)['alloc'] == [1, 0]
+    assert [d['lots'] for d in broker.of('target')] == [1]
+    assert [d['lots'] for d in broker.of('stop') if d['action'] == 'SELL'] == [1]
+
+
+def test_a_single_lot_fill_arms_a_stop_and_nothing_else(env, rows, broker):
+    """One lot cannot be both protected and targeted. Protection wins."""
+    sid = arm()
+    broker.entry_fills = {1: ('EXECUTED', 193.0, LOT)}
+    tick()
+    assert slot(sid, 1)['sl_lots'] == 1 and slot(sid, 1)['alloc'] == [0, 0]
+    assert [d['lots'] for d in broker.of('stop') if d['action'] == 'SELL'] == [1]
+    assert broker.of('target') == []
 
 
 def test_an_entry_that_never_traded_arms_nothing(env, rows, broker):
@@ -289,7 +329,7 @@ def live(rows, broker, instances=(1,)):
     return sid
 
 
-def test_target_one_shrinks_and_lifts_the_stop_to_the_actual_entry_fill(env, rows, broker):
+def test_target_one_lifts_the_stop_to_the_actual_entry_fill(env, rows, broker):
     sid = arm()
     broker.entry_fills = {1: ('EXECUTED', 193.4, 3 * LOT)}
     tick()
@@ -299,10 +339,14 @@ def test_target_one_shrinks_and_lifts_the_stop_to_the_actual_entry_fill(env, row
     tick()
 
     # 193.4, not the 193 the tip named: the stop follows what was really paid.
-    assert broker.of('modify') == [{'trigger': 193.4, 'quantity': 2 * LOT, 'price': None}]
+    # And the trigger moves ALONE — quantity is never sent, because the stop
+    # was one leg's worth to begin with and still is.
+    assert [d['trigger'] for d in broker.of('modify')] == [193.4]
+    assert [d['quantity'] for d in broker.of('modify')] == [None]
     s = slot(sid, 1)
     assert s['stage'] == 'T1_DONE' and s['open_qty'] == 2 * LOT
     assert s['stop_level'] == 193.4
+    assert leg(rows, sid, 'SL')['quantity'] == LOT      # unchanged, always
 
 
 def test_target_two_lifts_the_stop_to_target_ones_own_fill(env, rows, broker):
@@ -313,8 +357,11 @@ def test_target_two_lifts_the_stop_to_target_ones_own_fill(env, rows, broker):
 
     fill(rows, sid, 'T2', qty=LOT, price=213.25)
     tick()
-    assert broker.of('modify') == [{'trigger': 206.0, 'quantity': LOT, 'price': None}]
+    assert [d['trigger'] for d in broker.of('modify')] == [206.0]
     assert slot(sid, 1)['stage'] == 'T2_DONE'
+    # One lot left — the runner — still covered by its own stop.
+    assert slot(sid, 1)['open_qty'] == LOT
+    assert leg(rows, sid, 'SL')['quantity'] == LOT
 
 
 def test_a_target_moved_by_hand_is_the_price_the_stop_follows(env, rows, broker):
@@ -340,10 +387,10 @@ def test_both_targets_filling_between_two_ticks_are_handled_in_one_pass(env, row
     tick()
     assert slot(sid, 1)['stage'] == 'T2_DONE'
     assert slot(sid, 1)['open_qty'] == LOT
-    # One modify, straight to the final level and size. The 193 step would
-    # never have rested anywhere — the tick that would have placed it is the
-    # same tick that already knows about T2.
-    assert broker.of('modify') == [{'trigger': 206.0, 'quantity': LOT, 'price': None}]
+    # One modify, straight to the final level. The 193 step would never have
+    # rested anywhere — the tick that would have placed it is the same tick
+    # that already knows about T2.
+    assert [d['trigger'] for d in broker.of('modify')] == [206.0]
 
 
 def test_the_stop_filling_cancels_every_remaining_target_and_flattens(env, rows, broker):
@@ -429,7 +476,7 @@ def test_a_refused_trail_is_retried_on_the_next_tick(env, rows, broker):
 
     broker.modify_ok = True
     tick(ltp=210.0)
-    assert broker.of('modify') == [{'trigger': 193.0, 'quantity': 2 * LOT, 'price': None}]
+    assert [d['trigger'] for d in broker.of('modify')] == [193.0]
     assert slot(sid, 1)['stop_level'] == 193.0
 
 
@@ -542,19 +589,25 @@ def test_exit_all_stands_every_live_signal_down(env, rows, broker):
 
 # ── allocation, on its own ───────────────────────────────────────────────
 
-@pytest.mark.parametrize('filled, per_target, want', [
-    (3, 1, [1, 1, 1]),
-    (2, 1, [1, 1, 0]),
-    (1, 1, [1, 0, 0]),
-    (0, 1, [0, 0, 0]),
-    (6, 2, [2, 2, 2]),
-    (5, 2, [2, 2, 1]),
-    (60, 20, [20, 20, 20]),
+@pytest.mark.parametrize('filled, per_target, want_stop, want_targets', [
+    (3, 1, 1, [1, 1]),      # the whole plan: stop, T1, T2 — one lot each
+    (2, 1, 1, [1, 0]),      # a lot short: the stop keeps its lot, T2 goes
+    (1, 1, 1, [0, 0]),      # one lot: protected, not targeted
+    (0, 1, 0, [0, 0]),
+    (6, 2, 2, [2, 2]),
+    (5, 2, 2, [2, 1]),
+    (60, 20, 20, [20, 20]),
 ])
-def test_targets_are_allocated_greedily_and_never_oversold(filled, per_target, want):
-    got = engine.allocate(filled, per_target)
-    assert got == want
-    assert sum(got) <= filled
+def test_the_stop_is_allocated_first_and_nothing_is_oversold(
+        filled, per_target, want_stop, want_targets):
+    stop_lots, targets = engine.allocate(filled, per_target)
+    assert stop_lots == want_stop
+    assert targets == want_targets
+    # The invariant the whole ladder rests on: what is offered for sale is
+    # never more than what is held.
+    assert stop_lots + sum(targets) <= filled
+    # And a held position is never left without a stop.
+    assert (stop_lots > 0) == (filled > 0)
 
 
 # ── the orphan backstop ──────────────────────────────────────────────────
@@ -644,3 +697,133 @@ def test_the_sweep_does_not_run_on_every_tick(env, rows, broker, positions):
     tick()
     tick()
     assert positions['exits'] == []
+
+
+# ── over the freeze limit ────────────────────────────────────────────────
+# The exchange refuses a single F&O order above 27 lots and neither shared
+# dispatcher splits by that, so a signal splits its own legs. The tests that
+# matter are not that the split happens — it is arithmetic — but that the
+# ladder afterwards still treats the chunks as one position.
+
+@pytest.mark.parametrize('lots, want', [
+    (1, [1]), (3, [3]), (27, [27]),
+    (28, [27, 1]), (30, [27, 3]), (54, [27, 27]), (60, [27, 27, 6]),
+    (0, []),
+])
+def test_a_leg_is_split_into_orders_the_exchange_will_take(lots, want):
+    got = engine.lot_chunks(lots)
+    assert got == want
+    assert sum(got) == lots
+    assert all(c <= 27 for c in got)
+
+
+def big(rows_, broker, per_target=30, entry_lots=None):
+    """A signal whose legs are large enough to test the freeze-limit split."""
+    ENV['BROKER_1_OP_SIGNAL_LOTS'] = str(per_target)
+    ENV['BROKER_2_OP_SIGNAL_LOTS'] = str(per_target)
+    try:
+        sid = arm()
+    finally:
+        ENV['BROKER_1_OP_SIGNAL_LOTS'] = '1'
+        ENV['BROKER_2_OP_SIGNAL_LOTS'] = '1'
+    filled = (entry_lots if entry_lots is not None else per_target * 3)
+    broker.entry_fills = {1: ('EXECUTED', 193.0, filled * LOT)}
+    tick()
+    return sid
+
+
+def test_the_stop_over_the_limit_is_placed_as_several_orders(env, rows, broker):
+    """A stop is one leg's worth, so it only splits when a LEG is over the cap."""
+    sid = big(rows, broker, per_target=30)
+    stops = [d for d in broker.of('stop') if d['action'] == 'SELL']
+    assert [d['lots'] for d in stops] == [27, 3]
+    assert leg(rows, sid, 'SL')['quantity'] == 30 * LOT
+
+
+def test_a_leg_under_the_limit_is_one_order_however_big_the_position(env, rows, broker):
+    """90 lots held, but each leg is 30 — under the cap, so no leg splits."""
+    sid = big(rows, broker, per_target=10, entry_lots=30)
+    stops = [d for d in broker.of('stop') if d['action'] == 'SELL']
+    assert [d['lots'] for d in stops] == [10]
+    assert [(d['price'], d['lots']) for d in broker.of('target')] == \
+        [(206.0, 10), (213.0, 10)]
+
+
+def test_the_entry_over_the_limit_is_one_record_the_ladder_sizes_from(env, rows, broker):
+    sid = big(rows, broker, per_target=10, entry_lots=30)
+    entry = leg(rows, sid, 'ENTRY')
+    assert len(entry['broker_order_ids']) == 2      # 27 + 3
+    assert slot(sid, 1)['filled_lots'] == 30
+    assert slot(sid, 1)['sl_lots'] == 10 and slot(sid, 1)['alloc'] == [10, 10]
+
+
+def test_a_split_stop_moves_its_trigger_without_ever_being_resized(env, rows, broker):
+    """Every chunk gets the same new trigger and keeps the size it was placed
+    with. There is nothing to deal out, because the stop never covers more or
+    less than the one leg it was always for."""
+    sid = big(rows, broker, per_target=30)
+    broker.calls.clear()
+
+    fill(rows, sid, 'T1', qty=30 * LOT)
+    tick()
+
+    # One call, fanned out over both chunks by the shared modify helper.
+    sl_ids = [l.get('order_id') or l['result']['order_id']
+              for l in leg(rows, sid, 'SL')['broker_order_ids']]
+    assert len(sl_ids) == 2
+    moves = broker.of('modify')
+    assert len(moves) == 1
+    assert moves[0]['trigger'] == 193.0
+    assert moves[0]['ids'] == sl_ids
+    assert moves[0]['quantity'] is None      # size is never sent
+    assert broker.of('cancel') == []         # no chunk is ever surplus
+    assert leg(rows, sid, 'SL')['quantity'] == 30 * LOT
+
+
+def test_a_refused_trail_on_a_split_stop_leaves_every_chunk_alone(env, rows, broker):
+    sid = big(rows, broker, per_target=30)
+    broker.modify_ok = False
+    fill(rows, sid, 'T1', qty=30 * LOT)
+    tick(ltp=210.0)
+
+    assert broker.of('flatten') == []
+    assert leg(rows, sid, 'SL')['status'] == 'OPEN'
+    assert leg(rows, sid, 'SL')['trigger_price'] == 175.0   # unmoved
+    assert slot(sid, 1)['stop_level'] == 193.0              # intent recorded
+
+
+
+
+# ── the stop is one leg, so firing it is only the start of the exit ──────
+
+def test_the_stop_firing_cancels_the_targets_and_sells_what_is_left(env, rows, broker):
+    """The stop sells its own lot. The other two are the engine's job.
+
+    This is the trade-off the shape buys: resting sells never exceed the
+    position, and in return a stop hit is one exchange-side exit plus a market
+    exit for the remainder rather than one exchange-side exit for all of it.
+    """
+    sid = live(rows, broker)
+    assert leg(rows, sid, 'SL')['quantity'] == LOT      # one lot, of three held
+
+    fill(rows, sid, 'SL', qty=LOT)
+    tick()
+
+    # Both targets pulled, and the two lots the stop did not cover squared off.
+    assert leg(rows, sid, 'T1')['status'] == 'CANCELLED'
+    assert leg(rows, sid, 'T2')['status'] == 'CANCELLED'
+    flat = broker.of('flatten')
+    assert flat and 'SL hit' in flat[0]['tag']
+    assert slot(sid, 1)['stage'] == 'FLAT' and slot(sid, 1)['open_qty'] == 0
+
+
+def test_a_stop_hit_after_a_target_still_takes_the_rest_out(env, rows, broker):
+    sid = live(rows, broker)
+    fill(rows, sid, 'T1', qty=LOT)
+    tick()
+    broker.calls.clear()
+
+    fill(rows, sid, 'SL', qty=LOT)
+    tick()
+    assert leg(rows, sid, 'T2')['status'] == 'CANCELLED'
+    assert broker.of('flatten') and slot(sid, 1)['stage'] == 'FLAT'
