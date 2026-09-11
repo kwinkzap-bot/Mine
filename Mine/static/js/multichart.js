@@ -122,7 +122,7 @@
             rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.08 } },
             timeScale: { borderVisible: false, timeVisible: state.tfs[index] !== 'day', secondsVisible: false,
                          rightOffset: RIGHT_OFFSET, barSpacing: 8, minBarSpacing: 1 },
-            localization: { timeFormatter: window.lwCrosshairTime, timezone: 'Etc/UTC' },
+            localization: { timeFormatter: window.lwCrosshairTime, timezone: 'Etc/UTC', priceFormatter: fmt },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
             handleScale: { axisPressedMouseMove: true },
         }, chartLayout()));

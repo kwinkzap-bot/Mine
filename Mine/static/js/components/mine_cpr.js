@@ -449,6 +449,13 @@ window.MineCPR = (function () {
     function makePrimitive() {
         const state = { elements: [], series: null, chart: null, requestUpdate: null };
 
+        // Everything is snapped to the device-pixel grid, the way Lightweight
+        // Charts' own renderers do it: a 1px line drawn at a fractional y
+        // straddles two physical pixels and anti-aliases into a smeared 2px,
+        // and box edges blur the same way. Solid lines are filled rectangles
+        // (crisp by construction); only dashes need a stroke, at a half-pixel
+        // centre for odd widths. Fills go down first, then every line on
+        // top, so an edge is never softened by a later fill.
         const renderer = {
             draw(target) {
                 const { series, chart, elements } = state;
@@ -458,39 +465,65 @@ window.MineCPR = (function () {
                     const ctx = scope.context, hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
                     const W = scope.bitmapSize.width;
                     const half = Math.max(1, (ts.options().barSpacing || 6) / 2);
-                    const xOf = idx => { const c = ts.logicalToCoordinate(idx); return c === null ? null : c; };
-                    const yOf = p => { if (p == null || !isFinite(p)) return null; const c = series.priceToCoordinate(p); return c === null ? null : c * vr; };
-                    ctx.save();
-                    ctx.font = `${Math.round(9 * vr)}px Inter, system-ui, sans-serif`;
-                    ctx.textBaseline = 'bottom';
-                    for (const e of elements) {
-                        const cx1 = xOf(e.x1), cx2 = e.extendRight ? null : xOf(e.x2);
-                        if (cx1 === null && !e.extendRight) continue;
+                    const yOf = p => { if (p == null || !isFinite(p)) return null; const c = series.priceToCoordinate(p); return c === null ? null : Math.round(c * vr); };
+                    const px = n => Math.max(1, Math.round(n));
+
+                    // Horizontal span in device pixels, or null when off-screen.
+                    const spanOf = e => {
+                        const cx1 = ts.logicalToCoordinate(e.x1), cx2 = e.extendRight ? null : ts.logicalToCoordinate(e.x2);
+                        if (cx1 === null && !e.extendRight) return null;
                         // Half a bar of overhang each side so a shelf spans its
                         // whole period instead of stopping mid-candle.
                         let left = cx1 === null ? -half : cx1 - half;
                         let right = e.extendRight ? W / hr : (cx2 === null ? W / hr : cx2 + half);
-                        if (right < 0 || left > W / hr) continue;
-                        left = Math.max(left, -1) * hr; right = Math.min(right, W / hr + 1) * hr;
-                        if (e.kind === 'rect') {
-                            const y1 = yOf(e.y1), y2 = yOf(e.y2);
-                            if (y1 === null || y2 === null) continue;
-                            const top = Math.min(y1, y2), h = Math.abs(y2 - y1);
-                            if (e.fill) { ctx.fillStyle = e.fill; ctx.fillRect(left, top, right - left, h); }
-                            if (e.stroke) {
-                                ctx.strokeStyle = e.stroke; ctx.lineWidth = (e.strokeWidth || 1) * vr; ctx.setLineDash([]);
-                                ctx.strokeRect(left, top, right - left, h);
-                            }
+                        if (right < 0 || left > W / hr) return null;
+                        left = Math.round(Math.max(left, -1) * hr); right = Math.round(Math.min(right, W / hr + 1) * hr);
+                        return right > left ? [left, right] : null;
+                    };
+
+                    ctx.save();
+                    ctx.font = `${Math.round(9 * vr)}px Inter, system-ui, sans-serif`;
+                    ctx.textBaseline = 'bottom';
+
+                    // pass 1 — fills and box borders
+                    for (const e of elements) {
+                        if (e.kind !== 'rect') continue;
+                        const span = spanOf(e); if (!span) continue;
+                        const [left, right] = span;
+                        const y1 = yOf(e.y1), y2 = yOf(e.y2);
+                        if (y1 === null || y2 === null) continue;
+                        const top = Math.min(y1, y2), bottom = Math.max(y1, y2), h = Math.max(1, bottom - top);
+                        if (e.fill) { ctx.fillStyle = e.fill; ctx.fillRect(left, top, right - left, h); }
+                        if (e.stroke) {
+                            const w = px((e.strokeWidth || 1) * vr);
+                            ctx.fillStyle = e.stroke;
+                            ctx.fillRect(left, top, right - left, w);                 // top
+                            ctx.fillRect(left, bottom - w, right - left, w);          // bottom
+                            ctx.fillRect(left, top, w, h);                            // left
+                            if (!e.extendRight) ctx.fillRect(right - w, top, w, h);   // right
+                        }
+                    }
+                    // pass 2 — lines and their labels
+                    for (const e of elements) {
+                        if (e.kind !== 'line') continue;
+                        const span = spanOf(e); if (!span) continue;
+                        const [left, right] = span;
+                        const y = yOf(e.y);
+                        if (y === null) continue;
+                        const w = px((e.width || 1) * vr);
+                        if (e.dash) {
+                            ctx.strokeStyle = e.color; ctx.lineWidth = w;
+                            ctx.setLineDash(e.dash.map(d => Math.round(d * hr)));
+                            const yy = y + (w % 2 ? 0.5 : 0);
+                            ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(right, yy); ctx.stroke();
+                            ctx.setLineDash([]);
                         } else {
-                            const y = yOf(e.y);
-                            if (y === null) continue;
-                            ctx.strokeStyle = e.color; ctx.lineWidth = (e.width || 1) * vr;
-                            ctx.setLineDash(e.dash ? e.dash.map(d => d * hr) : []);
-                            ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
-                            if (e.label) {
-                                ctx.fillStyle = e.color;
-                                ctx.fillText(e.label, Math.max(left, 0) + 3 * hr, y - 1 * vr);
-                            }
+                            ctx.fillStyle = e.color;
+                            ctx.fillRect(left, y - Math.floor(w / 2), right - left, w);
+                        }
+                        if (e.label) {
+                            ctx.fillStyle = e.color;
+                            ctx.fillText(e.label, Math.max(left, 0) + 3 * hr, y - 1 * vr);
                         }
                     }
                     ctx.restore();
