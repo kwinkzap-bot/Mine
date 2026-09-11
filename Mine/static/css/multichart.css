@@ -287,8 +287,26 @@
 .mc-chart .tv-chart-scroll-btn.show { display: flex; }
 .mc-chart .tv-chart-scroll-btn svg { width: 12px; height: 12px; }
 
+/* Small screens: the toolbar and pane headers drop a size so the symbol,
+   quote, Indicators and live dot still share one row. */
 @media (max-width: 900px) {
     .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(220px, 1fr)); }
-    .mc-search-wrap { width: 140px; }
-    .mc-quote { min-width: 0; }
+    .mc-page { --mc-ctl-h: 20px; }
+    .mc-toolbar { gap: 4px 6px; min-height: 24px; }
+    .mc-title { font-size: 11px; }
+    .mc-search-wrap { width: 110px; }
+    .mc-search { font-size: 11px; padding: 0 6px; }
+    .mc-quote { min-width: 0; gap: 4px; }
+    .mc-ltp { font-size: 12px; }
+    .mc-chg { font-size: 10px; }
+    .mc-btn { font-size: 10px; padding: 0 6px; gap: 4px; }
+    .mc-live { font-size: 9px; }
+    .mc-banner { font-size: 10px; }
+    .mc-pane-head { font-size: 10px; gap: 6px; }
+    .mc-tf { font-size: 10px; height: 16px; }
+    .mc-ohlc { font-size: 9.5px; }
+    .mc-pane-cpr { font-size: 8px; }
+}
+@media (max-width: 640px) {
+    .mc-title { display: none; }
 }
