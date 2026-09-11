@@ -1,5 +1,37 @@
 [
   {
+    "date": "2026-09-11",
+    "direction": "SELL",
+    "entry_spot": 23235.1,
+    "exit_spot": 23252.45,
+    "pnl_pts": -17.35,
+    "reason": "SL",
+    "entry_time": "2026-09-11T09:17:33.340913",
+    "entry_spot_live": 23233.35,
+    "exit_time": "2026-09-11T09:19:18.720899",
+    "strike": 23450,
+    "option_type": "PE",
+    "lot_size": 65,
+    "sl_level": 23252.45,
+    "target_level": 23191.72,
+    "opt_entry_price": 235.7,
+    "opt_exit_price": 227.85,
+    "opt_pnl_pts": -7.85,
+    "opt_pnl_inr": -510.25,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "2098257109644140544",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2691523450PE",
+        "lots": 5,
+        "quantity": 325
+      }
+    ]
+  },
+  {
     "date": "2026-09-10",
     "direction": "SELL",
     "entry_spot": 23459.75,

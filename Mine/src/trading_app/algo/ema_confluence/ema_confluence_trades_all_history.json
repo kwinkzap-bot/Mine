@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "PREMIERENE",
+    "direction": "SELL",
+    "mode": "paper",
+    "qty": 650,
+    "lot_size": 650,
+    "entry_price": 982.1,
+    "exit_price": 953.7,
+    "spot_entry_price": 982.2,
+    "spot_exit_price": 951.6,
+    "sl_price": 1040.0,
+    "target_price": 952.73,
+    "pnl": 18460.0,
+    "reason": "TARGET",
+    "signal_date": "2026-08-26",
+    "entry_time": "2026-08-27T09:55:18.203996",
+    "exit_time": "2026-09-11T09:21:52.430365",
+    "date": "2026-09-11"
+  },
+  {
     "symbol": "BPCL",
     "direction": "BUY",
     "mode": "paper",
