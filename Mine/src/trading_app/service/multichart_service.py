@@ -143,8 +143,15 @@ def _to_bars(raw: List[Dict[str, Any]], intraday: bool) -> List[Dict[str, Any]]:
             mins = stamp.hour * 60 + stamp.minute
             if mins < _SESSION_OPEN_MIN or mins >= _SESSION_CLOSE_MIN:
                 continue
+        t = int(stamp.timestamp()) + IST_OFFSET
+        # Fyers stamps a daily bar at midnight UTC — 05:30 on this grid. The
+        # page builds today's daily bar from the minute feed at 00:00, and the
+        # crosshair label drops the clock only for a bar exactly on midnight,
+        # so daily bars are pinned there whichever broker served them.
+        if not intraday:
+            t -= t % 86400
         bar = {
-            'time': int(stamp.timestamp()) + IST_OFFSET,
+            'time': t,
             'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'],
             'volume': c.get('volume') or 0,
         }

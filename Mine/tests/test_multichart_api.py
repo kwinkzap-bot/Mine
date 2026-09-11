@@ -141,11 +141,16 @@ def test_candles_lookback_and_cache_ttl_per_interval(client, fake):
 
 
 def test_candles_daily_interval_reuses_its_own_rows(client, fake):
-    fake.rows = [_row(2026, 9, 9, 0, 0, o=1, h=3, l=0.5, c=2), _row(2026, 9, 10, 0, 0)]
+    # Fyers stamps daily bars 05:30 IST (midnight UTC); ICICI at midnight IST.
+    fake.rows = [_row(2026, 9, 9, 5, 30, o=1, h=3, l=0.5, c=2), _row(2026, 9, 10, 0, 0)]
     body = client.get('/api/multichart/candles?symbol=NIFTY&interval=day').get_json()
     assert len(fake.calls) == 1                      # no second fetch for daily
     assert len(body['candles']) == 2                 # no session filter on daily bars
     assert body['daily'][0] == {'date': '2026-09-09', 'o': 1, 'h': 3, 'l': 0.5, 'c': 2}
+    # Both land on midnight of their day on the fake-IST grid, whatever the
+    # broker's own stamp — the live merge builds today's bar at 00:00.
+    stamps = [datetime.utcfromtimestamp(b['time']).strftime('%Y-%m-%d %H:%M') for b in body['candles']]
+    assert stamps == ['2026-09-09 00:00', '2026-09-10 00:00']
 
 
 def test_candles_passes_fetch_error_through_when_empty(client, fake):
