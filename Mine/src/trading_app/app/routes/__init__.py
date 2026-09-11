@@ -10,6 +10,7 @@ def register_blueprints(app):
     from trading_app.app.routes.oi_crossover_api import oi_crossover_bp
     from trading_app.app.routes.order_placement_api import order_placement_bp
     from trading_app.app.routes.watchlist_api import watchlist_bp
+    from trading_app.app.routes.multichart_api import multichart_bp
 
     # Register blueprints
     app.register_blueprint(pages_bp)
@@ -18,3 +19,4 @@ def register_blueprints(app):
     app.register_blueprint(oi_crossover_bp, url_prefix='/api/oi-crossover')
     app.register_blueprint(order_placement_bp, url_prefix='/api/order-placement')
     app.register_blueprint(watchlist_bp, url_prefix='/api/watchlist')
+    app.register_blueprint(multichart_bp, url_prefix='/api/multichart')
