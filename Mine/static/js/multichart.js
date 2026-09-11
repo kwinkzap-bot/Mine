@@ -68,7 +68,9 @@
             }));
         } catch (e) { /* storage blocked — the page still works */ }
     }
-    const setting = key => (key in state.settings) ? state.settings[key] : MineCPR.DEFAULTS[key];
+    const PAGE_DEFAULTS = { countdown: true };   // page settings that are not Pine inputs
+    const setting = key => (key in state.settings) ? state.settings[key]
+        : (key in PAGE_DEFAULTS) ? PAGE_DEFAULTS[key] : MineCPR.DEFAULTS[key];
 
     /* ── fetch helpers ───────────────────────────────────────────────────── */
     async function getJSON(url, signal) {
@@ -149,6 +151,8 @@
             const bar = param && param.seriesData && param.seriesData.get(series);
             showOhlc(pane, bar || lastBar(pane));
         });
+        pane.countdown = makeCountdownPrimitive(pane);
+        series.attachPrimitive(pane.countdown);
         pane.seq = 0;
         return pane;
     }
@@ -325,6 +329,56 @@
 
     document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(0); });
 
+    /* ── bar-close countdown on the price axis ───────────────────────────── */
+    // TradingView's "00:25" under the last price: seconds until this pane's
+    // forming bar closes. A v5 series primitive can hand the price axis a
+    // label of its own, so it sits directly beneath the built-in last-value
+    // tag in the same colour and reads as one block. Refreshed once a second
+    // while the bar is live; blank between sessions.
+    const SESSION_OPEN_S = 9 * 3600 + 15 * 60, SESSION_CLOSE_S = 15 * 3600 + 30 * 60;
+    const nowIst = () => Math.floor(Date.now() / 1000) + 19800;
+
+    function barCloseAt(pane) {
+        const b = lastBar(pane);
+        if (!b) return null;
+        const day = b.time - (b.time % 86400);
+        if (pane.tf === 'day') return day + SESSION_CLOSE_S;
+        return Math.min(b.time + MineCPR.SECONDS[pane.tf], day + SESSION_CLOSE_S);
+    }
+
+    function countdownText(pane) {
+        const b = lastBar(pane), close = barCloseAt(pane), now = nowIst();
+        if (!b || close == null || now < b.time || now >= close) return '';
+        const left = close - now;
+        const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), sec = left % 60;
+        const p2 = n => String(n).padStart(2, '0');
+        return h ? `${h}:${p2(m)}:${p2(sec)}` : `${p2(m)}:${p2(sec)}`;
+    }
+
+    function makeCountdownPrimitive(pane) {
+        let requestUpdate = null, text = '';
+        const view = {
+            // Just under the last-value tag: that label is ~16px tall at the
+            // pane's 10px axis font, so this one starts where it ends.
+            coordinate() { const b = lastBar(pane); const y = b && pane.series.priceToCoordinate(b.close); return y == null ? -100 : y + 16; },
+            text: () => text,
+            textColor: () => '#ffffff',
+            backColor() { const b = lastBar(pane); return b && b.close < b.open ? DOWN : UP; },
+            visible: () => !!text,
+            tickVisible: () => false,
+        };
+        return {
+            attached(p) { requestUpdate = p.requestUpdate; },
+            detached() { requestUpdate = null; },
+            updateAllViews() { text = setting('countdown') ? countdownText(pane) : ''; },
+            priceAxisViews: () => [view],
+            paneViews: () => [],
+            refresh() { if (requestUpdate) requestUpdate(); },
+        };
+    }
+
+    setInterval(() => { for (const pane of state.panes) if (pane.countdown) pane.countdown.refresh(); }, 1000);
+
     /* ── crosshair link across timeframes ────────────────────────────────── */
     // The bar of `pane` containing `when` — the last one that had started by
     // then — so hovering 10:31 on the 1m pane lights the 10:30 bar on 3m and
@@ -449,6 +503,9 @@
     // Gates name the tfInfo flag that must hold on a pane for the item to draw
     // there; the tag turns green while any pane qualifies.
     const IND_SPEC = [
+        { title: 'Chart', items: [
+            { key: 'countdown', label: 'Bar-close countdown on price axis' },
+        ] },
         { title: 'CPR', items: [
             { key: 'cpr', label: 'CPR — P / BC / TC', color: MineCPR.COLORS.cpr },
             { key: 'shadow', label: 'CPR shadow', sub: true },
