@@ -543,7 +543,7 @@
             { key: 'pdhR1Box', label: 'PDH ↔ R1 box', color: MineCPR.COLORS.pdhBox },
             { key: 'pdlS1Box', label: 'PDL ↔ S1 box', color: MineCPR.COLORS.pdlBox },
             { key: 'histPdhl', label: 'PDH / PDL lines', color: MineCPR.COLORS.pdhl },
-            { key: 'virgin', label: 'Highlight virgin CPR', color: '#e2c000' },
+            { key: 'virgin', label: 'Highlight virgin CPR', color: MineCPR.COLORS.virginFill },
             { key: 'virginExtend', label: 'Extend until touched', sub: true },
             { key: 'futureCpr', label: 'Future CPR (dashed)' },
             { key: 'labels', label: 'Level labels' },

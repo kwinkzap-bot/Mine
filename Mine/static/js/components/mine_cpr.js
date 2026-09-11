@@ -35,7 +35,7 @@ window.MineCPR = (function () {
         s1: false, s2: false, s3: false, s4: false,
         camR3S3: true,
         pdhR1Box: true, pdlS1Box: true, histPdhl: false,
-        virgin: true, virginExtend: true, virginTransp: 60,
+        virgin: true, virginExtend: true, virginTransp: 65,
         futureCpr: false,
         labels: false,
         emaAll: false, ema9: true, ema20: true, ema50: true, ema100: false, ema200: true,
@@ -46,7 +46,7 @@ window.MineCPR = (function () {
     };
 
     const LIGHT_COLORS = {
-        cpr: '#00008B', cprFill: '#3366ff', virginFill: '#FFF59D',
+        cpr: '#00008B', cprFill: '#3366ff', virginFill: '#2952CC',   // virgin: a deeper shade of the CPR blue
         r: '#006400', s: '#ff0000', rFill: '#00cc66', sFill: '#ff0000',
         cam: '#A020F0', pdhl: '#ef07f9',
         pdhBox: '#00cc66', pdlBox: '#ff0000',
