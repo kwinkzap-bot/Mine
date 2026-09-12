@@ -4,6 +4,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}?v={{ sv('css/oi_profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/mine_cpr.css') }}?v={{ sv('css/components/mine_cpr.css') }}">
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 <script>
@@ -39,11 +40,20 @@
                         <!-- One as-of date for the whole page: it ends the chart's
                              window and is what the Round Strike block below reads
                              for its expiry list. The start/end pair the candles API
-                             takes is derived from it (10 trading days back) and kept
-                             hidden — there is one date to think about, not three. -->
+                             takes is derived from it (a per-timeframe number of
+                             sessions back, OIP_REPLAY_WINDOW_DAYS) and kept hidden.
+
+                             "From" is optional and empty by default: set, it replaces
+                             that default window start, so the first load is exactly
+                             the span wanted — one session of 1-minute bars instead of
+                             five, when five is what takes the time. Panning left past
+                             it still backfills as usual. -->
                         <span class="oip-label" style="margin-left:8px;">Date</span>
                         <input type="date" id="oipReplayDate" class="oip-input oip-input--xs oip-input--replay"
-                            title="As-of date — 10 trading days up to this date">
+                            title="As-of date — the chart's window ends here">
+                        <span class="oip-label" style="margin-left:6px;">From</span>
+                        <input type="date" id="oipReplayFromDate" class="oip-input oip-input--xs oip-input--replay"
+                            title="Optional — load from this date up to the as-of date. Empty: the default window for the timeframe">
                         <input type="hidden" id="oipStartDate">
                         <input type="hidden" id="oipEndDate">
                         <span class="oip-label" style="margin-left:8px;">TF</span>
@@ -73,13 +83,8 @@
                             Indicators
                         </button>
 
-                        <!-- The list mirrors the "Mine CPR" Pine script: same groups, and
-                             the toggles it ships ON are the ones checked here. Colour
-                             swatches quote the shared line defaults in oi_indicators.js
-                             (_OIP_LINE_DEFAULTS) so this popup and OI Profile draw the same
-                             indicator in the same colour; each row's own picker still wins.
-                             Pine's Virgin CPR / Future CPR and its SMA master switch have no
-                             equivalent here yet. -->
+                        <!-- Overlays / Lines are Replay's own rows; the Mine CPR block
+                             between them is the shared list (see #oipMineCprSections). -->
                         <div id="oipIndicatorsPopup" class="oip-ind-popup hidden">
                             <div class="oip-ind-popup-header">Indicators</div>
 
@@ -129,91 +134,6 @@
                                     title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
                                     <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
                                 </label>
-                                <!-- Pine plots Current / Previous / Avg-3 VWAP together, so
-                                     this is one group rather than the single flat VWAP line
-                                     Replay carried before. -->
-                                <div class="oip-ind-cpr-group">
-                                    <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowVwapGroup" checked>
-                                        <label for="oipShowVwapGroup" class="oip-ind-cpr-label">VWAP</label>
-                                        <span class="oip-cpr-expand" id="oipVwapExpandBtn">&#9658;</span>
-                                    </div>
-                                    <div class="oip-ind-cpr-sub hidden" id="oipVwapSub">
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShowCVWAP" checked><span style="color:#3b82f6">CVWAP</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShowPVWAP" checked><span style="color:#fdba74">PVWAP</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShow3AvgVWAP" checked><span style="color:#ef4444">3-AVG_VWAP</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <!-- Standalone, not the CPR block's own Prev H/L: this one
-                                     is computed from the candles on screen, so it follows
-                                     the replay instead of staying pinned to yesterday. -->
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowPrevDayHL"><span style="color:#f43f5e">Prev Day H / L</span>
-                                </label>
-                                <div class="oip-ind-cpr-group">
-                                    <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowCpr" checked>
-                                        <label for="oipShowCpr" class="oip-ind-cpr-label">CPR Levels</label>
-                                        <span class="oip-cpr-expand" id="oipCprExpandBtn">&#9658;</span>
-                                    </div>
-                                    <!-- Pine ships R1-R3, S1-S3, PDH/PDL and the level labels
-                                         off; only the central band and the Camarilla pair are
-                                         drawn by default. -->
-                                    <div class="oip-ind-cpr-sub hidden" id="oipCprSub">
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowPrevHL"><span style="color:#ef07f9">Prev H / L</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowBand" checked><span style="color:#3f51b5">PP / BC / TC</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowResistance"><span style="color:#006400">R1 &ndash; R4</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowSupport"><span style="color:#ff0000">S1 &ndash; S4</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#7b1fa2">Camarilla R3 / S3</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item"
-                                            title="A CPR no candle traded into during its own session — never tested, so it stays live S/R. Only the shadow changes colour; the lines keep the normal CPR look.">
-                                            <input type="checkbox" id="oipCprShowVirgin" checked><span style="color:#c79a10">Virgin CPR</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item"
-                                            title="Carry a virgin CPR to the right until the session that first trades into it. Still-untouched ones run to the right edge.">
-                                            <input type="checkbox" id="oipCprVirginExtend" checked><span>&#8627; Extend until touched</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowLabels"><span>Level Labels</span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <div class="oip-ind-cpr-group">
-                                    <div class="oip-ind-item oip-ind-cpr-header">
-                                        <input type="checkbox" id="oipShowMultiCpr" checked>
-                                        <label for="oipShowMultiCpr" class="oip-ind-cpr-label">Multi CPR</label>
-                                        <span class="oip-cpr-expand" id="oipMultiCprExpandBtn">&#9658;</span>
-                                    </div>
-                                    <!-- Pine has the group on with 1 Hour alone: three CPR
-                                         bands at once buries the daily one. -->
-                                    <div class="oip-ind-cpr-sub hidden" id="oipMultiCprSub">
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr15m"><span style="color:#f97316">15 Min</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr30m"><span style="color:#06b6d4">30 Min</span>
-                                        </label>
-                                        <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#9c28b0">1 Hour</span>
-                                        </label>
-                                    </div>
-                                </div>
                                 <!-- NIFTY only, and fetched for the replayed DATE (the
                                      endpoint takes one) — not today's 9:18 selection. -->
                                 <label class="oip-ind-item">
@@ -222,38 +142,15 @@
                                 </label>
                             </div>
 
-                            <div class="oip-ind-section">
-                                <!-- Collapsed by default: five rows that rarely change, kept
-                                     out of the way of the groups above. -->
-                                <div class="oip-ind-section-title oip-ind-cpr-header" id="oipEmaHeader"
-                                    style="cursor:pointer; justify-content:space-between;">
-                                    Moving Averages (EMA)
-                                    <span class="oip-cpr-expand" id="oipEmaExpandBtn">&#9658;</span>
-                                </div>
-                                <!-- Pine's per-EMA defaults: 9 / 20 / 50 / 200 on, 100 off. -->
-                                <div class="oip-ind-cpr-sub hidden" id="oipEmaSub">
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma9" checked>
-                                        <span style="color:#22c55e">EMA 9</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma20" checked>
-                                        <span style="color:#f97316">EMA 20</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma50" checked>
-                                        <span style="color:#ef4444">EMA 50</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma100">
-                                        <span style="color:#3b82f6">EMA 100</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma200" checked>
-                                        <span style="color:#888888">EMA 200</span>
-                                    </label>
-                                </div>
-                            </div>
+                            <!-- Mine CPR — the same indicator set as /multichart and the OI
+                                 Profile main chart (CPR, Multi CPR, EMAs, VWAP, boxes), rendered
+                                 from MineCPR.SPEC by oipInitMineCpr in oi_replay.js and computed
+                                 on the candles up to the playhead, so every level follows the
+                                 replay. It replaced this popup's own VWAP / CPR Levels / Multi
+                                 CPR / EMA groups, the standalone Prev Day H/L row (PDH / PDL
+                                 lines here) and the 2nd 1-min / 2nd 5-min / Monday boxes;
+                                 everything else in this popup is Replay-only and stays. -->
+                            <div id="oipMineCprSections"></div>
 
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Lines</div>
@@ -290,19 +187,10 @@
                                         <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
                                     </div>
                                 </div>
-                                <!-- 30Sec is Replay's own; Pine's opening-range boxes are the
-                                     2nd 1-min and 2nd 5-min ones, both on by default. -->
+                                <!-- 30Sec is Replay's own (no 30-second bar exists in the Pine
+                                     script); the 1-min / 5-min opening-range boxes are Mine CPR's. -->
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShow2ndCandle30s"><span style="color:#FFC800">2nd 30Sec Candle</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShow2ndCandle1m" checked><span style="color:#FF6B6B">2nd 1Min Candle</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5Min Candle</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowMondayBox" checked><span style="color:#34ed0b">Monday H/L Box</span>
                                 </label>
                             </div>
                         </div>
@@ -333,6 +221,14 @@
                             <option value="2000">0.5x &middot; 1 bar/2 sec</option>
                             <option value="5000">0.2x &middot; 1 bar/5 sec</option>
                         </select>
+                        <div class="oip-prem-sep"></div>
+                        <!-- Whether the Round Strike (option) chart below walks with the
+                             playhead. On, it is cut at the replayed bar like the index
+                             chart; off, it shows its whole session while the index chart
+                             replays. Persisted; oi_replay.js reads it on every step. -->
+                        <label class="oip-replay-sync" title="Cut the Round Strike option chart at the replayed bar too. Off: it shows the whole session while the index chart replays">
+                            <input type="checkbox" id="oipReplaySyncOpt" checked>Sync option chart
+                        </label>
                         <div class="oip-prem-sep"></div>
                         <div class="oip-prem-group">
                             <button id="oipReplayPlay" class="oip-btn oip-btn--replay-primary" title="Play">
@@ -790,6 +686,7 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_shared.js') }}?v={{ sv('js/oi_profile_shared.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_round_strike.js') }}?v={{ sv('js/oi_profile_round_strike.js') }}"></script>
 {% endblock %}

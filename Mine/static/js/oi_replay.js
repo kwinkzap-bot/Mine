@@ -90,9 +90,10 @@ let oipIntrinsicSeries = null;
 let oipIntrinsicPeSeries = null;
 let oipOIData = null;
 let oipOptionData = null;
-// Pine draws Current / Previous / Avg-3 VWAP together, so Replay carries all
-// three now. Names match the ones oi_indicators.js reaches for when a line's
-// colour or width changes (_oipLineStyleSeriesMap).
+// VWAP / EMA / CPR / Multi CPR / boxes on the index chart are the Mine CPR set
+// now (see oipInitMineCpr). These stay declared, and null, for the code paths
+// oi_indicators.js shares with OI Profile (_oipLineStyleSeriesMap,
+// oipUpdateEmaVisibility, oipApplyZOrder), which all skip a null series.
 let oipCvwapSeries = null;
 let oipPvwapSeries = null;
 let oipAvg3VwapSeries = null;
@@ -152,7 +153,7 @@ const oipElems = {
     showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
     strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
-    exitAll: null, days: null, startDate: null, endDate: null, replayDate: null,
+    exitAll: null, days: null, startDate: null, endDate: null, replayDate: null, replayFromDate: null,
     hdrLotSize: null,
     hdrIVP: null, ivpGaugeBar: null, ivCrushAlert: null
 };
@@ -204,6 +205,7 @@ function oipInitElems() {
     oipElems.peStrikeDropdown = document.getElementById('oipPEStrikeDropdown');
     oipElems.days = document.getElementById('oipDays');
     oipElems.replayDate = document.getElementById('oipReplayDate');
+    oipElems.replayFromDate = document.getElementById('oipReplayFromDate');
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
     oipElems.hdrIVP = document.getElementById('hdrIVP');
@@ -414,10 +416,40 @@ window.oipInitSecondaryCharts = function() {
 /* ── Logic Functions ───────────────────────────────────────── */
 // oipUpdateEmaVisibility — defined in oi_indicators.js
 
+// The same per-theme chart colours Multichart, OI Profile and the Opt Prem /
+// Round Strike charts use (OIP_CHART_THEMES in oi_profile.js and
+// tradingview-chart.js); keep the four in step.
+const OIP_REPLAY_CHART_THEMES = {
+    light:  { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
+    dark:   { bg: '#111827', text: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)' },
+    forest: { bg: '#0a1410', text: '#6ba88f', grid: 'rgba(16, 185, 129, 0.06)' },
+    cream:  { bg: '#ffffff', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
+    ocean:  { bg: '#ffffff', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' },
+};
+function oipReplayChartLayout() {
+    let theme = 'light';
+    try { theme = window.AppTheme?.getActiveTheme() || 'light'; } catch (e) {}
+    const th = OIP_REPLAY_CHART_THEMES[theme] || OIP_REPLAY_CHART_THEMES.light;
+    return {
+        layout: { textColor: th.text, background: { type: 'solid', color: th.bg } },
+        grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+    };
+}
+
 function oipInitCharts() {
     const elOI = document.getElementById('oipCandleChart');
     const wrapOI = oipElems.chartWrap;
     if (elOI && typeof LightweightCharts !== 'undefined') {
+        // Background / text / grid follow the app theme, as on every other
+        // chart in the app. This one used to hard-code the light look — a
+        // #f0f0f0 grid on white — which the ocean / cream / dark themes never
+        // show elsewhere, and Mine CPR draws its shelves BELOW the grid (so
+        // candles and lines stay on top), so that grid cut every band into
+        // vertical slices where Multichart's near-transparent one does not.
+        window.addEventListener('themechanged', () => {
+            try { oipOIChart?.applyOptions(oipReplayChartLayout()); } catch (e) {}
+        });
+
         const customAutoscale = () => {
             if (!oipOIChart || !oipOISeries) return null;
             const data = oipOISeries.data();
@@ -444,8 +476,7 @@ function oipInitCharts() {
             // sizes to the viewport — a hardcoded 375 left dead space inside the
             // taller block and had to be edited in two places to change.
             width: elOI.clientWidth || 1200, height: elOI.clientHeight || 575,
-            layout: { textColor: '#374151', background: { type: 'solid', color: '#ffffff' } },
-            grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+            ...oipReplayChartLayout(),
             crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
             timeScale: { timeVisible: true, textColor: '#6b7280', borderColor: 'transparent', rightOffset: 20, barSpacing: 8, fixLeftEdge: false, fixRightEdge: false, shiftVisibleRangeOnNewBar: false },
             // width 62 (not the 85 default) to match the Round Strike chart below.
@@ -463,18 +494,10 @@ function oipInitCharts() {
             autoscaleInfoProvider: customAutoscale
         });
         lwBringToFront(oipOISeries);
-        // crosshairMarkerVisible:false on every overlay line — LightweightCharts
-        // otherwise parks a filled dot on the line under the crosshair.
-        const _vwapBase = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
-        const _vwapOpts = key => ({ color: oipGetLineColor(key), lineWidth: oipGetLineWidth(key), lineStyle: oipGetLineStyle(key), visible: false, ..._vwapBase });
-        oipCvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, _vwapOpts('cvwap'));
-        oipPvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, _vwapOpts('pvwap'));
-        oipAvg3VwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, _vwapOpts('avg3vwap'));
-        oipEma9Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-        oipEma20Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-        oipEma50Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-        oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-        oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+        // VWAP / EMA / CPR / Multi CPR / boxes are the Mine CPR set
+        // (components/mine_cpr.js) — the same engine and settings list as
+        // /multichart and the OI Profile main chart.
+        oipInitMineCpr();
 
         // Futures volume, same pair/scale OI Profile uses (oipAddVolumeSeriesPair
         // in oi_indicators.js): the selected symbol's own current-expiry contract
@@ -556,7 +579,7 @@ function oipInitCharts() {
             _oipLastVisibleFrom = range.from;
             if (!_oipUserPanned || prev == null) return;
             if (range.from >= prev) return;                      // panning right
-            if (range.from > OIP_BACKFILL_TRIGGER_BARS) return;
+            if (range.from > oipBackfillTriggerBars(range)) return;
             oipBackfillOlderCandles();
         });
         if (wrapOI) new ResizeObserver(() => {
@@ -647,10 +670,20 @@ function oipWindowStartBefore(endDateStr) {
     return oipLocalDate(start);
 }
 
+// The optional From date, or '' when it is empty or lands after the as-of
+// date (the picker's max stops that, but a typed value can still get through).
+function oipReplayFromDate(picked) {
+    const from = oipElems.replayFromDate?.value || '';
+    return (from && from <= picked) ? from : '';
+}
+
 function oipApplyReplayDate() {
     const picked = oipElems.replayDate?.value;
     if (!picked || !oipElems.startDate || !oipElems.endDate) return;
-    oipElems.startDate.value = oipWindowStartBefore(picked);
+    // A From date the user set is the window start; otherwise the timeframe's
+    // default number of sessions back.
+    if (oipElems.replayFromDate) oipElems.replayFromDate.max = picked;
+    oipElems.startDate.value = oipReplayFromDate(picked) || oipWindowStartBefore(picked);
     oipElems.endDate.value = picked;
     // The window is the user's now, so the year-anchor widener must not fight it.
     oipStartDateTouched = true;
@@ -684,19 +717,136 @@ function oipUpdateReplayTfLabel() {
     el.textContent = label ? `(${label})` : '';
 }
 
-// The index chart's VWAP toggle. oipUpdateEmaVisibility (oi_indicators.js)
-// covers the EMAs for both pages; VWAP is wired differently on OI Profile, so
-// Replay's own switch lives here — it was previously unwired altogether and the
-// series stayed hidden whatever the checkbox said.
-function oipUpdateVwapVisibility() {
-    // The group's master gates all three; each line then follows its own box.
-    const on = oipElems.showVwapOI?.checked ?? false;
-    const sub = id => on && (document.getElementById(id)?.checked ?? false);
-    const set = (s, v) => { if (s) { try { s.applyOptions({ visible: v }); } catch (e) {} } };
-    set(oipCvwapSeries, sub('oipShowCVWAP'));
-    set(oipPvwapSeries, sub('oipShowPVWAP'));
-    set(oipAvg3VwapSeries, sub('oipShow3AvgVWAP'));
+/* ── Mine CPR on the index chart ──────────────────────────────
+ * The /multichart indicator set — CPR with its pivots, R/S levels, PDH/PDL
+ * boxes and lines, virgin CPR, Multi CPR, EMAs, the three VWAPs, the
+ * 2nd-candle and Monday boxes — computed by components/mine_cpr.js and drawn
+ * through the same pane primitive the Multichart panes and the OI Profile
+ * main chart use. Settings are MineCPR.DEFAULTS overlaid with the user's
+ * picks from the Indicators popup (rendered from MineCPR.SPEC into
+ * #oipMineCprSections), persisted under this page's own key.
+ *
+ * Replay-aware by construction: the engine is handed the candles up to the
+ * playhead (oipVisibleCandles), so the running period is the one being
+ * replayed, a band is virgin only until the replayed session trades into it,
+ * and nothing from the bars still ahead of the playhead is drawn. Every
+ * per-bar line (EMA, VWAP) depends on earlier bars alone, so on a one-bar
+ * forward step the lines take a single series.update() of the new point —
+ * the same incremental path the candles use — and only the primitive's
+ * elements are re-set; any other move re-sets the lines from the prefix.
+ *
+ * "Use daily-based values" wants the exchange's daily bars; those come from
+ * /api/multichart/candles?interval=day (400 days of them), fetched once per
+ * symbol and refreshed after five minutes. A replay older than that, an
+ * unknown symbol or a broker hiccup falls back to the loaded candles' own
+ * period H/L/C, as Multichart does before its daily rows arrive.
+ */
+const OIP_MINECPR_STORE_KEY = 'oip-replay-minecpr-v1';
+const OIP_MINE_DAILY_TTL_MS = 5 * 60 * 1000;
+// This page's own defaults, under the user's picks and over MineCPR's. Pine's
+// "Pivots back" of 15 is a live-chart economy: it caps how many past periods
+// get a CPR shelf. Multichart never loads more than that, but Replay's
+// backfill pans months into the past, and a window whose older sessions
+// carry no CPR reads as the indicator not loading — so the cap is the
+// popup's maximum here, and the user can lower it.
+const OIP_REPLAY_MINE_DEFAULTS = { pivotsBack: 200 };
+let oipMineCprSettings = {};
+let oipMinePane = null;                       // { chart, series, lines, primitive } for MineCPR.attach
+let oipMineDaily = { symbol: null, rows: [], at: 0, pending: null };
+let _oipMineLastIdx = -2;                     // playhead index the lines were last set to (-2: never)
+let _oipMineLastKeys = '';                    // line keys drawn at that index
+
+const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key]
+    : (key in OIP_REPLAY_MINE_DEFAULTS) ? OIP_REPLAY_MINE_DEFAULTS[key] : MineCPR.DEFAULTS[key];
+const oipMineEffectiveSettings = () => Object.assign({}, OIP_REPLAY_MINE_DEFAULTS, oipMineCprSettings);
+
+function oipInitMineCpr() {
+    if (typeof MineCPR === 'undefined' || !oipOIChart || !oipOISeries) return;
+    try { oipMineCprSettings = JSON.parse(localStorage.getItem(OIP_MINECPR_STORE_KEY) || '{}') || {}; }
+    catch (e) { oipMineCprSettings = {}; }
+    oipMinePane = { chart: oipOIChart, series: oipOISeries, lines: {}, primitive: null };
+
+    const host = document.getElementById('oipMineCprSections');
+    if (host && !host.dataset.built) {
+        host.dataset.built = '1';
+        host.innerHTML = MineCPR.renderSettings(oipMineSetting);
+        MineCPR.bindSettings(host, (key, v) => {
+            oipMineCprSettings[key] = v;
+            try { localStorage.setItem(OIP_MINECPR_STORE_KEY, JSON.stringify(oipMineCprSettings)); } catch (e) {}
+        }, () => oipApplyMineCpr(oipReplayIndex));
+    }
+    // EMA 200 / Monday box colours follow the theme, as on Multichart.
+    window.addEventListener('themechanged', () => oipApplyMineCpr(oipReplayIndex));
 }
+
+// Blank the set (a reload is coming) and forget the incremental position.
+function oipClearMineCpr() {
+    _oipMineLastIdx = -2; _oipMineLastKeys = '';
+    if (!oipMinePane) return;
+    try { MineCPR.attach(oipMinePane, { lines: {}, elements: [] }); } catch (e) {}
+}
+
+// Compute on the candles up to `index` and put the result on the chart.
+function oipApplyMineCpr(index) {
+    if (!oipMinePane || !oipFullCandles || !oipFullCandles.length) return;
+    if (index == null || index < 0 || index >= oipFullCandles.length) index = oipFullCandles.length - 1;
+    const candles = oipVisibleCandles(index);
+    let result;
+    try { result = MineCPR.compute(candles, oipInterval, oipMineDaily.rows, oipMineEffectiveSettings()); }
+    catch (e) { console.warn('[Replay] Mine CPR:', e); return; }
+
+    const keys = Object.keys(result.lines || {}).sort().join(',');
+    const incremental = index === _oipMineLastIdx + 1 && keys === _oipMineLastKeys;
+    let done = false;
+    if (incremental) {
+        // Same line set, one bar on: append each line's newest point. A line
+        // that has no point yet (EMA before its seed, PVWAP on the first
+        // session) is simply left alone until it does.
+        try {
+            for (const key of Object.keys(result.lines)) {
+                const pts = result.lines[key].points;
+                const s = oipMinePane.lines[key];
+                if (s && pts.length) s.update(pts[pts.length - 1]);
+            }
+            oipMinePane.primitive.setElements(result.elements);
+            done = true;
+        } catch (e) { done = false; }
+    }
+    if (!done) {
+        try { MineCPR.attach(oipMinePane, result); } catch (e) { console.warn('[Replay] Mine CPR:', e); return; }
+    }
+    _oipMineLastIdx = index; _oipMineLastKeys = keys;
+
+    const host = document.getElementById('oipMineCprSections');
+    if (host) MineCPR.refreshGates(host, [MineCPR.tfInfo(oipInterval)]);
+    if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
+    oipLoadMineDaily();
+}
+
+// Daily bars for the pivots — one request per symbol, re-fetched after the
+// TTL; re-applies the set (non-incrementally) when a fresh set lands.
+function oipLoadMineDaily() {
+    const d = oipMineDaily;
+    if (d.pending) return;
+    if (d.symbol === oipSymbol && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
+    const symbol = oipSymbol;
+    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day`, { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(body => {
+            d.pending = null;
+            if (symbol !== oipSymbol) return;
+            d.symbol = symbol; d.at = Date.now();
+            d.rows = (body && body.success && Array.isArray(body.daily)) ? body.daily : [];
+            if (d.rows.length && oipMinePane && oipFullCandles?.length) {
+                _oipMineLastIdx = -2;          // levels moved — the lines must be re-set, not appended to
+                oipApplyMineCpr(oipReplayIndex);
+            }
+        })
+        .catch(() => { d.pending = null; d.symbol = symbol; d.at = Date.now(); d.rows = []; });
+}
+
+// Kept for the shared call sites; the index chart's VWAP lines are Mine CPR's now.
+function oipUpdateVwapVisibility() {}
 
 // oipFullCandles.slice(0, i+1) on every replay step copied the whole loaded
 // history (a year of 5m bars is ~18k entries) just to hand the box/reversal
@@ -1014,20 +1164,12 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     oipInvalidateVisCache();
     _oipDayBoxesClearAll();
     oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
-    oip2ndCandle1mBox  = { oi: [], ce: [], pe: [] };
-    oip2nd5mCandleBox  = { oi: [], ce: [], pe: [] };
-    oipClearMondayBoxes();
     oipClear30mReversalLines();
     oipClear1DReversalLines();
-    Object.values(oipMultiCprSeriesMap).forEach(s => { try { s.setData([]); } catch(e) {} });
-    _oipMcprSeriesCount = -1;
-    _oipMcprLastBucket = -1;
-    _oipMcprLastTime = 0;
+    oipClearMineCpr();
 
     // Clear all chart series
     try { if (oipOISeries) oipOISeries.setData([]); } catch(e) {}
-    [oipCvwapSeries, oipPvwapSeries, oipAvg3VwapSeries].forEach(s => { try { s?.setData([]); } catch(e) {} });
-    [oipEma9Series, oipEma20Series, oipEma50Series, oipEma100Series, oipEma200Series].forEach(s => { try { s?.setData([]); } catch(e) {} });
     [oipVolumeSeries, oipBnfVolumeSeries, oipMaxPainSeries].forEach(s => { try { s?.setData([]); } catch(e) {} });
     oipClearAtmCeOiLines();
 
@@ -1090,16 +1232,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     oipPrecalculateIndicators();
     oipSetupReplaySlider();
 
-    // SHOW FULL DATA INITIALLY (Normal Chart Mode)
+    // SHOW FULL DATA INITIALLY (Normal Chart Mode). The Mine CPR set was put
+    // on by the oipRefreshLocalView(lastIdx) inside oipSetupReplaySlider.
     if (oipOISeries) oipOISeries.setData(oipFullCandles);
-    if (oipCvwapSeries) oipCvwapSeries.setData(oipCachedIndicators.index.vwap);
-    if (oipPvwapSeries) oipPvwapSeries.setData(oipCachedIndicators.index.pvwap);
-    if (oipAvg3VwapSeries) oipAvg3VwapSeries.setData(oipCachedIndicators.index.avg3vwap);
-    if (oipEma9Series) oipEma9Series.setData(oipCachedIndicators.index.ema9);
-    if (oipEma20Series) oipEma20Series.setData(oipCachedIndicators.index.ema20);
-    if (oipEma50Series) oipEma50Series.setData(oipCachedIndicators.index.ema50);
-    if (oipEma100Series) oipEma100Series.setData(oipCachedIndicators.index.ema100);
-    if (oipEma200Series) oipEma200Series.setData(oipCachedIndicators.index.ema200);
     oipSetVolumeBars(oipVolumeSeries, data.future_volume, oipFullCandles);
     oipSetVolumeBars(oipBnfVolumeSeries, data.banknifty_volume, oipFullCandles, 'banknifty');
     if (oipMaxPainSeries) oipMaxPainSeries.setData(oipMaxPainPoints());
@@ -1184,15 +1319,8 @@ function oipPrecalculateIndicators() {
     oipFullCeData = wantOptions ? oipFullOptionData.filter(d => d.type === 'CE') : [];
     oipFullPeData = wantOptions ? oipFullOptionData.filter(d => d.type === 'PE') : [];
 
-    oipCachedIndicators.index.vwap = oipCalculateVWAP(oipFullCandles);
-    oipCachedIndicators.index.pvwap = oipCalculatePVWAP(oipFullCandles);
-    oipCachedIndicators.index.avg3vwap = oipCalculateAvg3VWAP(oipFullCandles);
-    oipCachedIndicators.index.ema9 = oipCalculateFixedEMA(oipFullCandles, 9);
-    oipCachedIndicators.index.ema20 = oipCalculateFixedEMA(oipFullCandles, 20);
-    oipCachedIndicators.index.ema50 = oipCalculateFixedEMA(oipFullCandles, 50);
-    oipCachedIndicators.index.ema100 = oipCalculateFixedEMA(oipFullCandles, 100);
-    oipCachedIndicators.index.ema200 = oipCalculateFixedEMA(oipFullCandles, 200);
-    oipCachedIndicators.cpr = oipCalculateDynamicCPR(oipFullCandles);
+    // The index chart's VWAP / EMA / CPR are computed per step by Mine CPR
+    // (oipApplyMineCpr) — nothing to precalculate for it here.
 
     if (!wantOptions) return;
 
@@ -1232,13 +1360,32 @@ function oipPrecalculateIndicators() {
 
 let oipLastRefreshIndex = -2; // -2 so first replay call (index=0) is always non-incremental
 
+/* ── Option chart sync ────────────────────────────────────────
+   Whether the Round Strike (option) chart walks with the playhead. On, every
+   replay step cuts it at the replayed bar, so the two charts read as one
+   moment; off, it keeps showing its whole session while the index chart
+   replays — useful when the option chart is the reference and the index
+   chart is the thing being scrubbed. The "Sync option chart" switch in the
+   replay pill; persisted, default on. */
+const OIP_REPLAY_SYNC_OPT_KEY = 'oip-replay-sync-option-chart';
+let oipReplaySyncOptionChart = true;
+try { oipReplaySyncOptionChart = localStorage.getItem(OIP_REPLAY_SYNC_OPT_KEY) !== 'false'; } catch (e) {}
+
+// The one place the Round Strike cutoff is set: the playhead's bar time when
+// syncing, null (show everything) when not. Every caller goes through here so
+// switching the flag off cannot leave a stale cut behind.
+function oipSyncOptionChart(timeSec) {
+    window.oipRSApplyReplayCutoff?.(oipReplaySyncOptionChart ? (timeSec ?? null) : null);
+}
+
 function oipRefreshLocalView(view, resetZoom, index) {
     if (!oipFullCandles || index < 0) return;
 
-    // Walk the Round Strike chart to the same bar. Done here rather than in each
-    // of the play/step/slider/jump handlers because every one of them lands on
-    // this function, so this is the single place the replay position is known.
-    window.oipRSApplyReplayCutoff?.(oipFullCandles[index]?.time ?? null);
+    // Walk the Round Strike chart to the same bar (when the switch is on). Done
+    // here rather than in each of the play/step/slider/jump handlers because
+    // every one of them lands on this function, so this is the single place
+    // the replay position is known.
+    oipSyncOptionChart(oipFullCandles[index]?.time ?? null);
 
     // Suppress cross-chart range sync for the entire refresh. series.update() and
     // series.setData() fire subscribeVisibleLogicalRangeChange synchronously; without
@@ -1260,35 +1407,14 @@ function oipRefreshLocalView(view, resetZoom, index) {
 
     const timeAtIdx = oipFullCandles[index].time;
 
-    // PVWAP and 3-AVG VWAP hold the PREVIOUS session's value, so they emit
-    // nothing for the sessions with no predecessor loaded and their arrays are
-    // shorter than the candle array. Index-matched updates would push the wrong
-    // bar's value; match on the timestamp instead.
-    const updateOrSetAt = (series, fullData, t) => {
-        if (!series || !fullData) return;
-        if (isIncremental) { const p = fullData.find(d => d.time === t); if (p) series.update(p); }
-        else series.setData(fullData.filter(d => d.time <= t));
-    };
-
     // 1. Index Chart
     updateOrSet(oipOISeries, oipFullCandles, index);
-    updateOrSet(oipCvwapSeries, oipCachedIndicators.index.vwap, index);
-    updateOrSetAt(oipPvwapSeries, oipCachedIndicators.index.pvwap, timeAtIdx);
-    updateOrSetAt(oipAvg3VwapSeries, oipCachedIndicators.index.avg3vwap, timeAtIdx);
-    updateOrSet(oipEma9Series, oipCachedIndicators.index.ema9, index);
-    updateOrSet(oipEma20Series, oipCachedIndicators.index.ema20, index);
-    updateOrSet(oipEma50Series, oipCachedIndicators.index.ema50, index);
-    updateOrSet(oipEma100Series, oipCachedIndicators.index.ema100, index);
-    updateOrSet(oipEma200Series, oipCachedIndicators.index.ema200, index);
     oipRefreshVolumeBars(index);
     oipRefreshMaxPain(timeAtIdx);
 
-    // 2. CPR Redraw — the renderer clips to timeAtIdx itself.
-    if (oipCachedIndicators.cpr) oipRenderPrecalculatedCPR(oipCachedIndicators.cpr, timeAtIdx);
-
-    // Previous session's high/low. Recomputed per step so that during a replay it
-    // shows the session before the bar being replayed, not the one before today.
-    oipDrawPrevDayHL(oipVisibleCandles(index));
+    // 2. VWAP / EMA / CPR / Multi CPR / PDH-PDL / boxes — the Mine CPR set,
+    // computed on the candles up to this bar (see oipApplyMineCpr).
+    oipApplyMineCpr(index);
 
     // 3. Option Charts
     const hasOHLC = (d) => d && d.open != null;
@@ -1387,17 +1513,14 @@ function oipRefreshLocalView(view, resetZoom, index) {
         // 30m reversal lines: always repaint (extend to current candle) but only detect
         // new signals when a 30m candle closes (bucket changes).
         const _tCur  = oipFullCandles[_idxSnap]?.time ?? 0;
+        // (the 2nd 1-min / 2nd 5-min and Monday boxes are Mine CPR's now)
         oipDraw2ndCandle30sBox(_vis, _tCur);
-        oipDraw2ndCandle1mBox(_vis, _tCur);
-        oipDraw2nd5mCandleBox(_vis, _tCur);
-        oipDrawMondayBox(_vis);
         const _tPrev = _idxSnap > 0 ? (oipFullCandles[_idxSnap - 1]?.time ?? _tCur) : _tCur;
         const _cur30mBucket = Math.floor(_tCur / 1800);
         const _recompute30m = _oip30mLastBucket < 0 || _cur30mBucket !== Math.floor(_tPrev / 1800);
         if (_recompute30m) _oip30mLastBucket = _cur30mBucket;
         oipDraw30mReversalLines(_vis, _recompute30m);
         oipDraw1DReversalLines(_vis);
-        oipRefreshMultiCPR(_vis);
         // Defer the suppress reset by one extra RAF so it runs AFTER the inner RAFs
         // that oipDraw2ndCandle30sBox and oipDraw2nd5mCandleBox schedule for CE/PE
         // series creation. RAF callbacks run FIFO; the inner RAFs were queued first,
@@ -1430,77 +1553,6 @@ function oipRefreshLocalView(view, resetZoom, index) {
     }
 }
 
-/* Replay's Multi CPR step. The checkbox has been in the popup all along but
-   nothing ever called the renderer here, so it drew nothing whichever way it was
-   set; it is wired now that Pine's default (the group on, 1 Hour alone) is the
-   default here too.
-
-   oipDrawMultiCPR derives its buckets from whatever candles it is handed, so the
-   playhead prefix is all the clipping this needs. The z-order restack it
-   normally ends with is skipped per step and run only when a new bucket adds
-   series to the map — see the applyZ argument. */
-let _oipMcprSeriesCount = -1;
-let _oipMcprLastBucket = -1;
-let _oipMcprLastTime = 0;
-
-// Which Multi CPR timeframe is currently the finest one switched on — the rate
-// at which its levels can actually change.
-function _oipMcprSmallestMinutes() {
-    const on = [['oipMultiCpr15m', 15], ['oipMultiCpr30m', 30], ['oipMultiCpr1h', 60]]
-        .filter(([id]) => document.getElementById(id)?.checked);
-    return on.length ? Math.min(...on.map(([, mins]) => mins)) : 60;
-}
-
-function oipRefreshMultiCPR(candles, force = false) {
-    if (!oipOIChart) return;
-    const on = document.getElementById('oipShowMultiCpr')?.checked === true;
-    if (!on) {
-        if (_oipMcprSeriesCount === 0) return;         // already blank, nothing to do
-        oipDrawMultiCPR(candles, false);
-        _oipMcprSeriesCount = 0;
-        _oipMcprLastBucket = -1;
-        _oipMcprLastTime = 0;
-        return;
-    }
-
-    /* A bucket's levels come off the PREVIOUS bucket, so they are constant for
-       its whole span — there is nothing new to draw until one closes. Rebuilding
-       every bar meant re-aggregating the entire loaded window three times and
-       re-setting every bucket series on each replay step, which a three-month
-       window (~394 hourly buckets) turns from wasteful into unusable.
-
-       The cost is that the band's right edge advances in whole buckets rather
-       than bar by bar, so it can trail the playhead by up to one bucket. The
-       levels it shows are correct the whole time; only the extension lags. */
-    const bucketSec = _oipMcprSmallestMinutes() * 60;
-    const last = candles?.length ? candles[candles.length - 1].time : 0;
-    const bucket = Math.floor(last / bucketSec);
-    // Stepping BACKWARDS shortens the prefix, and the band has to shorten with
-    // it — a slider drag inside one bucket would otherwise leave it drawn out to
-    // where the playhead used to be.
-    const rewound = last < _oipMcprLastTime;
-    if (!force && !rewound && bucket === _oipMcprLastBucket) return;
-    _oipMcprLastBucket = bucket;
-    _oipMcprLastTime = last;
-
-    oipDrawMultiCPR(candles, false);
-    const n = Object.keys(oipMultiCprSeriesMap).length;
-    if (n !== _oipMcprSeriesCount) {
-        _oipMcprSeriesCount = n;
-        oipApplyZOrder();
-    }
-}
-
-// Replay's CPR step. The heavy lifting lives in oi_indicators.js so the static
-// chart and the replay share one renderer — this used to be a near-copy that
-// rebuilt every period's series on every step (and drew them in its own
-// hardcoded colours, ignoring the per-line settings).
-function oipRenderPrecalculatedCPR(daysData, maxTime) {
-    if (!oipOIChart || !oipElems.showCpr?.checked) return;
-    if (!oipAdvanceCprLevels(daysData, maxTime)) oipRenderCprLevels(daysData, maxTime);
-}
-
-
 /* This page draws the index candles and nothing else — the Intrinsic / CE / PE /
    Fixed panes have no container in oi_replay.html, so oipInitSecondaryCharts
    bails and those chart objects stay null. The endpoint was still resolving and
@@ -1524,9 +1576,11 @@ function oipCandleLegParams() {
 
    Two things make it feel seamless rather than like a refresh:
 
-   * It fires EARLY. The trigger is OIP_BACKFILL_TRIGGER_BARS bars of remaining
-     history, not zero, so the fetch is usually finished before the user has
-     dragged far enough to see the end of the data.
+   * It fires EARLY. The trigger is a screen and a half of remaining history
+     (oipBackfillTriggerBars), not zero, so the fetch is usually finished
+     before the user has dragged far enough to see the end of the data. It
+     used to be a flat 15 bars, which at the zoom the chart opens at is a
+     few pixels: the drag reached blank space and then waited on the broker.
    * Prepending N bars renumbers every logical index by +N, which would slide
      the view N bars to the right — the visual "jump" that makes a chart feel
      like it reloaded. The visible logical range is captured before the splice
@@ -1536,7 +1590,16 @@ function oipCandleLegParams() {
    `oipReplayIndex` is a position INTO oipFullCandles, so it is shifted by the
    same N — otherwise the playhead (and the Round Strike cutoff it drives) would
    silently jump back N bars into the newly loaded history. */
-const OIP_BACKFILL_TRIGGER_BARS = 15;
+const OIP_BACKFILL_TRIGGER_SCREENS = 1.5;   // of the visible width
+const OIP_BACKFILL_TRIGGER_MIN_BARS = 15;
+
+// How many bars of history may remain to the left of the view before the
+// next window is asked for — proportional to the zoom, so it is always the
+// same distance of dragging away whatever the bar spacing.
+function oipBackfillTriggerBars(range) {
+    const width = (range && range.to != null && range.from != null) ? range.to - range.from : 0;
+    return Math.max(OIP_BACKFILL_TRIGGER_MIN_BARS, Math.ceil(width * OIP_BACKFILL_TRIGGER_SCREENS));
+}
 
 let _oipBackfillBusy = false;
 // Set once the broker answers an older window with nothing. Intraday history is
@@ -1674,15 +1737,11 @@ function oipSpliceOlderCandles(older) {
     oipInvalidateVisCache();
     _oipDayBoxesClearAll();
     oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
-    oip2ndCandle1mBox  = { oi: [], ce: [], pe: [] };
-    oip2nd5mCandleBox  = { oi: [], ce: [], pe: [] };
-    oipClearMondayBoxes();
     oipClear30mReversalLines();
     oipClear1DReversalLines();
     _oip30mLastBucket = -1;
-    _oipMcprSeriesCount = -1;
-    _oipMcprLastBucket = -1;
-    _oipMcprLastTime = 0;
+    // Mine CPR's lines hold the old prefix too — its next apply must re-set them.
+    _oipMineLastIdx = -2;
 
     const slider = document.getElementById('oipReplaySlider');
     if (slider) {
@@ -1707,84 +1766,6 @@ function oipSpliceOlderCandles(older) {
     requestAnimationFrame(() => { restore(); oipBackfillNote(''); });
 }
 
-/* ── Previous-day High / Low ──────────────────────────────────────────────────
-   The previous SESSION's high and low, drawn as two rose step lines that change
-   at each day boundary — so scrolling back through the window shows what the
-   prior day's range was at every point, not one flat level taken from the last
-   session on screen.
-
-   Deliberately separate from the CPR block's own "Prev H / L": that one is a
-   sub-item of CPR Levels (it disappears when CPR is switched off) and comes off
-   the CPR payload. This is computed from the candles themselves, which is what
-   lets it follow a replay — step back a day and it re-anchors.
-
-   Step lines (lineType 1) rather than price lines: a price line spans the whole
-   chart at one value, which is wrong the moment more than one session is
-   loaded. */
-const OIP_PREV_DAY_HL_COLOR = '#f43f5e';   // rose
-let oipPrevDayHighSeries = null, oipPrevDayLowSeries = null;
-
-/** IST calendar day for a bar. Bars are stored pre-shifted so UTC getters read
- *  as IST — the same trick the chart's own time formatter uses. */
-function _oipBarDay(t) {
-    const d = new Date(t * 1000);
-    return `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
-}
-
-/** [{time, value}] pairs carrying each bar's PREVIOUS session high and low. */
-function oipCalcPrevDayHL(candles) {
-    const high = [], low = [];
-    if (!candles || !candles.length) return { high, low };
-
-    // One pass to collect each session's range, in order.
-    const days = [];
-    let cur = null;
-    for (const c of candles) {
-        const day = _oipBarDay(c.time);
-        if (!cur || cur.day !== day) {
-            cur = { day, high: c.high, low: c.low };
-            days.push(cur);
-        } else {
-            if (c.high > cur.high) cur.high = c.high;
-            if (c.low < cur.low) cur.low = c.low;
-        }
-    }
-    const prevOf = new Map();
-    for (let i = 1; i < days.length; i++) prevOf.set(days[i].day, days[i - 1]);
-
-    // The first session on screen has no predecessor loaded, so it plots nothing
-    // rather than borrowing its own range.
-    for (const c of candles) {
-        const prev = prevOf.get(_oipBarDay(c.time));
-        if (!prev) continue;
-        high.push({ time: c.time, value: prev.high });
-        low.push({ time: c.time, value: prev.low });
-    }
-    return { high, low };
-}
-
-function oipDrawPrevDayHL(candles) {
-    const on = document.getElementById('oipShowPrevDayHL')?.checked === true;
-    if (!oipOIChart) return;
-
-    if (!oipPrevDayHighSeries) {
-        const opts = {
-            color: OIP_PREV_DAY_HL_COLOR, lineWidth: 1, lineType: 1,   // 1 = with steps
-            priceLineVisible: false, lastValueVisible: true,
-            crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
-        };
-        oipPrevDayHighSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { ...opts, title: 'PDH' });
-        oipPrevDayLowSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { ...opts, title: 'PDL' });
-    }
-    oipPrevDayHighSeries.applyOptions({ visible: on });
-    oipPrevDayLowSeries.applyOptions({ visible: on });
-    if (!on) return;
-
-    const { high, low } = oipCalcPrevDayHL(candles);
-    oipPrevDayHighSeries.setData(high);
-    oipPrevDayLowSeries.setData(low);
-}
-
 /* ── Replay Core ───────────────────────────────────────────── */
 // True while the playhead is actually cutting the chart short — the toolbar is
 // up AND parked past bar 0. Everything that re-pushes candles has to ask,
@@ -1799,7 +1780,7 @@ function oipReplayActive() {
 function oipResetReplay() {
     oipFullCandles = null; oipFullOptionData = null; oipReplayIndex = 0;
     // Otherwise the Round Strike chart stays cut at wherever the slider was.
-    window.oipRSApplyReplayCutoff?.(null);
+    oipSyncOptionChart(null);
     oipLoadCandles();
 }
 
@@ -2000,6 +1981,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // which expiries were open then and reloads its legs.
         window.oipRSOnDateChanged?.();
     });
+    // From only moves the window's start; the as-of date (and so the Round
+    // Strike block's expiry) is unchanged, so this is one index-chart reload.
+    oipElems.replayFromDate?.addEventListener('change', () => {
+        oipApplyReplayDate();
+        oipResetReplay();
+    });
     // The page's single symbol control. oipSelectSymbol reloads the index
     // chart and tells the Round Strike block to follow.
     oipElems.symbolSelect?.addEventListener('change', e => oipSelectSymbol(e.target.value));
@@ -2017,9 +2004,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('oipShowMaxPain')?.addEventListener('change', () => oipUpdateMaxPainLine());
     document.getElementById('oipShowAtmCeOi')?.addEventListener('change', () => oipDrawAtmCeOiLines());
     document.getElementById('oipShow5mClose')?.addEventListener('change', () => oipRedraw5mCloseMain());
-    document.getElementById('oipShowPrevDayHL')?.addEventListener('change', () => {
-        oipDrawPrevDayHL(oipVisibleCandles(oipReplayIndex));
-    });
 
     oipElems.interval?.addEventListener('change', (e) => {
         oipInterval = e.target.value;
@@ -2071,30 +2055,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipElems.strikeMode?.value === 'ce_pe') oipReloadStrikeOnly();
     });
 
-    // Virgin CPR recolours and reshapes bands from EARLIER sessions, which the
-    // incremental advance path cannot express — blank the CPR state so the next
-    // refresh takes the full-render route.
-    ['oipCprShowVirgin', 'oipCprVirginExtend'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', () => {
-            oipClearCprSeries();
-            if (oipFullCandles) oipRefreshLocalView('combined', false, oipReplayIndex);
-        });
-    });
-
-    ['oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', () => {
-            if (oipFullCandles) oipRefreshMultiCPR(oipVisibleCandles(oipReplayIndex), true);
-        });
-    });
-
-    [
-        'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
-        'oipShowCpr',
-        'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
-        'oipShowVwapInt', 'oipShowPremium',
-        'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
-        'oipCprShowVirgin', 'oipCprVirginExtend', 'oipCprShowLabels'
-    ].forEach(id => {
+    // The index chart's VWAP / CPR / Multi CPR / EMA / box controls are the
+    // Mine CPR sections now — wired by oipInitMineCpr, not here.
+    ['oipShowVwapInt', 'oipShowPremium'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             oipUpdateEmaVisibility();
             oipUpdateVwapVisibility();
@@ -2105,19 +2068,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('oipShow2ndCandle30s')?.addEventListener('change', () => {
         if (!oipFullCandles) return;
         oipDraw2ndCandle30sBox(oipVisibleCandles(oipReplayIndex), oipFullCandles[oipReplayIndex]?.time ?? 0);
-    });
-    document.getElementById('oipShow2ndCandle1m')?.addEventListener('change', () => {
-        if (!oipFullCandles) return;
-        oipDraw2ndCandle1mBox(oipVisibleCandles(oipReplayIndex), oipFullCandles[oipReplayIndex]?.time ?? 0);
-    });
-    document.getElementById('oipShowMondayBox')?.addEventListener('change', () => {
-        if (oipFullCandles) oipDrawMondayBox(oipVisibleCandles(oipReplayIndex));
-    });
-    document.getElementById('oipShow2nd5mCandle')?.addEventListener('change', () => {
-        if (!oipFullCandles) return;
-        // Second argument is the playhead TIME (it used to be handed the CE/PE
-        // arrays, so the CE/PE boxes silently never drew from this path).
-        oipDraw2nd5mCandleBox(oipVisibleCandles(oipReplayIndex), oipFullCandles[oipReplayIndex]?.time ?? 0);
     });
     document.getElementById('oipShow30mReversalLines')?.addEventListener('change', () => {
         if (oipFullCandles) oipDraw30mReversalLines(oipFullCandles.slice(0, oipReplayIndex + 1));
@@ -2194,6 +2144,17 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
     btnReplayExit?.addEventListener('click', () => oipReplayExitMode());
+
+    const syncOpt = document.getElementById('oipReplaySyncOpt');
+    if (syncOpt) {
+        syncOpt.checked = oipReplaySyncOptionChart;
+        syncOpt.addEventListener('change', () => {
+            oipReplaySyncOptionChart = syncOpt.checked;
+            try { localStorage.setItem(OIP_REPLAY_SYNC_OPT_KEY, String(oipReplaySyncOptionChart)); } catch (e) {}
+            // Apply straight away: cut at the current bar, or show everything.
+            oipSyncOptionChart(oipReplayActive() ? (oipFullCandles[oipReplayIndex]?.time ?? null) : null);
+        });
+    }
 
     // Defer chart creation and initial data load until the panel is visible.
     // On the standalone /replay page the panel is visible immediately.
@@ -2487,150 +2448,3 @@ function oipDraw2ndCandle30sBox(candles, maxTime) {
     });
 }
 
-// ── 2nd 1-minute candle box — all days ──────────────────────────────────────
-// Pine's "2nd 1-Min Candle Box": the 09:16 bar's range, held across the rest of
-// the session. Its 5-minute sibling above is the same idea one timeframe up;
-// this one only has a bar to point at on 1-minute and 30-second charts.
-let oip2ndCandle1mBox = { oi: [], ce: [], pe: [] };
-
-function oipDraw2ndCandle1mBox(candles, maxTime) {
-    const allowedIntervals = ['30second', 'minute'];
-    const on = allowedIntervals.includes(oipInterval) && candles && candles.length &&
-               document.getElementById('oipShow2ndCandle1m')?.checked;
-    if (!on) {
-        ['1m:oi', '1m:ce', '1m:pe'].forEach(_oipDayBoxesClear);
-        oip2ndCandle1mBox = { oi: [], ce: [], pe: [] };
-        return;
-    }
-
-    const spec = (dk, day) => {
-        const w = day.filter(c => {
-            const d = new Date(c.time * 1000);
-            return d.getUTCHours() === 9 && d.getUTCMinutes() === 16;
-        });
-        if (!w.length) return null;
-        const hi = Math.max(...w.map(_oipH));
-        const lo = Math.min(...w.map(_oipL));
-        if (!isFinite(hi) || !isFinite(lo) || hi === lo) return null;
-        return { hi, lo, from: w[0].time };
-    };
-
-    const col = oipGetLineColor('box1m');
-    if (oipOIChart)
-        oip2ndCandle1mBox.oi = _oipDayBoxesRender('1m:oi', oipOIChart, candles, spec, col);
-
-    if (!oipCEChart?.chart && !oipPEChart?.chart) return;
-
-    requestAnimationFrame(() => {
-        try {
-            const raw = oipOptionData || [];
-            const ceSource = raw.filter(c => c.type === 'CE' && (!maxTime || c.time <= maxTime));
-            const peSource = raw.filter(c => c.type === 'PE' && (!maxTime || c.time <= maxTime));
-            if (oipCEChart?.chart && ceSource.length)
-                oip2ndCandle1mBox.ce = _oipDayBoxesRender('1m:ce', oipCEChart.chart, ceSource, spec, col);
-            if (oipPEChart?.chart && peSource.length)
-                oip2ndCandle1mBox.pe = _oipDayBoxesRender('1m:pe', oipPEChart.chart, peSource, spec, col);
-        } catch(e) {}
-    });
-}
-
-// ── Monday High/Low box ─────────────────────────────────────────────────────
-// Pine's "Monday H/L Box": each Monday's range carried across the rest of that
-// week. Unlike the day boxes above it spans a week, so it can't ride on
-// _oipDayBoxesRender — it gets its own per-week cache with the same contract
-// (a week is rebuilt only while its bar count is still growing, which during a
-// replay is the week under the playhead alone).
-let oipMondayBoxes = [];
-const _oipMondayBoxCache = {};
-
-function oipClearMondayBoxes() {
-    Object.keys(_oipMondayBoxCache).forEach(k => {
-        _oipRemoveBoxSeries(_oipMondayBoxCache[k].box);
-        delete _oipMondayBoxCache[k];
-    });
-    oipMondayBoxes = [];
-}
-
-function oipDrawMondayBox(candles) {
-    if (!oipOIChart) return;
-    if (!candles || !candles.length || !document.getElementById('oipShowMondayBox')?.checked) {
-        oipClearMondayBoxes();
-        return;
-    }
-
-    const dayMap = _oipGroupByDay(candles);
-    const weeks = {};
-    Object.keys(dayMap).sort().forEach(dk => {
-        const day = dayMap[dk];
-        // Bars are stored pre-shifted so the UTC getters read as IST — day 1 is Monday.
-        if (new Date(day[0].time * 1000).getUTCDay() !== 1) return;
-        let hi = -Infinity, lo = Infinity;
-        day.forEach(c => { hi = Math.max(hi, _oipH(c)); lo = Math.min(lo, _oipL(c)); });
-        if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
-        weeks[dk] = { hi, lo, start: day[0].time, end: day[0].time + 7 * 86400 };
-    });
-
-    // Weeks that scrolled out of range, or that the playhead stepped back past.
-    Object.keys(_oipMondayBoxCache).forEach(wk => {
-        if (!weeks[wk]) { _oipRemoveBoxSeries(_oipMondayBoxCache[wk].box); delete _oipMondayBoxCache[wk]; }
-    });
-
-    const col   = oipGetLineColor('mondayBox');
-    const style = oipGetLineStyle('mondayBox');
-    const width = oipGetLineWidth('mondayBox');
-    Object.keys(weeks).forEach(wk => {
-        const w = weeks[wk];
-        const times = candles.filter(c => c.time >= w.start && c.time < w.end).map(c => c.time);
-        if (!times.length) return;
-        const cached = _oipMondayBoxCache[wk];
-        if (cached && cached.n === times.length && cached.hi === w.hi && cached.lo === w.lo) return;
-        if (cached) _oipRemoveBoxSeries(cached.box);
-        // Border only: a week-wide translucent fill would sit under every candle.
-        const box = _oipDrawCandleBox(oipOIChart, w.hi, w.lo, times, col, 0, style, width);
-        if (box) _oipMondayBoxCache[wk] = { box, n: times.length, hi: w.hi, lo: w.lo };
-    });
-    oipMondayBoxes = Object.keys(_oipMondayBoxCache).map(wk => _oipMondayBoxCache[wk].box);
-}
-
-// ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
-let oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
-
-function oipDraw2nd5mCandleBox(candles, maxTime) {
-    const allowedIntervals = ['minute', '2minute', '3minute', '5minute'];
-    const on = allowedIntervals.includes(oipInterval) && candles && candles.length &&
-               document.getElementById('oipShow2nd5mCandle')?.checked;
-    if (!on) {
-        ['5m:oi', '5m:ce', '5m:pe'].forEach(_oipDayBoxesClear);
-        oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
-        return;
-    }
-
-    const spec = (dk, day) => {
-        const w = day.filter(c => {
-            const d = new Date(c.time * 1000);
-            return d.getUTCHours() === 9 && d.getUTCMinutes() >= 20 && d.getUTCMinutes() < 25;
-        });
-        if (!w.length) return null;
-        const hi = Math.max(...w.map(_oipH));
-        const lo = Math.min(...w.map(_oipL));
-        if (!isFinite(hi) || !isFinite(lo) || hi === lo) return null;
-        return { hi, lo, from: w[0].time };
-    };
-
-    if (oipOIChart)
-        oip2nd5mCandleBox.oi = _oipDayBoxesRender('5m:oi', oipOIChart, candles, spec, '#00D2FF');
-
-    if (!oipCEChart?.chart && !oipPEChart?.chart) return;
-
-    requestAnimationFrame(() => {
-        try {
-            const raw = oipOptionData || [];
-            const ceSource = raw.filter(c => c.type === 'CE' && (!maxTime || c.time <= maxTime));
-            const peSource = raw.filter(c => c.type === 'PE' && (!maxTime || c.time <= maxTime));
-            if (oipCEChart?.chart && ceSource.length)
-                oip2nd5mCandleBox.ce = _oipDayBoxesRender('5m:ce', oipCEChart.chart, ceSource, spec, '#00D2FF');
-            if (oipPEChart?.chart && peSource.length)
-                oip2nd5mCandleBox.pe = _oipDayBoxesRender('5m:pe', oipPEChart.chart, peSource, spec, '#00D2FF');
-        } catch(e) {}
-    });
-}

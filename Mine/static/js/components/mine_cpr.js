@@ -395,9 +395,11 @@ window.MineCPR = (function () {
 
         // ── 2nd candle boxes: the bucket after the open (09:20 on 5m, 09:16 on 1m),
         //    its H/L carried to the end of the day.
+        // One box per session for up to a year of them — one element each,
+        // so the cap is only there to bound a very long backfill (Replay).
         const candleBox = (secs, color) => {
             const days = groupBy(candles, dayKey);
-            for (let d = Math.max(0, days.length - 30); d < days.length; d++) {
+            for (let d = Math.max(0, days.length - 250); d < days.length; d++) {
                 const day = days[d];
                 const s = sessionStart(day.from);
                 let hi = -Infinity, lo = Infinity, firstIdx = -1;

@@ -2132,6 +2132,28 @@ body.dark-theme .oip-oo-cancel-all,
     max-width: 130px;
 }
 
+/* "Sync option chart" switch — same weight as the status text, a checkbox in
+   front. */
+.oip-replay-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--oip-replay-accent);
+    cursor: pointer;
+    user-select: none;
+}
+
+.oip-replay-sync input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    accent-color: var(--oip-replay-accent);
+    cursor: pointer;
+}
+
 .oip-btn--replay-exit {
     background: transparent;
     border-color: var(--oip-replay-line);
