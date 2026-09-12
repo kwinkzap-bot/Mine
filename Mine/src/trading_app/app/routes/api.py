@@ -16766,7 +16766,11 @@ def time_and_sales() -> EndpointResponse:
     Query params: symbol (Fyers string, required), since (last seq the client
     holds), epoch (the tape revision that cursor belongs to), limit (default
     500, capped 2000), contracts=1 to list the futures the picker can choose
-    from instead of returning rows.
+    from instead of returning rows. Two more read the ARCHIVE instead of the
+    live tape: days=1&root=NIFTY lists the days it holds for an underlying,
+    and day=YYYY-MM-DD answers with that day's tape in the live shape, plus
+    `historical: true`. Neither marks a symbol hot — an archived day has no
+    stream to keep alive.
 
     This reads the in-memory tape and nothing else, so the 1 Hz poll behind it
     costs the broker nothing — the collector's websocket is what talks to
@@ -16790,6 +16794,10 @@ def time_and_sales() -> EndpointResponse:
             logger.warning(f"[TimeAndSales] contract list failed for {root}: {e}")
             return jsonify({'success': False, 'error': str(e)}), 502
         return jsonify({'success': True, 'root': root, 'contracts': contracts})
+
+    if request.args.get('days'):
+        root = (request.args.get('root') or 'NIFTY').upper()
+        return jsonify({'success': True, 'root': root, 'days': tas.archived_days(root)})
 
     symbol = (request.args.get('symbol') or '').strip()
     if not symbol:
@@ -16823,8 +16831,16 @@ def time_and_sales() -> EndpointResponse:
     except ValueError:
         client_epoch = None
 
-    tas.register(symbol)
-    state = tas.view(symbol, since, limit, min_qty, client_epoch)
+    day_raw = (request.args.get('day') or '').strip()
+    if day_raw:
+        try:
+            day = datetime.strptime(day_raw[:10], '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'success': False, 'error': f'Bad day {day_raw!r}, want YYYY-MM-DD'}), 400
+        state = tas.archived_view(symbol, day, limit, min_qty)
+    else:
+        tas.register(symbol)
+        state = tas.view(symbol, since, limit, min_qty, client_epoch)
 
     return jsonify({
         'success': True,

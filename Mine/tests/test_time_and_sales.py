@@ -12,7 +12,7 @@ twice, or that fails to cede to the live feed at the boundary, double-counts
 volume the user is trying to reason about.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -423,12 +423,23 @@ def test_the_day_rollover_clears_yesterdays_tape():
 # 56 of 464 bars cleared. So the tape read as a wall of Σ rows from the open and
 # then almost nothing, and the fix is that history keeps catching up.
 
-def _topup_with(bars, complete=True):
-    """Run one top-up against a fake Breeze that answers with `bars`."""
+def _topup_with(bars, complete=True, now=None):
+    """Run one top-up against a fake Breeze that answers with `bars`.
+
+    The clock is pinned — mid-session by default — because a top-up asks for
+    nothing before the day's open, so left on the wall clock these tests only
+    passed after 09:15 IST.
+    """
     fake = mock.Mock()
     fake.historical_seconds_range.return_value = (bars, complete)
+    if now is None:
+        now = datetime.combine(tas._today(), time(10, 0), tzinfo=IST)
     with mock.patch('trading_app.service.provider_logic.get_icici_adapter',
-                    return_value=fake):
+                    return_value=fake), \
+         mock.patch.object(tas, 'datetime') as clock:
+        clock.now.return_value = now
+        clock.fromtimestamp = datetime.fromtimestamp
+        clock.combine = datetime.combine               # _session_bounds needs the real one
         tas._topup(SYMBOL)
     return fake
 
@@ -510,10 +521,10 @@ def test_the_frontier_never_reaches_the_second_still_forming():
     frozen into the tape."""
     tas._BACKFILL[SYMBOL] = 'ready'
     tas._BACKFILL_HIGH_TS[SYMBOL] = 1000
+    now = datetime.combine(tas._today(), time(10, 0), tzinfo=IST)
     with mock.patch.object(tas, '_tape_day', tas._today()):
-        fake = _topup_with([_bar(1001, 500)])
+        fake = _topup_with([_bar(1001, 500)], now=now)
     _, end = fake.historical_seconds_range.call_args[0][1:3]
-    now = datetime.now(IST)
     assert (now - end).total_seconds() >= tas._TOPUP_LAG_SEC
 
 
@@ -578,12 +589,8 @@ def test_a_topup_stops_asking_once_the_session_is_over():
     tas._BACKFILL_HIGH_TS[SYMBOL] = close_ts - 60          # the last trade of the day
 
     after_close = datetime.fromtimestamp(close_ts + 3600, IST)
-    with mock.patch.object(tas, '_tape_day', tas._today()), \
-         mock.patch.object(tas, 'datetime') as clock:
-        clock.now.return_value = after_close
-        clock.fromtimestamp = datetime.fromtimestamp
-        clock.combine = datetime.combine               # _session_bounds needs the real one
-        _topup_with([])                                    # nothing left to fetch
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([], now=after_close)                   # nothing left to fetch
     assert tas._TOPUP_AT[SYMBOL] >= tas.monotonic() + tas._TOPUP_BACKOFF_MAX
 
 
@@ -701,12 +708,8 @@ def test_standing_down_for_the_day_archives_the_tape():
     push(last_traded_time=close_ts - 30, last_traded_qty=9000, vol_traded_today=9000)
 
     after_close = datetime.fromtimestamp(close_ts + 3600, IST)
-    with mock.patch.object(tas, '_tape_day', tas._today()), \
-         mock.patch.object(tas, 'datetime') as clock:
-        clock.now.return_value = after_close
-        clock.fromtimestamp = datetime.fromtimestamp
-        clock.combine = datetime.combine
-        _topup_with([])
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([], now=after_close)
     assert [r['qty'] for r in _big(min_qty=8000)] == [9000]
 
 
@@ -737,3 +740,102 @@ def test_round_strike_builds_the_fyers_symbol_the_archive_is_keyed_on():
     assert _rs_fyers_future_symbol('NIFTY', date(2026, 9, 29)) == 'NSE:NIFTY26SEPFUT'
     assert _rs_fyers_future_symbol('BANKNIFTY', date(2027, 1, 28)) == 'NSE:BANKNIFTY27JANFUT'
     assert _rs_fyers_future_symbol('SENSEX', date(2026, 12, 31)) == 'BSE:SENSEX26DECFUT'
+
+
+# ── reading an archived day back ───────────────────────────────────────────
+
+def _archive_day_rows(day, symbol, rows):
+    """Plant a finished day straight into the archive under `symbol`."""
+    import os, pickle
+    os.makedirs(tas._TAPE_DIR, exist_ok=True)
+    with open(os.path.join(tas._TAPE_DIR, f'tape_{day.isoformat()}.pkl'), 'wb') as fh:
+        pickle.dump({'prints': {symbol: rows}}, fh)
+    tas.archive_snapshots()
+
+
+def _row(ts, qty, seq, src='tick', side='buy', vol_delta=None):
+    return {'ts': ts, 'price': 100.0 + seq, 'qty': qty, 'side': side, 'side_rule': 'quote',
+            'src': src, 'vol_delta': qty if vol_delta is None else vol_delta, 'seq': seq}
+
+
+def test_archived_days_are_listed_by_underlying_under_the_contract_that_traded_then():
+    """The picker only lists contracts still trading; once September has
+    expired its days are reachable only by root. Around a roll a day may be
+    taped under two contracts — the fuller one is the day's tape."""
+    d1 = tas._today() - timedelta(days=3)
+    d2 = tas._today() - timedelta(days=1)
+    _archive_day_rows(d1, 'NSE:NIFTY26SEPFUT', [_row(1001, 65, 1), _row(1002, 65, 2)])
+    _archive_day_rows(d2, 'NSE:NIFTY26SEPFUT', [_row(2001, 65, 1)])
+    _archive_day_rows(d2, 'NSE:NIFTY26OCTFUT', [_row(2001, 65, 1), _row(2002, 65, 2), _row(2003, 65, 3)])
+    _archive_day_rows(d2, 'NSE:BANKNIFTY26SEPFUT', [_row(2001, 65, 1)])
+
+    assert tas.archived_days('NIFTY') == [
+        {'day': d2.isoformat(), 'symbol': 'NSE:NIFTY26OCTFUT', 'rows': 3},
+        {'day': d1.isoformat(), 'symbol': 'NSE:NIFTY26SEPFUT', 'rows': 2}]
+    assert tas.archived_days('BANKNIFTY') == [
+        {'day': d2.isoformat(), 'symbol': 'NSE:BANKNIFTY26SEPFUT', 'rows': 1}]
+    assert tas.archived_days('SENSEX') == []
+
+
+def test_an_archived_day_reads_back_in_the_live_tapes_shape():
+    day = tas._today() - timedelta(days=2)
+    _archive_day_rows(day, SYMBOL, [
+        _row(1001, 65, 1, side='buy'),
+        _row(1002, 9000, 2, src='bar', side='sell', vol_delta=0),
+        _row(1003, 130, 3, side='sell', vol_delta=2000),
+    ])
+    st = tas.archived_view(SYMBOL, day, limit=500)
+    assert st['historical'] is True and st['market_open'] is False and st['streaming'] is False
+    assert st['day'] == day.isoformat()
+    assert [r['seq'] for r in st['rows']] == [1, 2, 3]
+    assert st['rows_held'] == 3 and st['next_seq'] == 4 and st['truncated'] is False
+    # session totals over the day's rows, split the way stats() splits them
+    assert st['prints'] == 2 and st['bars'] == 1
+    assert st['max_tick_qty'] == 130 and st['max_bar_qty'] == 9000
+    assert st['flow_buy'] == 65 and st['flow_sell'] == 9130
+    assert st['last_price'] == 103.0 and st['last_side'] == 'sell'
+    # coverage: 195 attributed of 2065 moved, over the minimum sample
+    assert st['coverage'] == pytest.approx(195 / 2065)
+
+    filtered = tas.archived_view(SYMBOL, day, limit=500, min_qty=100)
+    assert [r['qty'] for r in filtered['rows']] == [9000, 130]
+    capped = tas.archived_view(SYMBOL, day, limit=2)
+    assert [r['seq'] for r in capped['rows']] == [2, 3] and capped['truncated'] is True
+
+
+def test_a_day_the_archive_lacks_says_so_rather_than_erroring():
+    st = tas.archived_view(SYMBOL, tas._today() - timedelta(days=9))
+    assert st['rows'] == [] and st['rows_held'] == 0
+    assert st['backfill_state'].startswith('unavailable')
+    assert st['coverage'] is None and st['last_price'] is None
+
+
+def test_the_route_serves_an_archived_day_without_touching_the_live_tape(monkeypatch):
+    """`day=` must never register the symbol: an archived day has no stream
+    to keep alive, and registering a dead contract would open one."""
+    import sys
+    sys.path.insert(0, 'tests')
+    from route_app import build_route_app
+    from trading_app.app.routes import api
+    monkeypatch.setattr(api, 'check_auth', lambda: None)
+    app = build_route_app()
+    app.secret_key = 'test'
+    day = tas._today() - timedelta(days=2)
+    _archive_day_rows(day, 'NSE:NIFTY26SEPFUT', [_row(1001, 65, 1), _row(1002, 9000, 2, src='bar')])
+
+    with mock.patch.object(tas, 'register', side_effect=AssertionError('registered an archived day')), \
+         app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess['user_authenticated'] = True
+            sess['username'] = 'test-user'
+        listed = c.get('/api/time-and-sales?days=1&root=nifty').get_json()
+        assert listed['success'] and listed['days'] == [
+            {'day': day.isoformat(), 'symbol': 'NSE:NIFTY26SEPFUT', 'rows': 2}]
+
+        got = c.get(f'/api/time-and-sales?symbol=NSE:NIFTY26SEPFUT&day={day.isoformat()}&min_qty=100').get_json()
+        assert got['success'] and got['historical'] is True
+        assert [r['qty'] for r in got['rows']] == [9000]
+        assert got['symbol'] == 'NSE:NIFTY26SEPFUT' and got['day'] == day.isoformat()
+
+        bad = c.get('/api/time-and-sales?symbol=NSE:NIFTY26SEPFUT&day=yesterday')
+        assert bad.status_code == 400

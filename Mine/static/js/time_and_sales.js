@@ -5,6 +5,11 @@
  * nothing however many tabs are open — unlike every other live panel here,
  * where the poll interval IS the broker request rate.
  *
+ * The day picker swaps the live tape for an archived one. An archived day is
+ * fetched once and never polled — it cannot change — and it is read under
+ * the contract that was front month THAT day, whatever the contract picker
+ * says, because that is the only tape the day has.
+ *
  * The feed is throttled upstream, so the tape is a true but incomplete record:
  * every row is a real exchange print, and a good deal of volume trades between
  * the snapshots we are shown. The feed stat states that outright rather than
@@ -43,6 +48,11 @@ let _tasWindow  = TAS_DOM_ROWS;
 // over the live prints all session, and each catch-up renumbers every seq past
 // the seam it filled — so the cursor is only meaningful paired with this.
 let _tasEpoch   = null;
+// '' for today's live tape, else the archived day ('2026-09-09') being read.
+let _tasDay     = '';
+// The contract the archive holds for that day — the picker's choice is
+// today's front month, which may not be the one that traded then.
+let _tasDaySymbol = null;
 
 const _tasFmt = n => Number(n).toLocaleString('en-IN');
 const _tasPrice = n => Number(n).toLocaleString('en-IN', {
@@ -51,6 +61,12 @@ const _tasPrice = n => Number(n).toLocaleString('en-IN', {
 function _tasTime(ts) {
     return new Date(ts * 1000).toLocaleTimeString('en-GB', {
         hour12: false, timeZone: 'Asia/Kolkata' });
+}
+
+function _tasDayLabel(day) {
+    const d = new Date(day + 'T00:00:00+05:30');
+    return isNaN(d) ? day : d.toLocaleDateString('en-GB',
+        { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 /* "NSE:NIFTY26SEPFUT" is what the API speaks; a human picking a contract
@@ -116,7 +132,7 @@ function _tasRenderRail() {
 
     el.innerHTML =
         `<div class="dg-card tas-rail-card">
-           <div class="dg-card-hdr"><span class="dg-card-title">Session</span></div>
+           <div class="dg-card-hdr"><span class="dg-card-title">${_tasDay ? 'Session · ' + DataGrid.escape(_tasDayLabel(_tasDay)) : 'Session'}</span></div>
            <div class="tas-tiles">
              ${tile('Last', st.last_price != null ? _tasPrice(st.last_price) : '—', lastCls)}
              ${tile('Prints', st.prints != null ? _tasFmt(st.prints) : '—')}
@@ -156,14 +172,15 @@ function _tasRenderRail() {
    was — a single exchange print is a few lots, so only an aggregated Σ bar
    ever reaches the thousands. */
 function _tasEmptyMessage() {
-    if (!_tasSymbol) return 'Pick a contract to start.';
-    if (!_tasMinQty) return 'Waiting for the first trade…';
+    if (_tasDay && !_tasState.rows_held) return 'Nothing archived for this day.';
+    if (!_tasSymbol && !_tasDaySymbol) return 'Pick a contract to start.';
+    if (!_tasMinQty) return _tasDay ? 'No rows.' : 'Waiting for the first trade…';
     const st = _tasState;
     const tick = st.max_tick_qty || 0;
     const bar = st.max_bar_qty || 0;
     if (!tick && !bar) return 'Waiting for the first trade…';
     return `No rows at or above ${_tasFmt(_tasMinQty)}. `
-         + `Today's largest single print is ${_tasFmt(tick)}; the largest `
+         + `${_tasDay ? "That day's" : "Today's"} largest single print is ${_tasFmt(tick)}; the largest `
          + `1-second bar is ${_tasFmt(bar)}. Individual trades run a few lots, `
          + `so a threshold this high can only match aggregated Σ rows.`;
 }
@@ -199,7 +216,7 @@ function _tasRenderTape(opts) {
 
     // Say how much of the tape is on screen, so a partial view never reads as
     // the whole session.
-    const meta = _tasSymbol
+    const meta = (_tasSymbol || _tasDaySymbol)
         ? (shown.length < _tasRows.length
               ? `${_tasFmt(shown.length)} of ${_tasFmt(_tasRows.length)} rows`
               : `${_tasFmt(_tasRows.length)} rows`)
@@ -255,7 +272,10 @@ function _tasChip(state) {
     const el = document.getElementById('tasChip');
     if (!el) return;
     let text, cls;
-    if (!state.market_open) {
+    if (state.historical) {
+        text = 'Archived · ' + _tasDayLabel(state.day || _tasDay);
+        cls = 'tas-chip-idle';
+    } else if (!state.market_open) {
         text = 'Market closed · completed session';
         cls = 'tas-chip-idle';
     } else if (state.streaming) {
@@ -267,7 +287,7 @@ function _tasChip(state) {
     }
     const bf = state.backfill_state || '';
     if (bf === 'running') text += ' · loading session';
-    else if (bf.startsWith('unavailable')) text += ' · no history';
+    else if (bf.startsWith('unavailable')) text += state.historical ? ' · nothing archived' : ' · no history';
     el.textContent = text;
     el.className = 'tas-chip ' + cls;
     el.title = bf.startsWith('unavailable')
@@ -275,6 +295,7 @@ function _tasChip(state) {
 }
 
 async function tasLoad() {
+    if (_tasDay) return _tasLoadDay();
     if (!_tasSymbol) return;
     if (_tasLoading) { _tasPending = true; return; }
     _tasLoading = true;
@@ -333,6 +354,80 @@ async function tasLoad() {
     tasScheduleLoop(delay);
 }
 
+/* One fetch for an archived day, and no loop after it: the archive is the
+   finished record of a session, so there is nothing to poll for. */
+async function _tasLoadDay() {
+    if (!_tasDay || !_tasDaySymbol) return;
+    if (_tasLoading) { _tasPending = true; return; }
+    _tasLoading = true;
+    try {
+        const url = `/api/time-and-sales?symbol=${encodeURIComponent(_tasDaySymbol)}`
+                  + `&day=${_tasDay}&limit=${TAS_MAX_ROWS}`
+                  + (_tasMinQty ? `&min_qty=${_tasMinQty}` : '');
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'request failed');
+        _tasRows = data.rows || [];
+        _tasState = data;
+        _tasPainted = true;
+        _tasRenderTape();
+        _tasRenderRail();
+        _tasChip(data);
+    } catch (e) {
+        console.warn('[TimeAndSales] archived day', e);
+        const chip = document.getElementById('tasChip');
+        if (chip) { chip.textContent = 'Archive unavailable'; chip.className = 'tas-chip tas-chip-warn'; }
+    } finally {
+        _tasLoading = false;
+    }
+    if (_tasPending) { _tasPending = false; _tasLoadDay(); }
+}
+
+/* Switch between today's live tape and an archived day. The rows, cursor and
+   epoch all belong to whichever tape was being read, so they start over. */
+function tasSetDay(day, symbol) {
+    tasStopLoop();
+    _tasDay = day || '';
+    _tasDaySymbol = day ? symbol : null;
+    _tasRows = [];
+    _tasCursor = 0;
+    _tasEpoch = null;
+    _tasState = {};
+    _tasPainted = false;
+    _tasWindow = TAS_DOM_ROWS;
+    const contract = document.getElementById('tasContract');
+    if (contract) {
+        // The archive holds the contract that traded that day; today's picker
+        // has no say over it.
+        contract.disabled = !!_tasDay;
+        contract.title = _tasDay ? `Archived days are read under ${_tasDaySymbol}` : '';
+    }
+    _tasRender();
+    tasScheduleLoop(0);
+}
+
+async function _tasLoadDays(root) {
+    const sel = document.getElementById('tasDay');
+    if (!sel) return;
+    const keep = sel.value;
+    let days = [];
+    try {
+        const res = await fetch(`/api/time-and-sales?days=1&root=${encodeURIComponent(root)}`);
+        const data = await res.json();
+        if (data.success) days = data.days || [];
+    } catch (e) {
+        console.warn('[TimeAndSales] day list', e);
+    }
+    sel.innerHTML = '<option value="">Today · live</option>' + days.map(d =>
+        `<option value="${d.day}" data-symbol="${DataGrid.escape(d.symbol)}">`
+        + `${DataGrid.escape(_tasDayLabel(d.day))} · ${_tasFmt(d.rows)} rows</option>`).join('');
+    // A root change drops any archived day that root does not have.
+    const still = days.find(d => d.day === keep);
+    sel.value = still ? keep : '';
+    if (_tasDay && !still) tasSetDay('', null);
+    else if (still && (_tasDay !== keep || _tasDaySymbol !== still.symbol)) tasSetDay(keep, still.symbol);
+}
+
 function tasScheduleLoop(ms) {
     clearTimeout(_tasTimer);
     // A self-rescheduling timeout, never setInterval: a slow tick must not
@@ -348,6 +443,9 @@ function tasStopLoop() {
 function tasSetSymbol(symbol) {
     if (!symbol || symbol === _tasSymbol) return;
     _tasSymbol = symbol;
+    // Reading an archived day: remember the pick for when the reader comes
+    // back to live, but do not start polling under it.
+    if (_tasDay) return;
     _tasRows = [];
     _tasCursor = 0;
     _tasEpoch = null;
@@ -381,8 +479,14 @@ function tasInit() {
     const contract = document.getElementById('tasContract');
     const minQty = document.getElementById('tasMinQty');
 
-    if (root)     root.addEventListener('change', () => _tasLoadContracts(root.value));
+    const dayPick = document.getElementById('tasDay');
+
+    if (root)     root.addEventListener('change', () => { _tasLoadContracts(root.value); _tasLoadDays(root.value); });
     if (contract) contract.addEventListener('change', () => tasSetSymbol(contract.value));
+    if (dayPick)  dayPick.addEventListener('change', () => {
+        const opt = dayPick.options[dayPick.selectedIndex];
+        tasSetDay(dayPick.value, opt ? opt.dataset.symbol : null);
+    });
     if (minQty) {
         // Filtering is client-side over rows we already hold, so the funnel is
         // instant and lowering it again brings the hidden prints straight back.
@@ -414,4 +518,5 @@ function tasInit() {
     });
 
     _tasLoadContracts(root ? root.value : 'NIFTY');
+    _tasLoadDays(root ? root.value : 'NIFTY');
 }

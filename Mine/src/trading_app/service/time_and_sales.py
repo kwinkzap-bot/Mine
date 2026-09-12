@@ -55,6 +55,7 @@ THAT day, not the one being charted now.
 import logging
 import os
 import pickle
+import re
 import sqlite3
 import threading
 from collections import deque
@@ -1286,6 +1287,95 @@ def archived_large_prints(symbol: str, min_qty: int, from_day: date,
         return []
     return [{'ts': ts, 'price': price, 'qty': qty, 'side': side, 'src': src}
             for ts, price, qty, side, src in rows]
+
+
+def archived_days(root: str) -> List[Dict[str, Any]]:
+    """The days the archive holds for an underlying, newest first.
+
+    By ROOT rather than symbol, because the contract picker only lists what
+    is still trading: once the September future has expired its days would
+    otherwise be unreachable. Each entry names the contract that was taped
+    that day — the front month THEN — which is what a reader of that day
+    wants. A day taped under two contracts (around a roll) reports the one
+    with more rows.
+    """
+    if not root or not os.path.exists(_ARCHIVE_DB):
+        return []
+    pattern = re.compile(rf'^(NSE|BSE):{re.escape(root.upper())}\d{{2}}[A-Z]{{3}}FUT$')
+    try:
+        with _archive_conn() as conn:
+            rows = conn.execute(
+                'SELECT day, symbol, rows FROM archive_runs ORDER BY day DESC, rows DESC').fetchall()
+    except Exception as e:
+        logger.debug(f"[TimeAndSales] archive day list failed: {e}")
+        return []
+    out: List[Dict[str, Any]] = []
+    for day, symbol, n in rows:
+        if not pattern.match(symbol or ''):
+            continue
+        if out and out[-1]['day'] == day:
+            continue                                   # a smaller second contract
+        out.append({'day': day, 'symbol': symbol, 'rows': int(n or 0)})
+    return out
+
+
+def archived_view(symbol: str, day: date, limit: int = 500,
+                  min_qty: int = 0) -> Dict[str, Any]:
+    """One archived day in the shape `view` answers with, so the panel can
+    draw it with the code it already has. Session totals are computed over
+    the day's rows — the live counters were never archived, and for a day
+    whose top-up finished they are the rows anyway. Coverage is derived the
+    way load_snapshot does for a pre-versioned snapshot.
+    """
+    rows: List[Dict[str, Any]] = []
+    if os.path.exists(_ARCHIVE_DB):
+        try:
+            with _archive_conn() as conn:
+                got = conn.execute(
+                    'SELECT ts, price, qty, side, side_rule, src, vol_delta, seq FROM prints '
+                    'WHERE symbol=? AND day=? ORDER BY seq',
+                    (symbol, day.isoformat())).fetchall()
+            rows = [dict(zip(('ts', 'price', 'qty', 'side', 'side_rule', 'src', 'vol_delta', 'seq'), r))
+                    for r in got]
+        except Exception as e:
+            logger.debug(f"[TimeAndSales] archive read failed for {symbol} {day}: {e}")
+    seen = _derive_seen(rows)
+    buy = sell = bars = attributed = moved = 0
+    for r in rows:
+        qty = r['qty'] or 0
+        if r['src'] != 'tick':
+            bars += 1
+        elif (r.get('vol_delta') or 0) > 0:
+            attributed += qty
+            moved += r['vol_delta']
+        if r['side'] == 'buy':
+            buy += qty
+        elif r['side'] == 'sell':
+            sell += qty
+    matched = [r for r in rows if min_qty <= 0 or (r['qty'] or 0) >= min_qty]
+    over_limit = len(matched) > limit
+    return {
+        'historical': True,
+        'streaming': False,
+        'backfill_state': 'archived' if rows else 'unavailable:not archived',
+        'market_open': False,
+        'day': day.isoformat(),
+        'head_seq': rows[0]['seq'] if rows else 0,
+        'next_seq': (rows[-1]['seq'] + 1) if rows else 0,
+        'rows_held': len(rows),
+        'coverage': (attributed / moved) if moved >= _COVERAGE_MIN_VOLUME else None,
+        'epoch': 0,
+        'prints': seen['prints'],
+        'bars': bars,
+        'flow_buy': buy,
+        'flow_sell': sell,
+        'max_tick_qty': seen['max_tick_qty'],
+        'max_bar_qty': seen['max_bar_qty'],
+        'last_price': rows[-1]['price'] if rows else None,
+        'last_side': rows[-1]['side'] if rows else None,
+        'rows': matched[-limit:] if over_limit else matched,
+        'truncated': over_limit,
+    }
 
 
 def reset(symbol: Optional[str] = None) -> None:
