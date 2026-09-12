@@ -4031,6 +4031,12 @@ def run_second_candle_optimise_status(task_id):
 # how far back it reached. Cached sessions cost nothing, so re-running simply
 # walks further.
 #
+# "Spend" is what Breeze was actually asked for — `history_requests_made` —
+# not the slices read. Until 2026-09-12 it was the latter, so a sweep over a
+# year already walked by a run charged its 1,000 cached slices against the
+# ceiling and dropped the oldest three months of sessions that would have cost
+# nothing at all.
+#
 # 1500 is generous on purpose — a run spends ~2 requests a contract-day and a
 # sweep ~9, so it is roughly 15 months of runs or 4 months of sweeps, and normal
 # use never reaches it.
@@ -4070,8 +4076,16 @@ class _Counter:
         self._lock = threading.Lock()
 
     def bump(self) -> int:
+        return self.add(1)
+
+    def add(self, n: int) -> int:
         with self._lock:
-            self._n += 1
+            self._n += int(n)
+            return self._n
+
+    @property
+    def value(self) -> int:
+        with self._lock:
             return self._n
 
 
@@ -4094,22 +4108,36 @@ class _Budget:
 
     def __init__(self, total: int):
         self._left = int(total)
-        self._lock = threading.Lock()
+        self._in_flight = 0
+        self._cv = threading.Condition()
 
     def take(self, legs: int) -> bool:
-        """Reserve a whole session, or refuse it because the budget is gone."""
+        """Reserve a whole session, or refuse it because the budget is gone.
+
+        Refused only when it is REALLY gone: while other sessions are still in
+        flight their reservations are mostly about to be refunded (a cached
+        session hands back all of it), so this waits for them to settle before
+        answering. Without that, four workers each asking for a session's
+        reserve at once could see an empty budget that was full again a moment
+        later, and a session skipped that way was never retried.
+        """
         want = self.RESERVE * max(1, legs)
-        with self._lock:
+        with self._cv:
+            while self._left < want and self._in_flight:
+                self._cv.wait()
             if self._left < want:
                 return False
             self._left -= want
+            self._in_flight += 1
             return True
 
     def settle(self, legs: int, used: int) -> None:
         """Return the unused part of a reservation. A session that somehow cost
         more than it reserved simply refunds nothing."""
-        with self._lock:
+        with self._cv:
             self._left += max(0, self.RESERVE * max(1, legs) - int(used))
+            self._in_flight -= 1
+            self._cv.notify_all()
 
 
 def _ob_expiry_schedule(symbol: str):
@@ -4209,8 +4237,12 @@ def _ob_walk(adapter, symbol, exchange, plan, combos, cutoff, on_leg=None):
     answer inside the first one. See option_breakout_engine.walk_session.
     """
     fetch_notes: Dict[str, str] = {}
-    spent, ceiling = _Counter(), _Counter()
+    spent, ceiling, paid = _Counter(), _Counter(), _Counter()
     budget = _Budget(_OB_REQUEST_BUDGET)
+    # Reloaded once a run, not once a contract: the reload re-executes the
+    # module, and doing it 250 times from four threads at once was both wasted
+    # work and a race over the functions the other threads were inside.
+    engine = _ob_engine()
 
     def walk_leg_item(item):
         """`last_history_error` is thread-local, so a reason has to be read on
@@ -4219,19 +4251,23 @@ def _ob_walk(adapter, symbol, exchange, plan, combos, cutoff, on_leg=None):
         day = item['day']
         meta = {k: v for k, v in item.items() if k != 'candles'}
 
-        # The cheap index into the expensive series: one Breeze request, and it
-        # covers two days, so most of these are already cached by the leg before.
-        try:
-            minute_bars = adapter.historical_option_minutes(
-                symbol, item['expiry'], item['strike'], item['option_type'],
-                day, exchange_code=exchange)
-        except Exception as exc:      # noqa: BLE001 — the oracle is optional
-            logger.warning('[OptBreakout] %s minute index failed: %s', label, exc)
-            minute_bars = None
+        def minute_bars():
+            """The cheap index into the expensive series: one Breeze request.
+            Handed to the walk as a callable so it is only bought on a day the
+            first slice did not settle — see walk_session."""
+            try:
+                return adapter.historical_option_minutes(
+                    symbol, item['expiry'], item['strike'], item['option_type'],
+                    day, exchange_code=exchange)
+            except Exception as exc:  # noqa: BLE001 — the oracle is optional
+                logger.warning('[OptBreakout] %s minute index failed: %s', label, exc)
+                return None
 
         count = adapter.option_session_window_count(day)
-        for _ in range(count):
-            ceiling.bump()
+        ceiling.add(count)
+        # Everything this contract asks Breeze for happens on this thread, so
+        # the thread's counter before and after is exactly what it cost.
+        paid_before = adapter.history_requests_made()
 
         def fetch_window(i):
             try:
@@ -4246,8 +4282,11 @@ def _ob_walk(adapter, symbol, exchange, plan, combos, cutoff, on_leg=None):
             return bars
 
         try:
-            trades, fetched = _ob_engine().walk_session(
-                meta, fetch_window, count, minute_bars, combos, cutoff)
+            # Only a day that has closed has a complete minute series to close
+            # positions off; today's is still being written.
+            trades, fetched = engine.walk_session(
+                meta, fetch_window, count, minute_bars, combos, cutoff,
+                settled=day < datetime.now().date())
         except Exception as exc:      # noqa: BLE001
             logger.warning('[OptBreakout] %s walk failed: %s', label, exc)
             fetch_notes[label] = str(exc)
@@ -4259,19 +4298,22 @@ def _ob_walk(adapter, symbol, exchange, plan, combos, cutoff, on_leg=None):
             reason = adapter.last_history_error()
             if reason:
                 fetch_notes.setdefault(label, reason)
+        requests = adapter.history_requests_made() - paid_before
+        paid_total = paid.add(requests)
         if on_leg:
-            on_leg(label)
+            on_leg(label, paid_total)
         return {**meta, 'trades': trades, 'windows': len(fetched),
-                'had_data': bool(fetched), 'skipped': False}
+                'requests': requests, 'had_data': bool(fetched), 'skipped': False}
 
     def walk_day(items):
         """One session — every leg of it, or none. See _Budget."""
         if not budget.take(len(items)):
             return [{**{k: v for k, v in it.items() if k != 'candles'},
                      'trades': {c: None for c in combos}, 'windows': 0,
-                     'had_data': False, 'skipped': True} for it in items]
+                     'requests': 0, 'had_data': False, 'skipped': True}
+                    for it in items]
         out = [walk_leg_item(it) for it in items]
-        budget.settle(len(items), sum(r['windows'] for r in out))
+        budget.settle(len(items), sum(r['requests'] for r in out))
         return out
 
     # One task per SESSION, not per leg, so the budget can keep a day whole.
@@ -4290,26 +4332,20 @@ def _ob_walk(adapter, symbol, exchange, plan, combos, cutoff, on_leg=None):
         results = [r for f in futures for r in f.result()]
     results.sort(key=lambda r: (r['day'], r['option_type']))
 
-    # A settled slice never changes, so the ones this run bought are worth
-    # keeping past the next app restart — the run after it pays nothing.
-    try:
-        from trading_app.service.icici_data_service import flush_option_slice_cache
-        flush_option_slice_cache()
-    except Exception as exc:          # noqa: BLE001 — a cache write is never fatal
-        logger.warning('[OptBreakout] slice cache flush failed: %s', exc)
-
     ran = [r for r in results if not r['skipped']]
     stats = {
-        'windows':     spent.bump() - 1,
-        'windows_max': ceiling.bump() - 1,
+        'windows':     spent.value,
+        'windows_max': ceiling.value,
+        'requests':    paid.value,
         'sessions_run':     len({r['day'] for r in ran}),
         'sessions_skipped': len({r['day'] for r in results if r['skipped']}),
         'ran_from':    min((r['day'] for r in ran), default=None),
         'ran_to':      max((r['day'] for r in ran), default=None),
     }
-    logger.info('[OptBreakout] %d contract-days: %d of %d slices bought (%d%% saved)',
-                len(ran), stats['windows'], stats['windows_max'],
-                100 - (stats['windows'] * 100 // max(1, stats['windows_max'])))
+    logger.info('[OptBreakout] %d contract-days: %d of %d slices read (%d%% saved), '
+                '%d Breeze requests', len(ran), stats['windows'], stats['windows_max'],
+                100 - (stats['windows'] * 100 // max(1, stats['windows_max'])),
+                stats['requests'])
     return results, fetch_notes, stats
 
 
@@ -4376,6 +4412,10 @@ def _ob_task_response(task_id):
             'legs_done':  task.get('legs_done', 0),
             'legs_total': task.get('legs_total', 0),
             'days_total': task.get('days_total', 0),
+            # Real Breeze requests so far. What the wait actually is: Breeze is
+            # paced at 1.5/s app-wide, so this over `elapsed` says whether the
+            # run is cold (~1.5/s) or riding the slice cache (~0).
+            'requests':   task.get('requests', 0),
             'stage':      task.get('stage', ''),
             'elapsed':    round(_time.time() - task.get('started_at', _time.time())),
         })
@@ -4461,7 +4501,8 @@ def _run_option_breakout(task_id, _set, adapter, p):
     cutoff = p['exit_hour'] * 60 + p['exit_minute']
     results, fetch_notes, stats = _ob_walk(
         adapter, p['symbol'], exchange, plan, [combo], cutoff,
-        on_leg=lambda label: _set(legs_done=done.bump(), stage=f'Done {label}'))
+        on_leg=lambda label, paid: _set(legs_done=done.bump(), requests=paid,
+                                        stage=f'Done {label}'))
 
     ran = [r for r in results if not r['skipped']]
     trades = [r['trades'][combo] for r in ran if r['trades'][combo] is not None]
@@ -4511,6 +4552,7 @@ def _run_option_breakout(task_id, _set, adapter, p):
             # incremental walk earning its keep.
             'slices_bought':  stats['windows'],
             'slices_max':     stats['windows_max'],
+            'requests':       stats['requests'],
         },
     }
     with _ob_tasks_lock:
@@ -4590,7 +4632,8 @@ def _run_option_breakout_optimise(task_id, _set, adapter, p):
     cutoff = p['exit_hour'] * 60 + p['exit_minute']
     results, _notes, stats = _ob_walk(
         adapter, p['symbol'], exchange, plan, engine.COMBO_GRID, cutoff,
-        on_leg=lambda label: _set(legs_done=done.bump(), stage=f'Done {label}'))
+        on_leg=lambda label, paid: _set(legs_done=done.bump(), requests=paid,
+                                        stage=f'Done {label}'))
     if not any(r['had_data'] for r in results):
         raise _ObError('No contract returned candles for these sessions')
 
@@ -4625,6 +4668,7 @@ def _run_option_breakout_optimise(task_id, _set, adapter, p):
         'lot_value':           lot_value,
         'slices_bought':       stats['windows'],
         'slices_max':          stats['windows_max'],
+        'requests':            stats['requests'],
         'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
     }
     disk_cache = _load_opt_cache()

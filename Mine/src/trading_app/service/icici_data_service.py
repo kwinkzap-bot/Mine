@@ -44,9 +44,9 @@ session with filler bars Kite and Fyers do not return (see _in_session).
 import logging
 import os
 import pickle
+import sqlite3
 import threading
 import time
-from collections import OrderedDict
 from datetime import date as dt_date
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -1201,6 +1201,10 @@ class IciciDataServiceAdapter:
             'strike_price': info['strike_price'] or '',
         }
         _rate_limiter.wait()
+        # Tallied per thread so a caller that walks one contract on one thread
+        # can read off exactly what that contract cost — the option backtests'
+        # request budget charges these, never a cache hit.
+        _HIST_ERROR.requests = getattr(_HIST_ERROR, 'requests', 0) + 1
         try:
             resp = self.breeze.get_historical_data_v2(**kwargs)
         except Exception as exc:
@@ -1270,6 +1274,13 @@ class IciciDataServiceAdapter:
         """Why the calling thread's most recent historical_data() came back empty."""
         return getattr(_HIST_ERROR, 'msg', None)
 
+    @staticmethod
+    def history_requests_made() -> int:
+        """How many history requests THIS THREAD has actually sent to Breeze
+        since it started — a cache hit does not move it. Monotonic; take the
+        difference across a piece of work to learn what that work cost."""
+        return getattr(_HIST_ERROR, 'requests', 0)
+
 
 # ── Session verification ──────────────────────────────────────────────────
 
@@ -1326,102 +1337,125 @@ def _breeze_expiry(day: dt_date) -> str:
 # already paid for, so the same five sessions cost the same minutes again.
 #
 # Deliberately narrow: only the aggregated slices historical_option_window
-# produces go here, not the general chunk cache. The live algos' bars are
-# re-fetched constantly and would churn the file for nothing, and today's
-# still-forming slices are never written at all.
+# produces and the 1-minute sessions historical_option_minutes reads go here,
+# not the general chunk cache. The live algos' bars are re-fetched constantly
+# and would churn the store for nothing, and today's still-forming slices are
+# never written at all.
 #
-# Loaded lazily, so a live process that never runs a backtest never reads it.
+# SQLite rather than a pickled dict, and UNCAPPED, since 2026-09-12. The dict
+# was an LRU of 2,000 entries, sized as "~30 bars a slice"; a minute session is
+# 375 bars, so 660 of those held 86% of the bars, and a 252-contract run (~900
+# entries) or a sweep (~2,100) evicted the run before it. Measured: the same
+# six-month run took 208s at 10:58 and 235s again at 11:06 — nothing was warm.
+# One row per key on disk, read on demand, keeps nothing resident and has no
+# eviction, so a session bought once is free for good. An old pickle is
+# imported on first open and then renamed so it is not read again.
 _SLICE_CACHE_DIR = os.path.join(os.path.dirname(__file__), '..', '.cache')
 _SLICE_CACHE_FILE = os.path.join(_SLICE_CACHE_DIR, 'icici_option_slices_v1.pkl')
-# ~30 bars a slice, so this is ~60k candles on disk — a few hundred
-# contract-days at the 1-3 slices a run actually buys.
-_SLICE_CACHE_MAX = 2000
-_SLICE_SAVE_EVERY = 25
+_SLICE_CACHE_DB = os.path.join(_SLICE_CACHE_DIR, 'icici_option_slices.db')
 
-_slice_cache: 'OrderedDict[str, List[Dict[str, Any]]]' = OrderedDict()
 _slice_cache_lock = threading.Lock()
-_slice_cache_loaded = False
-_slice_cache_dirty = 0
+_slice_cache_db: Optional['sqlite3.Connection'] = None
+_slice_cache_failed = False
 
 
-def _slice_cache_ready() -> None:
-    """Read the file once, on the first backtest that asks."""
-    global _slice_cache_loaded
-    with _slice_cache_lock:
-        if _slice_cache_loaded:
-            return
-        _slice_cache_loaded = True
-        try:
-            if os.path.exists(_SLICE_CACHE_FILE):
-                with open(_SLICE_CACHE_FILE, 'rb') as fh:
-                    loaded = pickle.load(fh)
-                if isinstance(loaded, dict):
-                    _slice_cache.update(loaded)
-                    while len(_slice_cache) > _SLICE_CACHE_MAX:
-                        _slice_cache.popitem(last=False)
-                    logger.info('[IciciAdapter] loaded %d cached option slices from disk',
-                                len(_slice_cache))
-        except Exception as exc:      # noqa: BLE001 — a bad cache must never break a run
-            logger.warning('[IciciAdapter] option-slice cache unreadable: %s', exc)
-            _slice_cache.clear()
+def _slice_cache_conn() -> Optional['sqlite3.Connection']:
+    """The store, opened once on the first backtest that asks. None when the
+    disk is unusable — the run then simply pays Breeze, as it did before the
+    cache existed. Caller holds _slice_cache_lock."""
+    global _slice_cache_db, _slice_cache_failed
+    if _slice_cache_db is not None or _slice_cache_failed:
+        return _slice_cache_db
+    try:
+        os.makedirs(_SLICE_CACHE_DIR, exist_ok=True)
+        conn = sqlite3.connect(_SLICE_CACHE_DB, check_same_thread=False)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('CREATE TABLE IF NOT EXISTS slices ('
+                     ' key TEXT PRIMARY KEY, bars BLOB NOT NULL, saved REAL NOT NULL)')
+        conn.commit()
+        _slice_cache_db = conn
+    except Exception as exc:          # noqa: BLE001 — a bad cache must never break a run
+        logger.warning('[IciciAdapter] option-slice cache unusable: %s', exc)
+        _slice_cache_failed = True
+        return None
+    _slice_cache_import_pickle(conn)
+    return conn
+
+
+def _slice_cache_import_pickle(conn: 'sqlite3.Connection') -> None:
+    """Carry the pre-SQLite pickle's entries over, once, then rename it."""
+    if not os.path.exists(_SLICE_CACHE_FILE):
+        return
+    try:
+        with open(_SLICE_CACHE_FILE, 'rb') as fh:
+            loaded = pickle.load(fh)
+        if isinstance(loaded, dict):
+            now = time.time()
+            conn.executemany(
+                'INSERT OR IGNORE INTO slices (key, bars, saved) VALUES (?, ?, ?)',
+                ((k, pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL), now)
+                 for k, v in loaded.items() if isinstance(v, list)))
+            conn.commit()
+            logger.info('[IciciAdapter] imported %d cached option slices from the old pickle',
+                        len(loaded))
+        os.replace(_SLICE_CACHE_FILE, _SLICE_CACHE_FILE + '.imported')
+    except Exception as exc:          # noqa: BLE001
+        logger.warning('[IciciAdapter] old option-slice pickle not imported: %s', exc)
 
 
 def _slice_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:
-    _slice_cache_ready()
     with _slice_cache_lock:
-        hit = _slice_cache.get(key)
-        if hit is None:
+        conn = _slice_cache_conn()
+        if conn is None:
             return None
-        _slice_cache.move_to_end(key)          # LRU
-        return [dict(c) for c in hit]
+        try:
+            row = conn.execute('SELECT bars FROM slices WHERE key = ?', (key,)).fetchone()
+        except Exception as exc:      # noqa: BLE001
+            logger.warning('[IciciAdapter] option-slice cache read failed: %s', exc)
+            return None
+    if row is None:
+        return None
+    try:
+        bars = pickle.loads(row[0])
+    except Exception:                 # noqa: BLE001 — a corrupt row is a miss, not a crash
+        return None
+    return [dict(c) for c in bars]
 
 
 def _slice_cache_put(key: str, bars: List[Dict[str, Any]]) -> None:
-    _slice_cache_ready()
-    global _slice_cache_dirty
+    """Written through, one row a slice. A commit is ~1ms against the ~0.7s the
+    Breeze request behind it just cost, so there is nothing to batch, and a
+    run killed mid-way keeps everything it had bought."""
     with _slice_cache_lock:
-        if key in _slice_cache:
+        conn = _slice_cache_conn()
+        if conn is None:
             return
-        _slice_cache[key] = [dict(c) for c in bars]
-        while len(_slice_cache) > _SLICE_CACHE_MAX:
-            _slice_cache.popitem(last=False)
-        _slice_cache_dirty += 1
-        due = _slice_cache_dirty >= _SLICE_SAVE_EVERY
-        if due:
-            _slice_cache_dirty = 0
-    # Written off-thread and in batches: a backtest should not wait on the disk
-    # every slice, and a lost tail only costs the next run those few requests.
-    if due:
-        threading.Thread(target=_slice_cache_save, daemon=True).start()
+        try:
+            conn.execute('INSERT OR IGNORE INTO slices (key, bars, saved) VALUES (?, ?, ?)',
+                         (key, pickle.dumps(bars, protocol=pickle.HIGHEST_PROTOCOL),
+                          time.time()))
+            conn.commit()
+        except Exception as exc:      # noqa: BLE001
+            logger.warning('[IciciAdapter] option-slice cache write failed: %s', exc)
 
 
 def flush_option_slice_cache() -> None:
-    """Write the slice cache out now.
+    """Kept for the callers that flushed the pickle when a run finished. Every
+    put is committed as it happens now, so there is nothing left to write."""
+    return None
 
-    The debounce above is sized for a long walk, but a fast run buys only a
-    handful of slices and would otherwise never reach it — and those are exactly
-    the ones worth keeping, since the next run of the same sessions is then free.
-    Callers invoke this when a backtest finishes.
-    """
-    global _slice_cache_dirty
+
+def option_slice_cache_size() -> int:
+    """How many settled slices the store holds — for the coverage figures."""
     with _slice_cache_lock:
-        if not _slice_cache_dirty:
-            return
-        _slice_cache_dirty = 0
-    _slice_cache_save()
-
-
-def _slice_cache_save() -> None:
-    try:
-        os.makedirs(_SLICE_CACHE_DIR, exist_ok=True)
-        with _slice_cache_lock:
-            snapshot = dict(_slice_cache)
-        tmp = _SLICE_CACHE_FILE + '.tmp'
-        with open(tmp, 'wb') as fh:
-            pickle.dump(snapshot, fh, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(tmp, _SLICE_CACHE_FILE)     # never leave a half-written file
-    except Exception as exc:          # noqa: BLE001
-        logger.warning('[IciciAdapter] option-slice cache write failed: %s', exc)
+        conn = _slice_cache_conn()
+        if conn is None:
+            return 0
+        try:
+            return int(conn.execute('SELECT COUNT(*) FROM slices').fetchone()[0])
+        except Exception:             # noqa: BLE001
+            return 0
 
 
 def _chunk_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:

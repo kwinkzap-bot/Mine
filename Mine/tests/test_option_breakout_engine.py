@@ -245,11 +245,22 @@ def test_prepared_legs_drop_the_ones_that_came_back_empty():
 # ── Buying only part of the session ───────────────────────────────────────────
 # The optimisation that makes a run fast is also the one that could silently
 # change its results, so these assert EQUALITY with a whole-day fetch rather
-# than checking the walker in isolation.
+# than checking the walker in isolation — equality of every price, the reason
+# and the P&L. The one licensed difference is `exit_time`: a close read off the
+# 1-minute series is stamped with its minute, not its 30-second bar.
 
 from trading_app.Backtest.option_breakout_engine import (   # noqa: E402
     _simulate, walk_one, walk_session, walk_leg, DONE, NO_ENTRY_YET, OPEN,
 )
+
+
+def same_trade(walked, full):
+    """The walked trade is the whole-day trade, to the minute."""
+    if walked is None or full is None:
+        return walked == full
+    a, b = dict(walked), dict(full)
+    ta, tb = a.pop('exit_time'), b.pop('exit_time')
+    return a == b and ta[:16] == tb[:16]
 
 WINDOW_BARS = 30            # 900-second slice ÷ 30-second bar
 CUTOFF = 15 * 60 + 25
@@ -307,7 +318,7 @@ def test_a_trade_decided_in_the_first_slice_buys_only_that_slice():
     day = session([(100, 105, 95, 102), (102, 110, 100, 108),
                    (108, 112, 107, 111), (111, 135, 110, 133)])
     full, walked, calls = run_both(day)
-    assert walked == full
+    assert same_trade(walked, full)
     assert full['exit_reason'] == 'TG Hit'
     assert calls == [0]                    # 1 of 25
 
@@ -330,7 +341,7 @@ def test_a_trade_that_resolves_late_skips_the_quiet_slices_between():
     seq += [(111, 140, 110, 139)]                  # target, ~12:56
     day = session(seq)
     full, walked, calls = run_both(day)
-    assert walked == full
+    assert same_trade(walked, full)
     assert full['exit_reason'] == 'TG Hit'
     assert len(calls) < 8                          # not the 16 slices it spans
 
@@ -340,7 +351,7 @@ def test_a_position_open_to_the_close_buys_the_last_slice_not_every_slice():
     seq += [(111, 112, 105, 111)] * 600            # never resolves
     day = session(seq)
     full, walked, calls = run_both(day)
-    assert walked == full
+    assert same_trade(walked, full)
     assert full['exit_reason'] in ('Time Exit', 'EOD Exit')
     assert len(calls) < 10
 
@@ -355,7 +366,7 @@ def test_the_walk_matches_a_whole_day_fetch_across_the_grid(rr, buf, ci):
                    (108, 118, 99, 117), (117, 121, 96, 100),
                    (100, 145, 99, 144), (144, 146, 80, 82)])
     full, walked, _ = run_both(day, rr=rr, sl_buffer=buf, candle_index=ci)
-    assert walked == full
+    assert same_trade(walked, full)
 
 
 def test_the_walk_still_stops_early_with_no_minute_oracle():
@@ -365,7 +376,7 @@ def test_the_walk_still_stops_early_with_no_minute_oracle():
     fetch, count, calls = windowed(day)
     walked, _fetched = walk_one(meta, fetch, count, None, 2, 2.0, 1.0, CUTOFF)
     full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
-    assert walked == full
+    assert same_trade(walked, full)
     assert calls == [0]
 
 
@@ -398,8 +409,149 @@ def test_the_sweeps_combos_share_one_walk_and_still_match_a_whole_day_fetch():
 
     prepared = prepare_legs([{**meta, 'candles': day}])[0]
     for ci, rr, buf in combos:
-        assert trades[(ci, rr, buf)] == _simulate(prepared, ci, rr, buf, CUTOFF)
+        assert same_trade(trades[(ci, rr, buf)], _simulate(prepared, ci, rr, buf, CUTOFF))
 
     # One shared walk, not one per combo.
     assert len(set(calls)) == len(fetched)
     assert len(fetched) < count
+
+
+# ── The oracle is bought only when a slice leaves something undecided ─────────
+# The first slice always has to be read; on the days it settles the trade the
+# 1-minute series is a request spent on nothing. So the walk takes the oracle
+# as a callable and must not call it on those days — and must call it at most
+# once on the others.
+
+def oracle_for(day_bars):
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return minutes_from(day_bars)
+    return fetch, calls
+
+
+def test_a_day_settled_in_the_first_slice_never_buys_the_oracle():
+    day = session([(100, 105, 95, 102), (102, 110, 100, 108), (108, 135, 107, 133)])
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    oracle, asked = oracle_for(day)
+    walked, _ = walk_one(meta, fetch, count, oracle, 2, 2.0, 1.0, CUTOFF)
+    assert walked['exit_reason'] == 'TG Hit'
+    assert calls == [0] and asked == []
+
+
+def test_an_undecided_day_buys_the_oracle_once_and_still_matches():
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 400            # open well past the first slice
+    seq += [(111, 140, 110, 139)]                  # target, hours later
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    oracle, asked = oracle_for(day)
+    walked, _ = walk_one(meta, fetch, count, oracle, 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert same_trade(walked, full) and full['exit_reason'] == 'TG Hit'
+    assert asked == [1]                            # once, not once a slice
+    assert len(calls) < 8
+
+
+def test_an_oracle_that_returns_nothing_degrades_to_a_slice_walk():
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 40 + [(111, 140, 110, 139)]
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, lambda: None, 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert same_trade(walked, full)
+
+
+# ── Closing a position off the minute series ──────────────────────────────────
+# The exit is where a sweep's requests went: 48 combos close in ~5 different
+# slices a contract-day. A minute that touches only one of stop/target fixes
+# the close without its slice; one that touches both does not.
+
+def test_an_exit_the_minutes_settle_costs_no_extra_slice():
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 400
+    seq += [(111, 140, 110, 139)]                  # target alone, hours later
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, minutes_from(day), 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert same_trade(walked, full) and walked['exit_reason'] == 'TG Hit'
+    assert walked['exit_price'] == full['exit_price'] == full['target_price']
+    assert calls == [0]                            # the exit slice was never bought
+
+
+def test_a_minute_touching_both_levels_buys_its_slice_and_lets_the_bars_decide():
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 401            # odd: the next pair shares a minute
+    seq += [(111, 140, 110, 139), (139, 139, 90, 95)]   # target, then stop, one minute
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, minutes_from(day), 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert walked == full and walked['exit_reason'] == 'TG Hit'   # exact, bars bought
+    assert len(calls) == 2
+
+
+def test_a_dip_before_the_entry_bar_in_the_same_minute_is_not_a_stop():
+    # 09:16:00 dips to 90 (under the stop), 09:16:30 breaks out; the rule
+    # enters at 09:16:30 and only then watches the stop. The entry minute's
+    # low is 90, so reading that minute off the oracle would call it a stop.
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108),
+           (105, 106, 90, 104), (104, 112, 103, 111)]
+    seq += [(111, 112, 105, 111)] * 400 + [(111, 140, 110, 139)]
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, minutes_from(day), 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert full['exit_reason'] == 'TG Hit'
+    assert same_trade(walked, full)
+
+
+def test_a_time_exit_is_read_off_the_cutoff_minute_without_its_slice():
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 800            # never resolves
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, minutes_from(day), 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert full['exit_reason'] == 'Time Exit'
+    assert same_trade(walked, full)
+    assert calls == [0]
+
+
+def test_an_unsettled_day_does_not_call_a_quiet_tail_the_close():
+    """Today's session: the minute series stops where the day has got to, so a
+    position still open must not be booked as a time exit off it."""
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 100
+    day = bars(seq)                                # a partial day: 103 bars
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, minutes_from(day), 2, 2.0, 1.0, CUTOFF,
+                         settled=False)
+    assert walked is None or walked['exit_reason'] not in ('Time Exit',)
+
+
+def test_a_touch_by_a_single_tick_is_left_to_the_bars():
+    """Breeze's minute and second series disagree by a tick now and then, so a
+    minute that only just reaches a level buys its slice rather than closing
+    the trade on a print the bars may never have seen."""
+    seq = [(100, 105, 95, 102), (102, 110, 100, 108), (108, 112, 107, 111)]
+    seq += [(111, 112, 105, 111)] * 401
+    seq += [(111, 132.0, 110, 131), (131, 131, 130, 130)]   # target 132.0, touched exactly
+    day = session(seq)
+    meta = {k: v for k, v in leg(None).items() if k != 'candles'}
+    fetch, count, calls = windowed(day)
+    walked, _ = walk_one(meta, fetch, count, minutes_from(day), 2, 2.0, 1.0, CUTOFF)
+    full = _simulate(prepare_legs([{**meta, 'candles': day}])[0], 2, 2.0, 1.0, CUTOFF)
+    assert walked == full and full['exit_reason'] == 'TG Hit' and full['target_price'] == 132.0
+    assert len(calls) == 2                         # the bars were consulted

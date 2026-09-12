@@ -609,3 +609,69 @@ def test_candles_stay_on_breeze_when_quotes_have_failed_over(loaded_master, monk
 
     assert adapter.historical_data('NSE:NIFTY50-INDEX', '2026-09-07', '2026-09-07', 'minute')
     assert seen['root'] == 'NIFTY'
+
+
+# ── Option-slice disk cache ───────────────────────────────────────────────
+# A settled slice is bought once and kept for good. The store used to be a
+# 2,000-entry LRU, which a single six-month run overflowed — so the "warm"
+# re-run paid Breeze again. These pin that nothing is evicted and that the
+# old pickle's entries survive the move.
+
+import os
+import pickle
+
+
+@pytest.fixture
+def slice_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(ids, '_SLICE_CACHE_DIR', str(tmp_path))
+    monkeypatch.setattr(ids, '_SLICE_CACHE_DB', str(tmp_path / 'slices.db'))
+    monkeypatch.setattr(ids, '_SLICE_CACHE_FILE', str(tmp_path / 'old.pkl'))
+    monkeypatch.setattr(ids, '_slice_cache_db', None)
+    monkeypatch.setattr(ids, '_slice_cache_failed', False)
+    yield tmp_path
+    if ids._slice_cache_db is not None:
+        ids._slice_cache_db.close()
+
+
+def _slice(n):
+    return [{'date': datetime(2025, 1, 2, 9, 15) + timedelta(seconds=30 * i), 'open': 1.0 + i,
+             'high': 2.0 + i, 'low': 0.5 + i, 'close': 1.5 + i, 'volume': 10}
+            for i in range(n)]
+
+
+def test_a_cached_slice_comes_back_as_it_went_in_and_is_a_copy(slice_store):
+    bars = _slice(30)
+    assert ids._slice_cache_get('k') is None
+    ids._slice_cache_put('k', bars)
+    got = ids._slice_cache_get('k')
+    assert got == bars
+    got[0]['high'] = 999                      # a caller's edit must not leak back
+    assert ids._slice_cache_get('k')[0]['high'] == 2.0
+
+
+def test_nothing_is_evicted_however_much_a_run_buys(slice_store):
+    for i in range(3000):                      # more than the old LRU ever held
+        ids._slice_cache_put(f'k{i}', _slice(1))
+    assert ids._slice_cache_get('k0') is not None
+    assert ids.option_slice_cache_size() == 3000
+
+
+def test_a_put_survives_a_reopen_without_a_flush(slice_store):
+    ids._slice_cache_put('k', _slice(3))
+    ids._slice_cache_db.close()
+    ids._slice_cache_db = None
+    assert ids._slice_cache_get('k') == _slice(3)
+
+
+def test_the_old_pickle_is_imported_once_then_set_aside(slice_store):
+    old = str(slice_store / 'old.pkl')
+    with open(old, 'wb') as fh:
+        pickle.dump({'legacy': _slice(2)}, fh)
+    assert ids._slice_cache_get('legacy') == _slice(2)
+    assert not os.path.exists(old) and os.path.exists(old + '.imported')
+
+
+def test_a_first_put_wins_and_a_second_is_ignored(slice_store):
+    ids._slice_cache_put('k', _slice(1))
+    ids._slice_cache_put('k', _slice(5))
+    assert len(ids._slice_cache_get('k')) == 1

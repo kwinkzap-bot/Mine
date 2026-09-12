@@ -1045,11 +1045,34 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // The 30-Sec Option Breakout run and sweep share one progress line. The
+    // wait is Breeze, paced at 1.5 requests/s for the whole app, so the line
+    // says what has actually been asked for and how long the rest should take
+    // at the pace so far — a cold year is minutes, a cached one seconds, and
+    // without the estimate both looked hung.
+    function _obProgressLine(data) {
+        const elapsed = data.elapsed || 0;
+        const total = data.legs_total || 0;
+        const done  = data.legs_done  || 0;
+        const reqs  = data.requests   || 0;
+        let line = `${elapsed}s elapsed`;
+        if (!total) return line + ' · starting…';
+        line += ` · ${done}/${total} contracts`;
+        if (done >= 3 && done < total) {
+            const left = Math.round(elapsed / done * (total - done));
+            line += ` · ≈ ${left >= 90 ? Math.round(left / 60) + ' min' : left + 's'} left`;
+        }
+        if (reqs) line += ` · ${reqs} Breeze req${elapsed ? ' @ ' + (reqs / elapsed).toFixed(1) + '/s' : ''}`;
+        if (data.stage) line += ` · ${data.stage}`;
+        return line;
+    }
+
     // ── 30-Sec Option Breakout — start + poll ───────────────────────────
     // The server fetches one contract's premiums per Breeze request at 1.5
     // req/s, so a run is minutes, not seconds. It answers with a task id and
     // this walks it: every poll says which contract just landed, because a
     // silent three-minute spinner is indistinguishable from a hung request.
+
     function cancelObRun() {
         _obRun += 1;
         if (_obAbort) {
@@ -1131,12 +1154,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(data => {
                     if (myRun !== _obRun) return;
                     if (data.status === 'running') {
-                        const total = data.legs_total || 0;
-                        const done  = data.legs_done  || 0;
-                        const bar   = total ? `${done}/${total} contracts` : 'starting…';
-                        _showOptLoader('Running option backtest',
-                                       `${data.elapsed || 0}s elapsed · ${bar}`
-                                       + (data.stage ? ` · ${data.stage}` : ''));
+                        _showOptLoader('Running option backtest', _obProgressLine(data));
                         setTimeout(tick, 2000);
                         return;
                     }
@@ -1333,12 +1351,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(data => {
                     if (myRun !== _obOptRun) return;
                     if (data.status === 'running') {
-                        const total = data.legs_total || 0;
-                        const done  = data.legs_done  || 0;
-                        _showOptLoader('Finding best params…',
-                                       `${data.elapsed || 0}s elapsed`
-                                       + (total ? ` · ${done}/${total} contracts` : '')
-                                       + (data.stage ? ` · ${data.stage}` : ''));
+                        _showOptLoader('Finding best params…', _obProgressLine(data));
                         setTimeout(tick, 2000);
                         return;
                     }

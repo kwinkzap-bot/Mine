@@ -147,17 +147,19 @@ class LegWalk:
 
     `trade` is the finished trade, or None. `state` says whether that None is
     final. `range_high` is filled as soon as the range candle is known, and
-    `sl`/`tp`/`entry_min` once a position is open — those are what the
-    incremental fetcher asks the cheap 1-minute series about.
+    `sl`/`tp`/`entry_min`/`base` once a position is open — those are what the
+    incremental fetcher asks the cheap 1-minute series about, and `base` is
+    the entry it closes the trade against when that series is enough.
     """
 
-    __slots__ = ('trade', 'state', 'sl', 'tp', 'range_high', 'entry_min')
+    __slots__ = ('trade', 'state', 'sl', 'tp', 'range_high', 'entry_min', 'base')
 
     def __init__(self, trade=None, state=DONE, sl=None, tp=None,
-                 range_high=None, entry_min=None):
+                 range_high=None, entry_min=None, base=None):
         self.trade, self.state = trade, state
         self.sl, self.tp = sl, tp
         self.range_high, self.entry_min = range_high, entry_min
+        self.base = base
 
 
 def walk_leg(leg, candle_index, rr, sl_buffer, cutoff, whole_session=True):
@@ -232,7 +234,8 @@ def walk_leg(leg, candle_index, rr, sl_buffer, cutoff, whole_session=True):
         # Still open at the end of what we have: one of the day's unfetched
         # bars decides this one.
         return LegWalk(state=OPEN, sl=sl_level, tp=tp_level,
-                       range_high=range_high, entry_min=int(tmins[entry_i]))
+                       range_high=range_high, entry_min=int(tmins[entry_i]),
+                       base=base)
 
     return done(stamps[n - 1], closes[n - 1], 'EOD Exit')
 
@@ -400,28 +403,113 @@ def optimise_option_breakout(legs, exit_hour: int = 15, exit_minute: int = 25,
 # could have changed the outcome, so the trade this produces is the one the
 # whole-day fetch produces — `tests/test_option_breakout_engine.py` asserts that
 # equality against a full fetch rather than trusting the argument.
+#
+# The oracle itself is bought LAZILY: the first slice always has to be read (the
+# range candle is in it), and on the days it decides the trade — about half of
+# the contract-days in the slice cache on 2026-09-12 — the minute series is
+# never needed. Buying it up front made those days two requests instead of one.
 
 _WINDOW_SECONDS = 900       # icici_data_service._SECOND_WINDOW_SECONDS
 
 
 def _minute_index(minute_bars):
-    """The 1-minute oracle as plain arrays: (minutes-since-midnight, high, low)."""
+    """The 1-minute oracle as plain arrays:
+    (minutes-since-midnight, high, low, open, close, stamp)."""
     df = _frame(minute_bars)
     if df is None or df.empty:
         return None
     return ((df.index.hour * 60 + df.index.minute).to_numpy(),
             df['high'].to_numpy(dtype=float),
-            df['low'].to_numpy(dtype=float))
+            df['low'].to_numpy(dtype=float),
+            df['open'].to_numpy(dtype=float),
+            df['close'].to_numpy(dtype=float),
+            df.index.strftime('%Y-%m-%d %H:%M:%S').to_numpy())
 
 
 def _first_minute(index, after_min, predicate):
     """The first minute at/after `after_min` whose (high, low) satisfies
     `predicate`, or None. None means the rest of the day is provably quiet."""
-    tmins, highs, lows = index
+    tmins, highs, lows = index[0], index[1], index[2]
     for i in range(len(tmins)):
         if tmins[i] >= after_min and predicate(highs[i], lows[i]):
             return int(tmins[i])
     return None
+
+
+# What closing a position off the 1-minute series alone came to.
+CLOSED, AMBIGUOUS, UNKNOWN = 'closed', 'ambiguous', 'unknown'
+
+# How far past a level a minute must reach before its word is taken without the
+# bars: more than one option tick (₹0.05). Replayed over the 2023 sweep on
+# 2026-09-12 (444 contract-days, 21,312 combo-trades): at 0 the walk read 1.43
+# slices a contract-day against the old 3.99 but one trade flipped SL→target on
+# a minute high the second-bars never printed; at 0.10 it reads 1.70 and every
+# price, reason and P&L matches the whole-day fetch. 0.25 costs 1.99 and buys
+# nothing more.
+_ORACLE_MARGIN = 0.10
+
+
+def _close_from_minutes(index, walk, after_min, cutoff, settled):
+    """Close an OPEN position from the 1-minute series when that is provably
+    the close the 30-second bars would give.
+
+    Returns (CLOSED, trade), (AMBIGUOUS, minute) or (UNKNOWN, None).
+
+    Only minutes from `after_min` on are read — the first minute the walk has
+    NO bars for. Every earlier bar was checked at full resolution, and the
+    entry minute in particular must not be re-read off its minute bar: a
+    30-second bar before the entry bar may have dipped under the stop, which
+    the rule ignores and the minute's low would not.
+
+    The 30-second walk closes at the FIRST bar that touches the stop or the
+    target, at that level, and the minute series says which minute that bar is
+    in. When the minute touched only ONE of the two levels the close is fixed:
+    the price is the level, the reason follows, and no earlier bar could have
+    closed it (its minute would have touched something). A minute that touched
+    BOTH is the one case the bars are needed for — which came first, and the
+    rule's SL-before-target read inside a bar — so that minute is handed back
+    for its slice to be bought. A cut-off exit is the open of the first minute
+    at/after the cut-off, which is the open of that minute's first bar, and
+    the close-of-day exit is the last minute's close: both are the same number
+    in either series.
+
+    What is lost is 30 seconds of resolution on `exit_time` — the close is
+    stamped with its minute. Every price, the reason and the P&L are the ones
+    the whole-day fetch gives.
+
+    `settled` says the series is a complete session. A day still trading has
+    minutes nobody has seen yet, so "nothing touched before the cut-off" is
+    only an answer when the series actually reaches the cut-off.
+    """
+    tmins, highs, lows, opens, closes, stamps = index
+    n = len(tmins)
+    for i in range(n):
+        t = tmins[i]
+        if t < after_min:
+            continue
+        if t >= cutoff:
+            return CLOSED, _make_trade(walk.base, stamps[i], opens[i], 'Time Exit')
+        hit_sl, hit_tp = lows[i] <= walk.sl, highs[i] >= walk.tp
+        if hit_sl and hit_tp:
+            return AMBIGUOUS, int(t)
+        # A touch by no more than a tick is also handed to the bars. Breeze's
+        # minute series and its 1-second series are not built from the same
+        # prints — measured on the 2023 sweep, one minute in ~20,000 showed a
+        # high a tick over the target that no second-bar had — and a close
+        # decided on a print the bars never saw would be the wrong close.
+        if (hit_sl and lows[i] > walk.sl - _ORACLE_MARGIN) or \
+           (hit_tp and highs[i] < walk.tp + _ORACLE_MARGIN):
+            return AMBIGUOUS, int(t)
+        if hit_sl:
+            return CLOSED, _make_trade(walk.base, stamps[i], walk.sl, 'SL Hit')
+        if hit_tp:
+            return CLOSED, _make_trade(walk.base, stamps[i], walk.tp, 'TG Hit')
+    # Nothing touched and no cut-off minute: the close of the day closes it —
+    # provided the series really reaches the bars the walk already has, else
+    # its last close is not the day's.
+    if settled and n and tmins[n - 1] >= after_min - 1:
+        return CLOSED, _make_trade(walk.base, stamps[n - 1], closes[n - 1], 'EOD Exit')
+    return UNKNOWN, None
 
 
 def _window_of(minute_of_day, session_open_min=9 * 60 + 15):
@@ -438,7 +526,8 @@ def _minute_of_bar(candle):
     return int(str(stamp)[11:13]) * 60 + int(str(stamp)[14:16])
 
 
-def walk_session(meta, fetch_window, window_count, minute_bars, combos, cutoff):
+def walk_session(meta, fetch_window, window_count, minute_bars, combos, cutoff,
+                 settled=True):
     """Simulate one contract-day, buying slices only as the rules need them.
 
     `combos` is a list of (candle_index, rr_ratio, sl_buffer) — one for a plain
@@ -451,11 +540,32 @@ def walk_session(meta, fetch_window, window_count, minute_bars, combos, cutoff):
     is what the run actually paid for — the number this mechanism exists to
     shrink.
 
+    `minute_bars` is the day's 1-minute series, or a zero-argument callable
+    that fetches it. The callable is invoked at most once, and only after a
+    slice has left a combo undecided — a day settled inside the first slice
+    never asks for it. It must return [] or None on failure rather than raise.
+    `settled` says the day is over, so that series is complete.
+
+    An open position is closed off the minute series whenever that is enough
+    (see _close_from_minutes) rather than by buying the slice its exit is in.
+    Measured on the 2023 sweep, 2026-09-12: the 48 combos' exits landed in
+    ~2.3 slices a contract-day over the ~2 every run reads anyway, and nearly
+    all of those were readable off the minutes the walk already had.
+
     Degrades safely: with no usable minute index it still walks slice by slice
     and stops once everything is decided, which on its own was 38 requests of
     250 in the measurement above.
     """
-    index = _minute_index(minute_bars)
+    oracle = minute_bars if callable(minute_bars) else (lambda: minute_bars)
+    index, index_known = None, False
+
+    def minute_index():
+        nonlocal index, index_known
+        if not index_known:
+            index_known = True
+            index = _minute_index(oracle())
+        return index
+
     candles, fetched = [], []
     trades = {c: None for c in combos}
     pending = list(combos)
@@ -484,6 +594,7 @@ def walk_session(meta, fetch_window, window_count, minute_bars, combos, cutoff):
             if walk.state == DONE:
                 trades[combo] = walk.trade
                 continue
+            index = minute_index()           # first undecided combo pays for it
             if index is None or walk.range_high is None:
                 still_pending.append(combo)      # no oracle — take the next slice
                 next_i = min(next_i, i)
@@ -494,12 +605,20 @@ def walk_session(meta, fetch_window, window_count, minute_bars, combos, cutoff):
                 if trigger is None or trigger >= cutoff:
                     continue                 # no bar left can trigger it
             else:                            # OPEN — a position to close
-                trigger = _first_minute(
-                    index, walk.entry_min,
-                    lambda h, l, sl=walk.sl, tp=walk.tp: l <= sl or h >= tp)
-                # If nothing closes it, the cut-off or the close does — and both
-                # live in the session's last slice.
-                trigger = cutoff if trigger is None else min(trigger, cutoff)
+                verdict, what = _close_from_minutes(index, walk, last_min + 1,
+                                                    cutoff, settled)
+                if verdict == CLOSED:
+                    trades[combo] = what
+                    continue
+                if verdict == AMBIGUOUS:
+                    trigger = what           # both levels in one minute: buy it
+                else:
+                    # A day still trading: whatever closes it is in bars nobody
+                    # has, so take the session slice by slice.
+                    trigger = _first_minute(
+                        index, last_min + 1,
+                        lambda h, l, sl=walk.sl, tp=walk.tp: l <= sl or h >= tp)
+                    trigger = cutoff if trigger is None else min(trigger, cutoff)
             still_pending.append(combo)
             next_i = min(next_i, max(i, _window_of(trigger)))
 
@@ -511,9 +630,9 @@ def walk_session(meta, fetch_window, window_count, minute_bars, combos, cutoff):
 
 
 def walk_one(meta, fetch_window, window_count, minute_bars,
-             candle_index, rr, sl_buffer, cutoff):
+             candle_index, rr, sl_buffer, cutoff, settled=True):
     """`walk_session` for a single parameter set — what a plain run needs."""
     combo = (candle_index, rr, sl_buffer)
     trades, fetched = walk_session(meta, fetch_window, window_count, minute_bars,
-                                   [combo], cutoff)
+                                   [combo], cutoff, settled=settled)
     return trades[combo], fetched
