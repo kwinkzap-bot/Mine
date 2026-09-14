@@ -126,10 +126,10 @@ const _OIP_LINE_DEFAULTS = {
     // (see the flag below) — a neutral grey, so a flat histogram reads as
     // size only and never as a direction the candles don't agree with.
     volFlat: { color: '#8a8f98' },
-    // A bar that holds a single Time & Sales print at or above the server's
-    // RS_BIG_PRINT_QTY (8,000 contracts) — Round Strike's future volume only.
-    // Painted solid, whatever the candle did, so the print is impossible to
-    // miss in a 20%-tall band.
+    // A bar that holds a single Time & Sales print at or above the size in
+    // the popup's box (oipBigPrintQty, 8,000 contracts unless changed) —
+    // Round Strike's future volume only. Painted solid, whatever the candle
+    // did, so the print is impossible to miss in a 20%-tall band.
     volBig: { color: '#2563eb' },
     // Banknifty's overlay defaults to the PE chart's candle colours (violet up,
     // dark down), which also keeps it clear of the green/red pair above — the
@@ -251,6 +251,30 @@ function _oipLoadVolDirColor() {
 }
 _oipLoadVolDirColor();
 function oipVolDirColorOn() { return _oipVolDirColor; }
+
+/* Big print size — the single Time & Sales print, in contracts, that paints a
+   Round Strike volume bar the volBig colour. The server does the tagging (see
+   RS_BIG_PRINT_QTY in routes/api.py); this is the figure the block sends it as
+   `big_qty`. ONE page-wide number, mirrored as a box beside the volBig swatch
+   in every Indicator popup whose chart can show the bar, on the same "one
+   control, every chart" rule as the swatches. Loaded straight from
+   localStorage for the same reason as Vol Direction Color above: the block's
+   first request goes out before the popup is initialised. */
+const _OIP_BIG_PRINT_QTY_STORAGE_KEY = 'oip-big-print-qty';
+const _OIP_BIG_PRINT_QTY_DEFAULT = 8000;
+let _oipBigPrintQty = _OIP_BIG_PRINT_QTY_DEFAULT;
+function _oipLoadBigPrintQty() {
+    try { _oipBigPrintQty = _oipParseBigPrintQty(localStorage.getItem(_OIP_BIG_PRINT_QTY_STORAGE_KEY)); }
+    catch (e) { _oipBigPrintQty = _OIP_BIG_PRINT_QTY_DEFAULT; }
+}
+// Whole contracts, at least one; anything else falls back to the default so a
+// cleared box can never send the server a threshold that tags every bar.
+function _oipParseBigPrintQty(raw) {
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) && n >= 1 ? n : _OIP_BIG_PRINT_QTY_DEFAULT;
+}
+_oipLoadBigPrintQty();
+function oipBigPrintQty() { return _oipBigPrintQty; }
 
 /* Volume-weighted shading — opt-in per call site via oipSetVolumeBars'
    `intensity`, on for the Round Strike block. Squeezed into a 20%-tall band,
@@ -534,6 +558,30 @@ function _oipWireVolDirColorCheckbox(cb) {
     });
 }
 
+// Wires an ALREADY-IN-THE-DOM <input type="number" class="oip-big-print-qty-inp">.
+// Same one-setting-many-copies shape as the checkbox above. A change is a new
+// question for the server, not a repaint — the tag lives on the bars it sends
+// — so the Round Strike block is asked to fetch again straight away (its live
+// poll would pick the figure up within a second anyway; the historical block
+// on Replay would not, having nothing to poll for). `change`, not `input`:
+// half-typed figures must not each fire a request.
+function _oipWireBigPrintQtyInput(inp) {
+    if (inp.dataset.wired) return;
+    inp.dataset.wired = '1';
+    inp.value = oipBigPrintQty();
+    inp.addEventListener('click', e => e.stopPropagation());
+    inp.addEventListener('keydown', e => e.stopPropagation());
+    inp.addEventListener('change', e => {
+        e.stopPropagation();
+        _oipBigPrintQty = _oipParseBigPrintQty(inp.value);
+        inp.value = _oipBigPrintQty;
+        try { localStorage.setItem(_OIP_BIG_PRINT_QTY_STORAGE_KEY, String(_oipBigPrintQty)); } catch (err) {}
+        document.querySelectorAll('.oip-big-print-qty-inp')
+            .forEach(other => { if (other !== inp) other.value = _oipBigPrintQty; });
+        if (typeof oipRSScheduleLoop === 'function') oipRSScheduleLoop(0);
+    });
+}
+
 function _oipBuildColorInput(key) {
     const inp = document.createElement('input');
     inp.type = 'color';
@@ -665,6 +713,7 @@ function oipInjectLineStyleSelectors() {
     document.querySelectorAll('.oip-line-width-sel').forEach(_oipWireWidthSelect);
     document.querySelectorAll('.oip-line-opacity-sel').forEach(_oipWireOpacitySelect);
     document.querySelectorAll('.oip-vol-dircolor-cb').forEach(_oipWireVolDirColorCheckbox);
+    document.querySelectorAll('.oip-big-print-qty-inp').forEach(_oipWireBigPrintQtyInput);
 }
 
 // key -> array of persistent series objects (addSeries-based, reused via

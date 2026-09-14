@@ -17,7 +17,9 @@ Column order is the workbook's, by POSITION (its headers carry typos —
 
     Date | Price vs Daily CPR | Price vs Hourly CPR | CPR Type | CPR Direction
     | 1st 5min candle | Boxes | Trade Type | Entry | Target | SL | SL or Tar
-    | P&L (formula, recomputed here) | Reason
+    | P&L (formula, recomputed here; a plain number on an EOD square-off) | Reason
+    | Chart check (O, notes) | Setup (P, the setup candle's time, written by
+    propose_cpr_trades.py)
 
 A row is kept only when it carries an analysis (column B filled) — the
 workbook pre-fills a Date and a P&L formula on every future row, and those
@@ -61,9 +63,22 @@ def _num(v):
         return None
 
 
-def manual_pnl(trade, entry, target, sl, result):
+def _time(v):
+    """'09:30' from a string or a time/datetime cell, else None."""
+    if v in (None, ''):
+        return None
+    if hasattr(v, 'strftime'):
+        return v.strftime('%H:%M')
+    s = str(v).strip()
+    return s[:5] if len(s) >= 5 and s[2] == ':' else None
+
+
+def manual_pnl(trade, entry, target, sl, result, cell=None):
     """The sheet's P&L formula, signed: a Target is +|target - entry|, an SL
-    is -|sl - entry|; anything else (no trade, still open) is None."""
+    is -|sl - entry|. An EOD square-off has no formula — its P&L is the
+    number written in M (`cell`). Anything else is None."""
+    if result == 'EOD':
+        return _num(cell)
     if entry is None or target is None or not result:
         return None
     is_buy = target > entry
@@ -79,7 +94,7 @@ def import_sheet(path, symbol, sheet=None):
     ws = wb[sheet] if sheet else wb.worksheets[0]
     rows = []
     for r in ws.iter_rows(min_row=2, values_only=True):
-        r = list(r) + [None] * (14 - len(r))
+        r = list(r) + [None] * (16 - len(r))
         d = r[0]
         if not isinstance(d, datetime) or not _clean(r[1]):
             continue
@@ -99,8 +114,11 @@ def import_sheet(path, symbol, sheet=None):
             'target': target,
             'sl': sl,
             'result': result,
-            'pnl': manual_pnl(trade, entry, target, sl, result),
+            'pnl': manual_pnl(trade, entry, target, sl, result, r[12]),
             'reason': _clean(r[13]),
+            # P: the setup candle's time ("09:30") — the replay looks for
+            # the entry only after it. Blank on the hand-written rows.
+            'setup_time': _time(r[15]),
         })
     return {
         'symbol': symbol,

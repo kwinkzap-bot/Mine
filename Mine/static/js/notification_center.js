@@ -118,6 +118,31 @@
             </table>`;
     }
 
+    // One Round Strike bar that turned blue — the single print that did it.
+    function renderBigPrint(payload) {
+        const tone = payload.side === 'SELL' ? 'neg' : 'pos';
+        const num = v => (v === null || v === undefined || v === '') ? '—' : escapeHtml(Number(v).toLocaleString('en-IN'));
+        const rows = [
+            ['Print', `${num(payload.qty)} contracts @ ₹${num(payload.price)}` +
+                (payload.side ? ` <span class="notif-detail-${tone}">${escapeHtml(payload.side)}</span>` : '')],
+            ['At', escapeHtml(payload.print_time || '—')],
+            ['Bar', `${escapeHtml(payload.bar_time || '—')} (${escapeHtml(payload.interval || '—')})`],
+            ['Bar volume', num(payload.bar_volume)],
+            ['Threshold', `${num(payload.threshold)} contracts`],
+            ['Contract', escapeHtml(payload.contract || '—')],
+            ['Source', escapeHtml(payload.source === 'bar' ? 'backfilled 1s bar' : 'live tick')],
+        ];
+        return `
+            <div class="notif-modal-section-title">${escapeHtml(payload.symbol)} future</div>
+            <table class="notif-detail-table">
+                ${rows.map(([label, valueHtml]) => `
+                    <tr>
+                        <td class="notif-detail-label">${escapeHtml(label)}</td>
+                        <td class="notif-detail-value">${valueHtml}</td>
+                    </tr>`).join('')}
+            </table>`;
+    }
+
     async function openDetail(id) {
         closeDropdown();
         try {
@@ -137,6 +162,8 @@
             let html = '';
             if (n.category === 'ema_confluence_entry') {
                 html = renderEmaEntry(payload);
+            } else if (n.category === 'rs_big_print') {
+                html = renderBigPrint(payload);
             } else {
                 html += renderSignalTable('BUY signals', payload.buy);
                 html += renderSignalTable('SELL signals', payload.sell);

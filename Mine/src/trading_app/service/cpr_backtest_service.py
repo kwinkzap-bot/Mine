@@ -60,6 +60,8 @@ LEVEL_NEAR_PCT = 0.25         # ... within 0.25% counts as "near"
 LEVEL_AT_PCT = 0.08
 LEVEL_REASON_NEAR_PCT = 0.3
 
+SQUARE_OFF = '15:15'          # a trade still open is squared off here
+
 # Fyers serves at most 99 days of intraday bars per request.
 INTRADAY_CHUNK_DAYS = 90
 
@@ -228,16 +230,21 @@ def manual_colour(text: Optional[str]) -> Optional[str]:
 
 
 def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Optional[float],
-                   target: Optional[float], sl: Optional[float]) -> Dict[str, Any]:
+                   target: Optional[float], sl: Optional[float],
+                   setup_time: Optional[str] = None) -> Dict[str, Any]:
     """What the session's bars say the trade did: fill at the first bar after
-    09:15 that trades through the entry, then whichever of target / SL a
-    later bar reaches first. Bar-level, so a bar reaching both is 'Both'
-    rather than a guess."""
+    the setup candle (09:15 unless `setup_time` says otherwise) that trades
+    through the entry, then whichever of target / SL a later bar reaches
+    first. Bar-level, so a bar reaching both is 'Both' rather than a guess.
+    Still open at SQUARE_OFF -> 'EOD' at that price."""
     if not trade or entry is None or target is None or sl is None:
         return {'result': None, 'pnl': None, 'entry_time': None, 'exit_time': None}
     is_buy = trade == 'BUY'
     filled_at = None
-    for i, b in enumerate(bars[1:], start=1):     # the 09:15 candle is the setup, not a fill
+    start = 1                                       # the 09:15 candle is the setup, not a fill
+    if setup_time:
+        start = next((i + 1 for i, b in enumerate(bars) if b['time'] >= setup_time), len(bars))
+    for i, b in enumerate(bars[start:], start=start):
         if filled_at is None:
             if b['low'] <= entry <= b['high']:
                 filled_at = i
@@ -256,9 +263,12 @@ def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Opti
                     'entry_time': bars[filled_at]['time'], 'exit_time': b['time']}
     if filled_at is None:
         return {'result': 'No fill', 'pnl': None, 'entry_time': None, 'exit_time': None}
-    last = bars[-1]['close']
-    return {'result': 'Open', 'pnl': _r(last - entry if is_buy else entry - last),
-            'entry_time': bars[filled_at]['time'], 'exit_time': None}
+    # Neither side reached: squared off at 15:15 — the price at that moment
+    # is the 15:15 bar's open (the last close when the day ends earlier).
+    sq = next((b for b in bars if b['time'] >= SQUARE_OFF), None)
+    exit_px, exit_t = (sq['open'], sq['time']) if sq else (bars[-1]['close'], bars[-1]['time'])
+    return {'result': 'EOD', 'pnl': _r(exit_px - entry if is_buy else entry - exit_px),
+            'entry_time': bars[filled_at]['time'], 'exit_time': exit_t}
 
 
 # ── why the trade was placed where it was ─────────────────────────────────
@@ -312,6 +322,32 @@ def _fmt_px(v: Optional[float]) -> str:
     return '—' if v is None else f'{v:,.0f}'
 
 
+_CPR_LINES = {'TC', 'P', 'BC', 'WTC', 'WP', 'WBC'}
+CPR_MERGE_GAP_PCT = 0.1     # bands overlapping, or within 0.1% of price, read as one zone
+
+
+def cprs_merged(ladder: List[tuple]) -> bool:
+    """True when the daily CPR band and the weekly one overlap or nearly touch."""
+    lv = dict(ladder)
+    if not all(k in lv for k in ('BC', 'TC', 'WBC', 'WTC')):
+        return False
+    gap = max(lv['BC'], lv['WBC']) - min(lv['TC'], lv['WTC'])
+    return gap <= lv['TC'] * CPR_MERGE_GAP_PCT / 100
+
+
+def first_cpr_line(entry: float, is_buy: bool, ladder: List[tuple],
+                   min_pts: float = 10.0) -> Optional[tuple]:
+    """(name, price) of the CPR line — daily or weekly — price reaches first
+    from `entry` in the trade's direction, at least `min_pts` away. When the
+    two CPRs are merged this is the target: whichever line is hit first."""
+    lines = [(n, y) for n, y in ladder if n in _CPR_LINES]
+    if is_buy:
+        ahead = [(n, y) for n, y in lines if y >= entry + min_pts]
+        return min(ahead, key=lambda t: t[1]) if ahead else None
+    ahead = [(n, y) for n, y in lines if y <= entry - min_pts]
+    return max(ahead, key=lambda t: t[1]) if ahead else None
+
+
 def explain_trade(m: Dict[str, Any], ladder: List[tuple], candle: Dict[str, Any],
                   price_side: str) -> Optional[Dict[str, Any]]:
     trade, entry, target, sl = m.get('trade'), m.get('entry'), m.get('target'), m.get('sl')
@@ -335,10 +371,22 @@ def explain_trade(m: Dict[str, Any], ladder: List[tuple], candle: Dict[str, Any]
         entry_why = f"{trade} {_fmt_px(entry)} — at {_fmt_level(e)}"
     entry_why += f"; 1st candle {candle['colour'].lower()}, price {price_side.lower()} CPR"
 
-    # Target — the next level in the trade's direction.
+    # Target — the next level in the trade's direction. When the daily and
+    # the weekly (1-hour chart) CPRs sit on top of each other they are read
+    # as one zone, and a target on either of them is "the merged CPR".
     expected = _RESISTANCE if is_buy else _SUPPORT
+    merged = cprs_merged(ladder)
     if t['fit'] == 'none':
         target_why = f"Target {_fmt_px(target)} — {_fmt_level(t)}"
+    elif merged and t['name'] in _CPR_LINES:
+        # ... and the target is whichever of their lines price reaches first.
+        first = first_cpr_line(entry, is_buy, ladder)
+        if first and first[0] == t['name']:
+            target_why = (f"Target {_fmt_px(target)} — the merged daily + weekly CPR, "
+                          f"first line reached: {_fmt_level(t)}")
+        else:
+            target_why = (f"Target {_fmt_px(target)} — the merged daily + weekly CPR, at {_fmt_level(t)}"
+                          + (f"; first line reached would be {first[0]} {_fmt_px(first[1])}" if first else ''))
     elif t['name'] in expected:
         target_why = f"Target {_fmt_px(target)} — next {'resistance' if is_buy else 'support'} {_fmt_level(t)}"
     else:
@@ -362,7 +410,7 @@ def explain_trade(m: Dict[str, Any], ladder: List[tuple], candle: Dict[str, Any]
 
 # ── the comparison ────────────────────────────────────────────────────────
 
-_TRADE_KEYS = ('trade', 'entry', 'target', 'sl', 'result', 'pnl', 'reason')
+_TRADE_KEYS = ('trade', 'entry', 'target', 'sl', 'result', 'pnl', 'reason', 'setup_time')
 _ANALYSIS_KEYS = ('price_vs_daily', 'price_vs_hourly', 'cpr_type', 'cpr_direction',
                   'first_candle', 'boxes')
 
@@ -477,7 +525,7 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
 
         for t in trades:
             tm = t['manual']
-            sim = simulate_trade(bars, tm['trade'], tm['entry'], tm['target'], tm['sl'])
+            sim = simulate_trade(bars, tm['trade'], tm['entry'], tm['target'], tm['sl'], tm.get('setup_time'))
             t['chart'] = dict(sim, reasons=explain_trade(tm, ladder, candle, daily_side['side']))
             t['match'] = (_eq(tm.get('result'), sim['result'])
                           if tm.get('result') and sim['result'] else None)

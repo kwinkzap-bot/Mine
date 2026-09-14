@@ -734,6 +734,119 @@ def test_round_strike_tags_the_bar_a_big_print_landed_in():
     assert _rs_tag_big_prints(bars, [], 'minute', ist) is bars      # untouched with nothing to tag
 
 
+def test_round_strike_asks_for_prints_at_the_size_the_popup_sent():
+    """The Indicators popup's size box reaches both tape reads, and two sizes
+    never share a cached archive answer — a browser on 5,000 must not be
+    handed the 8,000 rows another one warmed."""
+    from trading_app.app.routes import api
+    from datetime import date
+    seen = []
+    def archived(symbol, min_qty, from_day, to_day):
+        seen.append(('archive', min_qty))
+        return [{'ts': 1, 'qty': min_qty}]
+    def live(symbol, min_qty):
+        seen.append(('live', min_qty))
+        return []
+    with mock.patch.object(api._tas, 'archived_large_prints', archived), \
+         mock.patch.object(api._tas, 'large_prints', live), \
+         mock.patch.object(api._tas, 'register', lambda s: None), \
+         mock.patch.object(api, '_rs_section_cache', {}):
+        d = date(2026, 9, 14)
+        assert api._rs_big_prints(SYMBOL, True, d, d, 5000) == [{'ts': 1, 'qty': 5000}]
+        assert api._rs_big_prints(SYMBOL, True, d, d, 8000) == [{'ts': 1, 'qty': 8000}]
+        assert api._rs_big_prints(SYMBOL, True, d, d, 5000) == [{'ts': 1, 'qty': 5000}]  # cache hit
+    assert seen == [('live', 5000), ('archive', 5000), ('live', 8000), ('archive', 8000), ('live', 5000)]
+
+
+def _alert_env(monkeypatch, api, env):
+    """Route the alert's env reads at a dict, capture the bell, and make the
+    Telegram thread synchronous so its send is observable."""
+    monkeypatch.setattr(api, '_rs_uvar', lambda key, default='': env.get(key, default))
+    bells, telegrams = [], []
+    import trading_app.service.notification_service as ns
+    monkeypatch.setattr(ns, 'create_notification',
+                        lambda category, title, data, summary=None: bells.append(
+                            {'category': category, 'title': title, 'summary': summary, 'data': data}) or 1)
+    import trading_app.service.telegram_service as tg
+    class _Svc:
+        def __init__(self, token=None, chat_id=None): self.to = (token, chat_id)
+        def send_text(self, message): telegrams.append((self.to, message)); return {'success': True}
+    monkeypatch.setattr(tg, 'TelegramService', _Svc)
+    class _Now:
+        def __init__(self, target=None, daemon=None, name=None): self.target = target
+        def start(self): self.target()
+    monkeypatch.setattr(api.threading, 'Thread', _Now)
+    monkeypatch.setattr(api, '_RS_BIG_PRINT_ALERTED', {})
+    return bells, telegrams
+
+
+def _fresh_bar_fixture():
+    """Two tagged bars: one on the last minute (fresh), one from an hour ago."""
+    import time as _t
+    ist = 19800
+    now = int(_t.time())
+    fresh_start = now - (now % 60) - 60
+    old_start = fresh_start - 3600
+    bars = [{'time': old_start + ist, 'volume': 500, 'big': True, 'big_qty': 8100},
+            {'time': fresh_start + ist, 'volume': 900, 'big': True, 'big_qty': 9500},
+            {'time': fresh_start + 60 + ist, 'volume': 20}]
+    prints = [{'ts': old_start + 5, 'qty': 8100, 'price': 24800.0, 'side': 'sell', 'src': 'tick'},
+              {'ts': fresh_start + 3, 'qty': 8000, 'price': 24810.0, 'side': 'buy', 'src': 'tick'},
+              {'ts': fresh_start + 40, 'qty': 9500, 'price': 24812.5, 'side': 'buy', 'src': 'bar'}]
+    return bars, prints, ist, fresh_start
+
+
+def test_round_strike_rings_once_per_fresh_blue_bar(monkeypatch):
+    """A bar that just turned blue rings the bell and Telegram exactly once —
+    not again on the next second's poll, and never for a bar tagged an hour
+    ago (a lowered threshold re-tags the whole day; none of that is news)."""
+    from trading_app.app.routes import api
+    env = {'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'}   # flags unset = on
+    bells, telegrams = _alert_env(monkeypatch, api, env)
+    bars, prints, ist, fresh_start = _fresh_bar_fixture()
+
+    api._rs_alert_big_prints('NIFTY', 'NSE:NIFTY26SEPFUT', bars, prints, 'minute', ist, 8000)
+    api._rs_alert_big_prints('NIFTY', 'NSE:NIFTY26SEPFUT', bars, prints, 'minute', ist, 8000)
+
+    assert len(bells) == 1 and len(telegrams) == 1
+    b = bells[0]
+    assert b['category'] == 'rs_big_print'
+    assert b['data']['qty'] == 9500 and b['data']['side'] == 'BUY'      # the bar's LARGEST print
+    assert b['data']['price'] == 24812.5 and b['data']['threshold'] == 8000
+    assert b['data']['bar_volume'] == 900 and b['data']['contract'] == 'NSE:NIFTY26SEPFUT'
+    assert '9,500' in b['title'] and 'NIFTY' in b['title']
+    to, message = telegrams[0]
+    assert to == ('tok', 'chat')
+    assert '9,500 contracts' in message and 'threshold 8,000' in message
+
+
+def test_round_strike_alert_flags_gate_each_channel(monkeypatch):
+    from trading_app.app.routes import api
+    bars, prints, ist, _ = _fresh_bar_fixture()
+    args = ('NIFTY', 'NSE:NIFTY26SEPFUT', bars, prints, 'minute', ist, 8000)
+
+    env = {'RS_BIG_PRINT_NOTIFY': 'false', 'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'}
+    bells, telegrams = _alert_env(monkeypatch, api, env)
+    api._rs_alert_big_prints(*args)
+    assert (len(bells), len(telegrams)) == (0, 1)
+
+    env = {'RS_BIG_PRINT_TELEGRAM': 'false', 'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'}
+    bells, telegrams = _alert_env(monkeypatch, api, env)
+    api._rs_alert_big_prints(*args)
+    assert (len(bells), len(telegrams)) == (1, 0)
+
+    # Telegram on but no credentials: silently the bell alone.
+    bells, telegrams = _alert_env(monkeypatch, api, {})
+    api._rs_alert_big_prints(*args)
+    assert (len(bells), len(telegrams)) == (1, 0)
+
+    # Both off: nothing, and nothing recorded as rung either.
+    env = {'RS_BIG_PRINT_NOTIFY': 'false', 'RS_BIG_PRINT_TELEGRAM': 'false'}
+    bells, telegrams = _alert_env(monkeypatch, api, env)
+    api._rs_alert_big_prints(*args)
+    assert (len(bells), len(telegrams)) == (0, 0) and api._RS_BIG_PRINT_ALERTED == {}
+
+
 def test_round_strike_builds_the_fyers_symbol_the_archive_is_keyed_on():
     from trading_app.app.routes.api import _rs_fyers_future_symbol
     from datetime import date

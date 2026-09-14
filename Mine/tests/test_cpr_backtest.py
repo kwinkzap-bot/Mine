@@ -128,10 +128,19 @@ def test_simulate_both_in_one_bar_and_no_fill():
     assert svc.simulate_trade(bars, 'BUY', 200, 210, 195)['result'] == 'No fill'
 
 
-def test_simulate_open_at_close():
+def test_simulate_squares_off_at_1515():
+    bars = _bars((100, 101, 99, 100), (100, 103, 99, 102))
+    bars += [{'time': '15:10', 'open': 102, 'high': 103, 'low': 101, 'close': 102.5},
+             {'time': '15:15', 'open': 104, 'high': 105, 'low': 103, 'close': 103.5},
+             {'time': '15:25', 'open': 103, 'high': 103, 'low': 100, 'close': 100.5}]
+    r = svc.simulate_trade(bars, 'BUY', 100, 110, 95)
+    assert r['result'] == 'EOD' and r['pnl'] == 4.0 and r['exit_time'] == '15:15'
+
+
+def test_simulate_falls_back_to_the_last_close_on_a_short_day():
     bars = _bars((100, 101, 99, 100), (100, 103, 99, 102))
     r = svc.simulate_trade(bars, 'BUY', 100, 110, 95)
-    assert r['result'] == 'Open' and r['pnl'] == 2.0
+    assert r['result'] == 'EOD' and r['pnl'] == 2.0
 
 
 # ── analyse end to end ────────────────────────────────────────────────────
@@ -313,3 +322,43 @@ def test_explain_trade_needs_a_full_trade():
     assert svc.explain_trade({'trade': None}, ladder, {'colour': 'Red'}, 'Above') is None
     assert svc.explain_trade({'trade': 'BUY', 'entry': 1.0, 'target': None, 'sl': 2.0}, ladder,
                              {'colour': 'Red'}, 'Above') is None
+
+
+def test_target_on_merged_daily_and_weekly_cpr_is_named_as_one_zone():
+    """1 Jan 2026: daily TC 26,113 and weekly TC 26,122 sit on top of each
+    other — a SELL target at 26,112 is 'the merged CPR', not just 'TC'."""
+    lv = svc.levels(26187.95, 25969.0, 26129.6)
+    wlv = {'pp': 26095.77, 'bc': 26069.03, 'tc': 26122.5}
+    c1 = {'high': 26195.35, 'low': 26163.1}
+    ladder = svc._reason_ladder(lv, wlv, c1, 26173.3)
+    assert svc.cprs_merged(ladder)
+    r = svc.explain_trade({'trade': 'SELL', 'entry': 26160.0, 'target': 26112.0, 'sl': 26200.0},
+                          ladder, {'colour': 'Doji'}, 'Above')
+    assert 'merged daily + weekly CPR' in r['target'] and 'TC 26,113' in r['target']
+    assert 'first line reached would be WTC 26,122' in r['target']
+    assert svc.first_cpr_line(26160.0, False, ladder) == ('WTC', 26122.5)
+    r2 = svc.explain_trade({'trade': 'SELL', 'entry': 26160.0, 'target': 26122.0, 'sl': 26200.0},
+                           ladder, {'colour': 'Doji'}, 'Above')
+    assert 'first line reached: WTC 26,122' in r2['target']
+
+
+def test_cprs_apart_are_not_merged():
+    lv = svc.levels(25400.0, 25100.0, 25350.0)
+    ladder = svc._reason_ladder(lv, {'pp': 24000.0, 'bc': 23950.0, 'tc': 24050.0},
+                                {'high': lv['pp'] + 30, 'low': lv['pp'] - 30}, lv['pp'])
+    assert not svc.cprs_merged(ladder)
+
+
+def test_simulate_starts_after_the_setup_candle():
+    """20 Feb 2026 in miniature: the entry price trades BEFORE the setup
+    candle; with the setup time given the replay must ignore that."""
+    bars = _bars((100, 101, 99, 100),      # 09:15
+                 (100, 106, 99, 105),      # 09:20 — trades through 105, then
+                 (105, 106, 94, 95),       # 09:25 — would stop out a 09:20 fill
+                 (95, 97, 94, 96),         # 09:30 — the setup candle
+                 (99, 107, 99, 106),       # 09:35 — fills at 105 ...
+                 (106, 112, 105, 111))     # 09:40 — ... and reaches 110
+    naive = svc.simulate_trade(bars, 'BUY', 105, 110, 98)
+    assert naive['result'] == 'SL' and naive['entry_time'] == '09:20'
+    r = svc.simulate_trade(bars, 'BUY', 105, 110, 98, setup_time='09:30')
+    assert r['result'] == 'Target' and r['entry_time'] == '09:35' and r['exit_time'] == '09:40'

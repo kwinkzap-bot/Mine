@@ -218,20 +218,30 @@ const _tdCprCols = [
       why: c => c.price_in_daily_cpr ? 'close inside CPR' : '' },
     { key: 'price_vs_hourly', label: 'Price vs Hourly CPR', chart: c => c.price_vs_hourly,
       why: c => c.price_in_hourly_cpr ? 'close inside weekly CPR' : '' },
-    { key: 'cpr_type',        label: 'CPR Type',            chart: c => c.cpr_type,
+    // No agree/disagree tint on CPR Type: the app reads it against a
+    // 10-session average while the sheet reads it by eye, so a difference
+    // there is a difference of scale, not an error.
+    { key: 'cpr_type',        label: 'CPR Type',            chart: c => c.cpr_type, noTint: true,
       why: c => `${c.width_pct}%` + (c.width_ratio != null ? ` · ${c.width_ratio}x avg` : '') },
+    // Tinted by the direction itself (Asc green, Dec red, Inside plain),
+    // not by agreement — the direction is what the eye wants at a glance.
     { key: 'cpr_direction',   label: 'CPR Direction',       chart: c => c.cpr_direction,
-      why: c => `pivot ${c.pivot_shift > 0 ? '+' : ''}${c.pivot_shift}` },
+      cellClass: (v, r) => ({ asc: 'td-cpr-asc', dec: 'td-cpr-dec' })[String(r.manual.cpr_direction || '').toLowerCase()] || '',
+      why: () => '' },
     { key: 'boxes',           label: 'Boxes',               chart: c => c.boxes,
       why: c => `${c.box_pts} pts` },
 ];
 
+// One value when the sheet and the chart agree; the two stacked (sheet on
+// top, chart under it) only where they differ or one side is missing.
 function _tdCprCell(m, c, match, manualText, chartText, why) {
-    return `<div class="td-cpr-cell">
-        <span class="td-cpr-manual">${_tdEsc(manualText ?? '—')}</span>
-        <span class="td-cpr-chart">${c ? _tdEsc(chartText ?? '—') : '<i>no bars</i>'}</span>
-        ${why ? `<span class="td-cpr-why">${_tdEsc(why)}</span>` : ''}
-    </div>`;
+    const same = c && manualText != null && chartText != null
+        && String(manualText).trim().toLowerCase() === String(chartText).trim().toLowerCase();
+    const lines = same
+        ? `<span class="td-cpr-manual">${_tdEsc(manualText)}</span>`
+        : `<span class="td-cpr-manual">${_tdEsc(manualText ?? '—')}</span>
+           <span class="td-cpr-chart">${c ? _tdEsc(chartText ?? '—') : '<i>no bars</i>'}</span>`;
+    return `<div class="td-cpr-cell">${lines}${why ? `<span class="td-cpr-why">${_tdEsc(why)}</span>` : ''}</div>`;
 }
 
 function _tdCprMatchClass(match) {
@@ -255,8 +265,8 @@ function renderCprBacktest(d) {
         ['Daily CPR', 'price_vs_daily'], ['Hourly CPR', 'price_vs_hourly'], ['Type', 'cpr_type'],
         ['Direction', 'cpr_direction'], ['Boxes', 'boxes'], ['1st candle', 'first_candle'], ['Result', 'result'],
     ].map(([l, k]) => `<span class="td-cpr-chip">${l} agree <b>${pct(k)}</b></span>`).join('') +
-    `<span class="td-cpr-chip">Sheet P&amp;L <b class="${pnlCls(s.manual?.pnl)}">${_tdNum(s.manual?.pnl, 0)}</b> pts · ${s.manual?.wins ?? 0}/${s.manual?.trades ?? 0} wins</span>` +
-    `<span class="td-cpr-chip">Chart P&amp;L <b class="${pnlCls(s.chart?.pnl)}">${_tdNum(s.chart?.pnl, 0)}</b> pts · ${s.chart?.wins ?? 0}/${s.chart?.trades ?? 0} wins</span>`;
+    `<span class="td-cpr-chip">P&amp;L <b class="${pnlCls(s.manual?.pnl)}">${_tdNum(s.manual?.pnl, 0)}</b> pts · ${s.manual?.wins ?? 0}/${s.manual?.trades ?? 0} wins</span>` +
+    '';
 
     // Trade columns read the day's single trade inline; a multi-trade day
     // shows a count here and lists its trades in the sub-grid below.
@@ -265,7 +275,7 @@ function renderCprBacktest(d) {
         key, label, align: 'right',
         render: (v, r) => {
             const t = one(r);
-            if (t) return _tdEsc(_tdNum(t.manual[key], 0));
+            if (t) return _tdCprPrice(t, key);
             return r.trades.length ? `<span class="td-cpr-multi">${r.trades.length} trades ▾</span>` : '—';
         },
     }, opts || {});
@@ -276,7 +286,8 @@ function renderCprBacktest(d) {
         ..._tdCprCols.map(col => ({
             key: col.key, label: col.label, sortable: true,
             sortValue: r => (r.manual[col.key] || '') + '|' + (r.chart ? col.chart(r.chart) : ''),
-            cellClass: (v, r) => _tdCprMatchClass(r.match[col.key]),
+            cellClass: (v, r) => col.cellClass ? col.cellClass(v, r)
+                               : col.noTint ? '' : _tdCprMatchClass(r.match[col.key]),
             render: (v, r) => _tdCprCell(r.manual, r.chart, r.match[col.key], r.manual[col.key],
                                          r.chart ? col.chart(r.chart) : null, r.chart ? col.why(r.chart) : ''),
         })),
@@ -300,14 +311,12 @@ function renderCprBacktest(d) {
         tradeCol('sl', 'SL'),
         { key: 'result', label: 'Result', sortable: true,
           sortValue: r => r.trades.map(t => t.manual.result || '').join(','),
-          cellClass: (v, r) => { const t = one(r); return t ? _tdCprMatchClass(t.match) : ''; },
           render: (v, r) => {
               const t = one(r);
               if (t) return _tdCprResult(t, r.chart);
               if (!r.trades.length) return '—';
-              const ok = r.trades.filter(t => t.match === true).length;
-              const judged = r.trades.filter(t => t.match != null).length;
-              return `<span class="td-cpr-multi">${ok}/${judged} agree ▾</span>`;
+              const hits = r.trades.filter(t => t.manual.result === 'Target').length;
+              return `<span class="td-cpr-multi">${hits}/${r.trades.length} target ▾</span>`;
           } },
         { key: 'pnl', label: 'P&L (pts)', align: 'right', sortable: true,
           sortValue: r => r.trades.reduce((a, t) => a + (t.manual.pnl || 0), 0),
@@ -344,7 +353,7 @@ function renderCprBacktest(d) {
 
     const rules = d.rules || {};
     tdElems.cprNote.innerHTML =
-        `Top line is the sheet, second line the chart. One row per session; a day with several trades shows the count ` +
+        `A cell shows one value when the sheet and the chart agree, and both (sheet on top, chart under it) when they differ. One row per session; a day with several trades shows the count ` +
         `and lists them in the sub-grid when the row is opened. <b>Hourly CPR</b> is the CPR the 1-hour chart draws — the ` +
         `previous week's, as the Pine script's AUTO pivot timeframe is weekly above 15 minutes. <b>Price vs CPR</b> ` +
         `reads the 09:15 candle's close against the pivot. <b>CPR Type</b>: ${_tdEsc(rules.cpr_type || '')}. ` +
@@ -354,17 +363,38 @@ function renderCprBacktest(d) {
         `both is "Both".`;
 }
 
+// Entry / Target / SL price with, underneath, the time the chart replay
+// reached it — the fill time for the entry, the exit time for whichever of
+// target / SL ended the trade. Nothing under a level that was never hit.
+function _tdCprPrice(t, key) {
+    const c = t.chart || {};
+    let when = '';
+    if (key === 'entry') when = c.entry_time || '';
+    else if (key === 'target' && (c.result === 'Target' || c.result === 'Both')) when = c.exit_time || '';
+    else if (key === 'sl' && (c.result === 'SL' || c.result === 'Both')) when = c.exit_time || '';
+    return `<div class="td-cpr-cell" style="align-items:flex-end">
+        <span>${_tdEsc(_tdNum(t.manual[key], 0))}</span>
+        ${when ? `<span class="td-cpr-why">${_tdEsc(when)}</span>` : ''}</div>`;
+}
+
+// Result and P&L show the sheet's figure only — one value, SL or Target —
+// with the replay's fill -> exit times underneath. The chart's own verdict
+// is not repeated here; the reach times under Entry / Target / SL and the
+// Result agreement chip carry it.
 function _tdCprResult(t, chart) {
     const c = t.chart;
     const when = c && c.entry_time ? `${c.entry_time}${c.exit_time ? ' → ' + c.exit_time : ''}` : '';
-    return _tdCprCell(t.manual, chart, t.match, t.manual.result, c ? c.result : null, when);
+    const res = t.manual.result;
+    const cls = res === 'Target' ? 'dg-pos' : res === 'SL' ? 'dg-neg' : '';
+    return `<div class="td-cpr-cell">
+        <span class="td-cpr-manual ${cls}">${_tdEsc(res ?? '—')}</span>
+        ${when ? `<span class="td-cpr-why">${_tdEsc(when)}</span>` : ''}</div>`;
 }
 
 function _tdCprPnl(mp, cp, tag) {
     const cls = x => x > 0 ? 'dg-pos' : x < 0 ? 'dg-neg' : '';
     return `<div class="td-cpr-cell" style="align-items:flex-end">
         <span class="td-cpr-manual ${cls(mp)}">${_tdNum(mp, 0)}</span>
-        <span class="td-cpr-chart ${cls(cp)}">${_tdNum(cp, 0)}</span>
         ${tag ? `<span class="td-cpr-why">${_tdEsc(tag)}</span>` : ''}</div>`;
 }
 
@@ -390,11 +420,10 @@ function _tdCprTradesGrid(r) {
             { key: 'n', label: '#', align: 'center', render: (v, t, i) => String(i + 1) },
             { key: 'trade', label: 'Trade', strong: true,
               render: (v, t) => `<span class="${t.manual.trade === 'BUY' ? 'dg-pos' : 'dg-neg'}">${_tdEsc(t.manual.trade)}</span>` },
-            { key: 'entry',  label: 'Entry',  align: 'right', render: (v, t) => _tdNum(t.manual.entry, 0) },
-            { key: 'target', label: 'Target', align: 'right', render: (v, t) => _tdNum(t.manual.target, 0) },
-            { key: 'sl',     label: 'SL',     align: 'right', render: (v, t) => _tdNum(t.manual.sl, 0) },
-            { key: 'result', label: 'Result', cellClass: (v, t) => _tdCprMatchClass(t.match),
-              render: (v, t) => _tdCprResult(t, r.chart) },
+            { key: 'entry',  label: 'Entry',  align: 'right', render: (v, t) => _tdCprPrice(t, 'entry') },
+            { key: 'target', label: 'Target', align: 'right', render: (v, t) => _tdCprPrice(t, 'target') },
+            { key: 'sl',     label: 'SL',     align: 'right', render: (v, t) => _tdCprPrice(t, 'sl') },
+            { key: 'result', label: 'Result', render: (v, t) => _tdCprResult(t, r.chart) },
             { key: 'pnl', label: 'P&L (pts)', align: 'right',
               render: (v, t) => _tdCprPnl(t.manual.pnl, t.chart ? t.chart.pnl : null, '') },
             { key: 'reason', label: 'Reason', render: (v, t) => _tdCprReason(t) },

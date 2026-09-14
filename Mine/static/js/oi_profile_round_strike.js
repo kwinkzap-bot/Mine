@@ -1251,6 +1251,12 @@ function oipRSApiUrl(withStrikes = true) {
     const asOf = oipRSAsOfDate();
     if (expiry) url += `&expiry=${expiry}`;
     if (asOf) url += `&date=${asOf}`;
+    // The print size that tags a volume bar blue — the box beside the Nifty
+    // Vol Fut swatches (see oipBigPrintQty in oi_indicators.js). Sent on every
+    // call: the server tags the bars, so a new figure is a new request. On the
+    // historical block it also changes the URL, which is what gets the browser
+    // cache out of the way of the refetch.
+    if (typeof oipBigPrintQty === 'function') url += `&big_qty=${oipBigPrintQty()}`;
     // Tell the server which volume overlays are actually switched on. Each one
     // it can skip is five fewer rate-limited Breeze chunks at 1-minute bars,
     // and Banknifty Vol Fut is off by default — it was being fetched and

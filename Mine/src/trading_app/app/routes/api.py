@@ -12758,8 +12758,9 @@ def _rs_session_open(candles: list) -> float:
 
 # A single Time & Sales print at or above this many contracts marks the volume
 # bar it landed in — the bar paints blue on the Round Strike chart, whatever the
-# candle's direction. One number for the whole feature: the server tags the
-# bars, the client only reads the tag (and shows the figure in the legend).
+# candle's direction. This is the DEFAULT: the Indicators popup carries a box
+# for the figure and sends it as `big_qty`, so the server tags the bars against
+# whatever the user typed and the client only reads the tag.
 RS_BIG_PRINT_QTY = 8000
 
 _RS_BAR_SECONDS = {
@@ -12822,8 +12823,8 @@ def _rs_tape_symbol(symbol: str, fut_symbol, is_fyers: bool):
     return _rs_cached(('rs-tape-symbol', symbol, datetime.now().strftime('%Y-%m-%d')), 3600.0, _lookup)
 
 
-def _rs_big_prints(tape_symbol, live: bool, from_day, to_day) -> list:
-    """Every print >= RS_BIG_PRINT_QTY of `tape_symbol` across [from_day, to_day].
+def _rs_big_prints(tape_symbol, live: bool, from_day, to_day, min_qty: int = RS_BIG_PRINT_QTY) -> list:
+    """Every print >= `min_qty` contracts of `tape_symbol` across [from_day, to_day].
 
     Two sources, concatenated. The archive holds every finished day; on the
     live chart the in-memory tape holds today, and registering it there keeps
@@ -12836,7 +12837,8 @@ def _rs_big_prints(tape_symbol, live: bool, from_day, to_day) -> list:
     contract and spend 25 Breeze requests backfilling a day that has no ticks.
     The archive is immutable for finished days, so the read is held for ten
     minutes and re-keyed on the archive generation so a day that lands later
-    is picked up rather than waiting out the TTL.
+    is picked up rather than waiting out the TTL. `min_qty` is part of the key
+    too, so two browsers on different thresholds never read each other's rows.
     """
     if not tape_symbol:
         return []
@@ -12844,12 +12846,12 @@ def _rs_big_prints(tape_symbol, live: bool, from_day, to_day) -> list:
     if live:
         try:
             _tas.register(tape_symbol)
-            prints.extend(_tas.large_prints(tape_symbol, RS_BIG_PRINT_QTY))
+            prints.extend(_tas.large_prints(tape_symbol, min_qty))
         except Exception as exc:
             logger.debug(f'[RoundStrike] live big-print lookup skipped for {tape_symbol}: {exc}')
     archived = _rs_cached(
-        ('rs-archived-prints', tape_symbol, from_day, to_day, RS_BIG_PRINT_QTY, _tas.archive_generation()),
-        600.0, lambda: _tas.archived_large_prints(tape_symbol, RS_BIG_PRINT_QTY, from_day, to_day))
+        ('rs-archived-prints', tape_symbol, from_day, to_day, min_qty, _tas.archive_generation()),
+        600.0, lambda: _tas.archived_large_prints(tape_symbol, min_qty, from_day, to_day))
     prints.extend(archived or [])
     return prints
 
@@ -12883,6 +12885,149 @@ def _rs_tag_big_prints(volume_bars: list, prints: list, interval: str, ist_offse
         return volume_bars
     return [dict(b, big=True, big_qty=biggest[int(b['time'])]) if int(b['time']) in biggest else b
             for b in volume_bars]
+
+
+# ── Big-print alerts ────────────────────────────────────────────────────────
+# A bar turning blue on the LIVE Round Strike chart also rings the in-app bell
+# and sends a Telegram message, each behind its own env flag:
+#
+#   RS_BIG_PRINT_NOTIFY    in-app notification (default on)
+#   RS_BIG_PRINT_TELEGRAM  Telegram message — needs TELEGRAM_BOT_TOKEN and
+#                          TELEGRAM_CHAT_ID as well (default on)
+#
+# The trigger is the tag itself, at whatever size the popup's box asked for, so
+# what rings is exactly what the chart shows. It rides on the block's own poll:
+# the tape is live for as long as the chart is (see _rs_big_prints), so an
+# alert can only ever fire while someone has the page open — which is also why
+# it lives here and not in the collector. One alert per bar per day: several
+# tabs poll the same second and a print can enter the tape twice (socket, then
+# the top-up's bar), and both must collapse to one ping. Only a bar that is
+# still FRESH rings — a lowered threshold or a reload re-tags the whole day,
+# and none of that is news.
+_RS_BIG_PRINT_ALERT_FRESH_SEC = 300
+_RS_BIG_PRINT_ALERTED: Dict[str, set] = {}      # 'YYYY-MM-DD' -> {(tape_symbol, bar_time)}
+_RS_BIG_PRINT_ALERT_LOCK = threading.Lock()
+
+
+def _rs_uvar(key: str, default: str = '') -> str:
+    """One env value from the monitoring user's file — the same file the
+    scheduler's jobs and the OI Crossover scanner read their flags from."""
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        user = os.getenv('MONITORING_USERNAME', 'Mine')
+        return (UserEnvManager.get_user_var(user, key, default) or '').strip()
+    except Exception:
+        return default
+
+
+def _rs_fresh_big_print_bars(volume_bars: list, prints: list, interval: str, ist_offset: int,
+                             now_ts: Optional[int] = None) -> list:
+    """The tagged bars in `volume_bars` that are new enough to ring, oldest
+    first, each with the largest print that landed in it attached as `print`.
+    Pure — the dedup and the sending are the caller's."""
+    if not volume_bars or not prints:
+        return []
+    secs = _RS_BAR_SECONDS.get(interval, 60)
+    now_ts = int(now_ts if now_ts is not None else _time.time())
+    fresh = []
+    for b in volume_bars:
+        if not b.get('big'):
+            continue
+        start = int(b['time']) - ist_offset
+        if now_ts - start > secs + _RS_BIG_PRINT_ALERT_FRESH_SEC:
+            continue
+        inside = [pr for pr in prints if start <= int(pr['ts']) < start + secs]
+        if not inside:
+            continue
+        top = max(inside, key=lambda pr: int(pr['qty'] or 0))
+        fresh.append(dict(b, print=top))
+    fresh.sort(key=lambda b: int(b['time']))
+    return fresh
+
+
+def _rs_alert_big_prints(symbol: str, tape_symbol, volume_bars: list, prints: list,
+                         interval: str, ist_offset: int, min_qty: int) -> None:
+    """Ring for every freshly tagged bar not already rung for today. Never
+    raises: an alert that fails must not cost the chart its tick."""
+    try:
+        notify = _rs_uvar('RS_BIG_PRINT_NOTIFY', 'true').lower() != 'false'
+        telegram = _rs_uvar('RS_BIG_PRINT_TELEGRAM', 'true').lower() != 'false'
+        if not (notify or telegram):
+            return
+        fresh = _rs_fresh_big_print_bars(volume_bars, prints, interval, ist_offset)
+        if not fresh:
+            return
+        today = datetime.now().strftime('%Y-%m-%d')
+        with _RS_BIG_PRINT_ALERT_LOCK:
+            for stale in [d for d in _RS_BIG_PRINT_ALERTED if d != today]:
+                _RS_BIG_PRINT_ALERTED.pop(stale, None)
+            rung = _RS_BIG_PRINT_ALERTED.setdefault(today, set())
+            new = [b for b in fresh if (tape_symbol, int(b['time'])) not in rung]
+            rung.update((tape_symbol, int(b['time'])) for b in new)
+        for b in new:
+            _rs_send_big_print_alert(symbol, tape_symbol, b, interval, ist_offset, min_qty, notify, telegram)
+    except Exception as exc:
+        logger.error(f'[RoundStrike] big-print alert failed: {exc}')
+
+
+def _rs_send_big_print_alert(symbol: str, tape_symbol, bar: dict, interval: str, ist_offset: int,
+                             min_qty: int, notify: bool, telegram: bool) -> None:
+    pr = bar['print']
+    qty = int(pr.get('qty') or 0)
+    price = float(pr.get('price') or 0)
+    side = str(pr.get('side') or '').upper()
+    # Bar times sit on the chart's fake-IST grid; the print's own ts is real.
+    bar_hhmm = _time.strftime('%H:%M', _time.gmtime(int(bar['time'])))
+    print_hhmm = _time.strftime('%H:%M:%S', _time.gmtime(int(pr['ts']) + ist_offset))
+    payload = {
+        'symbol': symbol,
+        'contract': tape_symbol,
+        'interval': interval,
+        'bar_time': bar_hhmm,
+        'print_time': print_hhmm,
+        'qty': qty,
+        'price': price,
+        'side': side,
+        'source': pr.get('src'),
+        'bar_volume': int(bar.get('volume') or 0),
+        'threshold': int(min_qty),
+    }
+    side_txt = f' {side}' if side in ('BUY', 'SELL') else ''
+    title = f'Big print — {symbol} {qty:,} @ ₹{price:,.2f}{side_txt}'
+    summary = f'{bar_hhmm} {interval} bar · threshold {min_qty:,} · {tape_symbol or symbol}'
+
+    if notify:
+        try:
+            from trading_app.service.notification_service import create_notification
+            create_notification(category='rs_big_print', title=title, summary=summary, data=payload)
+        except Exception as exc:
+            logger.error(f'[RoundStrike] in-app big-print alert failed: {exc}')
+
+    if not telegram:
+        return
+    token = _rs_uvar('TELEGRAM_BOT_TOKEN')
+    chat_id = _rs_uvar('TELEGRAM_CHAT_ID')
+    if not (token and chat_id):
+        return
+    message = '\n'.join([
+        f'🔵 Big print — {symbol} FUT',
+        f'{qty:,} contracts @ ₹{price:,.2f}{side_txt} at {print_hhmm}',
+        f'{bar_hhmm} {interval} bar · threshold {min_qty:,}',
+        f'{tape_symbol or ""}'.strip(),
+    ]).rstrip()
+
+    def _send() -> None:
+        try:
+            from trading_app.service.telegram_service import TelegramService
+            result = TelegramService(token=token, chat_id=chat_id).send_text(message)
+            if not result.get('success'):
+                logger.error(f"[RoundStrike] Telegram big-print alert failed: {result.get('error')}")
+        except Exception as exc:
+            logger.error(f'[RoundStrike] Telegram big-print alert failed: {exc}')
+
+    # Off-thread: send_text allows a 10s HTTP timeout, and this sits on the
+    # chart's 1-second poll.
+    threading.Thread(target=_send, daemon=True, name='RsBigPrintNotify').start()
 
 
 def _rs_trim_days(bars: list, days: int) -> list:
@@ -13046,7 +13191,7 @@ def oi_profile_expiries() -> EndpointResponse:
 def oi_profile_round_strike() -> EndpointResponse:
     """Every piece of data the OI Profile page's Round Strike block renders.
 
-    Query params: symbol, interval, days, ce_strike, pe_strike, step, expiry.
+    Query params: symbol, interval, days, ce_strike, pe_strike, step, expiry, big_qty.
     ce_strike/pe_strike may be omitted on the very first call — the block needs
     this endpoint's `session_open` and `strikes` to work out which pair to ask
     for, and the option legs come back empty until it does.
@@ -13064,6 +13209,9 @@ def oi_profile_round_strike() -> EndpointResponse:
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
         step      = request.args.get('step', 50, type=int) or 50
+        # The Time & Sales print size that paints a volume bar blue — the box
+        # next to the Nifty Vol Fut swatches. Absent or junk means the default.
+        big_qty   = max(1, request.args.get('big_qty', RS_BIG_PRINT_QTY, type=int) or RS_BIG_PRINT_QTY)
         # Replay's expiry + date pickers. Both absent on every live call, which
         # keeps the whole block below on its original path.
         #
@@ -13496,7 +13644,7 @@ def oi_profile_round_strike() -> EndpointResponse:
             return [{'time': b['time'], 'volume': b['volume']} for b in bars]
 
         future_volume = _volume_series(future_vol)
-        # Tag the bars a >= RS_BIG_PRINT_QTY print landed in. Today's prints
+        # Tag the bars a >= big_qty print landed in. Today's prints
         # come from the in-memory tape, every earlier day's from the archive,
         # so the live window's back days and replayed windows get tags too.
         # The volume leg is ONE contract for the whole window (today's front
@@ -13510,10 +13658,11 @@ def oi_profile_round_strike() -> EndpointResponse:
             else:
                 _tape_symbol = _rs_tape_symbol(symbol, fut_symbol, _is_fyers_provider)
                 _rs_check_future_symbol_format(symbol, _tape_symbol)
-            future_volume = _rs_tag_big_prints(
-                future_volume,
-                _rs_big_prints(_tape_symbol, not _historical, from_date.date(), to_date.date()),
-                interval, ist_offset)
+            _prints = _rs_big_prints(_tape_symbol, not _historical, from_date.date(), to_date.date(), big_qty)
+            future_volume = _rs_tag_big_prints(future_volume, _prints, interval, ist_offset)
+            # Live chart only: a replayed window is history, not news.
+            if not _historical:
+                _rs_alert_big_prints(symbol, _tape_symbol, future_volume, _prints, interval, ist_offset, big_qty)
         banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
 
         oi_data      = (_rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}) if _want_header else {}
@@ -13606,7 +13755,7 @@ def oi_profile_round_strike() -> EndpointResponse:
             'pe_candles': pe_candles,
             'future_volume': future_volume,
             'future_symbol': fut_symbol,
-            'big_print_qty': RS_BIG_PRINT_QTY,
+            'big_print_qty': big_qty,
             'banknifty_volume': banknifty_volume,
             'banknifty_symbol': bnf_symbol,
             'strikes': strikes_list,

@@ -72,7 +72,10 @@
                                         <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
                                             title="Volume bar color when Vol Direction Color is off">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volBig"
-                                            title="Bar holding a single Time &amp; Sales print of 8,000+ contracts (painted solid, live chart only)">
+                                            title="Bar holding a single Time &amp; Sales print at or above the size in the box (painted solid)">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp"
+                                            value="8000" min="1" step="100"
+                                            title="Print size, in contracts, that paints a bar the solid color (default 8000)">
                                     </span>
                                 </label>
                                 <!-- Hangs from its own band at the top of this pane and reuses the

@@ -1729,6 +1729,9 @@ body.ocean-theme .oip-tooltip {
     outline: none;
     border-color: var(--oip-accent);
 }
+/* The big-print size box beside the volume swatches: five digits plus the
+   spinner need more room than the reversal Count/Range boxes above. */
+.oip-big-print-qty-inp { width: 56px; }
 
 /* ── OI Bar popup modal ────────────────────────────────────── */
 .oip-modal-overlay {
