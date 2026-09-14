@@ -44,7 +44,8 @@ def candles():
     interval = (request.args.get('interval') or '').strip()
     if not symbol or not interval:
         return jsonify({'success': False, 'error': 'symbol and interval are required'}), 400
-    return _run('candles', lambda: svc.candles(symbol, interval))
+    daily_from = (request.args.get('daily_from') or '').strip() or None
+    return _run('candles', lambda: svc.candles(symbol, interval, daily_from))
 
 
 @multichart_bp.route('/live', methods=['GET'])

@@ -102,13 +102,9 @@
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
             <a href="/dashboard"
-                class="nav-link {% if request.path in ['/dashboard', '/trading', '/contracts'] %}active{% endif %}">📊
+                class="nav-link {% if request.path in ['/dashboard', '/trading', '/contracts', '/historic-oi', '/watchlist'] %}active{% endif %}">📊
                 Dashboard</a>
-            <a href="/historic-oi" class="nav-link {% if request.path == '/historic-oi' %}active{% endif %}">📈
-                Historic OI</a>
             <a href="/replay" class="nav-link {% if request.path == '/replay' %}active{% endif %}">🕒 Replay</a>
-             <a href="/watchlist" class="nav-link {% if request.path == '/watchlist' %}active{% endif %}">👁
-                Watchlist</a>
             <a href="/orderplacement"
                 class="nav-link {% if request.path == '/orderplacement' %}active{% endif %}">🧾 Order</a>
             <a href="/trend-detection" class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈

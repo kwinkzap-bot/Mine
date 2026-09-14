@@ -11929,6 +11929,15 @@ def oi_profile_candles() -> EndpointResponse:
             ('fixed PE', fixed_pe_token, fixed_pe_candles),
         ) if tok and not cds]
         fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
+        # The index leg goes through the same never-raises adapter as the
+        # options, so an expired Fyers token used to reach the page as the
+        # generic "No candle data for the selected date range" — the recorded
+        # reason ("Could not authenticate the user") was only ever read for the
+        # option legs below. Surface it for the index too.
+        if not fetch_error_msg and not candles:
+            index_reason = _empty_fetch_reasons.get(str(token))
+            if index_reason:
+                fetch_error_msg = f"Index candle fetch failed — {index_reason}"
         opt_fetch_failed = bool(empty_legs)
         if not fetch_error_msg and opt_fetch_failed:
             # A recorded reason means the fetch itself failed (rate limit,

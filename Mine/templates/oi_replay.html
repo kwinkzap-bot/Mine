@@ -59,10 +59,10 @@
                         <span class="oip-label" style="margin-left:8px;">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs">
                             <option value="30second">30s</option>
-                            <option value="minute" selected>1m</option>
+                            <option value="minute">1m</option>
                             <option value="2minute">2m</option>
                             <option value="3minute">3m</option>
-                            <option value="5minute">5m</option>
+                            <option value="5minute" selected>5m</option>
                             <option value="15minute">15m</option>
                             <option value="30minute">30m</option>
                             <option value="60minute">1h</option>
@@ -274,6 +274,11 @@
                  while that is in flight; it never blocks the chart. -->
             <div id="oipBackfillNote" class="oip-backfill-note hidden"></div>
         </div>
+        <!-- Drag handle — pulls #oipChartWrap taller or shorter. The height is
+             kept in localStorage per block (oipReplayInitResizers in
+             oi_replay.js), so it survives a reload. Double-click resets. -->
+        <div class="oip-resize-grip" data-resize-target="oipChartWrap"
+             title="Drag to resize the Replay chart · double-click to reset"></div>
     </div>
 
     <!-- Round Strike — the same block as OI Profile's, driven by the same
@@ -679,6 +684,11 @@
             </div>
             <div id="oipRSCombinedChart"></div>
         </div>
+        <!-- Same handle for the Round Strike chart. Its height goes through
+             oipRSSetUserChartHeight (oi_profile_round_strike.js) because that
+             chart adds a ΔOI pane on top of whatever base the user picks. -->
+        <div class="oip-resize-grip" data-resize-target="oipRSCombinedChartWrap"
+             title="Drag to resize the Round Strike chart · double-click to reset"></div>
     </div>
 </div>
 {% endblock %}

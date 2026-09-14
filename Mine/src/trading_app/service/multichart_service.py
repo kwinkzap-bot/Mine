@@ -224,8 +224,15 @@ def _fetch_error(adapter: Any) -> Optional[str]:
         return None
 
 
-def candles(symbol: str, interval: str) -> Dict[str, Any]:
-    """History for one pane plus the daily bars its CPR anchors on."""
+def candles(symbol: str, interval: str, daily_from: Optional[str] = None) -> Dict[str, Any]:
+    """History for one pane plus the daily bars its CPR anchors on.
+
+    `daily_from` (YYYY-MM-DD) widens the daily rows back to that date: the
+    Replay page pivots on whatever day it is playing, so its previous day /
+    week has to be inside the set for any as-of date it offers, not just
+    the last DAILY_LOOKBACK_DAYS. Multichart and the OI Profile main chart
+    leave it unset.
+    """
     if interval not in INTERVALS:
         raise BadRequest(f'Unsupported interval: {interval!r}')
     fy_symbol = resolve_symbol(symbol)
@@ -233,7 +240,17 @@ def candles(symbol: str, interval: str) -> Dict[str, Any]:
     adapter = provider()
 
     today = date.today()
+    daily_start = today - timedelta(days=DAILY_LOOKBACK_DAYS)
+    if daily_from:
+        try:
+            wanted = date.fromisoformat(daily_from)
+        except ValueError:
+            raise BadRequest(f'daily_from must be YYYY-MM-DD, got {daily_from!r}')
+        if wanted < daily_start:
+            daily_start = wanted
     start = today - timedelta(days=lookback)
+    if interval == 'day' and daily_start < start:
+        start = daily_start          # the daily pane's own bars are the daily rows
     raw = adapter.historical_data(
         fy_symbol, start.isoformat(), today.isoformat(), interval,
         use_cache=True, cache_ttl=HISTORY_CACHE_TTL, allow_synthetic=True,
@@ -241,7 +258,7 @@ def candles(symbol: str, interval: str) -> Dict[str, Any]:
     fetch_error = _fetch_error(adapter) if not raw else None
 
     daily_raw = adapter.historical_data(
-        fy_symbol, (today - timedelta(days=DAILY_LOOKBACK_DAYS)).isoformat(),
+        fy_symbol, daily_start.isoformat(),
         today.isoformat(), 'day', use_cache=True, cache_ttl=300.0,
     ) if interval != 'day' else raw
 

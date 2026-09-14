@@ -150,7 +150,9 @@ def contracts():
 @require_user_auth
 @login_required
 def historic_oi():
-    """Historic OI — standalone page."""
+    """Historic OI — a Dashboard tab; only served standalone when embedded."""
+    if not request.args.get('embed'):
+        return redirect(url_for('pages.dashboard') + '#historic-oi')
     return render_template('historic_oi.html')
 
 @pages_bp.route('/multichart')
@@ -193,12 +195,16 @@ def portfolio():
 @pages_bp.route('/watchlist')
 @require_user_auth
 def watchlist():
-    """Watchlist — user-defined tabs of stocks/indices with 52-week range and PE.
+    """Watchlist — a Dashboard tab; only served standalone when embedded.
+
+    User-defined tabs of stocks/indices with 52-week range and PE.
 
     No @login_required: the page's own data comes from the fundamentals cache
     and the public symbol master, so it builds and reads without a broker
     session. A live token only upgrades the price column from delayed to live.
     """
+    if not request.args.get('embed'):
+        return redirect(url_for('pages.dashboard') + '#watchlist')
     return render_template('watchlist.html')
 
 @pages_bp.route('/markets')

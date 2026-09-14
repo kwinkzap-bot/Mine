@@ -11,6 +11,7 @@ def register_blueprints(app):
     from trading_app.app.routes.order_placement_api import order_placement_bp
     from trading_app.app.routes.watchlist_api import watchlist_bp
     from trading_app.app.routes.multichart_api import multichart_bp
+    from trading_app.app.routes.trend_api import trend_bp
 
     # Register blueprints
     app.register_blueprint(pages_bp)
@@ -20,3 +21,4 @@ def register_blueprints(app):
     app.register_blueprint(order_placement_bp, url_prefix='/api/order-placement')
     app.register_blueprint(watchlist_bp, url_prefix='/api/watchlist')
     app.register_blueprint(multichart_bp, url_prefix='/api/multichart')
+    app.register_blueprint(trend_bp, url_prefix='/api/trend')

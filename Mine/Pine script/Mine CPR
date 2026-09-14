@@ -56,7 +56,8 @@ kind = input.string(title="Type", defval="Camarilla", options=[TRADITIONAL, FIBO
 pivot_time_frame = input.string(title="Pivots Timeframe", defval=AUTO, options=[AUTO, DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY, BIYEARLY, TRIYEARLY, QUINQUENNIALLY, DECENNIALLY])
 look_back = input.int(title="Number of Pivots Back", defval=15, minval=1, maxval=5000, tooltip="Pine Script allows max 500 line objects. Each pivot uses ~15 lines by default (~33 pivots max). Enable 'CPR Only in History' for ~160 pivots, or disable R/S and PDH/PDL toggles for ~50 pivots.")
 hist_cpr_only  = input.bool(false, "Historical CPR Lines Only (allows more pivots back)", tooltip="When ON, only P/BC/TC are drawn for historical pivots (~160 pivots max). When OFF, all R/S/PDH/PDL lines are drawn (~33 pivots max).")
-// R1–R4 / S1–S4 — each level has its own show flag (Traditional pivots only)
+// R1–R4 / S1–S4 — each level has its own show flag. Always the traditional floor-pivot
+// formulas, independent of the Type input (Camarilla only adds its own R3/S3 below).
 show_r1 = input.bool(false, "R1", inline="show_r", group="R/S Levels")
 show_r2 = input.bool(false, "R2", inline="show_r", group="R/S Levels")
 show_r3 = input.bool(false, "R3", inline="show_r", group="R/S Levels")
@@ -69,9 +70,9 @@ show_resistance = show_r1 or show_r2 or show_r3 or show_r4
 show_support    = show_s1 or show_s2 or show_s3 or show_s4
 // PDH↔R1 / PDL↔S1 boxes — shaded band between the previous period's high/low and the first pivot level
 show_pdh_r1_box  = input.bool(true, "PDH ↔ R1 Box", inline="box_pdh", group="PDH/PDL Boxes")
-pdh_r1_box_color = input.color(color.new(#00cc66, 85), "", inline="box_pdh", group="PDH/PDL Boxes")
+pdh_r1_box_color = input.color(color.new(#00cc66, 92), "", inline="box_pdh", group="PDH/PDL Boxes")
 show_pdl_s1_box  = input.bool(true, "PDL ↔ S1 Box", inline="box_pdl", group="PDH/PDL Boxes")
-pdl_s1_box_color = input.color(color.new(#ff0000, 85), "", inline="box_pdl", group="PDH/PDL Boxes")
+pdl_s1_box_color = input.color(color.new(#ff0000, 92), "", inline="box_pdl", group="PDH/PDL Boxes")
 hist_show_pdhl  = input.bool(false, "Show PDH/PDL in History", tooltip="Disable to save 2 lines per pivot.")
 is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip="When this option is unchecked, Pivot Points will use intraday data while calculating on intraday charts. If Extended Hours are displayed on the chart, they will be taken into account during the pivot level calculation. If intraday OHLC values are different from daily-based values (normal for stocks), the pivot levels will also differ.")
 show_labels = input.bool(title="Show Labels", defval=false, inline="labels")
@@ -355,7 +356,7 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
             if shadow
                 array.push(fills, linefill.new(_lbc, _ltc, _virgin ? color.new(vcpr_fill, vcpr_transp) : color.new(pivotColor, cprTransp)))
 
-            if not hist_cpr_only and show_resistance and kind == TRADITIONAL
+            if not hist_cpr_only and show_resistance
                 line _lr1 = na
                 line _lr2 = na
                 if show_r1
@@ -374,7 +375,7 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
                 if shadow and not na(_lr1) and not na(_lr2)
                     array.push(fills, linefill.new(_lr1, _lr2, color.new(greenColor, rsTransp)))
 
-            if not hist_cpr_only and show_support and kind == TRADITIONAL
+            if not hist_cpr_only and show_support
                 line _ls1 = na
                 line _ls2 = na
                 if show_s1
@@ -479,7 +480,7 @@ if barstate.islast and fsd
     
     _f_range = ftime_pdh - ftime_pdl
 
-    if kind == TRADITIONAL
+    if show_resistance or show_support
         if show_r1
             f_r1 := line.new(next_start, ftime_r1, next_end, ftime_r1, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
         if show_r2
@@ -579,6 +580,110 @@ p60  = plot(showMCPR and show1hCPR ? m60_pivot : na, title="1h P",  color=h1_lin
 bc60 = plot(showMCPR and show1hCPR ? m60_bc    : na, title="1h BC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
 tc60 = plot(showMCPR and show1hCPR ? m60_tc    : na, title="1h TC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
 fill(bc60, tc60, color=showMCPR and show1hCPR ? h1_fill_color : na)
+
+//--------Weekly CPR---------------------------------------------------------------------------------------------
+// Weekly CPR — pivot from the previous completed week's H/L/C, one band per
+// week, with its own Virgin tracking. Shown only on 15-min and below: above
+// that the main CPR's AUTO resolution is already "W", so it would duplicate.
+
+wcpr_show     = input.bool(true, "Show Weekly CPR", group="Weekly CPR")
+wcpr_back     = input.int(8, "Weeks Back", minval=1, maxval=100, group="Weekly CPR", tooltip="Each week uses 3 lines and 1 fill from the shared 500-line budget.")
+wcpr_width    = input.int(1, "Line Width", minval=1, maxval=4, group="Weekly CPR")
+wcpr_line_col = input.color(#B8860B, "Line Colour", group="Weekly CPR", inline="wcpr_col")
+wcpr_fill_col = input.color(#B8860B, "Shadow Colour", group="Weekly CPR", inline="wcpr_col")
+wcpr_transp   = input.int(85, "Shadow Transparency", minval=0, maxval=100, group="Weekly CPR")
+wcpr_labels   = input.bool(false, "Show Labels", group="Weekly CPR")
+// Virgin Weekly CPR — a weekly band no candle traded into during its own week.
+// Same rule as the daily Virgin CPR above, on the weekly session instead.
+wcpr_vshow    = input.bool(true, "Highlight Virgin Weekly CPR", group="Weekly CPR", tooltip="A weekly CPR is virgin when no candle traded into its BC-TC band during its own week. Only the shadow changes colour; the lines keep the normal look.")
+wcpr_vextend  = input.bool(true, "Extend until touched", group="Weekly CPR", tooltip="Virgin weekly CPRs are extended to the right and stop at the end of the week in which price first touches the band. Still-untouched ones run to the right edge of the chart.")
+// Virgin bands use the same shadow colour, just less transparent, so they read as a darker
+// shade of the normal weekly band rather than a different colour.
+wcpr_vtransp  = input.int(60, "Virgin Shadow Transparency", minval=0, maxval=100, group="Weekly CPR", tooltip="Lower than Shadow Transparency = darker than the normal weekly band.")
+
+wcpr_visible = wcpr_show and timeframe.isintraday and timeframe.multiplier <= 15
+
+// Previous completed week's H/L/C — [1] on the weekly series, so the live week never repaints
+[wk_h, wk_l, wk_c] = request.security(syminfo.tickerid, "W", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+wk_pivot = (wk_h + wk_l + wk_c) / 3.0
+wk_bc    = (wk_h + wk_l) / 2.0
+wk_tc    = wk_pivot - wk_bc + wk_pivot
+
+// One entry per week, kept in step
+var w_t0     = array.new_int()      // first bar of the week
+var w_t1     = array.new_int()      // close of the week
+var w_p      = array.new_float()
+var w_bc     = array.new_float()
+var w_tc     = array.new_float()
+var w_virgin = array.new_bool()     // true while the band was never touched in its own week
+var w_vtouch = array.new_int()      // close time of the week in which it is first touched afterwards
+var w_lines  = array.new_line()
+var w_fills  = array.new_linefill()
+var w_labels = array.new_label()
+var w_dirty  = false                // something changed since the last redraw
+
+w_is_new_week = ta.change(time("W")) != 0
+
+if wcpr_visible and w_is_new_week and not na(wk_pivot)
+    array.push(w_t0, time)
+    array.push(w_t1, time_close("W"))
+    array.push(w_p, wk_pivot)
+    array.push(w_bc, wk_bc)
+    array.push(w_tc, wk_tc)
+    array.push(w_virgin, true)
+    array.push(w_vtouch, int(na))
+    if array.size(w_t0) > wcpr_back
+        array.shift(w_t0), array.shift(w_t1)
+        array.shift(w_p), array.shift(w_bc), array.shift(w_tc)
+        array.shift(w_virgin), array.shift(w_vtouch)
+    w_dirty := true
+
+// Virgin tracking — runs on every bar. The live week loses its virginity the
+// moment price trades into its band; older virgin weeks remember the END of
+// the week in which a candle finally reaches them, and stop extending there.
+if wcpr_visible and array.size(w_p) > 0
+    _wcur = array.size(w_p) - 1
+    for i = 0 to _wcur
+        _wlo = math.min(array.get(w_bc, i), array.get(w_tc, i))
+        _whi = math.max(array.get(w_bc, i), array.get(w_tc, i))
+        _whit = high >= _wlo and low <= _whi
+        if _whit and i == _wcur
+            array.set(w_virgin, i, false)
+        else if _whit and i < _wcur and array.get(w_virgin, i) and na(array.get(w_vtouch, i))
+            array.set(w_vtouch, i, nz(time_close("W"), time))
+            w_dirty := true
+
+// Redraw on the last bar whenever a week was added or a virgin band was touched
+if wcpr_visible and barstate.islast and w_dirty and array.size(w_t0) > 0
+    w_dirty := false
+    while array.size(w_lines) > 0
+        line.delete(array.pop(w_lines))
+    while array.size(w_fills) > 0
+        linefill.delete(array.pop(w_fills))
+    while array.size(w_labels) > 0
+        label.delete(array.pop(w_labels))
+
+    _wlast = array.size(w_t0) - 1
+    for i = 0 to _wlast
+        _wx1 = array.get(w_t0, i)
+        _wx2 = array.get(w_t1, i)
+        // The running week is still forming, so it is never styled virgin yet
+        _wvirgin = wcpr_vshow and i < _wlast and array.get(w_virgin, i)
+        _wext = extend.none
+        if _wvirgin and wcpr_vextend
+            _wvt = array.get(w_vtouch, i)
+            if na(_wvt)
+                _wext := extend.right         // never touched — carry it into the future
+            else if _wvt > _wx2
+                _wx2 := _wvt                  // stop at the end of the touch week
+        _wlp  = line.new(_wx1, array.get(w_p, i),  _wx2, array.get(w_p, i),  xloc=xloc.bar_time, color=wcpr_line_col, width=wcpr_width, extend=_wext)
+        _wlbc = line.new(_wx1, array.get(w_bc, i), _wx2, array.get(w_bc, i), xloc=xloc.bar_time, color=wcpr_line_col, width=wcpr_width, extend=_wext)
+        _wltc = line.new(_wx1, array.get(w_tc, i), _wx2, array.get(w_tc, i), xloc=xloc.bar_time, color=wcpr_line_col, width=wcpr_width, extend=_wext)
+        array.push(w_lines, _wlp), array.push(w_lines, _wlbc), array.push(w_lines, _wltc)
+        if shadow
+            array.push(w_fills, linefill.new(_wlbc, _wltc, color.new(wcpr_fill_col, _wvirgin ? wcpr_vtransp : wcpr_transp)))
+        if wcpr_labels
+            array.push(w_labels, label.new(_wx1, array.get(w_p, i), _wvirgin ? "Virgin W-CPR" : "W-CPR", xloc=xloc.bar_time, style=label.style_label_left, color=#00000000, textcolor=wcpr_line_col, size=size.small))
 
 //===============================================================================================================================
 

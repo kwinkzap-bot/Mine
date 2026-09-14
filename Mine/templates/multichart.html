@@ -40,6 +40,15 @@
         </div>
 
         <span class="mc-live" id="mcLive" title="Live feed"><i class="mc-dot"></i><span id="mcLiveText">connecting</span></span>
+
+        <!-- Phone only (see the 700px block in the stylesheet): folds the app
+             nav away so the charts start at the top of the screen. Same
+             control as Order Placement's — a per-browser view preference,
+             never sent anywhere. The button itself always stays, or there
+             would be no way back. -->
+        <button type="button" class="mc-btn mc-chrome" id="mcChrome"
+                aria-pressed="false" aria-label="Hide the nav bar"
+                title="Hide the nav bar on this screen">▴</button>
     </div>
 
     <!-- 2×2 grid; a pane's ⛶ swaps the grid for that pane alone. -->

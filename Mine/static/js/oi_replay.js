@@ -130,7 +130,7 @@ let oipAllStrikes = [];
 let oipCurrentPrice = 0;
 let oipSymbol = 'NIFTY';
 let oipLotSize = 50, oipStrikeStep = 50;
-let oipInterval = 'minute';    // matches the TF select's default option
+let oipInterval = '5minute';   // matches the TF select's default option
 let oipMode = 'change';
 let oipRafId = null;
 let oipOIChartReady = false;
@@ -750,6 +750,11 @@ const OIP_MINE_DAILY_TTL_MS = 5 * 60 * 1000;
 // carry no CPR reads as the indicator not loading — so the cap is the
 // popup's maximum here, and the user can lower it.
 const OIP_REPLAY_MINE_DEFAULTS = { pivotsBack: 200 };
+// The daily rows the pivots read reach back to here, whatever the timeframe's
+// chart window is: a replay on any 2025 date still finds its previous day and
+// week in the set, where Multichart's 120-day default would leave the levels
+// to the loaded candles — which on 1m never hold the previous week at all.
+const OIP_REPLAY_MINE_DAILY_FROM = '2025-01-01';
 let oipMineCprSettings = {};
 let oipMinePane = null;                       // { chart, series, lines, primitive } for MineCPR.attach
 let oipMineDaily = { symbol: null, rows: [], at: 0, pending: null };
@@ -830,7 +835,7 @@ function oipLoadMineDaily() {
     if (d.pending) return;
     if (d.symbol === oipSymbol && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
     const symbol = oipSymbol;
-    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day`, { credentials: 'same-origin' })
+    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day&daily_from=${OIP_REPLAY_MINE_DAILY_FROM}`, { credentials: 'same-origin' })
         .then(r => r.json())
         .then(body => {
             d.pending = null;
@@ -1955,10 +1960,104 @@ function oipInitPremiumSeries() {
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
+// ── Resizable chart blocks ───────────────────────────────────────────────
+// Each .oip-resize-grip in oi_replay.html sits under one chart wrapper and
+// names it in data-resize-target. Dragging the grip sets that wrapper's
+// height inline (which beats --oip-replay-chart-h in the CSS); the wrapper's
+// ResizeObserver then re-sizes the LightweightCharts canvas, so nothing here
+// touches a chart directly — except the Round Strike block, whose height is
+// base + an optional ΔOI pane and is owned by oi_profile_round_strike.js.
+// That file exposes oipRSSetUserChartHeight for exactly this, and restores
+// its own saved height on init; this file restores the index chart's.
+//
+// The saved height is per block and per browser (localStorage), and a
+// double-click on the grip clears it so the CSS default comes back.
+const OIP_REPLAY_CHART_H_KEY = 'oipReplay_chartH_v1';
+const OIP_REPLAY_RESIZE_MIN = 180;
+const OIP_REPLAY_RESIZE_MAX = 1400;
+
+function oipReplayClampHeight(px) {
+    return Math.max(OIP_REPLAY_RESIZE_MIN, Math.min(OIP_REPLAY_RESIZE_MAX, Math.round(px)));
+}
+
+function oipReplayRestoreChartHeight() {
+    const wrap = document.getElementById('oipChartWrap');
+    if (!wrap) return;
+    let px = null;
+    try { px = parseInt(localStorage.getItem(OIP_REPLAY_CHART_H_KEY), 10); } catch (e) {}
+    if (Number.isFinite(px)) wrap.style.height = `${oipReplayClampHeight(px)}px`;
+}
+
+// The two targets persist differently, so the apply/reset pair is looked up
+// per target rather than written into the drag handler.
+function oipReplayResizeTarget(id) {
+    if (id === 'oipRSCombinedChartWrap') {
+        return {
+            apply: (px) => window.oipRSSetUserChartHeight?.(px),
+            reset: () => window.oipRSSetUserChartHeight?.(null),
+        };
+    }
+    const wrap = document.getElementById(id);
+    return {
+        apply: (px) => {
+            wrap.style.height = `${px}px`;
+            try { localStorage.setItem(OIP_REPLAY_CHART_H_KEY, String(px)); } catch (e) {}
+        },
+        reset: () => {
+            wrap.style.height = '';
+            try { localStorage.removeItem(OIP_REPLAY_CHART_H_KEY); } catch (e) {}
+        },
+    };
+}
+
+function oipReplayInitResizers() {
+    document.querySelectorAll('.oip-resize-grip[data-resize-target]').forEach(grip => {
+        const wrap = document.getElementById(grip.dataset.resizeTarget);
+        if (!wrap) return;
+        const target = oipReplayResizeTarget(wrap.id);
+        let startY = 0, startH = 0, raf = null, pending = null;
+
+        const flush = () => {
+            raf = null;
+            if (pending != null) target.apply(pending);
+            pending = null;
+        };
+
+        grip.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            startY = e.clientY;
+            startH = wrap.getBoundingClientRect().height;
+            grip.classList.add('is-dragging');
+            grip.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        });
+        grip.addEventListener('pointermove', (e) => {
+            if (!grip.classList.contains('is-dragging')) return;
+            pending = oipReplayClampHeight(startH + (e.clientY - startY));
+            // One apply per frame — the chart re-lays out on every height
+            // change, and pointermove fires far more often than it can paint.
+            if (!raf) raf = requestAnimationFrame(flush);
+        });
+        const end = (e) => {
+            if (!grip.classList.contains('is-dragging')) return;
+            grip.classList.remove('is-dragging');
+            try { grip.releasePointerCapture(e.pointerId); } catch (err) {}
+            if (raf) { cancelAnimationFrame(raf); flush(); }
+        };
+        grip.addEventListener('pointerup', end);
+        grip.addEventListener('pointercancel', end);
+        grip.addEventListener('dblclick', () => target.reset());
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems();
     oipInitIndicatorsPopup('oip-ind-replay-v4');
+    // Before the chart is created, so it is born at the remembered height
+    // rather than snapping to it a frame later.
+    oipReplayRestoreChartHeight();
+    oipReplayInitResizers();
     // Replay opens on today and looks back OIP_REPLAY_WINDOW_DAYS[interval] sessions.
     // It used to open on the year to date, which made the very first fetch a
     // year of candles; the page now has one date and a fixed window behind it.

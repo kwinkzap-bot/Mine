@@ -70,6 +70,32 @@
         } catch (e) { /* storage blocked — the page still works */ }
     }
     const PAGE_DEFAULTS = { countdown: true, futVolume: true };   // page settings that are not Pine inputs
+
+    // A per-browser view preference, kept apart from the chart state above
+    // so it never rides along with a symbol/timeframe save. Guarded like the
+    // rest: blocked storage must not stop the page rendering.
+    const CHROME_KEY = 'mc.hideChrome';
+    function readChrome() {
+        try { return localStorage.getItem(CHROME_KEY) === '1'; } catch (e) { return false; }
+    }
+    function applyChrome(hidden) {
+        document.body.classList.toggle('mc-bare', hidden);
+        const btn = $('mcChrome');
+        const label = hidden ? 'Show the nav bar' : 'Hide the nav bar on this screen';
+        btn.textContent = hidden ? '▾' : '▴';
+        btn.setAttribute('aria-pressed', String(hidden));
+        btn.setAttribute('aria-label', label);
+        btn.title = label;
+    }
+    function initChrome() {
+        applyChrome(readChrome());
+        $('mcChrome').addEventListener('click', () => {
+            const hidden = !document.body.classList.contains('mc-bare');
+            applyChrome(hidden);
+            try { localStorage.setItem(CHROME_KEY, hidden ? '1' : '0'); } catch (e) { /* not fatal */ }
+            fitGrid();   // the grid's height is measured from its top, which just moved
+        });
+    }
     const setting = key => (key in state.settings) ? state.settings[key]
         : (key in PAGE_DEFAULTS) ? PAGE_DEFAULTS[key] : MineCPR.DEFAULTS[key];
 
@@ -573,6 +599,7 @@
     async function init() {
         if (typeof LightweightCharts === 'undefined') { banner('Chart library failed to load (CDN blocked?)'); return; }
         restore();
+        initChrome();   // before fitGrid: the nav's height decides where the grid starts
         document.title = `${state.symbol} · Multichart`;
         for (let i = 0; i < 4; i++) state.panes.push(buildPane(i));
         if (state.maximised !== null) { const m = state.maximised; state.maximised = null; toggleMax(m); }

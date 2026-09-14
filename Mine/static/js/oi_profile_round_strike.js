@@ -346,10 +346,41 @@ const OIP_RS_OI_CHG_PANE_HEIGHT = 150;
 // there by the time this file parses.
 const OIP_RS_REPLAY_CHART_HEIGHT = 390;   // must equal --oip-replay-chart-h
 const OIP_RS_PROFILE_CHART_HEIGHT = 600;
-const OIP_RS_BASE_CHART_HEIGHT =
+const OIP_RS_DEFAULT_CHART_HEIGHT =
     (typeof window !== 'undefined' && window.oipReplayMode)
         ? OIP_RS_REPLAY_CHART_HEIGHT
         : OIP_RS_PROFILE_CHART_HEIGHT;
+
+// Replay lets the user drag this block taller or shorter (the grip under it,
+// see oipReplayInitResizers in oi_replay.js). What they drag is the WHOLE
+// wrapper, so the saved figure is the total and the base is that minus the
+// ΔOI pane if one is showing — otherwise toggling the pane on would grow the
+// block past where they put it. Null means "use the default". OI Profile
+// has no grip and never reads this.
+const OIP_RS_USER_CHART_H_KEY = 'oipReplay_rsChartH_v1';
+let oipRSUserChartHeight = null;
+try {
+    const v = parseInt(localStorage.getItem(OIP_RS_USER_CHART_H_KEY), 10);
+    if (window.oipReplayMode && Number.isFinite(v)) oipRSUserChartHeight = v;
+} catch (e) {}
+
+function oipRSBaseChartHeight() {
+    if (oipRSUserChartHeight == null) return OIP_RS_DEFAULT_CHART_HEIGHT;
+    const extra = oipRSOiChgPane ? OIP_RS_OI_CHG_PANE_HEIGHT : 0;
+    return Math.max(120, oipRSUserChartHeight - extra);
+}
+
+// Called by the Replay grip with the wrapper's new total height, or null to
+// forget it. Persists and re-applies in one go.
+function oipRSSetUserChartHeight(px) {
+    oipRSUserChartHeight = Number.isFinite(px) ? Math.round(px) : null;
+    try {
+        if (oipRSUserChartHeight == null) localStorage.removeItem(OIP_RS_USER_CHART_H_KEY);
+        else localStorage.setItem(OIP_RS_USER_CHART_H_KEY, String(oipRSUserChartHeight));
+    } catch (e) {}
+    oipRSApplyOiChgChartHeight();
+}
+if (typeof window !== 'undefined') window.oipRSSetUserChartHeight = oipRSSetUserChartHeight;
 
 function oipRSSetChartHeight(px) {
     try { oipRSChart?.chart?.applyOptions({ height: px }); } catch (e) {}
@@ -367,7 +398,7 @@ function oipRSSetChartHeight(px) {
 // their 575 and a ΔOI pane is still 100.
 function oipRSApplyOiChgChartHeight() {
     const extra = oipRSOiChgPane ? OIP_RS_OI_CHG_PANE_HEIGHT : 0;
-    oipRSSetChartHeight(OIP_RS_BASE_CHART_HEIGHT + extra);
+    oipRSSetChartHeight(oipRSBaseChartHeight() + extra);
     if (oipRSOiChgPane) {
         try { oipRSOiChgPane.setHeight(OIP_RS_OI_CHG_PANE_HEIGHT); } catch (e) {}
     }
@@ -525,7 +556,7 @@ function oipRSSyncOiChgPane() {
     // destroy helpers each size the chart themselves, but destroy returns early
     // when there was no series to remove — so a page opening with BOTH legs off
     // would never size the wrapper at all, leaving it on .oip-chart-wrap's
-    // hardcoded 575px CSS instead of OIP_RS_BASE_CHART_HEIGHT. Harmless while
+    // hardcoded 575px CSS instead of oipRSBaseChartHeight(). Harmless while
     // those two numbers happened to be equal; wrong the moment they differ.
     oipRSApplyOiChgChartHeight();
     oipRSUpdateOiChangeSeries(oipRSLastCeData, oipRSLastPeData);
@@ -875,7 +906,7 @@ function oipRSInitCharts() {
         // needs the CURRENT interval, not the one at attach time (same
         // reasoning as the main OI chart's ray tool).
         isCombined: true, timeframe: () => oipRSInterval,
-        options: { height: OIP_RS_BASE_CHART_HEIGHT },
+        options: { height: oipRSBaseChartHeight() },
         // The DeltaOI panes run to millions of contracts, which the default 2dp
         // formatter rendered as "-2500000.00" — six digits of noise on a narrow
         // axis. Compact ticks only kick in at a lakh, so the premium axis on the

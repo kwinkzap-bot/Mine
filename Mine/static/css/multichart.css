@@ -98,6 +98,17 @@
 }
 .mc-btn:hover, .mc-btn.on { color: var(--color-text); border-color: var(--color-accent); }
 
+/* Phone-only control: on a wide screen there is nothing to reclaim, and a
+   button that hides the app's nav on a desktop would only ever be pressed by
+   accident. Shown by the 700px block at the end of this file. */
+.mc-chrome {
+    display: none;
+    width: 26px;
+    padding: 0;
+    justify-content: center;
+    font-size: 10px;
+}
+
 .mc-live { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--color-text-3); white-space: nowrap; }
 .mc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-3); }
 .mc-live.open .mc-dot { background: var(--color-pos); box-shadow: 0 0 0 3px rgba(22, 163, 74, .18); }
@@ -234,7 +245,7 @@
 /* Small screens: the toolbar and pane headers drop a size so the symbol,
    quote, Indicators and live dot still share one row. */
 @media (max-width: 900px) {
-    .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(220px, 1fr)); }
+    .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(220px, 1fr)); gap: 0px; }
     .mc-page { --mc-ctl-h: 20px; }
     .mc-toolbar { gap: 4px 6px; min-height: 24px; }
     .mc-title { font-size: 11px; }
@@ -251,6 +262,14 @@
     .mc-ohlc { font-size: 9.5px; }
     .mc-pane-cpr { font-size: 8px; }
 }
-@media (max-width: 640px) {
-    .mc-title { display: none; }
+/* Below 700 the nav bar can go: charts are the whole point of the page and
+   a phone has no height to spare above them. The title stays — the toolbar
+   wraps, so it costs nothing the charts would otherwise have. The class
+   lands on <body> because the nav is outside this page's markup; scoping the
+   rule to this block means a phone preference can never take the nav bar
+   away on a desktop. The grid is re-fitted by JS after the toggle, since its
+   height is measured from wherever the toolbar ends. */
+@media (max-width: 700px) {
+    .mc-chrome { display: inline-flex; }
+    body.mc-bare .navigation-bar { display: none; }
 }

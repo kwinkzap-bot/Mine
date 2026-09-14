@@ -1567,6 +1567,10 @@ body.ocean-theme .oip-tooltip {
     min-width: 180px;
     width: max-content;
     max-width: 320px;
+    /* The list outgrew the viewport once the Mine CPR sections joined it;
+       scroll inside the popup rather than lose its tail under the toolbar. */
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
     font-size: 12px;
 }
 .oip-ind-popup.hidden { display: none; }
@@ -2194,4 +2198,54 @@ body.dark-theme .oip-oo-cancel-all,
 .oip-page--replay #oipChartWrap {
     flex: 0 0 auto;
     height: var(--oip-replay-chart-h);
+}
+
+/* Drag handle under each Replay chart — a slim strip with a centred grip
+   line. oipReplayInitResizers (oi_replay.js) turns a vertical drag on it into
+   an inline height on the wrapper named by data-resize-target, which beats
+   the CSS heights above; the charts' ResizeObservers do the rest. It sits
+   inside the card (not over the time axis) so the card grows with the chart. */
+.oip-resize-grip {
+    flex: 0 0 auto;
+    height: 10px;
+    cursor: ns-resize;
+    position: relative;
+    background: var(--oip-header-bg);
+    border-top: 1px solid var(--oip-hairline);
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+    touch-action: none;
+    user-select: none;
+    transition: background-color 0.15s ease;
+}
+
+.oip-resize-grip::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 36px;
+    height: 3px;
+    transform: translate(-50%, -50%);
+    border-radius: 2px;
+    background: var(--oip-border);
+    transition: background-color 0.15s ease, width 0.15s ease;
+}
+
+.oip-resize-grip:hover,
+.oip-resize-grip.is-dragging {
+    background: var(--oip-ctl-bg-hover);
+}
+
+.oip-resize-grip:hover::before,
+.oip-resize-grip.is-dragging::before {
+    width: 48px;
+    background: var(--oip-accent);
+}
+
+/* The grip now closes the card, so the chart wrap above it loses the rounded
+   bottom it had as the last child. */
+.oip-page--replay #oipChartWrap {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
 }

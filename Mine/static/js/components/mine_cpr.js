@@ -4,8 +4,8 @@
  * `MineCPR.compute(candles, interval, daily, settings)` is pure: it turns one
  * pane's candles into per-bar lines (EMA ×5, VWAP ×3) and a flat list of
  * time-spanned drawing elements (CPR shelves and their shadow, R/S levels,
- * PDH↔R1 / PDL↔S1 boxes, Future CPR, Multi-CPR shelves, 2nd-candle and Monday
- * boxes). `MineCPR.attach(pane, result)` puts them on a Lightweight Charts v5
+ * PDH↔R1 / PDL↔S1 boxes, Future CPR, Weekly CPR, Multi-CPR shelves,
+ * 2nd-candle and Monday boxes). `MineCPR.attach(pane, result)` puts them on a Lightweight Charts v5
  * pane: lines as LineSeries, everything else through ONE canvas primitive,
  * which is what keeps four live panes cheap — the OI Profile page draws each
  * pivot level as its own series and cannot afford to run four times.
@@ -35,8 +35,13 @@ window.MineCPR = (function () {
         s1: false, s2: false, s3: false, s4: false,
         camR3S3: true,
         pdhR1Box: true, pdlS1Box: true, histPdhl: true,     // PDH/PDL on — the one default that departs from the script
+        boxTransp: 92,                        // PDH↔R1 / PDL↔S1 fills: lighter than the script's 85 so the candles stay readable inside them
         virgin: true, virginExtend: true, virginTransp: 65,
         futureCpr: false,
+        // Weekly CPR overlaid on lower timeframes, its own colour so it reads
+        // apart from the daily shelf; virgin weeks deeper still.
+        weeklyCpr: true, weeklyShadow: true, weeklyTransp: 82, weeklyBack: 26,
+        weeklyVirgin: true, weeklyVirginExtend: true, weeklyVirginTransp: 68,
         labels: false,
         emaAll: false, ema9: true, ema20: true, ema50: true, ema100: false, ema200: true,
         multiCpr: false, mcpr15: false, mcpr30: false, mcpr60: true,
@@ -55,11 +60,13 @@ window.MineCPR = (function () {
         mcpr15: '#f97316', mcpr30: '#0d9488', mcpr60: '#9333ea',
         box5m: '#00D2FF', box1m: '#FF6B6B', monday: '#000000', mondayDark: '#facc15',
         vwapCur: '#2563eb', vwapPrev: '#f97316', vwapAvg3: '#ef4444',
+        weekly: '#b45309', weeklyFill: '#f59e0b', weeklyVirginFill: '#d97706',   // amber shelf; virgin: the same amber, a shade deeper
     };
     // The script's navy / dark-green / black are drawn for a white chart;
     // on a dark one they vanish, so those few keys get lighter twins.
     const DARK_COLORS = Object.assign({}, LIGHT_COLORS, {
         cpr: '#93c5fd', r: '#4ade80', ema200: LIGHT_COLORS.ema200Dark, monday: LIGHT_COLORS.mondayDark,
+        weekly: '#fbbf24',
     });
     const COLORS = LIGHT_COLORS;   // exported palette (the popup's swatches)
 
@@ -92,6 +99,7 @@ window.MineCPR = (function () {
             show1mBox: intraday && mult <= 1,
             showMonday: intraday && mult <= 60,
             showVwap: intraday && mult <= 15,
+            showWeekly: intraday && mult <= 15,   // where the main CPR is daily; 30m+ already anchor on the week
         };
     }
 
@@ -280,7 +288,6 @@ window.MineCPR = (function () {
         if (S.cpr && periods.length > 1) {
             const showR = ['r1', 'r2', 'r3', 'r4'].filter(k => S[k]);
             const showS = ['s1', 's2', 's3', 's4'].filter(k => S[k]);
-            const rsOn = S.kind !== 'camarilla';
             const first = Math.max(1, periods.length - S.pivotsBack);
             for (let i = first; i < periods.length; i++) {
                 const prev = periods[i - 1], cur = periods[i];
@@ -326,17 +333,18 @@ window.MineCPR = (function () {
                 els.push({ kind: 'line', x1, x2, extendRight, y: lv.bc, color: cprColor, width: 1, label: lbl && 'BC', scale: sc });
                 els.push({ kind: 'line', x1, x2, extendRight, y: lv.tc, color: cprColor, width: 1, label: lbl && 'TC', scale: sc });
 
-                // R/S lines (Traditional / Fibonacci only), R1–R2 and S1–S2 shadows
+                // R/S lines and the R1–R2 / S1–S2 shadows. Drawn under every
+                // pivot type: Camarilla only changes R3/S3 (its own pair below),
+                // the R/S arrays hold the traditional / fibonacci levels
+                // regardless, exactly like pdhR1Box reads lv.r1 under Camarilla.
                 const rx2 = cur.endIdx, rExt = isLive && !S.futureCpr;
-                if (rsOn) {
-                    for (const k of showR) els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv[k], color: COLORS.r, width: 1, label: lbl && k.toUpperCase() });
-                    for (const k of showS) els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv[k], color: COLORS.s, width: 1, label: lbl && k.toUpperCase() });
-                    if (S.shadow && S.r1 && S.r2) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: lv.r2, y2: lv.r1, fill: withAlpha(COLORS.rFill, S.rsTransp) });
-                    if (S.shadow && S.s1 && S.s2) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: lv.s1, y2: lv.s2, fill: withAlpha(COLORS.sFill, S.rsTransp) });
-                }
+                for (const k of showR) els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv[k], color: COLORS.r, width: 1, label: lbl && k.toUpperCase() });
+                for (const k of showS) els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv[k], color: COLORS.s, width: 1, label: lbl && k.toUpperCase() });
+                if (S.shadow && S.r1 && S.r2) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: lv.r2, y2: lv.r1, fill: withAlpha(COLORS.rFill, S.rsTransp) });
+                if (S.shadow && S.s1 && S.s2) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: lv.s1, y2: lv.s2, fill: withAlpha(COLORS.sFill, S.rsTransp) });
                 // PDH↔R1 / PDL↔S1 boxes — independent of the R/S flags and the kind
-                if (S.pdhR1Box) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: Math.max(lv.pdh, lv.r1), y2: Math.min(lv.pdh, lv.r1), fill: withAlpha(COLORS.pdhBox, 85) });
-                if (S.pdlS1Box) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: Math.max(lv.pdl, lv.s1), y2: Math.min(lv.pdl, lv.s1), fill: withAlpha(COLORS.pdlBox, 85) });
+                if (S.pdhR1Box) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: Math.max(lv.pdh, lv.r1), y2: Math.min(lv.pdh, lv.r1), fill: withAlpha(COLORS.pdhBox, S.boxTransp) });
+                if (S.pdlS1Box) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: Math.max(lv.pdl, lv.s1), y2: Math.min(lv.pdl, lv.s1), fill: withAlpha(COLORS.pdlBox, S.boxTransp) });
                 // Camarilla R3/S3
                 if (S.camR3S3 && S.kind === 'camarilla') {
                     els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv.cr3, color: COLORS.cam, width: 2, label: lbl && 'R3', scale: sc });
@@ -362,18 +370,73 @@ window.MineCPR = (function () {
             els.push(Object.assign({}, f, { y: lv.bc, color: COLORS.cpr }));
             els.push(Object.assign({}, f, { y: lv.tc, color: COLORS.cpr }));
             if (S.shadow) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.bc, lv.tc), y2: Math.min(lv.bc, lv.tc), fill: withAlpha(COLORS.cprFill, S.cprTransp) });
-            if (S.kind !== 'camarilla') {
-                for (const k of ['r1', 'r2', 'r3', 'r4']) if (S[k]) els.push(Object.assign({}, f, { y: lv[k], color: COLORS.r }));
-                for (const k of ['s1', 's2', 's3', 's4']) if (S[k]) els.push(Object.assign({}, f, { y: lv[k], color: COLORS.s }));
-            }
-            if (S.pdhR1Box) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.pdh, lv.r1), y2: Math.min(lv.pdh, lv.r1), fill: withAlpha(COLORS.pdhBox, 85) });
-            if (S.pdlS1Box) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.pdl, lv.s1), y2: Math.min(lv.pdl, lv.s1), fill: withAlpha(COLORS.pdlBox, 85) });
+            for (const k of ['r1', 'r2', 'r3', 'r4']) if (S[k]) els.push(Object.assign({}, f, { y: lv[k], color: COLORS.r }));
+            for (const k of ['s1', 's2', 's3', 's4']) if (S[k]) els.push(Object.assign({}, f, { y: lv[k], color: COLORS.s }));
+            if (S.pdhR1Box) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.pdh, lv.r1), y2: Math.min(lv.pdh, lv.r1), fill: withAlpha(COLORS.pdhBox, S.boxTransp) });
+            if (S.pdlS1Box) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.pdl, lv.s1), y2: Math.min(lv.pdl, lv.s1), fill: withAlpha(COLORS.pdlBox, S.boxTransp) });
             if (S.camR3S3 && S.kind === 'camarilla') {
                 els.push(Object.assign({}, f, { y: lv.cr3, color: COLORS.cam, width: 2 }));
                 els.push(Object.assign({}, f, { y: lv.cs3, color: COLORS.cam, width: 2 }));
             }
             els.push(Object.assign({}, f, { y: lv.pdh, color: withAlpha(COLORS.pdhl, 10) }));
             els.push(Object.assign({}, f, { y: lv.pdl, color: withAlpha(COLORS.pdhl, 10) }));
+        }
+
+        // ── Weekly CPR on lower timeframes: the previous calendar week's
+        //    H/L/C shelf (P / BC / TC) over every week on the chart, in its
+        //    own colour. On 1m–15m the candles never reach back a week, so
+        //    the source is the exchange's daily bars folded by week — with
+        //    the candles' own previous week as the fallback, as the daily
+        //    CPR does before the daily rows arrive. A week is virgin when no
+        //    candle traded into its band during the week itself; it then
+        //    gets the deeper fill and runs right until the end of the first
+        //    session that touches it. Only ≤15m, where Auto anchors the main
+        //    CPR on the day; and skipped if that CPR was set to Weekly by
+        //    hand: one shelf, not two.
+        if (S.weeklyCpr && tf.showWeekly && !(S.cpr && anchor === 'week')) {
+            const weeks = groupBy(candles, t => periodKey(t, 'week'));
+            const byWeek = (daily && daily.length) ? periodOhlcFromDaily(daily, 'week') : null;
+            const prevWeekKey = key => {
+                const d = new Date(`${key}T00:00:00Z`);
+                d.setUTCDate(d.getUTCDate() - 7);
+                return d.toISOString().slice(0, 10);
+            };
+            const firstTouch = (a, b, lo, hi) => { for (let k = a; k <= b; k++) if (candles[k].low <= hi && candles[k].high >= lo) return k; return -1; };
+            const first = Math.max(0, weeks.length - S.weeklyBack);
+            for (let i = first; i < weeks.length; i++) {
+                const cur = weeks[i];
+                const fromDaily = byWeek && byWeek[prevWeekKey(cur.key)];
+                const fromBars = i > 0 ? weeks[i - 1] : null;
+                const src = S.dailyBased ? (fromDaily || fromBars) : (fromBars || fromDaily);
+                if (!src) continue;
+                const lv = pivotLevels(src.high, src.low, src.close, S.kind);
+                const bandLo = Math.min(lv.bc, lv.tc), bandHi = Math.max(lv.bc, lv.tc);
+                const isLive = i === weeks.length - 1;
+
+                let virgin = false, x2 = cur.endIdx, extendRight = false;
+                if (S.weeklyVirgin && !isLive && firstTouch(cur.startIdx, cur.endIdx, bandLo, bandHi) < 0) {
+                    virgin = true;
+                    if (S.weeklyVirginExtend) {
+                        const hit = firstTouch(cur.endIdx + 1, lastIdx, bandLo, bandHi);
+                        if (hit < 0) extendRight = true;                       // still untouched — into the future
+                        else {                                                 // to the end of the touch session
+                            const day = dayKey(candles[hit].time);
+                            x2 = hit;
+                            while (x2 + 1 <= lastIdx && dayKey(candles[x2 + 1].time) === day) x2++;
+                        }
+                    }
+                }
+                if (isLive && !S.futureCpr) extendRight = true;
+
+                const x1 = cur.startIdx, lbl = S.labels;
+                if (S.weeklyShadow) {
+                    els.push({ kind: 'rect', x1, x2, extendRight, y1: bandHi, y2: bandLo,
+                               fill: virgin ? withAlpha(COLORS.weeklyVirginFill, S.weeklyVirginTransp) : withAlpha(COLORS.weeklyFill, S.weeklyTransp) });
+                }
+                els.push({ kind: 'line', x1, x2, extendRight, y: lv.pp, color: COLORS.weekly, width: 1, label: lbl && 'WP' });
+                els.push({ kind: 'line', x1, x2, extendRight, y: lv.bc, color: COLORS.weekly, width: 1, label: lbl && 'WBC' });
+                els.push({ kind: 'line', x1, x2, extendRight, y: lv.tc, color: COLORS.weekly, width: 1, label: lbl && 'WTC' });
+            }
         }
 
         // ── Multi CPR (≤15m): 15/30/60-minute blocks, each shelf from the
@@ -602,7 +665,7 @@ window.MineCPR = (function () {
             { key: 'pivotsBack', type: 'number', label: 'Pivots back', min: 1, max: 200 },
             { key: 'dailyBased', label: 'Use daily-based values' },
             { key: 'camR3S3', label: 'R3 / S3 (Camarilla)', color: COLORS.cam },
-            { row: 'R levels', keys: ['r1', 'r2', 'r3', 'r4'], color: COLORS.r, note: 'Traditional / Fibonacci' },
+            { row: 'R levels', keys: ['r1', 'r2', 'r3', 'r4'], color: COLORS.r },
             { row: 'S levels', keys: ['s1', 's2', 's3', 's4'], color: COLORS.s },
             { key: 'pdhR1Box', label: 'PDH ↔ R1 box', color: COLORS.pdhBox },
             { key: 'pdlS1Box', label: 'PDL ↔ S1 box', color: COLORS.pdlBox },
@@ -611,6 +674,13 @@ window.MineCPR = (function () {
             { key: 'virginExtend', label: 'Extend until touched', sub: true },
             { key: 'futureCpr', label: 'Future CPR (dashed)' },
             { key: 'labels', label: 'Level labels' },
+        ] },
+        { title: 'Weekly CPR', gate: 'showWeekly', gateLabel: '≤15m', items: [
+            { key: 'weeklyCpr', label: 'Weekly CPR — P / BC / TC', color: COLORS.weekly },
+            { key: 'weeklyShadow', label: 'Weekly shadow', sub: true, color: COLORS.weeklyFill },
+            { key: 'weeklyVirgin', label: 'Highlight virgin weekly CPR', sub: true, color: COLORS.weeklyVirginFill },
+            { key: 'weeklyVirginExtend', label: 'Extend until touched', sub: true },
+            { key: 'weeklyBack', type: 'number', label: 'Weeks back', min: 1, max: 200, sub: true },
         ] },
         { title: 'Multi CPR', gate: 'showMCPR', gateLabel: '≤15m', items: [
             { key: 'multiCpr', label: 'Multi CPR' },

@@ -153,6 +153,30 @@
        standalone Contracts page (table fills the rest of the viewport) — it
        must not apply here, where .ac-page just wraps a small analysis block. */
     .td-page .ac-page { height: auto; }
+
+    /* ── CPR Manual vs Chart ─────────────────────────────────────
+       Each analysis cell stacks the sheet's reading over the chart's
+       and tints by agreement; the numbers behind the chart's verdict
+       sit under it in small type so a disagreement can be judged
+       without opening the detail row. */
+    .td-cpr-cell { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+    .td-cpr-manual { font-weight: 700; }
+    .td-cpr-chart  { color: var(--dg-text-2, var(--td-muted)); }
+    .td-cpr-why    { font-size: 9.5px; color: var(--dg-text-3, var(--td-muted)); font-variant-numeric: tabular-nums; }
+    .dg-table .dg-td.td-cpr-ok  { background: color-mix(in srgb, var(--dg-pos) 6%, transparent); }
+    .dg-table .dg-td.td-cpr-bad { background: color-mix(in srgb, var(--dg-neg) 6%, transparent); }
+    .td-cpr-sum { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .td-cpr-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--td-border); border-radius: 999px; font-size: 11px; color: var(--td-muted); white-space: nowrap; }
+    .td-cpr-chip b { color: var(--td-text); font-variant-numeric: tabular-nums; }
+    .td-cpr-chip .pos { color: var(--dg-pos); }
+    .td-cpr-chip .neg { color: var(--dg-neg); }
+    .dg-table .td-cpr-row-nodata .dg-td { opacity: .55; }
+    .td-cpr-multi { font-size: 10.5px; font-weight: 700; color: var(--td-accent); white-space: nowrap; }
+    .td-cpr-subgrid { padding: 6px 8px 2px 28px; }
+    .td-cpr-subgrid .dg-table { font-size: 10.5px; }
+    .td-cpr-reason { min-width: 260px; max-width: 420px; white-space: normal; font-size: 10.5px; }
+    .td-cpr-reason b { color: var(--td-muted); font-weight: 700; margin-right: 3px; }
+    .td-cpr-note { font-size: 10px; color: var(--td-muted); margin-top: 6px; line-height: 1.4; }
 </style>
 {% endblock %}
 
@@ -189,6 +213,17 @@
                 <span style="font-size:11px;color:var(--pf-text-3)">Running 5-year analysis…</span>
             </div>
         </div>
+    </div>
+
+    <!-- CPR Manual vs Chart: the hand-analysed CPR sheet beside the chart's own reading -->
+    <div class="td-card" style="margin-bottom:10px;">
+        <div class="td-card-hdr">
+            <h2>CPR Manual vs Chart</h2>
+            <div class="td-card-hdr-meta" id="tdCprMeta"></div>
+        </div>
+        <div class="td-cpr-sum" id="tdCprSummary"></div>
+        <div id="tdCprBacktest"><span style="font-size:11px;color:var(--td-muted)">Loading the CPR sheet…</span></div>
+        <div class="td-cpr-note" id="tdCprNote"></div>
     </div>
 
     <!-- Market Direction (mirrors the Contracts route's analysis block) -->
