@@ -1667,6 +1667,81 @@ body.ocean-theme .sm-gl-overlay {
     color: var(--ag-pos, #16a34a);
 }
 
+/* ── Invested vs Current graph: the 📈 icons and their popup ─────── */
+.sm-graph-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 0.82rem;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 50%;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-accent-dim);
+    color: var(--ag-text-2);
+    transition: border-color .15s, background .15s, transform .12s;
+    flex-shrink: 0;
+}
+.sm-graph-btn:hover {
+    border-color: var(--ag-accent);
+    transform: translateY(-1px);
+}
+/* On the card title the icon sits inline with the index name */
+.sm-graph-btn-card {
+    width: 20px;
+    height: 20px;
+    font-size: 0.72rem;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.sm-value-chart-modal { max-width: 820px; }
+.sm-value-chart-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 320px;
+    height: 46vh;
+    padding: 12px 16px 6px;
+}
+.sm-value-chart-wrap .sm-signal-loading,
+.sm-value-chart-wrap .sm-signal-error {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.5;
+}
+.sm-mstat-red { color: var(--ag-neg, #dc2626); }
+.sm-vc-span {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--ag-text-3, #94a3b8);
+}
+/* The popup hangs off <body>, outside .algo-page, so the --ag-btn-* tokens
+   .ag-btn-preview reads are undefined there — style the button in full. */
+.sm-vc-snapshot-btn {
+    flex-shrink: 0;
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    background: transparent;
+    color: var(--color-accent, #3b82f6);
+    border: 1.5px solid var(--color-accent, #3b82f6);
+    transition: background .15s, transform .1s;
+}
+.sm-vc-snapshot-btn:hover:not(:disabled) {
+    background: var(--color-accent-dim, rgba(59,130,246,.1));
+    transform: translateY(-1px);
+}
+.sm-vc-snapshot-btn:disabled { opacity: .6; cursor: default; }
+
 /* ── SIP/SWP history type tags ─────────────────────────────────── */
 .sm-mtag {
     display: inline-block; margin-left: 6px; padding: 1px 6px;

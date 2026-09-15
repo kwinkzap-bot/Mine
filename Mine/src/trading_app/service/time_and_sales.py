@@ -34,11 +34,23 @@ implying parity with Dhan.
 ISOLATION
 ---------
 Nothing here can reach the live algos. This module imports provider_logic and
-nothing else from the app: no algo package, no order service, no scheduler. It
-never calls live_candle_fallback.record_tick/record_quote, so it cannot inject
-anything into the tick store behind `allow_synthetic` bars. It places no
-orders and has no code path that could. The only writes are its own module
-globals, its own pickle under data/tape/ and the SQLite archive beside it.
+big_print_alerts and nothing else from the app: no algo package, no order
+service, no scheduler. It never calls live_candle_fallback.record_tick/
+record_quote, so it cannot inject anything into the tick store behind
+`allow_synthetic` bars. It places no orders and has no code path that could.
+The only writes are its own module globals, its own pickle under data/tape/
+and the SQLite archive beside it.
+
+BIG PRINTS
+----------
+Every NEW row passes through big_print_alerts.observe on its way in — the one
+place a print is seen exactly once, whichever path brought it (socket tick,
+opening backfill, top-up bar). That is where the Round Strike blue bar's bell
+and Telegram message fire. For that to work with no tab open, the standing
+watch (RS_BIG_PRINT_WATCH, default on) keeps the NIFTY front future hot all
+session, so the tape fills and the alert rings whether or not anyone is
+looking at the chart. Cost: the same socket and one Breeze request a minute
+that an open tab already spent.
 
 HISTORY
 -------
@@ -63,6 +75,8 @@ from contextlib import contextmanager
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from time import monotonic, sleep
 from typing import Any, Deque, Dict, List, Optional, Tuple
+
+from trading_app.service import big_print_alerts as _alerts
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +149,12 @@ _TOPUP_MAX_REQUESTS = 8
 # Long enough to mean "not again today". The day rollover clears it.
 _DONE_FOR_THE_DAY = 6 * 3600.0
 
+# The standing watch — see BIG PRINTS above. The root whose front future is
+# kept hot, and how long to wait before asking the Fyers master for its symbol
+# again after a miss (a token not yet logged in at the open, for instance).
+_WATCH_ROOT = 'NIFTY'
+_WATCH_RETRY_SEC = 60.0
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Store
@@ -170,6 +190,10 @@ _SEEN: Dict[str, Dict[str, int]] = {}
 _TOPUP_AT: Dict[str, float] = {}
 _TOPUP_BUSY: set = set()
 
+# The watched contract's Fyers symbol once resolved, and when to try again.
+_watch_symbol: Optional[str] = None
+_watch_retry_at: float = 0.0
+
 _socket: Any = None
 _socket_started_at: float = 0.0
 _last_push_at: float = 0.0
@@ -199,7 +223,7 @@ def _roll_day_if_needed() -> date:
     The app runs for days at a time under the LaunchAgent, so without this
     Monday's tab would open showing Friday's prints.
     """
-    global _tape_day
+    global _tape_day, _watch_symbol
     today = _today()
     with _lock:
         if _tape_day != today:
@@ -215,6 +239,7 @@ def _roll_day_if_needed() -> date:
             _SEEN.clear()
             _TOPUP_AT.clear()
             _subscribed.clear()
+            _watch_symbol = None                 # next session may be a new front month
     return today
 
 
@@ -279,6 +304,9 @@ def _note_row(symbol: str, row: Dict[str, Any]) -> None:
         cov = _COVERAGE.setdefault(symbol, [0, 0])
         cov[0] += qty
         cov[1] += row['vol_delta']
+
+    # The one place a print is new exactly once — see BIG PRINTS above.
+    _alerts.observe(symbol, row)
 
 
 def _append_row(symbol: str, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -513,6 +541,7 @@ def _supervisor_loop() -> None:
     while True:
         try:
             now = monotonic()
+            _keep_watch_hot()
             with _lock:
                 _roll_day_if_needed()
                 for stale in [s for s, seen in _HOT.items() if now - seen > HOT_TTL_SEC]:
@@ -551,6 +580,60 @@ def _supervisor_loop() -> None:
         except Exception as e:                   # never let the thread die
             logger.debug(f"[TimeAndSales] supervisor iteration failed: {e}")
         sleep(_SUPERVISOR_TICK_SEC)
+
+
+def _watch_enabled() -> bool:
+    return _alerts.flag('RS_BIG_PRINT_WATCH')
+
+
+def _watch_window_open() -> bool:
+    """The session plus two minutes: long enough past the bell for one more
+    top-up pass to settle the last minute into Σ bars before the symbol is
+    allowed to go cold."""
+    now = datetime.now(IST)
+    if now.weekday() >= 5:
+        return False
+    close = datetime.combine(now.date(), MARKET_CLOSE, IST) + timedelta(minutes=2)
+    return MARKET_OPEN <= now.time() and now <= close
+
+
+def _keep_watch_hot() -> None:
+    """Register the watched front future on every supervisor tick while the
+    market is open, so it never goes cold between tabs.
+
+    The symbol comes from the Fyers master and is resolved lazily: at the
+    open the token may not be in yet, and a miss is retried a minute later
+    rather than every 5s. Resolved once per process — the front month does
+    not change inside a session — and re-resolved after a day roll so the
+    week after an expiry picks up the next contract.
+    """
+    global _watch_symbol, _watch_retry_at
+    if not _watch_window_open() or not _watch_enabled():
+        return
+    now = monotonic()
+    if _watch_symbol is None:
+        if now < _watch_retry_at:
+            return
+        _watch_retry_at = now + _WATCH_RETRY_SEC
+        try:
+            from trading_app.service.provider_logic import get_fyers_adapter
+            adapter = get_fyers_adapter()
+            _watch_symbol = adapter.find_future_symbol(_WATCH_ROOT) if adapter else None
+        except Exception as e:
+            logger.debug(f"[TimeAndSales] watch symbol lookup failed: {e}")
+            _watch_symbol = None
+        if not _watch_symbol:
+            return
+        logger.info(f"[TimeAndSales] watching {_watch_symbol} for big prints")
+    register(_watch_symbol)
+
+
+def start_watch() -> None:
+    """Bring the supervisor up so the standing watch can run without a tab
+    ever having opened. Called once at app start; a no-op when the watch is
+    off, so a process that never wants the tape never starts the thread."""
+    if _watch_enabled():
+        _ensure_supervisor()
 
 
 def _ensure_supervisor() -> None:

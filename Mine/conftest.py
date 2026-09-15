@@ -42,3 +42,15 @@ def _block_outbound_side_effects(monkeypatch):
             lambda self, *a, **k: {"success": True, "blocked_in_tests": True})
     except Exception:
         pass
+    # The Swing Momentum value ledger (algo/swing_momentum/sm_daily_values.csv)
+    # is written from /signal/<id> as a side effect of pricing a card, so any
+    # test that drives that route would otherwise put its fixture's numbers
+    # into the real sheet — the one the Live Watch graphs plot. Every test
+    # gets a scratch copy; the ledger's own tests patch the same name.
+    try:
+        import tempfile
+        from trading_app.algo.swing_momentum import sm_value_history as vh
+        monkeypatch.setattr(vh, "SM_DAILY_VALUES_PATH",
+                            os.path.join(tempfile.mkdtemp(), "sm_daily_values.csv"))
+    except Exception:
+        pass

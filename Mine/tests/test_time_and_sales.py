@@ -15,30 +15,61 @@ volume the user is trying to reason about.
 from datetime import datetime, time, timedelta, timezone
 from unittest import mock
 
+import os
+
 import pytest
 
 from trading_app.service import time_and_sales as tas
+from trading_app.service import big_print_alerts as bpa
 
 IST = timezone(timedelta(hours=5, minutes=30))
 SYMBOL = 'NSE:TESTFUT'
 
 
 @pytest.fixture(autouse=True)
-def clean_tape(tmp_path):
+def clean_tape(tmp_path, alert_env):
     """A fresh store per test, pinned to today so the rollover never fires.
 
     The snapshot dir and the archive are pointed at tmp_path for EVERY test:
     a top-up that stands down for the day now writes both, and the real
-    data/tape/ holds the only copy of days nobody can re-record.
+    data/tape/ holds the only copy of days nobody can re-record. The
+    big-print alert's env and ledger are likewise redirected (alert_env):
+    every row now passes through it, and a test pushing a 12,000-lot print
+    must never read the real Telegram credentials.
     """
     tas.reset()
     tas._tape_day = datetime.now(IST).date()
     tape_dir = tmp_path / 'tape'
     with mock.patch.object(tas, '_market_is_open', return_value=True), \
+         mock.patch.object(tas, '_watch_enabled', return_value=False), \
          mock.patch.object(tas, '_TAPE_DIR', str(tape_dir)), \
          mock.patch.object(tas, '_ARCHIVE_DB', str(tape_dir / 'tape.db')):
         yield
     tas.reset()
+
+
+@pytest.fixture
+def alert_env(tmp_path, monkeypatch):
+    """Route the alert's env reads at a dict, capture the bell and Telegram,
+    make its send thread synchronous, and give it a ledger under tmp_path.
+    Yields (env, bells, telegrams); tests mutate `env` to set flags."""
+    env = {}
+    bells, telegrams = [], []
+    monkeypatch.setattr(bpa, '_uvar', lambda key, default='': env.get(key, default))
+    monkeypatch.setattr(bpa, '_LEDGER_PATH', str(tmp_path / 'tape' / 'big_print_alerts.json'))
+    import trading_app.service.notification_service as ns
+    monkeypatch.setattr(ns, 'create_notification',
+                        lambda category, title, data, summary=None: bells.append(
+                            {'category': category, 'title': title, 'summary': summary, 'data': data}) or 1)
+    import trading_app.service.telegram_service as tg
+    class _Svc:
+        def __init__(self, token=None, chat_id=None): self.to = (token, chat_id)
+        def send_text(self, message): telegrams.append((self.to, message)); return {'success': True}
+    monkeypatch.setattr(tg, 'TelegramService', _Svc)
+    monkeypatch.setattr(bpa, '_spawn', lambda target, args: target(*args))
+    bpa.reset()
+    yield env, bells, telegrams
+    bpa.reset()
 
 
 def push(**kw):
@@ -792,93 +823,166 @@ def test_round_strike_asks_for_prints_at_the_size_the_popup_sent():
     assert seen == [('live', 5000), ('archive', 5000), ('live', 8000), ('archive', 8000), ('live', 5000)]
 
 
-def _alert_env(monkeypatch, api, env):
-    """Route the alert's env reads at a dict, capture the bell, and make the
-    Telegram thread synchronous so its send is observable."""
-    monkeypatch.setattr(api, '_rs_uvar', lambda key, default='': env.get(key, default))
-    bells, telegrams = [], []
-    import trading_app.service.notification_service as ns
-    monkeypatch.setattr(ns, 'create_notification',
-                        lambda category, title, data, summary=None: bells.append(
-                            {'category': category, 'title': title, 'summary': summary, 'data': data}) or 1)
-    import trading_app.service.telegram_service as tg
-    class _Svc:
-        def __init__(self, token=None, chat_id=None): self.to = (token, chat_id)
-        def send_text(self, message): telegrams.append((self.to, message)); return {'success': True}
-    monkeypatch.setattr(tg, 'TelegramService', _Svc)
-    class _Now:
-        def __init__(self, target=None, daemon=None, name=None): self.target = target
-        def start(self): self.target()
-    monkeypatch.setattr(api.threading, 'Thread', _Now)
-    monkeypatch.setattr(api, '_RS_BIG_PRINT_ALERTED', {})
-    return bells, telegrams
-
-
-def _fresh_bar_fixture():
-    """Two tagged bars: one on the last minute (fresh), one from an hour ago."""
+def _now_ts():
     import time as _t
-    ist = 19800
-    now = int(_t.time())
-    fresh_start = now - (now % 60) - 60
-    old_start = fresh_start - 3600
-    bars = [{'time': old_start + ist, 'volume': 500, 'big': True, 'big_qty': 8100},
-            {'time': fresh_start + ist, 'volume': 900, 'big': True, 'big_qty': 9500},
-            {'time': fresh_start + 60 + ist, 'volume': 20}]
-    prints = [{'ts': old_start + 5, 'qty': 8100, 'price': 24800.0, 'side': 'sell', 'src': 'tick'},
-              {'ts': fresh_start + 3, 'qty': 8000, 'price': 24810.0, 'side': 'buy', 'src': 'tick'},
-              {'ts': fresh_start + 40, 'qty': 9500, 'price': 24812.5, 'side': 'buy', 'src': 'bar'}]
-    return bars, prints, ist, fresh_start
+    return int(_t.time())
 
 
-def test_round_strike_rings_once_per_fresh_blue_bar(monkeypatch):
-    """A bar that just turned blue rings the bell and Telegram exactly once —
-    not again on the next second's poll, and never for a bar tagged an hour
-    ago (a lowered threshold re-tags the whole day; none of that is news)."""
-    from trading_app.app.routes import api
-    env = {'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'}   # flags unset = on
-    bells, telegrams = _alert_env(monkeypatch, api, env)
-    bars, prints, ist, fresh_start = _fresh_bar_fixture()
+def _live(env, **kw):
+    """Telegram credentials present, both channels on unless `env` says not."""
+    env.update({'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'})
+    env.update(kw)
 
-    api._rs_alert_big_prints('NIFTY', 'NSE:NIFTY26SEPFUT', bars, prints, 'minute', ist, 8000)
-    api._rs_alert_big_prints('NIFTY', 'NSE:NIFTY26SEPFUT', bars, prints, 'minute', ist, 8000)
 
-    assert len(bells) == 1 and len(telegrams) == 1
+def test_a_big_print_rings_the_moment_it_enters_the_tape(alert_env):
+    """The bell and Telegram fire from the store, once per print — not from
+    the chart's poll, so no tab need be open and nothing is re-rung a second
+    later."""
+    env, bells, telegrams = alert_env
+    _live(env)
+    now = _now_ts()
+    push(last_traded_time=now - 30, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=now - 20, last_traded_qty=9500, vol_traded_today=20000, ltp=24812.5)
+    push(last_traded_time=now - 10, last_traded_qty=8000, vol_traded_today=30000, ltp=24810.0)
+
+    assert [b['data']['qty'] for b in bells] == [9500, 8000]
     b = bells[0]
     assert b['category'] == 'rs_big_print'
-    assert b['data']['qty'] == 9500 and b['data']['side'] == 'BUY'      # the bar's LARGEST print
-    assert b['data']['price'] == 24812.5 and b['data']['threshold'] == 8000
-    assert b['data']['bar_volume'] == 900 and b['data']['contract'] == 'NSE:NIFTY26SEPFUT'
-    assert '9,500' in b['title'] and 'NIFTY' in b['title']
+    assert b['data']['price'] == 24812.5 and b['data']['side'] == 'BUY'
+    assert b['data']['threshold'] == 8000 and b['data']['contract'] == SYMBOL
+    assert '9,500' in b['title']
     to, message = telegrams[0]
     assert to == ('tok', 'chat')
     assert '9,500 contracts' in message and 'threshold 8,000' in message
 
 
-def test_round_strike_alert_flags_gate_each_channel(monkeypatch):
-    from trading_app.app.routes import api
-    bars, prints, ist, _ = _fresh_bar_fixture()
-    args = ('NIFTY', 'NSE:NIFTY26SEPFUT', bars, prints, 'minute', ist, 8000)
+def test_a_print_below_the_threshold_or_too_old_stays_quiet(alert_env):
+    env, bells, telegrams = alert_env
+    _live(env)
+    now = _now_ts()
+    push(last_traded_time=now - 3600, last_traded_qty=12000, vol_traded_today=1000)   # an hour old
+    push(last_traded_time=now - 5, last_traded_qty=7999, vol_traded_today=9000)      # one short
+    assert bells == [] and telegrams == []
 
-    env = {'RS_BIG_PRINT_NOTIFY': 'false', 'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'}
-    bells, telegrams = _alert_env(monkeypatch, api, env)
-    api._rs_alert_big_prints(*args)
-    assert (len(bells), len(telegrams)) == (0, 1)
 
-    env = {'RS_BIG_PRINT_TELEGRAM': 'false', 'TELEGRAM_BOT_TOKEN': 'tok', 'TELEGRAM_CHAT_ID': 'chat'}
-    bells, telegrams = _alert_env(monkeypatch, api, env)
-    api._rs_alert_big_prints(*args)
-    assert (len(bells), len(telegrams)) == (1, 0)
+def test_the_bar_that_replaces_a_rung_tick_does_not_ring_again(alert_env):
+    """A top-up swaps the live prints for Σ bars on the same seconds — the
+    same trades seen twice. Dedup is by exchange second, so the bar is quiet
+    where the tick already rang and rings where it did not."""
+    env, bells, _ = alert_env
+    _live(env)
+    now = _now_ts()
+    t = now - 60
+    push(last_traded_time=t, last_traded_qty=9000, vol_traded_today=9000)
+    push(last_traded_time=t + 1, last_traded_qty=65, vol_traded_today=9100)
+    assert [b['data']['qty'] for b in bells] == [9000]
+    bars = [{'date': t, 'open': 100, 'close': 101, 'volume': 9400},        # holds the rung 9,000
+            {'date': t + 1, 'open': 101, 'close': 100, 'volume': 8500}]    # the 65 was the tip of 8,500
+    assert tas._rebuild(SYMBOL, tas._bar_rows(bars), t + 1)
+    assert [(b['data']['qty'], b['data']['source']) for b in bells] == [(9000, 'tick'), (8500, 'bar')]
 
-    # Telegram on but no credentials: silently the bell alone.
-    bells, telegrams = _alert_env(monkeypatch, api, {})
-    api._rs_alert_big_prints(*args)
-    assert (len(bells), len(telegrams)) == (1, 0)
 
-    # Both off: nothing, and nothing recorded as rung either.
-    env = {'RS_BIG_PRINT_NOTIFY': 'false', 'RS_BIG_PRINT_TELEGRAM': 'false'}
-    bells, telegrams = _alert_env(monkeypatch, api, env)
-    api._rs_alert_big_prints(*args)
-    assert (len(bells), len(telegrams)) == (0, 0) and api._RS_BIG_PRINT_ALERTED == {}
+def test_a_restart_cannot_ring_twice(alert_env):
+    """The rung set lives in a ledger beside the tape, so a process that
+    comes back and re-lays the same seconds stays quiet."""
+    env, bells, _ = alert_env
+    _live(env)
+    now = _now_ts()
+    push(last_traded_time=now - 20, last_traded_qty=9500, vol_traded_today=20000)
+    assert len(bells) == 1
+    bpa.reset()                                     # a fresh process
+    tas.reset()
+    push(last_traded_time=now - 20, last_traded_qty=9500, vol_traded_today=20000)
+    assert len(bells) == 1
+
+
+def test_alert_flags_gate_each_channel(alert_env):
+    env, bells, telegrams = alert_env
+    now = _now_ts()
+    def ring(**flags):
+        env.clear(); bells.clear(); telegrams.clear(); bpa.reset(); tas.reset()
+        try: os.remove(bpa._LEDGER_PATH)             # a genuinely new print each time
+        except FileNotFoundError: pass
+        _live(env, **flags)
+        push(last_traded_time=now - 20, last_traded_qty=9500, vol_traded_today=20000)
+        return len(bells), len(telegrams)
+
+    assert ring(RS_BIG_PRINT_NOTIFY='false') == (0, 1)
+    assert ring(RS_BIG_PRINT_TELEGRAM='false') == (1, 0)
+    assert ring(TELEGRAM_BOT_TOKEN='', TELEGRAM_CHAT_ID='') == (1, 0)     # no credentials: bell alone
+    # Both off: nothing, and nothing recorded as rung either — turning a
+    # channel back on must not find the print already spent.
+    assert ring(RS_BIG_PRINT_NOTIFY='false', RS_BIG_PRINT_TELEGRAM='false') == (0, 0)
+    assert bpa._rung == set()
+
+
+def test_the_threshold_follows_the_charts_box_unless_the_env_pins_it(alert_env):
+    env, bells, _ = alert_env
+    _live(env)
+    now = _now_ts()
+    bpa.note_chart_threshold(5000)                  # the live chart's Indicators box
+    assert bpa.threshold() == 5000
+    push(last_traded_time=now - 20, last_traded_qty=6000, vol_traded_today=6000)
+    assert [b['data']['qty'] for b in bells] == [6000] and bells[0]['data']['threshold'] == 5000
+
+    bpa.reset()                                     # a restart remembers the box
+    assert bpa.threshold() == 5000
+
+    env['RS_BIG_PRINT_QTY'] = '9000'                # the env file wins over the box
+    bpa.reset()
+    bpa.note_chart_threshold(4000)
+    assert bpa.threshold() == 9000
+    push(last_traded_time=now - 10, last_traded_qty=8000, vol_traded_today=14000)
+    assert len(bells) == 1
+    bpa.note_chart_threshold('garbage')             # never a threshold that tags every bar
+    assert bpa.threshold() == 9000
+
+
+def test_the_standing_watch_keeps_the_front_future_hot(monkeypatch):
+    """With RS_BIG_PRINT_WATCH on, the supervisor registers the NIFTY front
+    future itself, resolving its symbol from the Fyers master once."""
+    calls = []
+    class _Adapter:
+        def find_future_symbol(self, root): calls.append(root); return 'NSE:NIFTY26SEPFUT'
+    import trading_app.service.provider_logic as pl
+    monkeypatch.setattr(pl, 'get_fyers_adapter', lambda user=None: _Adapter())
+    monkeypatch.setattr(tas, '_watch_enabled', lambda: True)
+    monkeypatch.setattr(tas, '_watch_window_open', lambda: True)
+    registered = []
+    monkeypatch.setattr(tas, 'register', lambda s: registered.append(s))
+    tas._watch_symbol = None
+    tas._watch_retry_at = 0.0
+    tas._keep_watch_hot()
+    tas._keep_watch_hot()
+    assert registered == ['NSE:NIFTY26SEPFUT'] * 2 and calls == ['NIFTY']
+
+    # Off, or outside the session: nothing is registered.
+    monkeypatch.setattr(tas, '_watch_window_open', lambda: False)
+    tas._keep_watch_hot()
+    assert len(registered) == 2
+    tas._watch_symbol = None
+
+
+def test_a_missed_symbol_lookup_is_retried_a_minute_later_not_every_tick(monkeypatch):
+    import trading_app.service.provider_logic as pl
+    monkeypatch.setattr(pl, 'get_fyers_adapter', lambda user=None: None)
+    monkeypatch.setattr(tas, '_watch_enabled', lambda: True)
+    monkeypatch.setattr(tas, '_watch_window_open', lambda: True)
+    registered = []
+    monkeypatch.setattr(tas, 'register', lambda s: registered.append(s))
+    tas._watch_symbol = None
+    tas._watch_retry_at = 0.0
+    tas._keep_watch_hot()
+    assert registered == [] and tas._watch_retry_at > 0
+    class _Adapter:
+        def find_future_symbol(self, root): return 'NSE:NIFTY26SEPFUT'
+    monkeypatch.setattr(pl, 'get_fyers_adapter', lambda user=None: _Adapter())
+    tas._keep_watch_hot()                           # still inside the backoff
+    assert registered == []
+    tas._watch_retry_at = 0.0
+    tas._keep_watch_hot()
+    assert registered == ['NSE:NIFTY26SEPFUT']
+    tas._watch_symbol = None
 
 
 def test_round_strike_builds_the_fyers_symbol_the_archive_is_keyed_on():

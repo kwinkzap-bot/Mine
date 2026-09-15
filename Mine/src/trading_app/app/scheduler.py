@@ -353,6 +353,23 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # Swing Momentum value ledger: one Invested / Current row per config at
+        # 15:35 IST, after the close — the point the Live Watch graphs plot.
+        self.scheduler.add_job(
+            self._run_sm_daily_values_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=15,
+                minute=35,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='sm_daily_values_record',
+            name='Swing Momentum Daily Values Record',
+            replace_existing=True,
+            misfire_grace_time=600,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -868,6 +885,18 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"[HistoricOI Scheduler] Unexpected error: {e}", exc_info=True)
 
+    def _run_sm_daily_values_task(self):
+        """3:35 PM IST: write today's Invested / Current row for every Swing
+        Momentum config into algo/swing_momentum/sm_daily_values.csv."""
+        try:
+            if not self.is_trading_day():
+                return
+            from trading_app.app.routes.api import _sm_record_daily_values
+            rows = _sm_record_daily_values()
+            logger.info(f"[SM Daily Values] {len(rows)} config(s) recorded")
+        except Exception as e:
+            logger.error(f"[SM Daily Values] Unexpected error: {e}", exc_info=True)
+
     def _run_tape_archive_task(self):
         """3:45 PM IST: park today's Time & Sales tape and fold it into the archive."""
         try:
@@ -1038,6 +1067,14 @@ class MarketScheduler:
                 logger.info(f"[Startup Catchup] Tape archive folded in {rows} rows")
         except Exception as e:
             logger.error(f"[Startup Catchup] Tape archive step failed: {e}", exc_info=True)
+        # The standing big-print watch: bring the tape's supervisor up now,
+        # so the NIFTY front future is taped — and its big prints ring — from
+        # the bell, with no tab ever having opened. Not a cron job: the
+        # supervisor is one daemon thread that idles outside market hours.
+        try:
+            tas.start_watch()
+        except Exception as e:
+            logger.error(f"[Startup Catchup] Tape watch failed to start: {e}", exc_info=True)
         try:
             self._run_historic_oi_catchup()
         except Exception as e:

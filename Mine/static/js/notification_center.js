@@ -149,12 +149,16 @@
             ['Print', `${num(payload.qty)} contracts @ ₹${num(payload.price)}` +
                 (payload.side ? ` <span class="notif-detail-${tone}">${escapeHtml(payload.side)}</span>` : '')],
             ['At', escapeHtml(payload.print_time || '—')],
-            ['Bar', `${escapeHtml(payload.bar_time || '—')} (${escapeHtml(payload.interval || '—')})`],
-            ['Bar volume', num(payload.bar_volume)],
             ['Threshold', `${num(payload.threshold)} contracts`],
             ['Contract', escapeHtml(payload.contract || '—')],
-            ['Source', escapeHtml(payload.source === 'bar' ? 'backfilled 1s bar' : 'live tick')],
+            ['Source', escapeHtml(payload.source === 'bar' ? 'one second of exchange volume (Σ bar)' : 'single live print')],
         ];
+        // Alerts rung before 2026-09-15 carried the chart bar they were seen
+        // in; a print now rings from the tape itself, so newer ones don't.
+        if (payload.bar_time) {
+            rows.splice(2, 0, ['Bar', `${escapeHtml(payload.bar_time)} (${escapeHtml(payload.interval || '—')})`],
+                              ['Bar volume', num(payload.bar_volume)]);
+        }
         return `
             <div class="notif-modal-section-title">${escapeHtml(payload.symbol)} future</div>
             <table class="notif-detail-table">

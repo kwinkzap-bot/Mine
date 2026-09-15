@@ -10,7 +10,7 @@ engine, four brokers. Treat every change as touching real orders.
 
 **Never call `create_app()` outside the real app.** It runs
 `init_extensions` → `init_scheduler` (`app/__init__.py:27` →
-`extensions.py:96` → `scheduler.py:978`), which registers 16 cron jobs and
+`extensions.py:96` → `scheduler.py:978`), which registers 17 cron jobs and
 immediately restarts the live algos. A test or REPL that imports it during
 market hours places real orders. Tests build a bare `Flask()` instead — see
 `tests/route_app.py`.
@@ -58,7 +58,7 @@ few seconds later. Booting it out is the real stop, and `bootstrap` puts it
 back.
 
 A restart takes ~8s to serve again and re-runs `init_scheduler`, so it
-re-registers the 16 cron jobs and **restarts the live algos** — the same reason
+re-registers the 17 cron jobs and **restarts the live algos** — the same reason
 `create_app()` is dangerous. Verify afterwards:
 
 ```bash
@@ -156,6 +156,22 @@ Every leg is a normal `MineOrderStore` record with `strategy='op'` plus
 `signal_id` and `leg`, which is what keeps the price box, the ✕, the
 reconciliation sweep and Exit all working on signal legs with no special case.
 Do not "tidy" that into a store of its own.
+
+## Swing Momentum value graph
+
+The 📈 icons on Live Watch (header = every config, broker row = that slot,
+card title = that config) plot **Invested vs Current, one point per day**,
+from `algo/swing_momentum/sm_daily_values.csv` — a tracked sheet, one row
+per config per day, keyed by `(date, config_id)` and carrying the broker
+slot so a removed config keeps its past. The `sm_daily_values_record` job
+writes the close at **15:35 IST**; `/signal/<id>` upserts today's row every
+time it prices a card (weekdays only), so the last point tracks the market
+while the page is open. **Snapshot now** in the popup is the same write, by
+hand. Nothing is backfilled: the graph starts the day the sheet did. The
+maths (`series()` carries a config missing one day forward inside its own
+span, never outside it) is in `sm_value_history.py`, tests in
+`tests/test_sm_value_history*.py`; `conftest.py` points every test at a
+scratch sheet because `/signal` writes as a side effect.
 
 ## EMA Confluence live mode
 

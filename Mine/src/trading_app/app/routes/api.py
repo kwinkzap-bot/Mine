@@ -542,6 +542,7 @@ def resolve_standard_lot(symbol: str) -> Optional[int]:
 
 from trading_app.service.provider_logic import get_kite, get_data_provider, get_icici_adapter, get_fyers_adapter
 from trading_app.service import time_and_sales as _tas
+from trading_app.service import big_print_alerts as _big_print_alerts
 from trading_app.Backtest import ema_futures_pricing
 from trading_app.filters import futures_candle_store
 
@@ -11747,146 +11748,13 @@ def _rs_tag_big_prints(volume_bars: list, prints: list, interval: str, ist_offse
 
 
 # ── Big-print alerts ────────────────────────────────────────────────────────
-# A bar turning blue on the LIVE Round Strike chart also rings the in-app bell
-# and sends a Telegram message, each behind its own env flag:
-#
-#   RS_BIG_PRINT_NOTIFY    in-app notification (default on)
-#   RS_BIG_PRINT_TELEGRAM  Telegram message — needs TELEGRAM_BOT_TOKEN and
-#                          TELEGRAM_CHAT_ID as well (default on)
-#
-# The trigger is the tag itself, at whatever size the popup's box asked for, so
-# what rings is exactly what the chart shows. It rides on the block's own poll:
-# the tape is live for as long as the chart is (see _rs_big_prints), so an
-# alert can only ever fire while someone has the page open — which is also why
-# it lives here and not in the collector. One alert per bar per day: several
-# tabs poll the same second and a print can enter the tape twice (socket, then
-# the top-up's bar), and both must collapse to one ping. Only a bar that is
-# still FRESH rings — a lowered threshold or a reload re-tags the whole day,
-# and none of that is news.
-_RS_BIG_PRINT_ALERT_FRESH_SEC = 300
-_RS_BIG_PRINT_ALERTED: Dict[str, set] = {}      # 'YYYY-MM-DD' -> {(tape_symbol, bar_time)}
-_RS_BIG_PRINT_ALERT_LOCK = threading.Lock()
-
-
-def _rs_uvar(key: str, default: str = '') -> str:
-    """One env value from the monitoring user's file — the same file the
-    scheduler's jobs and the OI Crossover scanner read their flags from."""
-    try:
-        from trading_app.app.utils.user_env import UserEnvManager
-        user = os.getenv('MONITORING_USERNAME', 'Mine')
-        return (UserEnvManager.get_user_var(user, key, default) or '').strip()
-    except Exception:
-        return default
-
-
-def _rs_fresh_big_print_bars(volume_bars: list, prints: list, interval: str, ist_offset: int,
-                             now_ts: Optional[int] = None) -> list:
-    """The tagged bars in `volume_bars` that are new enough to ring, oldest
-    first, each with the largest print that landed in it attached as `print`.
-    Pure — the dedup and the sending are the caller's."""
-    if not volume_bars or not prints:
-        return []
-    secs = _RS_BAR_SECONDS.get(interval, 60)
-    now_ts = int(now_ts if now_ts is not None else _time.time())
-    fresh = []
-    for b in volume_bars:
-        if not b.get('big'):
-            continue
-        start = int(b['time']) - ist_offset
-        if now_ts - start > secs + _RS_BIG_PRINT_ALERT_FRESH_SEC:
-            continue
-        inside = [pr for pr in prints if start <= int(pr['ts']) < start + secs]
-        if not inside:
-            continue
-        top = max(inside, key=lambda pr: int(pr['qty'] or 0))
-        fresh.append(dict(b, print=top))
-    fresh.sort(key=lambda b: int(b['time']))
-    return fresh
-
-
-def _rs_alert_big_prints(symbol: str, tape_symbol, volume_bars: list, prints: list,
-                         interval: str, ist_offset: int, min_qty: int) -> None:
-    """Ring for every freshly tagged bar not already rung for today. Never
-    raises: an alert that fails must not cost the chart its tick."""
-    try:
-        notify = _rs_uvar('RS_BIG_PRINT_NOTIFY', 'true').lower() != 'false'
-        telegram = _rs_uvar('RS_BIG_PRINT_TELEGRAM', 'true').lower() != 'false'
-        if not (notify or telegram):
-            return
-        fresh = _rs_fresh_big_print_bars(volume_bars, prints, interval, ist_offset)
-        if not fresh:
-            return
-        today = datetime.now().strftime('%Y-%m-%d')
-        with _RS_BIG_PRINT_ALERT_LOCK:
-            for stale in [d for d in _RS_BIG_PRINT_ALERTED if d != today]:
-                _RS_BIG_PRINT_ALERTED.pop(stale, None)
-            rung = _RS_BIG_PRINT_ALERTED.setdefault(today, set())
-            new = [b for b in fresh if (tape_symbol, int(b['time'])) not in rung]
-            rung.update((tape_symbol, int(b['time'])) for b in new)
-        for b in new:
-            _rs_send_big_print_alert(symbol, tape_symbol, b, interval, ist_offset, min_qty, notify, telegram)
-    except Exception as exc:
-        logger.error(f'[RoundStrike] big-print alert failed: {exc}')
-
-
-def _rs_send_big_print_alert(symbol: str, tape_symbol, bar: dict, interval: str, ist_offset: int,
-                             min_qty: int, notify: bool, telegram: bool) -> None:
-    pr = bar['print']
-    qty = int(pr.get('qty') or 0)
-    price = float(pr.get('price') or 0)
-    side = str(pr.get('side') or '').upper()
-    # Bar times sit on the chart's fake-IST grid; the print's own ts is real.
-    bar_hhmm = _time.strftime('%H:%M', _time.gmtime(int(bar['time'])))
-    print_hhmm = _time.strftime('%H:%M:%S', _time.gmtime(int(pr['ts']) + ist_offset))
-    payload = {
-        'symbol': symbol,
-        'contract': tape_symbol,
-        'interval': interval,
-        'bar_time': bar_hhmm,
-        'print_time': print_hhmm,
-        'qty': qty,
-        'price': price,
-        'side': side,
-        'source': pr.get('src'),
-        'bar_volume': int(bar.get('volume') or 0),
-        'threshold': int(min_qty),
-    }
-    side_txt = f' {side}' if side in ('BUY', 'SELL') else ''
-    title = f'Big print — {symbol} {qty:,} @ ₹{price:,.2f}{side_txt}'
-    summary = f'{bar_hhmm} {interval} bar · threshold {min_qty:,} · {tape_symbol or symbol}'
-
-    if notify:
-        try:
-            from trading_app.service.notification_service import create_notification
-            create_notification(category='rs_big_print', title=title, summary=summary, data=payload)
-        except Exception as exc:
-            logger.error(f'[RoundStrike] in-app big-print alert failed: {exc}')
-
-    if not telegram:
-        return
-    token = _rs_uvar('TELEGRAM_BOT_TOKEN')
-    chat_id = _rs_uvar('TELEGRAM_CHAT_ID')
-    if not (token and chat_id):
-        return
-    message = '\n'.join([
-        f'🔵 Big print — {symbol} FUT',
-        f'{qty:,} contracts @ ₹{price:,.2f}{side_txt} at {print_hhmm}',
-        f'{bar_hhmm} {interval} bar · threshold {min_qty:,}',
-        f'{tape_symbol or ""}'.strip(),
-    ]).rstrip()
-
-    def _send() -> None:
-        try:
-            from trading_app.service.telegram_service import TelegramService
-            result = TelegramService(token=token, chat_id=chat_id).send_text(message)
-            if not result.get('success'):
-                logger.error(f"[RoundStrike] Telegram big-print alert failed: {result.get('error')}")
-        except Exception as exc:
-            logger.error(f'[RoundStrike] Telegram big-print alert failed: {exc}')
-
-    # Off-thread: send_text allows a 10s HTTP timeout, and this sits on the
-    # chart's 1-second poll.
-    threading.Thread(target=_send, daemon=True, name='RsBigPrintNotify').start()
+# A bar turning blue here also rings the bell and sends a Telegram message, but
+# not from this route: big_print_alerts.observe fires the moment the print
+# enters the tape (time_and_sales._note_row), so the alert no longer depends on
+# a poll catching the tag while it is fresh, rings once per print rather than
+# per bar, survives a restart, and — with the standing watch — fires with the
+# page closed. The route's only part is to tell the alert module the size the
+# chart's box is asking for, so what rings is what the chart shows.
 
 
 def _rs_trim_days(bars: list, days: int) -> list:
@@ -12519,9 +12387,10 @@ def oi_profile_round_strike() -> EndpointResponse:
                 _rs_check_future_symbol_format(symbol, _tape_symbol)
             _prints = _rs_big_prints(_tape_symbol, not _historical, from_date.date(), to_date.date(), big_qty)
             future_volume = _rs_tag_big_prints(future_volume, _prints, interval, ist_offset)
-            # Live chart only: a replayed window is history, not news.
+            # Live chart only: the alert threshold follows the box (see
+            # big_print_alerts); a replayed window says nothing about today.
             if not _historical:
-                _rs_alert_big_prints(symbol, _tape_symbol, future_volume, _prints, interval, ist_offset, big_qty)
+                _big_print_alerts.note_chart_threshold(big_qty)
         banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
 
         oi_data      = (_rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}) if _want_header else {}
@@ -15587,6 +15456,22 @@ def sm_live_signal(config_id):
             xirr_pct        = None
             xirr_annualised = True
 
+        # Today's point on the value graph. The 15:35 job writes the close;
+        # this keeps the point tracking the market while the page is open.
+        # Nothing here may fail the response the card is waiting on. Weekends
+        # are skipped: a Saturday view would only repeat Friday's close.
+        try:
+            from trading_app.algo.swing_momentum import sm_value_history as _smvh
+            if is_trading_day():
+                _smvh.upsert_rows([_smvh.snapshot_row(config, {
+                    'invested': float(config.get('investment', 100000) or 0) + total_sip - total_swp,
+                    'current':  total_curr_val,
+                    'deployed': total_invested,
+                    'cash':     cash_bal,
+                }, today)])
+        except Exception as ve:
+            logger.warning(f'SM value ledger: skipped today\'s row for {config_id}: {ve}')
+
         return jsonify({
             'success':                True,
             'live_mode':              True,
@@ -15716,6 +15601,77 @@ def sm_live_aggregate_returns():
         })
     except Exception as e:
         logger.exception(f'SM aggregate returns failed: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── Swing Momentum: daily Invested / Current ledger ──────────────────────────
+# The graph behind the 📈 icons on Live Watch. The sheet is
+# algo/swing_momentum/sm_daily_values.csv; the maths and the CSV live in
+# sm_value_history.py so they can be tested without this module.
+
+def _sm_value_config(config: dict) -> Optional[dict]:
+    """Price one config the way the card does: money in, holdings at LTP,
+    cost of stock held, idle cash. None when nothing could be priced, so a
+    quote outage never writes a zero row."""
+    entries = config.get('live_entries') or []
+    if not entries:
+        return None
+    prices = _sm_current_prices([e['symbol'] for e in entries])
+    if not prices:
+        return None
+    current  = sum(float(prices.get(e['symbol'], e.get('entry_price', 0)) or 0)
+                   * int(e.get('qty', 0) or 0) for e in entries)
+    log      = config.get('monthly_investment_log', []) or []
+    sip      = sum(e.get('amount', 0) for e in log if (e.get('amount') or 0) > 0)
+    swp      = sum(-e.get('amount', 0) for e in log if (e.get('amount') or 0) < 0)
+    return {
+        'invested': round(float(config.get('investment', 100000) or 0) + sip - swp, 2),
+        'current':  round(current, 2),
+        'deployed': _sm_cost_basis(config),
+        'cash':     _sm_cash_balance(config),
+    }
+
+
+def _sm_record_daily_values() -> list:
+    """Write today's row for every config holding stock. Called by the 15:35
+    scheduler job and by the Snapshot button in the graph popup."""
+    from trading_app.algo.swing_momentum import sm_value_history as _smvh
+    rows = _smvh.record_snapshot(_sm_load_live_configs(), _sm_value_config,
+                                 datetime.today().date())
+    logger.info(f'SM value ledger: recorded {len(rows)} config(s) for today')
+    return rows
+
+
+@api_bp.route('/algo/swing-momentum/value-history', methods=['GET'])
+def sm_live_value_history():
+    """Daily Invested vs Current for one scope: `?scope=all`,
+    `?scope=broker&key=<slot>` or `?scope=config&key=<id>`."""
+    from trading_app.algo.swing_momentum import sm_value_history as _smvh
+    scope = (request.args.get('scope') or 'all').strip().lower()
+    key   = (request.args.get('key') or '').strip()
+    if scope not in ('all', 'broker', 'config'):
+        return jsonify({'success': False, 'error': 'scope must be all, broker or config'}), 400
+    if scope != 'all' and not key:
+        return jsonify({'success': False, 'error': 'key is required for this scope'}), 400
+    try:
+        points = _smvh.series(_smvh.load_rows(), scope, key)
+        return jsonify({'success': True, 'scope': scope, 'key': key, 'points': points})
+    except Exception as e:
+        logger.exception(f'SM value history failed: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/swing-momentum/value-history/snapshot', methods=['POST'])
+@csrf.exempt
+def sm_live_value_snapshot():
+    """Record today's row for every config now — the same write the 15:35 job
+    does, for seeding the sheet or catching a day the job missed."""
+    try:
+        rows = _sm_record_daily_values()
+        return jsonify({'success': True, 'recorded': len(rows),
+                        'date': str(datetime.today().date())})
+    except Exception as e:
+        logger.exception(f'SM value snapshot failed: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

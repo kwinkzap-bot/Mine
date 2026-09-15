@@ -1154,8 +1154,9 @@ function _smLiveRenderConfigs(configs) {
         const key = b ? `inst-${b.instance}` : '__none__';
         if (!groups.has(key)) {
             groups.set(key, {
-                gid:     b ? `inst-${b.instance}` : 'none',
-                label:   b ? (b.broker_name || b.broker_type || 'Broker') : 'None',
+                gid:      b ? `inst-${b.instance}` : 'none',
+                instance: b ? b.instance : null,   // the ledger keys broker rows by slot
+                label:    b ? (b.broker_name || b.broker_type || 'Broker') : 'None',
                 type:    b ? (b.broker_type || '') : '',
                 isNone:  !b,
                 configs: [],
@@ -1182,6 +1183,8 @@ function _smLiveRenderConfigs(configs) {
         <span class="sm-broker-group-icon">🏦</span>
         <span class="sm-broker-group-name">${g.label}</span>
         ${typeStr}
+        ${g.isNone ? '' : `<button class="sm-graph-btn" data-scope="broker" data-key="${g.instance}"
+                data-label="${g.label}" title="Invested vs Current — ${g.label}, day by day">📈</button>`}
         <span class="sm-broker-group-pnl" id="sm-grp-pnl-${g.gid}"></span>
         <span class="sm-broker-group-count">${cntLbl(g.configs.length)}</span>
     </div>
@@ -1236,6 +1239,13 @@ function _smLiveRenderConfigs(configs) {
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveReinit(btn.dataset.id); }));
     container.querySelectorAll('.sm-live-card-hdr').forEach(hdr =>
         hdr.addEventListener('click', () => _smLiveExpandToggle(hdr.dataset.id)));
+    // Graph icons on broker headers and card titles. The card one sits inside
+    // the expand/collapse header, so it must not bubble into the toggle.
+    container.querySelectorAll('.sm-graph-btn').forEach(btn =>
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            _smOpenValueChart(btn.dataset.scope, btn.dataset.key, btn.dataset.label);
+        }));
 
     // Fresh cards render enabled — re-apply whatever the header lock says.
     _smApplyCardActionsLock();
@@ -1481,7 +1491,11 @@ function _smLiveBuildCard(c) {
     <div class="sm-live-card-hdr ${hdrCls}" data-id="${c.id}">
         <span class="sm-chevron" id="sm-chev-${c.id}">&#9654;</span>
         <div class="sm-live-title-block">
-            <div class="sm-live-label">${indexLabel}</div>
+            <div class="sm-live-label">${indexLabel}
+                <button class="sm-graph-btn sm-graph-btn-card" data-scope="config" data-key="${c.id}"
+                        data-label="${indexLabel}${c.broker ? ' · ' + (c.broker.broker_name || c.broker.broker_type) : ''}"
+                        title="Invested vs Current — this config, day by day">📈</button>
+            </div>
             <div class="sm-live-subtitle">
                 <span>${freqLabel}</span>
                 <span class="sm-live-subtitle-sep">·</span>
@@ -2050,6 +2064,180 @@ function _smShowSipHistory(id) {
 </div>`;
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
+}
+
+// ── Invested vs Current graph (the 📈 icons) ─────────────────────────────────
+// One popup for three scopes: every config, one broker, one config. The
+// points come from algo/swing_momentum/sm_daily_values.csv — a row per config
+// per day, written at 15:35 and refreshed while the page prices the cards —
+// so the graph only starts on the day the sheet did. Nothing is derived from
+// the cards on screen: a config's history outlives the config.
+let _smValueChart = null;
+
+function _smOpenValueChart(scope, key, label) {
+    const existing = document.getElementById('sm-value-chart-modal');
+    if (existing) existing.remove();
+    if (_smValueChart) { _smValueChart.destroy(); _smValueChart = null; }
+
+    const modal = document.createElement('div');
+    modal.id = 'sm-value-chart-modal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box sm-value-chart-modal">
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">${label || 'Invested vs Current'}</span>
+            <span class="sm-modal-subtitle">Invested vs Current · one point per day</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('sm-value-chart-modal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+    <div class="sm-modal-stats" id="sm-vc-stats"></div>
+    <div class="sm-value-chart-wrap" id="sm-vc-wrap">
+        <div class="sm-signal-loading">Loading…</div>
+    </div>
+    <div class="sm-modal-footer sm-value-chart-footer">
+        <span class="sm-mfooter-lbl" id="sm-vc-note">Recorded at 15:35 IST every trading day</span>
+        <button class="sm-vc-snapshot-btn" id="sm-vc-snapshot"
+                title="Write today's row for every config now">Snapshot now</button>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    document.getElementById('sm-vc-snapshot').addEventListener('click', () => _smValueSnapshot(scope, key));
+    _smLoadValueChart(scope, key);
+}
+
+function _smLoadValueChart(scope, key) {
+    const wrap = document.getElementById('sm-vc-wrap');
+    if (!wrap) return;
+    const qs = `scope=${encodeURIComponent(scope)}&key=${encodeURIComponent(key || '')}`;
+    fetch(`/api/algo/swing-momentum/value-history?${qs}`)
+        .then(r => r.json())
+        .then(d => {
+            if (!document.getElementById('sm-value-chart-modal')) return;   // closed meanwhile
+            if (!d?.success) {
+                wrap.innerHTML = `<div class="sm-signal-error">⚠ ${d?.error || 'Failed to load'}</div>`;
+                return;
+            }
+            _smRenderValueChart(d.points || []);
+        })
+        .catch(() => {
+            wrap.innerHTML = '<div class="sm-signal-error">⚠ Failed to load value history</div>';
+        });
+}
+
+function _smValueSnapshot(scope, key) {
+    const btn  = document.getElementById('sm-vc-snapshot');
+    const note = document.getElementById('sm-vc-note');
+    if (btn) { btn.disabled = true; btn.textContent = 'Recording…'; }
+    fetch('/api/algo/swing-momentum/value-history/snapshot', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (note) note.textContent = d?.success
+                ? `Recorded ${d.recorded} config${d.recorded === 1 ? '' : 's'} for ${d.date}`
+                : `⚠ ${d?.error || 'Snapshot failed'}`;
+            if (d?.success) _smLoadValueChart(scope, key);
+        })
+        .catch(() => { if (note) note.textContent = '⚠ Snapshot failed'; })
+        .finally(() => { if (btn) { btn.disabled = false; btn.textContent = 'Snapshot now'; } });
+}
+
+function _smRenderValueChart(points) {
+    const wrap  = document.getElementById('sm-vc-wrap');
+    const stats = document.getElementById('sm-vc-stats');
+    if (!wrap) return;
+
+    if (!points.length) {
+        if (stats) { stats.innerHTML = ''; stats.style.display = 'none'; }
+        wrap.innerHTML = `<div class="sm-signal-loading"><div>No rows in the sheet yet for this scope.<br>
+            The first point lands at 15:35 today, or click <strong>Snapshot now</strong>.</div></div>`;
+        return;
+    }
+    if (stats) stats.style.display = '';
+
+    const last   = points[points.length - 1];
+    const first  = points[0];
+    const chg    = last.current - last.invested;
+    const chgPct = last.invested ? chg / last.invested * 100 : 0;
+    const fmtChg = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    if (stats) stats.innerHTML = `
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Invested</span>
+            <span class="sm-mstat-val">${_smFmtInr(last.invested)}</span>
+        </div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Current</span>
+            <span class="sm-mstat-val">${_smFmtInr(last.current)}</span>
+        </div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Change</span>
+            <span class="sm-mstat-val ${chg >= 0 ? 'sm-mstat-green' : 'sm-mstat-red'}">${fmtChg(chg)} (${chgPct >= 0 ? '+' : ''}${chgPct.toFixed(1)}%)</span>
+        </div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Days</span>
+            <span class="sm-mstat-val">${points.length}<span class="sm-vc-span"> · ${first.date} → ${last.date}</span></span>
+        </div>`;
+
+    wrap.innerHTML = '<canvas id="sm-vc-canvas"></canvas>';
+    const ctx = document.getElementById('sm-vc-canvas');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const fmtY = v => {
+        const a = Math.abs(v), s = v < 0 ? '-' : '';
+        if (a >= 10000000) return s + '₹' + (a / 10000000).toFixed(2) + 'Cr';
+        if (a >= 100000)   return s + '₹' + (a / 100000).toFixed(2) + 'L';
+        if (a >= 1000)     return s + '₹' + (a / 1000).toFixed(0) + 'K';
+        return s + '₹' + a;
+    };
+    const labels = points.map(p => p.date);
+    const inv    = points.map(p => p.invested);
+    const cur    = points.map(p => p.current);
+
+    if (_smValueChart) { _smValueChart.destroy(); _smValueChart = null; }
+    _smValueChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [
+            { label: 'Invested', data: inv, borderColor: 'rgba(100,116,139,.95)',
+              backgroundColor: 'rgba(100,116,139,.08)', borderDash: [5, 4],
+              fill: false, tension: 0, pointRadius: points.length > 60 ? 0 : 2.5, pointHoverRadius: 4, borderWidth: 2 },
+            { label: 'Current',  data: cur, borderColor: 'rgba(34,197,94,.95)',
+              backgroundColor: 'rgba(34,197,94,.12)',
+              fill: false, tension: 0.2, pointRadius: points.length > 60 ? 0 : 2.5, pointHoverRadius: 4, borderWidth: 2 },
+        ] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: true, position: 'top', align: 'end',
+                          labels: { boxWidth: 22, boxHeight: 2, color: '#999', font: { size: 11 } } },
+                tooltip: { callbacks: {
+                    title: items => items[0].label,
+                    label: item => `  ${item.dataset.label}: ${_smFmtInr(item.raw)}`,
+                    footer: items => {
+                        const p = points[items[0].dataIndex];
+                        const d = p.current - p.invested;
+                        const pc = p.invested ? d / p.invested * 100 : 0;
+                        return `  Change: ${fmtChg(d)} (${pc >= 0 ? '+' : ''}${pc.toFixed(1)}%)`;
+                    },
+                } },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 12, color: '#999', font: { size: 11 }, autoSkip: true, maxRotation: 0 },
+                     grid: { color: 'rgba(128,128,128,0.08)' } },
+                y: { ticks: { color: '#999', font: { size: 11 }, callback: fmtY },
+                     grid: { color: 'rgba(128,128,128,0.1)' } },
+            }
+        }
+    });
 }
 
 function _smToggleEditInv(id, currentVal) {
