@@ -183,8 +183,8 @@ def test_require_rr_skips_setups_worse_than_one_to_one():
 
 
 def test_require_rr_defaults_off(daily):
-    """Existing runs (which never pass the flag) must be byte-identical to
-    before."""
+    """Existing runs (and the live algo, which never passes the flag) must be
+    byte-identical to before."""
     trades, summary = _run(daily, '2020-01-01')
     assert trades
     assert summary['rr_skipped'] == 0

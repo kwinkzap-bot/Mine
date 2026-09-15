@@ -18,6 +18,7 @@ USER = sys.argv[1] if len(sys.argv) > 1 else 'Mine'
 
 token   = (UserEnvManager.get_user_var(USER, 'TELEGRAM_BOT_TOKEN') or '').strip()
 chat_id = (UserEnvManager.get_user_var(USER, 'TELEGRAM_CHAT_ID') or '').strip()
+enabled = (UserEnvManager.get_user_var(USER, 'EMA_CONFLUENCE_TELEGRAM') or 'true').strip()
 
 def mask(v):
     return f"set ({len(v)} chars, ...{v[-4:]})" if v else "MISSING"
@@ -25,14 +26,18 @@ def mask(v):
 print(f"env file : env/{USER}.env")
 print(f"BOT_TOKEN: {mask(token)}")
 print(f"CHAT_ID  : {chat_id or 'MISSING'}")
+print(f"EMA_CONFLUENCE_TELEGRAM: {enabled}")
 
 if not token or not chat_id:
     print("\nFAIL — fill both keys in env/%s.env, then re-run." % USER)
     sys.exit(1)
+if enabled.lower() == 'false':
+    print("\nNOTE — EMA_CONFLUENCE_TELEGRAM=false, so entry alerts stay off "
+          "even though credentials are valid.")
 
 print("\nSending test message...")
 result = TelegramService(token=token, chat_id=chat_id).send_text(
-    "✅ Trading app test — Telegram alerts are wired up correctly."
+    "✅ Trading app test — EMA Confluence entry alerts are wired up correctly."
 )
 
 if result.get('success'):

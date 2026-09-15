@@ -1,22 +1,25 @@
 """
-2nd 30-Sec Candle Live Algo Trader
-Background thread with multi-broker delta-~0.90 NIFTY option execution and
-state/history JSON; the signal is the 2nd 30-Sec Candle breakout strategy
-(see Backtest/second_candle_engine.py).
+2nd 30-Sec Candle Live Algo — PAPER TRADE ONLY.
+
+Background thread that detects the signal on live NIFTY 30-second candles and
+books a simulated delta-~0.90 option trade in state/history JSON. It never
+talks to a broker: there is no order-placement path in this module at all, so
+no BROKER_N_* flag can make it place a real order. The signal is the 2nd
+30-Sec Candle breakout strategy (see Backtest/second_candle_engine.py).
 
 Logic (NIFTY 30-second candles, ONE trade per day):
   • Read the Nth 30-sec candle of the day (default N=2) → its High/Low = the range.
-  • First breakout above range High → BUY → buy CE (delta ~0.90).
-  • First breakout below range Low  → SELL → buy PE (delta ~0.90).
+  • First breakout above range High → BUY → paper-buy CE (delta ~0.90).
+  • First breakout below range Low  → SELL → paper-buy PE (delta ~0.90).
   • SL = opposite end of the range candle; Target = entry ± rr × risk.
   • Exit on SL / Target / cut-off time / EOD. No re-entry after the first trade.
 
 Params are editable from the UI and stored in sc_state.json['params'].
 
-Env vars required in Mine.env:
-  SC_ALGO_ACTIVE=true
-  BROKER_N_SC_ACTIVE=true/false   (alongside BROKER_N_ACTIVE)
-  BROKER_N_SC_LOTS=1              (per-broker lot count)
+Env vars read from Mine.env:
+  SC_ALGO_ACTIVE=true             (kill-switch: gates signal detection)
+  SC_STRIKE_MODE                  (strike selection, see _strike_mode)
+BROKER_N_SC_ACTIVE / BROKER_N_SC_LOTS are no longer read.
 """
 import json
 import logging
@@ -137,7 +140,7 @@ def get_instance(username: str) -> Optional['SecondCandleAlgo']:
 
 
 class SecondCandleAlgo:
-    """Live 2nd 30-Sec Candle breakout detector and option order executor."""
+    """Live 2nd 30-Sec Candle breakout detector — paper option trades only."""
 
     def __init__(self, username: str):
         self.username = username
@@ -145,7 +148,6 @@ class SecondCandleAlgo:
         self._state_lock   = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         # Populated once at monitor-loop start; reused all day
-        self._broker_map: Dict[int, Tuple[str, Any]] = {}  # idx -> (broker_type, svc)
         self._instruments: List[Dict] = []
         self._expiry: Optional[date] = None
         self._lot_size: int = 75
@@ -291,7 +293,8 @@ class SecondCandleAlgo:
                 'opt_exit_price':   opt_exit_price,
                 'opt_pnl_pts':      opt_pnl_pts,
                 'opt_pnl_inr':      opt_pnl_inr,
-                'broker_entries':   trade.get('broker_entries', []),
+                'broker_entries':   [],
+                'paper':            True,
             }
             history.insert(0, record)  # latest-first
 
@@ -921,134 +924,6 @@ class SecondCandleAlgo:
         return self._select_premium_strike(opt_type, spot, provider, chain_deltas,
                                            target=_PREM250_TARGET, band_high=None)
 
-    # ── Broker management ─────────────────────────────────────────────────────
-
-    def _get_active_brokers(self) -> List[Tuple[int, str, Any]]:
-        """Return (idx, broker_type, service) for all active+SC-enabled brokers."""
-        result: List[Tuple[int, str, Any]] = []
-        for i in range(1, 11):
-            if self._uvar(f'BROKER_{i}_ACTIVE', 'false').lower() != 'true':
-                continue
-            if self._uvar(f'BROKER_{i}_SC_ACTIVE', 'false').lower() != 'true':
-                continue
-            broker_type = self._uvar(f'BROKER_{i}_TYPE', '').lower()
-            if not broker_type:
-                continue
-            try:
-                svc = self._init_broker_svc(i, broker_type)
-                if svc:
-                    result.append((i, broker_type, svc))
-            except Exception as e:
-                logger.error(f"[SC] Broker {i} ({broker_type}) init failed: {e}")
-        return result
-
-    def _init_broker_svc(self, idx: int, broker_type: str) -> Optional[Any]:
-        if broker_type == 'zerodha':
-            from trading_app.service.provider_logic import get_kite
-            from trading_app.service.kite_order_services import KiteService
-            kite = get_kite(user=self.username, instance=idx)
-            return KiteService(kite_instance=kite) if kite else None
-
-        if broker_type == 'fyers':
-            from trading_app.service.fyers_order_services import FyersOrderService
-            app_id = self._uvar(f'BROKER_{idx}_APP_ID')
-            token  = self._uvar(f'BROKER_{idx}_ACCESS_TOKEN')
-            if app_id and token:
-                return FyersOrderService(app_id=app_id, access_token=token)
-
-        if broker_type == 'kotak':
-            from trading_app.service.kotak_order_services import KotakOrderService
-            trading_token = self._uvar(f'BROKER_{idx}_TRADING_TOKEN')
-            consumer_key  = self._uvar(f'BROKER_{idx}_CONSUMER_KEY')
-            trading_sid   = self._uvar(f'BROKER_{idx}_TRADING_SID')
-            base_url      = self._uvar(f'BROKER_{idx}_BASE_URL') or 'https://e21.kotaksecurities.com'
-            if trading_token and consumer_key and trading_sid:
-                svc = KotakOrderService()
-                svc.base_url         = base_url
-                svc._order_base_url  = base_url
-                svc.trading_token    = trading_token
-                svc.trading_sid      = trading_sid
-                svc.consumer_key     = consumer_key
-                return svc
-
-        if broker_type == 'dhan':
-            from trading_app.service.dhan_order_services import DhanOrderService
-            access_token = self._uvar(f'BROKER_{idx}_ACCESS_TOKEN')
-            client_id    = self._uvar(f'BROKER_{idx}_CLIENT_ID')
-            if access_token and client_id:
-                return DhanOrderService(access_token=access_token, client_id=client_id)
-
-        return None
-
-    # ── Order placement ───────────────────────────────────────────────────────
-
-    def _place_order(
-        self,
-        idx: int,
-        broker_type: str,
-        svc: Any,
-        opt_type: str,
-        strike: float,
-        kite_ts: str,
-        fyers_sym: str,
-        quantity: int,
-        transaction_type: str,
-        product: str,
-    ) -> Optional[str]:
-        """Route a single NIFTY option order to the correct broker service."""
-        try:
-            if broker_type == 'zerodha':
-                kite_txn = (
-                    svc.kite.TRANSACTION_TYPE_BUY
-                    if transaction_type == 'BUY'
-                    else svc.kite.TRANSACTION_TYPE_SELL
-                )
-                result = svc.place_option_order(
-                    symbol='NIFTY', strike=int(strike), option_type=opt_type,
-                    transaction_type=kite_txn, quantity=quantity, product=product,
-                )
-                return str(result['order_id']) if result.get('success') else None
-
-            if broker_type == 'kotak':
-                k_txn = 'B' if transaction_type == 'BUY' else 'S'
-                result = svc.place_option_order(
-                    symbol='NIFTY', strike=int(strike), option_type=opt_type,
-                    transaction_type=k_txn, quantity=quantity, product_type=product,
-                )
-                return str(result['order_id']) if result and result.get('success') else None
-
-            if broker_type == 'dhan':
-                sec_id = svc.get_option_security_id('NIFTY', int(strike), opt_type)
-                if sec_id:
-                    result = svc.place_order(
-                        security_id=sec_id,
-                        transaction_type=transaction_type,
-                        quantity=quantity,
-                        order_type='MARKET',
-                        product_type=product,
-                        exchange_segment='NSE_FNO',
-                        price=0,
-                    )
-                    return str(result.get('order_id', '')) if result else None
-
-            if broker_type == 'fyers':
-                if fyers_sym:
-                    f_side = 1 if transaction_type == 'BUY' else -1
-                    result = svc.place_order(
-                        symbol=fyers_sym,
-                        side=f_side,
-                        quantity=quantity,
-                        order_type=2,
-                        product_type=product,
-                    )
-                    return str(result.get('order_id', '')) if result else None
-
-        except Exception as e:
-            logger.error(
-                f"[SC] [{broker_type.upper()}_{idx}] {transaction_type} order error: {e}"
-            )
-        return None
-
     # ── Delta-strike query (used by the UI "Δ Strikes" button) ───────────────
 
     def get_delta_strikes(self, provider: Any) -> Dict[str, Any]:
@@ -1102,7 +977,7 @@ class SecondCandleAlgo:
         self, direction: str, entry_ref: float, sl_level: float,
         target_level: float, provider: Any, spot: Optional[float] = None,
     ) -> None:
-        """Select delta strike, place BUY orders on all cached brokers, save state.
+        """Select the strike and book a PAPER entry in state — no broker order.
         SL/Target are computed by the caller from the 2nd-candle range."""
         opt_type = 'CE' if direction == 'BUY' else 'PE'
         # Strike/IV selection keys off where NIFTY actually is now, not off the
@@ -1123,38 +998,7 @@ class SecondCandleAlgo:
         fyers_sym = inst.get('instrument_token', '')
         kite_ts   = inst.get('tradingsymbol', '')
 
-        broker_entries: List[Dict] = []
-        for idx, (broker_type, svc) in self._broker_map.items():
-            lots     = max(1, int(self._uvar(f'BROKER_{idx}_SC_LOTS', '1') or '1'))
-            quantity = lots * self._lot_size
-            product  = self._uvar(f'BROKER_{idx}_PRODUCT_TYPE', 'NRML').upper()
-            order_id = self._place_order(
-                idx, broker_type, svc, opt_type, strike,
-                kite_ts, fyers_sym, quantity, 'BUY', product,
-            )
-            entry_success = bool(order_id)
-            broker_entries.append({
-                'broker_idx':    idx,
-                'broker_type':   broker_type,
-                'order_id':      str(order_id or ''),
-                'entry_success': entry_success,
-                'tradingsymbol': kite_ts,
-                'fyers_sym':     fyers_sym,
-                'lots':          lots,
-                'quantity':      quantity,
-            })
-            if entry_success:
-                logger.info(
-                    f"[SC] [{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)}"
-                    f" qty={quantity} ({lots} lot(s)) order_id={order_id}"
-                )
-            else:
-                logger.error(
-                    f"[SC] [{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)} FAILED"
-                    f" — no exit will be placed for this broker"
-                )
-
-        # Capture option LTP just after order placement as proxy for fill price
+        # Option LTP at the signal stands in for the paper fill price
         opt_entry_price: Optional[float] = None
         try:
             ltp_data = provider.ltp([fyers_sym])
@@ -1178,9 +1022,16 @@ class SecondCandleAlgo:
             'option_type':     opt_type,
             'lot_size':        self._lot_size,
             'expiry':          str(self._expiry),
-            'broker_entries':  broker_entries,
+            # Paper trade: nothing rests at any broker. broker_entries stays
+            # for readers that iterate it (status route, Active tab) — always
+            # empty here; the symbol and size live on the trade itself.
+            'broker_entries':  [],
+            'fyers_sym':       fyers_sym,
+            'tradingsymbol':   kite_ts,
+            'total_quantity':  int(self._lot_size),
             'opt_entry_price': opt_entry_price,
             'strike_mode':     strike_mode,
+            'paper':           True,
         }
         state['traded_today'] = True            # one trade per day
         state['trade_date']   = date.today().isoformat()
@@ -1188,8 +1039,7 @@ class SecondCandleAlgo:
         logger.info(
             f"[SC] ENTERED {direction}: entry={entry_ref} {int(strike)}{opt_type}"
             f" opt_ltp={opt_entry_price} mode={strike_mode}"
-            f" sl={sl_level} tgt={target_level} expiry={self._expiry}"
-            f" brokers={len(broker_entries)}"
+            f" sl={sl_level} tgt={target_level} expiry={self._expiry} (paper)"
         )
 
     def _exit_reference_spot(self, provider: Any, trade: Dict[str, Any]) -> float:
@@ -1226,61 +1076,29 @@ class SecondCandleAlgo:
         logger.info(f"[SC] Live-spot {reason}: spot={spot} → booking at level {level}")
 
     def _exit_trade(self, reason: str, spot: float) -> None:
-        """Square off option position on all brokers and clear active trade in state."""
+        """Book the paper exit and clear the active trade in state — no broker order."""
         state = self._load_state()
         trade = state.get('active_trade')
         if not trade:
             return
 
-        opt_type = trade['option_type']
-        strike   = trade['strike']
-
-        # Capture option LTP before exit orders for option P&L calculation
+        # Option LTP at the exit signal stands in for the paper fill price
         opt_exit_price: Optional[float] = None
         try:
             provider = getattr(self, '_provider', None)
             if provider:
-                fyers_sym = trade.get('broker_entries', [{}])[0].get('fyers_sym', '') if trade.get('broker_entries') else ''
+                # Older state files (pre-paper) carried the symbol only on
+                # their broker_entries.
+                fyers_sym = trade.get('fyers_sym') or next(
+                    (e.get('fyers_sym') for e in (trade.get('broker_entries') or [])
+                     if e.get('fyers_sym')), ''
+                )
                 if fyers_sym:
                     ltp_data = provider.ltp([fyers_sym])
                     raw = ltp_data.get(fyers_sym, {}).get('last_price', 0)
                     opt_exit_price = round(float(raw), 2) if raw else None
         except Exception as _e:
             logger.warning(f"[SC] Could not fetch option exit LTP: {_e}")
-
-        for entry in trade.get('broker_entries', []):
-            idx         = entry['broker_idx']
-            broker_type = entry.get('broker_type', 'zerodha')
-            kite_ts     = entry.get('tradingsymbol', '')
-            fyers_sym   = entry.get('fyers_sym', '')
-            quantity    = entry.get('quantity', int(trade.get('lot_size', 75)))
-            # Broker-specific guard: only square off where the entry BUY actually
-            # succeeded on this broker. Fall back to order_id for older state files
-            # written before entry_success was tracked.
-            entry_ok = entry.get('entry_success', bool(entry.get('order_id')))
-            if not entry_ok:
-                logger.warning(
-                    f"[SC] [{broker_type.upper()}_{idx}] skipping exit — entry never succeeded"
-                )
-                continue
-            try:
-                cached = self._broker_map.get(idx)
-                if cached:
-                    _, svc = cached
-                else:
-                    svc = self._init_broker_svc(idx, broker_type)
-                if svc:
-                    product  = self._uvar(f'BROKER_{idx}_PRODUCT_TYPE', 'NRML').upper()
-                    order_id = self._place_order(
-                        idx, broker_type, svc, opt_type, strike,
-                        kite_ts, fyers_sym, quantity, 'SELL', product,
-                    )
-                    logger.info(
-                        f"[SC] [{broker_type.upper()}_{idx}] SELL {opt_type} {strike}"
-                        f" qty={quantity} order_id={order_id}"
-                    )
-            except Exception as e:
-                logger.error(f"[SC] Exit order failed broker {idx}: {e}")
 
         state['active_trade'] = None
         state['last_exit'] = {
@@ -1334,16 +1152,7 @@ class SecondCandleAlgo:
             logger.info("[SC] New trading day — traded_today reset")
         self._save_state(state)
 
-        # Cache broker services once — avoids repeated session re-initialisation per trade
-        logger.info("[SC] Initialising broker services...")
-        self._broker_map = {
-            idx: (btype, svc)
-            for idx, btype, svc in self._get_active_brokers()
-        }
-        if self._broker_map:
-            logger.info(f"[SC] Active SC brokers: {list(self._broker_map.keys())}")
-        else:
-            logger.warning("[SC] No active SC brokers — signals detected but no orders placed")
+        logger.info("[SC] Paper mode — signals are booked in state only, no broker orders")
 
         # ── Wait for NFO instruments (may need a live market session) ─────────
         logger.info("[SC] Fetching NFO instruments...")

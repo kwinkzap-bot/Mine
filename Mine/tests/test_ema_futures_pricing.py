@@ -1,9 +1,9 @@
 """EMA Confluence Breakout — futures pricing / carry-forward.
 
-The properties pinned here are the ones that make the backtest describe a
-futures trade: the money moves onto the contract, an open position is carried
-forward at the roll moment, and every order — a roll's two legs included — is
-charged.
+The properties pinned here are the ones that make the backtest describe the
+trade the live algo actually places: the money moves onto the contract, an open
+position is carried forward at the same roll moment the live algo uses, and
+every order — a roll's two legs included — is charged.
 """
 from datetime import date
 
@@ -80,6 +80,13 @@ def test_select_contract_moves_to_the_far_month_inside_the_roll_window(spot):
     assert fp.select_contract(date(2024, 1, 19), timeline)['expiry'] == date(2024, 1, 25)
     # On the roll day itself the strategy is already on February.
     assert fp.select_contract(date(2024, 1, 22), timeline)['expiry'] == date(2024, 2, 29)
+
+
+def test_roll_sessions_match_the_live_algo():
+    """The backtest's roll window is the live algo's, or the backtest is
+    describing a position the algo does not hold."""
+    from trading_app.algo.ema_confluence.ema_confluence_algo import _ROLL_SESSIONS_BEFORE_EXPIRY
+    assert fp.ROLL_SESSIONS_BEFORE_EXPIRY == _ROLL_SESSIONS_BEFORE_EXPIRY
 
 
 # ── Pricing ──────────────────────────────────────────────────────────────

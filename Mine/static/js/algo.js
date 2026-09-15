@@ -1,4 +1,4 @@
-/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + Swing Momentum + OI Crossover tabs */
+/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + EMA Confluence + Swing Momentum + OI Crossover tabs */
 'use strict';
 
 let _scStatusTimer     = null;
@@ -6,7 +6,7 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade changes
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'sc', 'tmf', 'swing-momentum', 'oi-crossover'];
+const _ALGO_TABS = ['active', 'sc', 'tmf', 'ema-confluence', 'swing-momentum', 'oi-crossover'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -111,7 +111,7 @@ function _algoNetInrTip(t) {
 // ── Active Trade tab (all live option algos consolidated) ─────────────────────
 // Each source shares the same status shape: { active, state.active_trade, live }.
 const _ACTIVE_SOURCES = [
-    { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history',     mode: 'live'  },
+    { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history',     mode: 'paper' },
 ];
 
 
@@ -192,7 +192,8 @@ function _activeRender(rows) {
         empty: 'No active trades',
         columns: [
             { label: 'Logic Type', strong: true, format: (_, r) => r.label },
-            { label: 'Mode',
+            // `key` matters: DataGrid draws a dash, not a badge, for a blank value.
+            { key: 'mode', label: 'Mode',
               format: (_, r) => (r.mode || 'live').toLowerCase() === 'paper' ? 'Paper' : 'Live',
               badge:  (_, r) => (r.mode || 'live').toLowerCase() === 'paper' ? 'warn' : 'pos' },
             { label: 'Direction', strong: true,
@@ -439,6 +440,7 @@ function algoSwitch(tab) {
     clearTimeout(_scHistoryTimer);
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
+    if (typeof _emacClearTimers === 'function') _emacClearTimers();
     // The scanner polls on a 60s timer of its own and draws an SVG on every
     // refresh — both wasted while its tab is hidden, so it is stopped here
     // and started again below only when its tab is the one being shown.
@@ -452,6 +454,9 @@ function algoSwitch(tab) {
     } else if (tab === 'tmf') {
         _tmfFetchStatus();
         _tmfFetchHistory();
+    } else if (tab === 'ema-confluence') {
+        _emacFetchStatus();
+        _emacFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
     } else if (tab === 'oi-crossover') {
@@ -609,7 +614,7 @@ function _scRenderStatus(data) {
     const badge = document.getElementById('scBadge');
     badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
     document.getElementById('scBadgeText').textContent =
-        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+        active ? (trade.direction + ' ' + trade.option_type + ' · Paper') : 'No Trade · Paper';
 
     document.getElementById('scLastUpd').textContent =
         new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -947,7 +952,7 @@ function scShowLogic() {
     <div class="rtp-logic-body">
 
         <!-- One-line idea -->
-        <p class="rtp-idea">Take the <b>2nd 30-second candle</b> of the day — its High &amp; Low set the range. Trade the <b>first breakout</b> of that range. <b>One trade per day</b>, no re-entry.</p>
+        <p class="rtp-idea">Take the <b>2nd 30-second candle</b> of the day — its High &amp; Low set the range. Trade the <b>first breakout</b> of that range. <b>One trade per day</b>, no re-entry. <b>Paper trade only</b> — entries and exits are booked at the option LTP; no broker order is ever placed.</p>
 
         <!-- Entry: BUY vs SELL side by side -->
         <div class="rtp-blk-lbl entry">Entry — first breakout of the range candle</div>
@@ -986,7 +991,7 @@ function scShowLogic() {
 
 
 function scExitNow(btn) {
-    if (!confirm('Force-close the active Candle Breakout trade? A market SELL order will be sent immediately.')) return;
+    if (!confirm('Force-close the active Candle Breakout paper trade? It is booked out at the current option LTP — no broker order is sent.')) return;
     _setBusy(btn, 'Exiting…');
     fetch('/api/algo/sc/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
         .then(r => r.json())
