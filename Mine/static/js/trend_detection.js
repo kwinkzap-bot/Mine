@@ -347,6 +347,7 @@ function renderCprBacktest(d) {
         rows: gridRows,
         columns,
         empty: 'The sheet has no analysed sessions yet',
+        defaultSort: { key: 'date', dir: 'desc' },   // newest session on top
         rowClass: r => (r.chart ? '' : 'td-cpr-row-nodata') + (r.trades.length > 1 ? ' td-cpr-row-multi' : ''),
         detail: r => r.trades.length > 1 ? _tdCprTradesGrid(r) : '',   // only multi-trade days expand
     });

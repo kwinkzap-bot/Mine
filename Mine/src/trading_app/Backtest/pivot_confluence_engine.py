@@ -622,7 +622,7 @@ def _manage(day_pos, arr, params, entry_k, is_long, entry, sl_level, tp_level,
                 return _finish(arr['ts_strs'][i], o, 'Time Exit', k)
 
         # Ratchet the trailing stop on favourable excursion, using the same
-        # step arithmetic as rtp_backtest_engine so TRAIL_SL means one thing.
+        # step arithmetic as scalp_pullback_engine so TRAIL_SL means one thing.
         if trail:
             if is_long and h > best:
                 best = h

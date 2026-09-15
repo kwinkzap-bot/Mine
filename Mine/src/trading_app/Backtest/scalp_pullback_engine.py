@@ -179,7 +179,7 @@ class ScalpPullbackEngine:
             (high - prev_close).abs(),
             (low - prev_close).abs(),
         ], axis=1).max(axis=1)
-        # Wilder smoothing, same as rtp_backtest_engine._atr
+        # Wilder smoothing (ATR-14 convention)
         return tr.ewm(alpha=1.0 / period, adjust=False).mean()
 
     # ── Array prep (shared by run + optimiser) ─────────────────────────────────
@@ -653,7 +653,7 @@ def _manage(day_pos, arr, params, entry_k, is_long, entry, sl_level, tp_level, p
             return _finish(arr['ts_strs'][i], o, 'Time Exit', k)
 
         # Ratchet the trailing stop on favourable excursion, using the same
-        # step arithmetic as rtp_backtest_engine so TRAIL_SL means one thing.
+        # step arithmetic as pivot_confluence_engine so TRAIL_SL means one thing.
         if trail:
             if is_long and h > best:
                 best = h

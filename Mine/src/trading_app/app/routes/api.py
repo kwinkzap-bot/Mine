@@ -25,8 +25,10 @@ from trading_app.app.utils.helpers import is_market_hours, is_trading_day
 _pending_request_locks: Dict[Any, threading.Lock] = {}
 _pending_locks_manager = threading.Lock()
 
-# RTP optimisation cache — persisted to disk so results survive restarts
-_RTP_OPT_CACHE_PATH = os.path.normpath(
+# Backtest optimisation cache (2nd-Candle / Scalp Pullback / Pivot Confluence
+# sweeps) — persisted to disk so results survive restarts. The file keeps its
+# historical name.
+_OPT_CACHE_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', 'utils', 'rtp_opt_cache.json')
 )
 
@@ -101,8 +103,8 @@ def _algo_option_live(trade: dict, provider) -> dict:
 
 def _load_opt_cache() -> dict:
     try:
-        if os.path.exists(_RTP_OPT_CACHE_PATH):
-            with open(_RTP_OPT_CACHE_PATH, 'r') as _f:
+        if os.path.exists(_OPT_CACHE_PATH):
+            with open(_OPT_CACHE_PATH, 'r') as _f:
                 return json.load(_f)
     except Exception:
         pass
@@ -110,10 +112,10 @@ def _load_opt_cache() -> dict:
 
 def _save_opt_cache(cache: dict) -> None:
     try:
-        with open(_RTP_OPT_CACHE_PATH, 'w') as _f:
+        with open(_OPT_CACHE_PATH, 'w') as _f:
             json.dump(cache, _f, indent=2, default=str)
     except Exception as _e:
-        logger.warning(f"RTP opt cache write failed: {_e}")
+        logger.warning(f"Opt cache write failed: {_e}")
 
 # Swing Momentum optimisation cache
 _SM_OPT_CACHE_PATH = os.path.normpath(
@@ -140,10 +142,6 @@ def _save_sm_opt_cache(cache: dict) -> None:
 # In-memory task store for long-running SM optimisation background jobs
 _sm_opt_tasks: Dict[str, Dict] = {}
 _sm_opt_tasks_lock = threading.Lock()
-
-# In-memory task store for long-running RTP optimisation background jobs
-_rtp_opt_tasks: Dict[str, Dict] = {}
-_rtp_opt_tasks_lock = threading.Lock()
 
 # In-memory task store for long-running 2nd-Candle optimisation background jobs
 _sc_opt_tasks: Dict[str, Dict] = {}
@@ -3309,151 +3307,9 @@ def run_cpr_gap_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@api_bp.route('/backtest/rtp', methods=['POST'], strict_slashes=False)
-@csrf.exempt
-@require_user_auth
-def run_rtp_backtest_api():
-    """Run Railway Track Pattern (RTP) backtest."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    try:
-        data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date')
-        end_date_str   = data.get('end_date')
-        interval       = data.get('interval', 'minute')
-        entry_mode     = data.get('entry_mode', 'RTP(20 & 9)')
-        use_adx        = bool(data.get('use_adx', True))
-        adx_thresh     = float(data.get('adx_thresh', 25.0))
-        sl_points      = float(data['sl_points'])     if data.get('sl_points')     else None
-        tgt_points     = float(data['tgt_points'])    if data.get('tgt_points')    else None
-        trail_points   = float(data['trail_points'])  if data.get('trail_points')  else None
-        exit_on        = data.get('exit_on', 'value')
-        confirm_bars       = int(data.get('confirm_bars', 0) or 0)
-        strict_pattern     = bool(data.get('strict_pattern', False))
-        min_rail_gap_atr   = float(data.get('min_rail_gap_atr', 0) or 0)
-        max_trades_per_day = int(data['max_trades_per_day']) if data.get('max_trades_per_day') else None
-        max_consec_sl      = int(data['max_consec_sl'])      if data.get('max_consec_sl')      else None
-
-        if not symbol or not start_date_str or not end_date_str:
-            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-
-        current_kite = get_data_provider(context='backtest')
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
-
-        # Resolve Fyers symbol string
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
-        kite_indices = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105,
-            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
-        }
-
-        if _speaks_symbols(current_kite):
-            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-        else:
-            instrument_token = kite_indices.get(symbol, symbol)
-
-        candles = current_kite.historical_data(
-            instrument_token=instrument_token,
-            from_date=start_date_str,
-            to_date=end_date_str,
-            interval=interval,
-            use_cache=False,
-        )
-
-        if not candles:
-            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
-
-        import pandas as pd
-        from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
-
-        interval_minutes_map = {
-            '30second': 0.5,
-            'minute': 1, '2minute': 2, '3minute': 3,
-            '5minute': 5, '10minute': 10, '15minute': 15,
-            '30minute': 30, '60minute': 60,
-        }
-        interval_minutes = interval_minutes_map.get(interval, 1)
-
-        df = pd.DataFrame(candles)
-        engine  = RTPBacktestEngine(
-            df=df,
-            entry_mode=entry_mode,
-            interval_minutes=interval_minutes,
-            use_adx=use_adx,
-            adx_thresh=adx_thresh,
-            sl_points=sl_points,
-            tgt_points=tgt_points,
-            trail_points=trail_points,
-            exit_on=exit_on,
-            confirm_bars=confirm_bars,
-            strict_pattern=strict_pattern,
-            min_rail_gap_atr=min_rail_gap_atr,
-            max_trades_per_day=max_trades_per_day,
-            max_consec_sl=max_consec_sl,
-        )
-        results = engine.run()
-        trades  = results.get('trades', [])
-
-        # Serialise datetime fields for JSON
-        for t in trades:
-            for k in ('entry_time', 'exit_time'):
-                if hasattr(t.get(k), 'isoformat'):
-                    t[k] = t[k].isoformat()
-                elif t.get(k) is not None:
-                    t[k] = str(t[k])
-
-        def _fmt_dt(val):
-            if val is None:
-                return None
-            s = str(val)
-            return s[:16]  # "YYYY-MM-DD HH:MM"
-
-        return jsonify({
-            'success': True,
-            'trades': trades,
-            'summary': {
-                'total_trades':  results['total_trades'],
-                'wins':          results['wins'],
-                'losses':        results['losses'],
-                'total_pnl':     results['net_pnl'],
-                'win_rate':      results['win_rate'],
-                'profit_factor': results['profit_factor'],
-                'max_drawdown':  results['max_drawdown'],
-                'max_dd_start':  _fmt_dt(results.get('max_dd_start')),
-                'max_dd_end':    _fmt_dt(results.get('max_dd_end')),
-                'avg_win':       results.get('avg_win', 0),
-                'avg_loss':      results.get('avg_loss', 0),
-                'sl_points':     results['sl_points'],
-                'tgt_points':    results['tgt_points'],
-                'trail_points':  results.get('trail_points'),
-                'exit_on':       results.get('exit_on', 'value'),
-                'confirm_bars':        results.get('confirm_bars', 0),
-                'strict_pattern':      results.get('strict_pattern', False),
-                'min_rail_gap_atr':    results.get('min_rail_gap_atr', 0),
-                'max_trades_per_day':  results.get('max_trades_per_day'),
-                'max_consec_sl':       results.get('max_consec_sl'),
-                'skipped_unconfirmed': results.get('skipped_unconfirmed', 0),
-                'skipped_circuit':     results.get('skipped_circuit', 0),
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"Error in RTP backtest API: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
 def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_date_str, interval):
     """
-    Fetch 1-minute bars (maximum Fyers historical depth — same as RTP) and
+    Fetch 1-minute bars (maximum Fyers historical depth) and
     resample to the requested interval in-process.
 
     Fyers stores 10+ years of 1-minute data for NSE indices but only ~1 year
@@ -3672,7 +3528,7 @@ def run_second_candle_backtest_api():
 def run_second_candle_optimise():
     """Sweep the 2nd-Candle (candle # × SL:Target × direction) grid across every
     intraday timeframe (30s–5 min) and return one leaderboard per timeframe —
-    the same per-timeframe shape as /backtest/rtp/optimise."""
+    one sortable board per timeframe."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -3750,7 +3606,7 @@ def run_second_candle_optimise():
 
                 grid_size = (len(_sc_mod._CANDLE_GRID) * len(_sc_mod._RR_GRID)
                              * len(_sc_mod._DIR_GRID))
-                lot_value     = _rtp_lot_value(symbol)   # ₹/pt, shared with RTP
+                lot_value     = _bt_lot_value(symbol)   # ₹/pt
                 tf_groups     = []   # one leaderboard per timeframe
                 combos_tested = 0
 
@@ -3768,9 +3624,9 @@ def run_second_candle_optimise():
                     for r in tf_results:
                         r['tf_label'] = tf_label
                         r['interval'] = interval_str
-                        # ₹ net of brokerage (1 lot) — same economics as RTP. The
+                        # ₹ net of brokerage (1 lot). The
                         # 2nd-candle result's Net P&L field is `total_pnl`.
-                        brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+                        brok = _bt_brokerage_per_trade(1) * (r.get('total_trades') or 0)
                         r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
                     # Only combos still profitable after brokerage belong on the board.
                     profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
@@ -4442,8 +4298,8 @@ def run_option_breakout_optimise():
     """Sweep (range candle # × SL:Target × SL buffer × legs) and return one
     ranked board.
 
-    One board rather than the per-timeframe stack the RTP and 2nd-candle sweeps
-    build, because this strategy has one timeframe — see _OB_INTERVAL. The
+    One board rather than the per-timeframe stack the 2nd-candle sweep
+    builds, because this strategy has one timeframe — see _OB_INTERVAL. The
     sessions are the same ones the plain run walks, fetched once and swept in
     memory: the premiums are the expensive part (see the run's own note), the
     144-combination grid is not.
@@ -4509,12 +4365,12 @@ def _run_option_breakout_optimise(task_id, _set, adapter, p):
                 by_combo[combo].append(trade)
 
     _set(stage='Ranking the grid')
-    lot_value = _rtp_lot_value(p['symbol'])     # ₹/pt, shared with RTP
+    lot_value = _bt_lot_value(p['symbol'])     # ₹/pt
     ranked = engine.rank_combos(by_combo)
     for r in ranked:
         # ₹ net of brokerage (1 lot) — same economics as the 2nd-candle board,
         # so the two read against each other.
-        brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+        brok = _bt_brokerage_per_trade(1) * (r.get('total_trades') or 0)
         r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
     # Only combos still profitable after brokerage belong on the board.
     profitable = sorted([r for r in ranked if r['net_pnl_inr'] > 0],
@@ -4740,7 +4596,7 @@ def run_scalp_pullback_optimise():
                 grid_size = (len(_sp_mod._RR_GRID) * len(_sp_mod._TOUCH_GRID)
                              * len(_sp_mod._DIR_GRID) * len(_sp_mod._HUNT_GRID)
                              * len(_sp_mod._ENTRY_CUTOFF_GRID) * len(_sp_mod._SL_GRID))
-                lot_value     = _rtp_lot_value(symbol)   # ₹/pt, shared with RTP
+                lot_value     = _bt_lot_value(symbol)   # ₹/pt
                 tf_groups     = []
                 combos_tested = 0
 
@@ -4766,7 +4622,7 @@ def run_scalp_pullback_optimise():
                         for r in tf_results:
                             r['tf_label'] = tf_label
                             r['interval'] = interval_str
-                            brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+                            brok = _bt_brokerage_per_trade(1) * (r.get('total_trades') or 0)
                             r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
 
                         # Only combos still profitable after brokerage belong on the board.
@@ -5033,7 +4889,7 @@ def run_pivot_confluence_optimise():
                 grid_size = (len(_pc_mod._TRIGGER_GRID) * len(_pc_mod._CONFLUENCE_GRID)
                              * len(_pc_mod._DIR_GRID) * len(_pc_mod._TARGET_GRID)
                              * len(_pc_mod._WINDOW_GRID))
-                lot_value     = _rtp_lot_value(symbol)   # ₹/pt, shared with RTP
+                lot_value     = _bt_lot_value(symbol)   # ₹/pt
                 tf_groups     = []
                 combos_tested = 0
 
@@ -5063,7 +4919,7 @@ def run_pivot_confluence_optimise():
                         for r in tf_results:
                             r['tf_label'] = tf_label
                             r['interval'] = interval_str
-                            brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+                            brok = _bt_brokerage_per_trade(1) * (r.get('total_trades') or 0)
                             r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
 
                         # Only combos still profitable after brokerage belong on the board.
@@ -6320,7 +6176,7 @@ def run_thirty_min_fakeout_optimise():
     just one stock if symbol is passed — same override as the plain
     backtest), and rank combos by real ₹ Net P&L (after sizing +
     brokerage) — same universe scan as the plain backtest,
-    run once per combo. Unlike RTP/2nd-Candle, there's no timeframe axis
+    run once per combo. Unlike 2nd-Candle, there's no timeframe axis
     here (the engine always resamples to 30-min candles), so this returns
     one flat leaderboard instead of one per timeframe."""
     auth_error = check_auth()
@@ -6539,7 +6395,7 @@ def run_thirty_min_fakeout_optimise_status(task_id):
 
 # ── Optimise-grid ₹ economics (mirrors the frontend so the leaderboard drops
 # combos whose Net P&L is negative *after brokerage*, not just in points) ──────
-_RTP_LOT_VALUE_BY_SYMBOL = {'NIFTY': 65, 'BANKNIFTY': 30, 'SENSEX': 20}
+_BT_LOT_VALUE_BY_SYMBOL = {'NIFTY': 65, 'BANKNIFTY': 30, 'SENSEX': 20}
 
 # Option strike ladder step, by index — the 2nd-candle option-basis P&L prices
 # its CE/PE leg on this ladder (NIFTY's 50 is the fallback, as in the engine).
@@ -6551,250 +6407,16 @@ def _opt_strike_step(symbol: str) -> float:
     return _OPT_STRIKE_STEP_BY_SYMBOL.get((symbol or '').upper(), 50)
 
 
-def _rtp_lot_value(symbol: str) -> float:
+def _bt_lot_value(symbol: str) -> float:
     """₹ per point for one lot, by symbol (defaults to NIFTY's 65)."""
-    return _RTP_LOT_VALUE_BY_SYMBOL.get((symbol or '').upper(), 65)
+    return _BT_LOT_VALUE_BY_SYMBOL.get((symbol or '').upper(), 65)
 
-def _rtp_brokerage_per_trade(lots: int = 1) -> float:
+def _bt_brokerage_per_trade(lots: int = 1) -> float:
     """Round-trip brokerage per trade for NIFTY, by lot count (matches backtest.js)."""
     lookup = {1: 103, 2: 158, 3: 213, 4: 268, 5: 330}
     if lots <= 5:
         return lookup.get(max(1, int(lots)), 103)
     return 330 + (int(lots) - 5) * 62
-
-def _rtp_net_inr(r: Dict[str, Any], lot_value: float, lots: int = 1) -> float:
-    """Net P&L in ₹ = gross ₹ (pts × ₹/pt × lots) − round-trip brokerage."""
-    brok = _rtp_brokerage_per_trade(lots) * (r.get('total_trades') or 0)
-    return (r.get('net_pnl') or 0) * lot_value * lots - brok
-
-
-@api_bp.route('/backtest/rtp/optimise', methods=['POST'], strict_slashes=False)
-@csrf.exempt
-@require_user_auth
-def run_rtp_optimise():
-    """Return RTP optimisation results, using cached data when available."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    try:
-        data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date', '2017-01-01')
-        end_date_str   = data.get('end_date')
-        recalculate    = bool(data.get('recalculate', False))
-
-        if not end_date_str:
-            end_date_str = datetime.today().strftime('%Y-%m-%d')
-
-        # We sweep every intraday timeframe (30s–5 min) in one run and return a
-        # per-timeframe leaderboard, so the cache is keyed by symbol alone.
-        # _v2 marks the per-timeframe payload shape (was a flat combined list).
-        # v3: grids now use native per-timeframe candles (was 1-min resampled).
-        # v4: leaderboard excludes combos with a negative Net P&L (₹, net of
-        # brokerage). Bump the key to invalidate stale cache entries.
-        # v5: grid gained confirm_bars and min_rail_gap_atr dimensions.
-        cache_key = f"{symbol}_multiTF_v5"
-
-        # ── Serve from cache unless caller asked to recalculate ──────────────
-        if not recalculate:
-            cache = _load_opt_cache()
-            if cache_key in cache:
-                entry = cache[cache_key]
-                return jsonify({
-                    'success':            True,
-                    'from_cache':         True,
-                    'cached_at':          entry.get('cached_at'),
-                    'symbol':             entry['symbol'],
-                    'interval':           entry['interval'],
-                    'total_combos_tested': entry['total_combos_tested'],
-                    'best':               entry['best'],
-                    'timeframes':         entry.get('timeframes', []),
-                })
-
-        # ── Run optimisation ─────────────────────────────────────────────────
-        # Fetching multi-year intraday data (chunked, rate-limited) plus the
-        # full parameter sweep can take minutes, so run it in a background
-        # thread and let the client poll /backtest/rtp/optimise/status/<task_id>.
-        current_kite = get_data_provider(context='backtest')
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
-
-        task_id = str(uuid.uuid4())
-        with _rtp_opt_tasks_lock:
-            _rtp_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
-
-        def _run():
-            try:
-                fyers_indices = {
-                    'NIFTY':      'NSE:NIFTY50-INDEX',
-                    'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-                    'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-                    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-                    'SENSEX':     'BSE:SENSEX-INDEX',
-                }
-
-                if _speaks_symbols(current_kite):
-                    instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-                else:
-                    kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
-                                    'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
-                    instrument_token = kite_indices.get(symbol, symbol)
-
-                from trading_app.Backtest.rtp_backtest_engine import optimise_rtp
-
-                tf_groups     = []   # one leaderboard per timeframe
-                combos_tested = 0
-
-                lot_value = _rtp_lot_value(symbol)
-
-                def _sweep(df_tf, interval_str, tf_label, tf_min):
-                    """Run the full param sweep on one timeframe, keep its top 10 by Net P&L."""
-                    nonlocal combos_tested
-                    if df_tf is None or df_tf.empty:
-                        return
-
-                    def _progress(done, total):
-                        with _rtp_opt_tasks_lock:
-                            task = _rtp_opt_tasks.get(task_id)
-                            if task is not None and task.get('status') == 'running':
-                                task['progress'] = f"{tf_label} · {done}/{total}"
-
-                    tf_results = optimise_rtp(df_tf, interval=interval_str, min_trades=15,
-                                              progress_cb=_progress)
-                    combos_tested += len(tf_results)
-                    for r in tf_results:
-                        r['timeframe_min'] = tf_min      # numeric (0.5 for 30s)
-                        r['tf_label']      = tf_label     # display label
-                        r['interval']      = interval_str
-                        r['net_pnl_inr']   = round(_rtp_net_inr(r, lot_value), 2)  # ₹ net (1 lot)
-                    # Only combos that are still profitable after brokerage belong on
-                    # the leaderboard — drop any with a negative Net P&L (₹).
-                    profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
-                    # Rank the leaderboard by Net P&L (highest first) and keep the top 10.
-                    top_by_pnl = sorted(
-                        profitable, key=lambda r: r.get('net_pnl', 0), reverse=True
-                    )[:10]
-                    tf_groups.append({
-                        'tf_label': tf_label,
-                        'tf_min':   tf_min,
-                        'interval': interval_str,
-                        'total':    len(tf_results),      # combos that passed min_trades
-                        'results':  top_by_pnl,           # top 10 profitable by Net P&L
-                    })
-
-                # ── Minute timeframes: native fetch per interval ─────────────────
-                # Fetch each timeframe natively — the SAME data path the single
-                # backtest uses — so an optimise grid row reproduces exactly what
-                # a manual backtest at that timeframe produces. Deriving 2/3/5-min
-                # by resampling 1-min drifted from the broker's native N-min
-                # candles (different bar highs/lows → different SL/target hits),
-                # which made the grid's Net P&L disagree with the backtest card.
-                any_data = False
-                for minutes, interval_str, tf_label in [
-                    (1, 'minute', '1m'), (2, '2minute', '2m'),
-                    (3, '3minute', '3m'), (5, '5minute', '5m'),
-                ]:
-                    try:
-                        tf_candles = current_kite.historical_data(
-                            instrument_token=instrument_token,
-                            from_date=start_date_str,
-                            to_date=end_date_str,
-                            interval=interval_str,
-                            use_cache=False,
-                        )
-                        if not tf_candles:
-                            logger.info("[RTPOptimise] timeframe %s: no data returned — skipped", interval_str)
-                            continue
-                        any_data = True
-                        _sweep(pd.DataFrame(tf_candles), interval_str, tf_label, minutes)
-                    except Exception as tf_exc:
-                        logger.warning(f"[RTPOptimise] timeframe {interval_str} failed: {tf_exc}")
-                if not any_data:
-                    with _rtp_opt_tasks_lock:
-                        _rtp_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
-                    return
-
-                # ── 30-second: native fetch, can't be derived from 1-min ─────────
-                # Fyers only serves seconds-resolution history for a recent window,
-                # so cap the range (a full multi-year 30s pull would be thousands
-                # of mostly-empty chunk calls). Best-effort: skip on any failure.
-                try:
-                    from datetime import timedelta as _td
-                    _end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
-                    _cap_dt = _end_dt - _td(days=90)
-                    _start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
-                    sec_from = max(_start_dt, _cap_dt).strftime('%Y-%m-%d')
-                    sec_candles = current_kite.historical_data(
-                        instrument_token=instrument_token,
-                        from_date=sec_from,
-                        to_date=end_date_str,
-                        interval='30second',
-                        use_cache=False,
-                    )
-                    if sec_candles:
-                        _sweep(pd.DataFrame(sec_candles), '30second', '30s', 0.5)
-                    else:
-                        logger.info("[RTPOptimise] 30-second timeframe: no data returned — skipped")
-                except Exception as sec_exc:
-                    logger.warning(f"[RTPOptimise] 30-second timeframe failed: {sec_exc}")
-
-                # Order the grids fastest→slowest (30s, 1m, 2m, 3m, 5m).
-                tf_groups.sort(key=lambda g: g['tf_min'])
-
-                # Overall best across every timeframe — used to auto-apply the
-                # top result to the form when the run completes. Each grid is now
-                # ranked by Net P&L, so pick the highest Net P&L across timeframes.
-                all_top = [g['results'][0] for g in tf_groups if g['results']]
-                best_overall = max(all_top, key=lambda r: r.get('net_pnl', 0), default=None)
-
-                payload = {
-                    'symbol':             symbol,
-                    'interval':           'multi-TF (30s–5 min)',
-                    'total_combos_tested': combos_tested,
-                    'best':               best_overall,
-                    'timeframes':         tf_groups,
-                    'cached_at':          datetime.now().strftime('%Y-%m-%d %H:%M'),
-                }
-
-                # Persist to disk
-                disk_cache            = _load_opt_cache()
-                disk_cache[cache_key] = payload
-                _save_opt_cache(disk_cache)
-
-                with _rtp_opt_tasks_lock:
-                    _rtp_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
-            except Exception as e:
-                logger.error(f"[RTPOptimise] background error: {e}", exc_info=True)
-                with _rtp_opt_tasks_lock:
-                    _rtp_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
-
-        threading.Thread(target=_run, daemon=True).start()
-        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
-
-    except Exception as e:
-        logger.error(f"Error in RTP optimise API: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/backtest/rtp/optimise/status/<task_id>', methods=['GET'])
-@csrf.exempt
-@require_user_auth
-def run_rtp_optimise_status(task_id):
-    """Poll the status of a background RTP optimisation job."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    with _rtp_opt_tasks_lock:
-        task = _rtp_opt_tasks.get(task_id)
-    if not task:
-        return jsonify({'success': False, 'error': 'Task not found'}), 404
-    if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running', 'progress': task.get('progress')})
-    if task['status'] == 'error':
-        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
-    # complete
-    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
-
 
 @api_bp.route('/place-live-order', methods=['POST'])
 @csrf.exempt

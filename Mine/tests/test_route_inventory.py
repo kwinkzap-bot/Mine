@@ -74,7 +74,7 @@ def test_route_counts_per_blueprint():
     for rule in app.url_map.iter_rules():
         prefix = rule.endpoint.split(".")[0]
         counts[prefix] = counts.get(prefix, 0) + 1
-    assert counts == {"api": 148, "pages": 25, "auth": 16, "oi_crossover": 10,
+    assert counts == {"api": 145, "pages": 25, "auth": 16, "oi_crossover": 10,
                       "order_placement": 11, "watchlist": 16, "multichart": 3, "trend": 1, "static": 1}
 
 

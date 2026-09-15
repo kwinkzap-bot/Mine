@@ -14,13 +14,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let selectedSymbol = 'NIFTY';
     let lotSizeBySymbol = {};   // populated from /api/backtest/symbols' lot_sizes
 
-    // Tracks the in-flight RTP optimise so a new/changed run cancels the old one.
-    // Declared up top so cancelRtpOptimise() is safe to call during init.
-    let _rtpOptRun   = 0;     // generation token — only the latest run is honoured
-    let _rtpOptAbort = null;  // AbortController for the in-flight POST request
-    // Same generation-token pattern for the 2nd-Candle optimise.
-    let _scOptRun    = 0;
-    let _scOptAbort  = null;
+    // Tracks the in-flight 2nd-Candle optimise so a new/changed run cancels
+    // the old one. Declared up top so cancelScOptimise() is safe to call
+    // during init.
+    let _scOptRun    = 0;     // generation token — only the latest run is honoured
+    let _scOptAbort  = null;  // AbortController for the in-flight POST request
     // Same generation-token pattern for the 30-Min Fakeout optimise.
     let _tmfOptRun   = 0;
     let _tmfOptAbort = null;
@@ -62,7 +60,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateLiveFlagBadge() {
         const badge = document.getElementById('liveFlagBadge');
         if (!badge) return;
-        const strat = document.getElementById('strategySelect')?.value || 'rtp';
+        const strat = document.getElementById('strategySelect')?.value || '';
         let live = false;
         if (strat === 'second_candle') {
             live = _isScComboLive({
@@ -83,7 +81,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 _liveConfigs = { sc: data.second_candle || null };
                 // Re-badge anything already rendered — same rows/sort, but the
                 // Live column's isLive() check re-reads the fresh _liveConfigs.
-                Object.values(_optGroupsByTf).forEach(st => DataGrid.refresh(st.gridEl));
                 Object.values(_scOptGroupsByTf).forEach(st => DataGrid.refresh(st.gridEl));
                 updateLiveFlagBadge();
             }
@@ -324,8 +321,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 applyLotValueForSymbol(selectedSymbol);
                 applyEmaDefaultsForSymbol(selectedSymbol);
                 syncEmaAllStocksMode();
-                cancelRtpOptimise(); // stale: results would be for the old symbol
-                cancelScOptimise();
+                cancelScOptimise(); // stale: results would be for the old symbol
                 this.blur();
             } else {
                 this.blur();
@@ -341,8 +337,7 @@ document.addEventListener('DOMContentLoaded', function() {
             applyLotValueForSymbol(selectedSymbol);
             applyEmaDefaultsForSymbol(selectedSymbol);
             syncEmaAllStocksMode();
-            cancelRtpOptimise(); // stale: results would be for the old symbol
-            cancelScOptimise();
+            cancelScOptimise(); // stale: results would be for the old symbol
         }
     });
 
@@ -359,7 +354,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // the last real symbol had (it's greyed out in that mode anyway).
         if ((symbol || '').toUpperCase() === ALL_STOCKS) return;
         const lotValue = lotValueForSymbol(symbol);
-        ['rtpLotValue', 'scLotValue', 'obLotValue', 'emaLotValue'].forEach(function(id) {
+        ['scLotValue', 'obLotValue', 'emaLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
@@ -405,16 +400,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 2.5 Strategy Selection Logic
     const strategySelect = document.getElementById('strategySelect');
-    const rtpParamsRow   = document.getElementById('rtpParamsRow');
-    const rtpFilterRow   = document.getElementById('rtpFilterRow');
-    const rtpLotRow      = document.getElementById('rtpLotRow');
 
     function updateStrategyView() {
         if (!strategySelect) return;
 
-        // Switching strategy abandons any in-flight RTP / 2nd-Candle / Pivot
+        // Switching strategy abandons any in-flight 2nd-Candle / Pivot
         // Confluence optimise run.
-        if (typeof cancelRtpOptimise === 'function') cancelRtpOptimise();
         if (typeof cancelScOptimise === 'function') cancelScOptimise();
         if (typeof cancelPcOptimise === 'function') cancelPcOptimise();
         if (typeof cancelObRun === 'function') cancelObRun();
@@ -427,9 +418,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const val   = strategySelect.value;
 
         // Reset all rows
-        if (rtpParamsRow)   rtpParamsRow.style.display   = 'none';
-        if (rtpFilterRow)   rtpFilterRow.style.display   = 'none';
-        if (rtpLotRow)      rtpLotRow.style.display      = 'none';
         const smParamsRow   = document.getElementById('swingMomentumParamsRow');
         const scParamsRow   = document.getElementById('secondCandleParamsRow');
         const scLotRow      = document.getElementById('secondCandleLotRow');
@@ -480,13 +468,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
-        const rtpOptPanel = document.getElementById('rtpOptimisePanel');
         const smOptPanel  = document.getElementById('smOptimisePanel');
-        if (rtpOptPanel) rtpOptPanel.style.display = 'none';
         if (smOptPanel)  smOptPanel.style.display  = 'none';
 
         if (mainInputsRow) {
@@ -495,14 +481,7 @@ document.addEventListener('DOMContentLoaded', function() {
             mainInputsRow.style.display = '';
         }
 
-        if (val === 'rtp') {
-            if (rtpParamsRow) rtpParamsRow.style.display = 'grid';
-            if (rtpFilterRow) rtpFilterRow.style.display = 'grid';
-            if (rtpLotRow)    rtpLotRow.style.display    = 'grid';
-            if (intervalSelect) intervalSelect.value = 'minute';
-            if (startDateInput) startDateInput.value = '2017-01-01';
-
-        } else if (val === 'second_candle') {
+        if (val === 'second_candle') {
             if (scParamsRow) scParamsRow.style.display = 'grid';
             if (scLotRow)    scLotRow.style.display    = 'grid';
             // Base timeframe is selectable: 30second (~1 month of Fyers history)
@@ -606,14 +585,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // updateStrategyView() call below — whichever strategy is the default
     // `selected` option in the HTML calls its own update*Investment()
     // immediately on load, so these must already exist by then.
-    window.updateRtpInvestment = function() {
-        const lots = Math.max(1, parseInt(document.getElementById('rtpLots')?.value || 1));
-        const total = lots * 50000;
-        const el = document.getElementById('rtpInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
-    };
-
-    // 2nd 30-Sec Candle investment display
     window.updateScInvestment = function() {
         const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
         const total = lots * 50000;
@@ -662,9 +633,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ── Status filter: narrows the strategy dropdown to one maturity bucket ──
     const strategyStatusSelect = document.getElementById('strategyStatusSelect');
+    // "live" is every strategy that also runs as a live algo thread — the
+    // Candle Breakout (paper-only since 2026-09-15, but still a running
+    // thread), 30-Min Fakeout, Swing Momentum (Go Live / Live Watch) and EMA
+    // Confluence. A strategy is in exactly one bucket: when one goes live,
+    // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
-        success: ['rtp', 'second_candle', 'option_breakout', 'expiry_breakout',
-                  'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
+        live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
+        success: ['option_breakout', 'expiry_breakout'],
         testing: ['scalp_pullback', 'pivot_confluence'],
         failure: [],
     };
@@ -766,7 +742,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 30-Min Opening Fakeout investment display
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
-        const _strat = strategySelect ? strategySelect.value : 'rtp';
+        const _strat = strategySelect ? strategySelect.value : '';
         if (_strat === 'expiry_breakout') {
             await runExpiryScan();
             return;
@@ -802,9 +778,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (btTradesSec)    btTradesSec.style.display    = 'none';
         if (btPlaceholder)  btPlaceholder.style.display  = 'none';
         if (periodSec)      periodSec.style.display      = 'none';
-        // Keep the RTP / Candle Breakout "Best Params" panels visible across a
-        // backtest run, but collapse their grids so the results take focus.
-        setCollapsed(document.querySelector('#rtpOptimisePanel .opt-header'), true);
+        // Keep the Candle Breakout / Scalp / Pivot "Best Params" panels visible
+        // across a backtest run, but collapse their grids so the results take focus.
         setCollapsed(document.querySelector('#secondCandleOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#optionBreakoutOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#scalpPullbackOptimisePanel .opt-header'), true);
@@ -813,9 +788,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tmfOptPanel2)   tmfOptPanel2.style.display   = 'none';
 
         try {
-            const strat = strategySelect ? strategySelect.value : 'rtp';
-            let endpoint = '/api/backtest/rtp';
-
+            const strat = strategySelect ? strategySelect.value : '';
+            let endpoint = null;
 
             // 2nd 30-Sec Candle breakout
             if (strat === 'second_candle') {
@@ -932,26 +906,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.monthly_add    = parseFloat(document.getElementById('smMonthlyAdd')?.value || '0');
             }
 
-            // RTP-specific payload fields
-            if (strat === 'rtp') {
-                payload.entry_mode = document.getElementById('rtpEntryMode')?.value || 'RTP(20 & 9)';
-                payload.use_adx    = document.getElementById('rtpUseAdx')?.checked ?? false;
-                payload.adx_thresh = parseFloat(document.getElementById('rtpAdxThresh')?.value || 20);
-                const slVal    = document.getElementById('rtpSL')?.value;
-                const tgtVal   = document.getElementById('rtpTarget')?.value;
-                const trailVal = document.getElementById('rtpTrailSL')?.value;
-                if (slVal)    payload.sl_points    = parseFloat(slVal);
-                if (tgtVal)   payload.tgt_points   = parseFloat(tgtVal);
-                if (trailVal) payload.trail_points = parseFloat(trailVal);
-                payload.exit_on = document.getElementById('rtpExitOn')?.value || 'value';
-                payload.confirm_bars   = parseInt(document.getElementById('rtpConfirmBars')?.value || '0');
-                payload.strict_pattern = document.getElementById('rtpStrictPattern')?.checked ?? false;
-                const railVal  = document.getElementById('rtpRailGap')?.value;
-                const maxTrVal = document.getElementById('rtpMaxTrades')?.value;
-                const maxSlVal = document.getElementById('rtpMaxConsecSL')?.value;
-                if (railVal)  payload.min_rail_gap_atr   = parseFloat(railVal);
-                if (maxTrVal) payload.max_trades_per_day = parseInt(maxTrVal);
-                if (maxSlVal) payload.max_consec_sl      = parseInt(maxSlVal);
+            if (!endpoint) {
+                window.showNotification('Pick a strategy first', 'warning');
+                return;
             }
 
             const response = await fetch(endpoint, {
@@ -1476,7 +1433,6 @@ document.addEventListener('DOMContentLoaded', function() {
     function displayResults(data) {
         lastData = data;
         const { summary } = data;
-        const isRtp  = strategySelect && strategySelect.value === 'rtp';
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
         // 30-Min Fakeout scans many symbols at once, each already sized
@@ -1556,80 +1512,9 @@ document.addEventListener('DOMContentLoaded', function() {
         outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
         outcomeEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
 
-        // ── Row 2: RTP-only cards ──────────────────────────────────
+        // ── Row 2: per-trade cards (points strategies) ─────────────
         const rtpRow = document.getElementById('rtpStatsRow');
-        if (isRtp && rtpRow) {
-            rtpRow.style.display = '';
-
-            // RTP doesn't compute CAGR (its sizing is fixed lots, not a
-            // compounding capital base) — reset so a prior TMF run's value
-            // doesn't linger.
-            const cagrElRtp = document.getElementById('statCagr');
-            const cagrSubElRtp = document.getElementById('statCagrSub');
-            if (cagrElRtp) { cagrElRtp.textContent = '—'; cagrElRtp.className = 'stat-card__val'; }
-            if (cagrSubElRtp) cagrSubElRtp.textContent = '';
-
-            // Profit factor
-            document.getElementById('statProfitFactor').textContent = summary.profit_factor ?? '—';
-
-            // Avg Win / Avg Loss
-            const avgWinEl  = document.getElementById('statAvgWin');
-            const avgLossEl = document.getElementById('statAvgLoss');
-            if (avgWinEl)  avgWinEl.textContent  = summary.avg_win  != null ? '+' + summary.avg_win.toFixed(1)  + ' pts' : '—';
-            if (avgLossEl) avgLossEl.textContent = summary.avg_loss != null ? summary.avg_loss.toFixed(1) + ' pts' : '—';
-
-            // Position sizing inputs
-            const lots     = Math.max(1, parseInt(document.getElementById('rtpLots')?.value    || 1));
-            const lotValue = Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value || 75));
-
-            // Max drawdown — pts near label, ₹ as main value
-            const dd        = summary.max_drawdown ?? 0;
-            const ddPtsEl   = document.getElementById('statMaxDDPts');
-            const ddEl      = document.getElementById('statMaxDD');
-            if (ddPtsEl) ddPtsEl.textContent = dd.toFixed(1) + ' pts';
-            if (ddEl)    ddEl.textContent    = '₹' + Math.round(Math.abs(dd) * lotValue * lots).toLocaleString('en-IN');
-
-            // Drawdown date range subtitle
-            const ddDatesEl = document.getElementById('statMaxDDDates');
-            if (ddDatesEl) {
-                if (summary.max_dd_start && summary.max_dd_end) {
-                    const fmt = s => s.replace('T', ' ').slice(0, 16);
-                    ddDatesEl.textContent = fmt(summary.max_dd_start) + ' → ' + fmt(summary.max_dd_end);
-                } else {
-                    ddDatesEl.textContent = '';
-                }
-            }
-
-            // Net P&L (₹) = gross ₹ − brokerage
-            const brokPerTrade   = calcBrokeragePerTrade(lots);
-            const totalBrokerage = brokPerTrade * (summary.total_trades || 0);
-            const grossRs = pnl * lotValue * lots;
-            const netRs   = grossRs - totalBrokerage;
-            const netEl   = document.getElementById('statNetRs');
-            if (netEl) {
-                netEl.textContent = (netRs >= 0 ? '+' : '') + '₹' + Math.round(netRs).toLocaleString('en-IN');
-                netEl.className   = 'stat-card__val ' + (netRs >= 0 ? 'stat-val-green' : 'stat-val-red');
-            }
-            const netSubEl = document.getElementById('statNetRsSub');
-            if (netSubEl) netSubEl.textContent = 'brok: ₹' + totalBrokerage.toLocaleString('en-IN');
-
-            // Subtitle with SL / Target / Trail + active entry filters
-            if (summary.sl_points != null && summary.tgt_points != null) {
-                const subtitle = document.getElementById('btSubtitle');
-                if (subtitle) {
-                    let info = `SL: ${summary.sl_points} pts  ·  Target: ${summary.tgt_points} pts`;
-                    if (summary.trail_points) info += `  ·  Trail: ${summary.trail_points} pts`;
-                    if (summary.confirm_bars) info += `  ·  Confirm: ${summary.confirm_bars} bar${summary.confirm_bars > 1 ? 's' : ''}`;
-                    if (summary.min_rail_gap_atr) info += `  ·  Rail gap ≥${summary.min_rail_gap_atr}×ATR`;
-                    if (summary.strict_pattern) info += '  ·  Strict candle';
-                    if (summary.max_trades_per_day) info += `  ·  Max ${summary.max_trades_per_day}/day`;
-                    if (summary.max_consec_sl) info += `  ·  Max SL streak ${summary.max_consec_sl}`;
-                    const skipped = (summary.skipped_unconfirmed || 0) + (summary.skipped_circuit || 0);
-                    if (skipped > 0) info += `  ·  ${skipped} signals filtered out`;
-                    subtitle.textContent = info;
-                }
-            }
-        } else if ((isSc || isOb || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
+        if ((isSc || isOb || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1780,13 +1665,16 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
+        // TMF / Swing Momentum have no Lots box — TMF's trades carry their own
+        // ₹ (directRupees below) and SM isn't money-scaled here, so the
+        // fallbacks are inert.
         const lots2     = (isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
-            : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
+            : 1;
         const lotValue2 = (isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
-            : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isSc || isOb || isSp || isPc || isTmf || isEma;
+            : 65;
+        const isMoney     = isSc || isOb || isSp || isPc || isTmf || isEma;
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
@@ -1801,7 +1689,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Store for period tab re-renders
         _periodTrades   = data.trades;
-        _periodIsRtp    = isMoney;
+        _periodIsMoney    = isMoney;
         _periodLots     = lots2;
         _periodLotValue = lotValue2;
         _periodUseDirectRupees = directRupees;
@@ -1836,13 +1724,13 @@ document.addEventListener('DOMContentLoaded', function() {
     let _lastEquityArgs = null;   // cached args so a theme switch can redraw in place
     let _lastSmEquityArgs = null;
 
-    function renderEquityCurve(trades, isRtp, lots, lotValue, investment) {
+    function renderEquityCurve(trades, isMoney, lots, lotValue, investment) {
         const section = document.getElementById('equityCurveSection');
         if (!section || !trades || trades.length === 0) {
             if (section) section.style.display = 'none';
             return;
         }
-        _lastEquityArgs = { trades, isRtp, lots, lotValue, investment };
+        _lastEquityArgs = { trades, isMoney, lots, lotValue, investment };
         _lastSmEquityArgs = null;
         const chartColors = _btChartColors();
 
@@ -1861,7 +1749,7 @@ document.addEventListener('DOMContentLoaded', function() {
         sorted.forEach((t, idx) => {
             const tradeRs = (t.pnl_rupees != null)
                 ? t.pnl_rupees
-                : (isRtp ? Math.round((t.pnl || 0) * lotValue * lots) : (t.pnl || 0));
+                : (isMoney ? Math.round((t.pnl || 0) * lotValue * lots) : (t.pnl || 0));
             portfolio += tradeRs;
             labels.push('T' + (idx + 1));
             chartData.push(Math.round(portfolio));
@@ -1959,7 +1847,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // ── Period P&L Breakdown ─────────────────────────────────────────
     let _periodChart = null;
     let _periodTrades = [];
-    let _periodIsRtp = false;
+    let _periodIsMoney = false;
     let _periodLots = 1;
     let _periodLotValue = 75;
     let _periodUseDirectRupees = false;
@@ -1992,10 +1880,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Compact number formatter for bar labels
-    function fmtCompact(v, isRtp) {
+    function fmtCompact(v, isMoney) {
         const abs  = Math.abs(v);
         const sign = v >= 0 ? '+' : '−';
-        if (isRtp) {
+        if (isMoney) {
             if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(1) + 'L';
             if (abs >= 1000)   return sign + '₹' + (abs / 1000).toFixed(1) + 'K';
             return sign + '₹' + abs;
@@ -2029,7 +1917,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 
-    function renderPeriodBreakdown(trades, isRtp, lots, lotValue, period, useDirectRupees) {
+    function renderPeriodBreakdown(trades, isMoney, lots, lotValue, period, useDirectRupees) {
         const section = document.getElementById('periodBreakdownSection');
         const chartColors = _btChartColors();
         if (!section || !trades || trades.length === 0) {
@@ -2057,7 +1945,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const values = keys.map(k => {
             if (useDirectRupees) return Math.round(groups[k].pnlRupees);
             const raw = groups[k].pnl;
-            return isRtp ? Math.round(raw * lotValue * lots) : Math.round(raw * 100) / 100;
+            return isMoney ? Math.round(raw * lotValue * lots) : Math.round(raw * 100) / 100;
         });
 
         const meta = keys.map(k => groups[k]);  // { pnl, wins, losses }
@@ -2080,7 +1968,7 @@ document.addEventListener('DOMContentLoaded', function() {
             inner.style.minWidth = Math.max(wrapWidth, keys.length * MIN_BAR_PX) + 'px';
         }
 
-        const fmt = v => fmtCompact(v, isRtp);
+        const fmt = v => fmtCompact(v, isMoney);
 
         _periodChart = new Chart(canvas.getContext('2d'), {
             type: 'bar',
@@ -2113,7 +2001,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 const tr = g.wins + g.losses;
                                 const wr = tr > 0 ? ((g.wins / tr) * 100).toFixed(0) : 0;
                                 return [
-                                    ' P&L: ' + (v >= 0 ? '+' : '') + (isRtp
+                                    ' P&L: ' + (v >= 0 ? '+' : '') + (isMoney
                                         ? '₹' + Math.abs(v).toLocaleString('en-IN')
                                         : v + ' pts'),
                                     ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
@@ -2143,7 +2031,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 if (v === 0) return '0';
                                 const abs = Math.abs(v);
                                 const s   = v < 0 ? '−' : '';
-                                if (isRtp) {
+                                if (isMoney) {
                                     if (abs >= 100000) return s + '₹' + (abs/100000).toFixed(1) + 'L';
                                     if (abs >= 1000)   return s + '₹' + (abs/1000).toFixed(0) + 'K';
                                     return s + '₹' + abs;
@@ -2163,7 +2051,7 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.period-tab').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, btn.dataset.period, _periodUseDirectRupees);
+            renderPeriodBreakdown(_periodTrades, _periodIsMoney, _periodLots, _periodLotValue, btn.dataset.period, _periodUseDirectRupees);
         });
     });
 
@@ -2173,14 +2061,14 @@ document.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('themechanged', () => {
         if (_lastEquityArgs) {
             const a = _lastEquityArgs;
-            renderEquityCurve(a.trades, a.isRtp, a.lots, a.lotValue, a.investment);
+            renderEquityCurve(a.trades, a.isMoney, a.lots, a.lotValue, a.investment);
         } else if (_lastSmEquityArgs) {
             const a = _lastSmEquityArgs;
             _renderSmEquityCurve(a.curve, a.investment);
         }
         if (_periodTrades && _periodTrades.length) {
             const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
-            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, activePeriod, _periodUseDirectRupees);
+            renderPeriodBreakdown(_periodTrades, _periodIsMoney, _periodLots, _periodLotValue, activePeriod, _periodUseDirectRupees);
         }
     });
 
@@ -2528,19 +2416,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // ── Shared per-timeframe optimiser grid ────────────────────────────
-    // The RTP and Candle Breakout optimisers each produce a best-combos grid
+    // The Candle Breakout, Scalp and Pivot optimisers each produce a best-combos grid
     // per timeframe, with the same shape: an old-style column list of
     // {label, key, fmt(r)}, a "Use this row" button, and the best row
     // highlighted while sorted by ₹ P&L descending (the default). This is
     // that grid, built once from DataGrid.mountSortable, so both call it
     // instead of carrying their own copy of the sort/highlight/click-wiring.
     //
-    // `legacyCols`: the existing OPT_COLS / SC_OPT_COLS shape — kept as-is
+    // `legacyCols`: the existing SC_OPT_COLS shape — kept as-is
     // rather than rewritten as DataGrid columns, since each cell's fmt(r)
     // already reads whatever fields (including derived ₹ ones) it needs.
     // `spec`: { idPrefix, isLive(row), derivedSort: {key: row=>comparable},
     //           applyFn(row), stateStore } — stateStore is the caller's own
-    //           `_optGroupsByTf`-shaped object, kept alive so any other code
+    //           `_scOptGroupsByTf`-shaped object, kept alive so any other code
     //           reading it afterwards (there is none today, but the shape
     //           mirrors the pre-DataGrid version) still finds `.displayed`.
     function _mapLegacyOptColumns(legacyCols, spec) {
@@ -2632,248 +2520,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         initCollapsibles(container);
-    }
-
-    // ── Optimise helpers ─────────────────────────────────────────────
-    // Position sizing for the optimise grid's ₹ columns, read from the RTP
-    // lot inputs (same defaults as the result cards: 1 lot × 75 qty).
-    function _optMoney() {
-        const lots     = Math.max(1, parseInt(document.getElementById('rtpLots')?.value    || 1));
-        const lotValue = Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value || 75));
-        return { lots, lotValue };
-    }
-    // Round-trip brokerage for a result row = per-trade brokerage × trade count.
-    function _optBrokerage(r, lots) {
-        return calcBrokeragePerTrade(lots) * (r.total_trades || 0);
-    }
-    // Net P&L in ₹ = gross ₹ (pts × qty × lots) − total brokerage.
-    function _optNetRs(r, lots, lotValue) {
-        return (r.net_pnl || 0) * lotValue * lots - _optBrokerage(r, lots);
-    }
-
-    // Column spec for the per-timeframe grids. `key` (when set) is the result
-    // field the column sorts on; `fmt(r)` renders the cell.
-    const OPT_COLS = [
-        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
-        { label: 'Live',          key: null,            fmt: () => '<span class="opt-live-off">—</span>' },
-        { label: 'Mode',          key: 'entry_mode',    fmt: r => `<span style="white-space:nowrap">${r.entry_mode}</span>` },
-        { label: 'SL',            key: 'sl_points',     fmt: r => r.sl_points },
-        { label: 'Target',        key: 'tgt_points',    fmt: r => r.tgt_points },
-        { label: 'ADX',           key: 'adx_thresh',    fmt: r => r.use_adx ? `≥${r.adx_thresh}` : 'Off' },
-        { label: 'Confirm',       key: 'confirm_bars',  fmt: r => r.confirm_bars ? `${r.confirm_bars}b` : 'Off' },
-        { label: 'Rail Gap',      key: 'min_rail_gap_atr', fmt: r => r.min_rail_gap_atr ? `≥${r.min_rail_gap_atr}×ATR` : 'Off' },
-        { label: 'Trades',        key: 'total_trades',  fmt: r => r.total_trades },
-        { label: 'Win%',          key: 'win_rate',      fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
-        { label: 'Net P&L (pts)', key: 'net_pnl',       fmt: r => `<span class="${r.net_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.net_pnl >= 0 ? '+' : '') + r.net_pnl.toFixed(1)} pts</span>` },
-        { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _optMoney(); const v = _optNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
-        { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _optMoney(); const b = _optBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
-        { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
-        { label: '',              key: null,            fmt: () => '' },   // Use button (handled below)
-    ];
-
-    // Per-timeframe render state, keyed by tf_label — {displayed, sortState}.
-    // Kept for applyOptResult's benefit via _renderOptTfGrids; nothing here
-    // does its own sorting or row-building any more.
-    let _optGroupsByTf = {};
-
-    function renderOptResults(data) {
-        const panel     = document.getElementById('rtpOptimisePanel');
-        const container = document.getElementById('rtpOptGrids');
-        const metaEl    = document.getElementById('optMeta');
-        const recalcBtn = document.getElementById('recalculateOptBtn');
-
-        refreshLiveConfigs();   // re-badge rows against the current live algos
-
-        if (metaEl) {
-            let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
-            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
-            metaEl.textContent = meta;
-        }
-
-        _renderOptTfGrids(container, data.timeframes || [], OPT_COLS, {
-            idPrefix: 'rtpOptGrid',
-            isLive: () => false,
-            applyFn: applyOptResult,
-            stateStore: _optGroupsByTf,
-            derivedSort: {
-                // Stored as counts, not a ratio — sort by the ratio.
-                win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
-                // Derived ₹ columns depend on the current lot-size inputs, so
-                // they read them fresh on every compare rather than once.
-                net_pnl_inr: r => { const { lots, lotValue } = _optMoney(); return _optNetRs(r, lots, lotValue); },
-                brokerage_inr: r => { const { lots } = _optMoney(); return _optBrokerage(r, lots); },
-            },
-        });
-
-        if (panel) panel.style.display = '';
-        if (recalcBtn) recalcBtn.style.display = '';
-        if (data.best) applyOptResult(data.best);
-    }
-
-    // Abort any running RTP optimise (pending request + polling loop).
-    function cancelRtpOptimise() {
-        _rtpOptRun += 1;            // invalidate any active poll
-        if (_rtpOptAbort) {
-            try { _rtpOptAbort.abort(); } catch (e) { /* noop */ }
-            _rtpOptAbort = null;
-        }
-        _hideOptLoader();
-    }
-
-    async function runOptimise(recalculate) {
-        const symbol = symbolSearch.value.trim().toUpperCase();
-        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
-
-        const panel     = document.getElementById('rtpOptimisePanel');
-        const recalcBtn = document.getElementById('recalculateOptBtn');
-        const optimBtn  = document.getElementById('runOptimiseBtn');
-
-        const activeBtn = recalculate ? recalcBtn : optimBtn;
-        const origText  = activeBtn ? activeBtn.textContent : '';
-        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
-        if (panel) panel.style.display = 'none';
-
-        // Cancel whatever was running before and claim this generation.
-        cancelRtpOptimise();
-        const myRun     = _rtpOptRun;
-        const controller = new AbortController();
-        _rtpOptAbort     = controller;
-        _showOptLoader('Finding best params…', 'Sweeping SL / target combos across timeframes…');
-
-        try {
-            const resp = await fetch('/api/backtest/rtp/optimise', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                signal: controller.signal,
-                body: JSON.stringify({
-                    symbol,
-                    start_date:  document.getElementById('startDate').value,
-                    end_date:    document.getElementById('endDate').value,
-                    interval:    document.getElementById('interval').value,
-                    recalculate: recalculate,
-                })
-            });
-            const data = await resp.json();
-            if (myRun !== _rtpOptRun) return; // superseded by a newer run
-            if (!data.success) {
-                window.showNotification(data.error || 'Optimisation failed', 'error');
-                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
-                _hideOptLoader();
-                return;
-            }
-            // Served straight from cache → render immediately
-            if (data.from_cache) {
-                _rtpOptAbort = null;
-                _hideOptLoader();
-                renderOptResults(data);
-                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
-                return;
-            }
-            // Long-running task: poll status endpoint until complete
-            _pollRtpOptimise(data.task_id, activeBtn, origText, Date.now(), myRun);
-        } catch (err) {
-            if (err && err.name === 'AbortError') return; // cancelled on purpose
-            console.error('Optimise error:', err);
-            window.showNotification('Optimisation request failed', 'error');
-            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
-            _hideOptLoader();
-        }
-    }
-
-    function _pollRtpOptimise(taskId, activeBtn, origText, startMs, myRun) {
-        const MAX_WAIT_MS = 30 * 60 * 1000; // hard stop (multi-TF sweep can run long)
-        let lastProgress = '';
-
-        function tick() {
-            if (myRun !== _rtpOptRun) return; // cancelled / superseded — stop polling
-
-            const elapsed = Math.round((Date.now() - startMs) / 1000);
-            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s${lastProgress ? ' · ' + lastProgress : ''}…`;
-            _showOptLoader('Finding best params…', `${elapsed}s elapsed · ${lastProgress || 'starting…'}`);
-
-            if (Date.now() - startMs > MAX_WAIT_MS) {
-                window.showNotification(
-                    'Optimisation is taking unusually long — it keeps running on the server. ' +
-                    'Click "Find Best Params" again later to load the finished result from cache.',
-                    'warning');
-                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
-                _hideOptLoader();
-                return;
-            }
-
-            fetch(`/api/backtest/rtp/optimise/status/${taskId}`)
-                .then(r => r.json())
-                .then(data => {
-                    if (myRun !== _rtpOptRun) return; // superseded while awaiting response
-                    if (data.status === 'running') {
-                        if (data.progress) lastProgress = data.progress;
-                        setTimeout(tick, 2000);
-                        return;
-                    }
-                    _rtpOptAbort = null;
-                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
-                    _hideOptLoader();
-                    if (!data.success || data.status === 'error') {
-                        window.showNotification(data.error || 'Optimisation failed', 'error');
-                        return;
-                    }
-                    renderOptResults(data);
-                })
-                .catch(err => {
-                    if (myRun !== _rtpOptRun) return; // cancelled — ignore
-                    console.error('RTP poll error:', err);
-                    setTimeout(tick, 3000); // retry on transient network error
-                });
-        }
-
-        setTimeout(tick, 2000); // first check after 2s
-    }
-
-    function applyOptResult(r) {
-        const entryMode = document.getElementById('rtpEntryMode');
-        const useAdx    = document.getElementById('rtpUseAdx');
-        const adxThresh = document.getElementById('rtpAdxThresh');
-        const sl        = document.getElementById('rtpSL');
-        const tgt       = document.getElementById('rtpTarget');
-        const intervalSel = document.getElementById('interval');
-        if (entryMode) entryMode.value = r.entry_mode;
-        if (useAdx)    useAdx.checked  = r.use_adx;
-        if (adxThresh && r.adx_thresh != null) adxThresh.value = r.adx_thresh;
-        if (sl)        sl.value        = r.sl_points;
-        if (tgt)       tgt.value       = r.tgt_points;
-        // The optimiser sweeps neither a trailing stop nor the on-close exit
-        // filter, so reset both to their defaults (Trail off, exit on value).
-        // Otherwise a follow-up backtest would apply a trail/close filter the
-        // grid row never used and its Net P&L (pts and ₹) wouldn't match.
-        const trailSL = document.getElementById('rtpTrailSL');
-        const exitOn  = document.getElementById('rtpExitOn');
-        if (trailSL) { trailSL.value = ''; trailSL.style.fontStyle = 'italic'; }
-        if (exitOn)  exitOn.value = 'value';
-        // Swept filters → apply from the grid row; non-swept filters → reset,
-        // so a follow-up backtest reproduces the grid row exactly.
-        const confirmSel = document.getElementById('rtpConfirmBars');
-        const railGap    = document.getElementById('rtpRailGap');
-        if (confirmSel) confirmSel.value = String(r.confirm_bars || 0);
-        if (railGap) {
-            railGap.value = r.min_rail_gap_atr ? r.min_rail_gap_atr : '';
-            railGap.style.fontStyle = railGap.value ? 'normal' : 'italic';
-        }
-        const strictChk  = document.getElementById('rtpStrictPattern');
-        const maxTrades  = document.getElementById('rtpMaxTrades');
-        const maxSlStrk  = document.getElementById('rtpMaxConsecSL');
-        if (strictChk) strictChk.checked = false;
-        if (maxTrades) { maxTrades.value = ''; maxTrades.style.fontStyle = 'italic'; }
-        if (maxSlStrk) { maxSlStrk.value = ''; maxSlStrk.style.fontStyle = 'italic'; }
-        // Winning timeframe → main interval dropdown, so a follow-up single
-        // backtest reproduces the optimised run.
-        if (intervalSel && r.interval) intervalSel.value = r.interval;
-        if (window.showNotification) {
-            const tfStr = r.tf_label ? `${r.tf_label} · ` : '';
-            window.showNotification(
-                `Applied: ${tfStr}${r.entry_mode}  ·  SL ${r.sl_points}  ·  TGT ${r.tgt_points}`, 'success'
-            );
-        }
     }
 
     // ── Single-grid Optimise (Swing Momentum, EMA Confluence) ─────────
@@ -3035,7 +2681,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function _scOptBrokerage(r, lots) { return calcBrokeragePerTrade(lots) * (r.total_trades || 0); }
     function _scOptNetRs(r, lots, lotValue) { return (r.total_pnl || 0) * lotValue * lots - _scOptBrokerage(r, lots); }
 
-    // Column spec for the per-timeframe grids (mirrors the RTP grid, with the
+    // Column spec for the per-timeframe grids (one per timeframe, with the
     // 2nd-candle params). `key` (when set) is the field the column sorts on.
     const SC_OPT_COLS = [
         { label: '#',             key: null,            fmt: (r, i) => i + 1 },
@@ -3614,7 +3260,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // ── 30-Min Opening Fakeout Optimise ──────────────────────────────────
     // Sweeps Direction × SL/Target-Confirm × the 3 boolean pattern filters
     // (48 combos) across the full F&O stock universe — no per-symbol/
-    // per-timeframe axis like RTP/2nd-Candle, since this strategy always
+    // per-timeframe axis like 2nd-Candle, since this strategy always
     // scans every stock at a fixed 30-min-candle resolution. One flat
     // leaderboard, ranked by real ₹ Net P&L.
     const TMF_OPT_COLS = [
@@ -3815,9 +3461,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (tmfRecalcBtn) tmfRecalcBtn.addEventListener('click', () => runTmfOptimise(true));
 
     const optimiseBtn   = document.getElementById('runOptimiseBtn');
-    const recalcOptBtn  = document.getElementById('recalculateOptBtn');
     if (optimiseBtn)  optimiseBtn.addEventListener('click', () => {
-        const strat = strategySelect ? strategySelect.value : 'rtp';
+        const strat = strategySelect ? strategySelect.value : '';
         if (strat === 'swing_momentum') _runSmOptimise(false);
         else if (strat === 'second_candle') runScOptimise(false);
         else if (strat === 'option_breakout') runObOptimise(false);
@@ -3825,9 +3470,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'ema_pullback') runEmaOptimise(false);
         else if (strat === 'scalp_pullback') runSpOptimise(false);
         else if (strat === 'pivot_confluence') runPcOptimise(false);
-        else                            runOptimise(false);
     });
-    if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));
 
     // ── Swing Momentum Optimise ──────────────────────────────────────────
     const smRecalcOptBtn = document.getElementById('smRecalcOptBtn');
@@ -3942,9 +3585,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const panel     = document.getElementById('smOptimisePanel');
         const metaEl    = document.getElementById('smOptMeta');
         const recalcBtn = document.getElementById('smRecalcOptBtn');
-        const rtpPanel  = document.getElementById('rtpOptimisePanel');
-
-        if (rtpPanel) rtpPanel.style.display = 'none';
 
         if (metaEl) {
             const freqLabel = (data.rebalance_freq || 'monthly');
@@ -4169,7 +3809,7 @@ document.addEventListener('DOMContentLoaded', function() {
         _smSetCard('statOutcome',     'Net Outcome', tr >= 0 ? 'PROFIT' : 'LOSS',
             tr >= 0 ? 'stat-val-green' : 'stat-val-red');
 
-        // Row 2 (RTP): hide
+        // Row 2 (per-trade cards): hide
         const rtpRow = document.getElementById('rtpStatsRow');
         if (rtpRow) rtpRow.style.display = 'none';
 

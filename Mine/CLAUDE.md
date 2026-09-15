@@ -212,9 +212,13 @@ symbol per day. Tests: `tests/test_ema_confluence_live.py`.
 
 The EMA RTP live algo (five timeframe variants, `algo/rtp_railway_track/`)
 was removed on 2026-09-15, with its `/api/algo/rtp*` routes, Algo-page tab,
-scheduler jobs and tests. Its **backtest** (`Backtest/rtp_backtest_engine.py`
-and the `/api/backtest/rtp*` routes) stays. The per-user `EMA_RTP_*` /
-`RTP_*_STRIKE_MODE` / `BROKER_N_RTP_*` variables in `.users.json` are now
-dead and read by nothing. EMA Confluence (`algo/ema_confluence/`) was **not**
+scheduler jobs and tests. Its **backtest** went the same evening:
+`Backtest/rtp_backtest_engine.py`, the `/api/backtest/rtp*` routes and the
+RTP strategy on `/backtest`. Two things kept the name: the shared optimiser
+cache is still `app/utils/rtp_opt_cache.json` (2nd-Candle / Scalp / Pivot
+sweeps write it), and `#rtpStatsRow` is still the id of the shared Row-2
+stat cards. The per-user `EMA_RTP_*` / `RTP_*_STRIKE_MODE` /
+`BROKER_N_RTP_*` variables in `.users.json` are now dead and read by
+nothing. EMA Confluence (`algo/ema_confluence/`) was **not**
 removed — it is a separate algo and still runs (see "EMA Confluence live
 mode" above).
