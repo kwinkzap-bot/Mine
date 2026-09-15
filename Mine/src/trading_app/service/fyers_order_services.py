@@ -93,9 +93,9 @@ class FyersOrderService:
         self.ORDER_TYPE_STOP_LOSS = 3
         self.ORDER_TYPE_STOP_LOSS_MARKET = 4
         
-        # Transaction type (side) mappings
+        # Transaction type (side) mappings (Fyers API v3: 1 = Buy, -1 = Sell)
         self.SIDE_BUY = 1
-        self.SIDE_SELL = 2
+        self.SIDE_SELL = -1
         
         # Product type mappings for Fyers
         self.PRODUCT_INTRADAY = 'INTRADAY'
@@ -759,7 +759,7 @@ class FyersOrderService:
         Place a stop loss order on Fyers platform.
         """
         try:
-            # Map transaction type (Fyers V3: 1=BUY, 2=SELL)
+            # Map transaction type (Fyers V3: 1=BUY, -1=SELL)
             fyers_side = self.SIDE_SELL
             if str(transaction_type).upper() in ['BUY', 'B', '1']: fyers_side = self.SIDE_BUY
             elif str(transaction_type).upper() in ['SELL', 'S', '2', '-1']: fyers_side = self.SIDE_SELL
