@@ -3,7 +3,9 @@
    backtest.js (the Backtest page). algo.js only calls the small hooks
    _emacFetchStatus, _emacFetchHistory, _emacClearTimers, and the
    typeof-guarded call in algoSwitch — everything else about this tab
-   (rendering, start/stop, delete) lives in this file. PAPER TRADE ONLY. */
+   (rendering, start/stop, delete) lives in this file. Paper by default;
+   under EMA_CONFLUENCE_MODE=live the same grid shows real broker fills, and
+   the header badge says which accounts they go to. */
 'use strict';
 
 let _emacStatusTimer  = null;
@@ -85,6 +87,30 @@ function _emacRenderStatus(data) {
 
     const upd = document.getElementById('emacLastUpd');
     if (upd) upd.textContent = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Mode badge: PAPER (amber) or LIVE (red) with the accounts a real order
+    // goes to. A live flag with no usable broker is called out — the algo
+    // refuses every trigger in that state, which is worth seeing up front.
+    const modeBadge = document.getElementById('emacModeBadge');
+    if (modeBadge) {
+        const brokers = (data.live_brokers || []);
+        const usable  = brokers.filter(b => b.supported);
+        const refused = brokers.filter(b => !b.supported);
+        if (data.mode === 'live') {
+            modeBadge.className = 'dg-badge dg-badge--neg';
+            modeBadge.textContent = usable.length
+                ? 'LIVE · FUTURES · ' + usable.map(b => `${b.name} ×${b.lots}`).join(', ')
+                : 'LIVE · NO BROKER FLAGGED';
+            modeBadge.title = 'EMA_CONFLUENCE_MODE=live — real NRML futures orders at every BROKER_N_EMA_ACTIVE=true account'
+                + (refused.length ? `. Refused (not zerodha/fyers): ${refused.map(b => b.name).join(', ')}` : '');
+        } else {
+            const held = (data.live_positions || []);
+            modeBadge.className = 'dg-badge dg-badge--warn';
+            modeBadge.textContent = 'PAPER TRADE · FUTURES' + (held.length ? ` · ${held.length} LIVE position(s) still held` : '');
+            modeBadge.title = 'EMA_CONFLUENCE_MODE=paper — simulated fills, no broker orders'
+                + (held.length ? `. Live legs still at the broker: ${held.join(', ')}` : '');
+        }
+    }
 
     const summary = data.summary || {};
     const summaryGrid = document.getElementById('emacSummaryGrid');
@@ -518,7 +544,7 @@ function _emacRenderEquityCurve(trades) {
         data: {
             labels,
             datasets: [{
-                label: 'Portfolio Value (Paper)',
+                label: 'Portfolio Value',
                 data: chartData,
                 borderColor: lineColor,
                 backgroundColor: fillColor,
@@ -837,7 +863,7 @@ function emacShowLogic() {
 
     <div class="rtp-logic-body">
 
-        <div class="rtp-tf"><span class="rtp-tf-lbl">Mode</span><span class="rtp-tf-val">Simulated (paper) fills on the FUTURES contract</span><span class="rtp-tf-sub">No broker orders — gated by the EMA_CONFLUENCE_ACTIVE kill-switch</span></div>
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Mode</span><span class="rtp-tf-val">EMA_CONFLUENCE_MODE = paper (simulated fills at the future's LTP) or live (real MARKET · NRML futures orders)</span><span class="rtp-tf-sub">Live orders go to every account with BROKER_N_EMA_ACTIVE=true (Zerodha / Fyers only), BROKER_N_EMA_LOTS lots each — entries still gated by the EMA_CONFLUENCE_ACTIVE kill-switch. A position is closed the way it was opened: a live leg is flattened at its broker even after the flag goes back to paper.</span></div>
 
         <p class="rtp-idea">Scans <b>every symbol</b> in the Backtest page's EMA Confluence symbol table, each using its <b>own</b> default Direction/Target%. Daily EMA 20/50/100/200 — a signal candle's range must touch all four at once; its own colour (red/green) fixes the direction. <b>One setup per symbol at a time</b> — a new signal is ignored while one is still watching or in position.</p>
 

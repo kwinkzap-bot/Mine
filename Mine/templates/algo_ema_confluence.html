@@ -1,5 +1,5 @@
     <!-- ════════════════════════════════════════════════════════ -->
-    <!-- EMA Confluence Breakout panel (PAPER TRADE — futures)    -->
+    <!-- EMA Confluence Breakout panel (futures; paper by default, LIVE under EMA_CONFLUENCE_MODE=live) -->
     <!-- Own files: algo_ema_confluence.html (this) + static/js/algo_ema_confluence.js. -->
     <!-- ════════════════════════════════════════════════════════ -->
     <div class="ag-panel" id="algo-ema-confluence-panel">
@@ -17,7 +17,7 @@
             </svg>
             <span>Logic</span>
         </button>
-        <span class="dg-badge dg-badge--warn">PAPER TRADE · FUTURES</span>
+        <span id="emacModeBadge" class="dg-badge dg-badge--warn" title="EMA_CONFLUENCE_MODE">PAPER TRADE · FUTURES</span>
         <span id="emacRunBadge" class="ag-badge inactive">
             <span class="ag-badge-dot"></span>
             <span id="emacRunBadgeText">Stopped</span>
@@ -104,7 +104,7 @@
     <!-- ── Executed Trade History ──────────────────────────────── -->
     <div class="ag-card">
         <div class="ag-card-hdr">
-            <span class="ag-card-title">Executed Trade History (Paper)</span>
+            <span class="ag-card-title">Executed Trade History</span>
             <span style="margin-left:auto;font-size:11px;color:var(--ag-text-3)">P&amp;L is net of Zerodha futures charges</span>
             <span id="emacHistCount" style="font-size:11px;color:var(--ag-text-3)"></span>
             <button class="ag-hist-delall-btn" onclick="_emacDeleteAllTrades()" title="Delete ALL trade history records">&#128465; Delete All</button>

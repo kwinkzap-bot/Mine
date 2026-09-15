@@ -9521,7 +9521,9 @@ def algo_tmf_stop() -> EndpointResponse:
 def algo_ema_confluence_status() -> EndpointResponse:
     """Today's per-symbol EMA Confluence Breakout state (phase/direction/
     trigger/SL/entry/target for every symbol in EMA_SYMBOL_DEFAULTS) plus a
-    summary count by phase. PAPER TRADE ONLY — no broker orders."""
+    summary count by phase, the mode (paper / live) and, in live mode, which
+    broker slots carry BROKER_N_EMA_ACTIVE. Flags are read here, never
+    sessions: building a broker session is the algo thread's job."""
     try:
         try:
             with open(_EMAC_STATE_PATH, 'r') as _f:
@@ -9550,13 +9552,38 @@ def algo_ema_confluence_status() -> EndpointResponse:
         # Persisted Start/Stop intent (defaults on). False only after a Stop
         # click — that's what keeps the scheduler from restarting the thread.
         enabled = (UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_ENABLED', 'true') or 'true').strip().lower() != 'false'
+        mode = 'live' if (UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_MODE', 'paper') or 'paper').strip().lower() == 'live' else 'paper'
+
+        def _flag(key, default='false'):
+            return (UserEnvManager.get_user_var(username, key, default) or default).strip().lower() in ('true', '1', 'yes')
+
+        # The accounts a live entry would go to — the same filter the algo's
+        # _get_live_brokers applies, minus the login check. `supported` is
+        # false for a flagged dhan/kotak/icici slot, which the algo refuses.
+        live_brokers = []
+        for i in range(1, 21):
+            b_type = (UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '') or '').strip().lower()
+            if not b_type or not _flag(f'BROKER_{i}_ACTIVE') or not _flag(f'BROKER_{i}_EMA_ACTIVE'):
+                continue
+            raw_lots = (UserEnvManager.get_user_var(username, f'BROKER_{i}_EMA_LOTS', '') or '').strip()
+            live_brokers.append({
+                'idx': i, 'type': b_type,
+                'name': (UserEnvManager.get_user_var(username, f'BROKER_{i}_NAME', '') or '').strip() or f'Broker {i}',
+                'lots': int(raw_lots) if raw_lots.isdigit() else lots,
+                'supported': b_type in ('zerodha', 'fyers'),
+            })
+
+        # Symbols holding real broker legs, whatever the flag says now.
+        live_positions = sorted(sym for sym, s in stocks.items() if s.get('broker_legs'))
 
         return jsonify({
             'success': True,
             'running': bool(instance and instance.is_running()),
             'enabled': enabled,
             'algo_active': algo_active,
-            'mode': 'paper',
+            'mode': mode,
+            'live_brokers': live_brokers,
+            'live_positions': live_positions,
             'lots': lots,
             'last_scan_date': state.get('last_scan_date'),
             'summary': summary,

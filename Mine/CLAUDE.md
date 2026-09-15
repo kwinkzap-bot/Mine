@@ -2,8 +2,9 @@
 
 Live-money intraday trading app. Flask + APScheduler, three live algo threads
 (2nd 30s Candle — **paper only since 2026-09-15**, it has no order path —
-30-Min Fakeout, and the paper-only EMA Confluence) plus the Order Placement
-signal engine, four brokers. Treat every change as touching real orders.
+30-Min Fakeout, and EMA Confluence — paper by default, **live under
+`EMA_CONFLUENCE_MODE=live`**, see below) plus the Order Placement signal
+engine, four brokers. Treat every change as touching real orders.
 
 ## Hard rules
 
@@ -156,6 +157,41 @@ Every leg is a normal `MineOrderStore` record with `strategy='op'` plus
 reconciliation sweep and Exit all working on signal legs with no special case.
 Do not "tidy" that into a store of its own.
 
+## EMA Confluence live mode
+
+`algo/ema_confluence/` is a multi-day **futures** swing (NRML, carried
+overnight, rolled 3 sessions before expiry). Since 2026-09-15 it places real
+orders when:
+
+```
+EMA_CONFLUENCE_MODE=live        # default paper — simulated fills at the future's LTP
+BROKER_N_EMA_ACTIVE=true        # per account, with BROKER_N_ACTIVE=true; zerodha/fyers ONLY
+BROKER_N_EMA_LOTS=1             # per account; falls back to EMA_CONFLUENCE_LOTS
+EMA_CONFLUENCE_ACTIVE=true      # the kill-switch still gates every entry
+```
+
+A flagged Dhan/Kotak/ICICI slot is refused with an error at thread start —
+neither has a futures order path here. The mode is read once, at thread
+start (08:30), like the other flags; a change needs the after-hours restart.
+
+Two things are load-bearing:
+
+* **The leg decides, not the flag.** Every live holding is a `broker_legs`
+  entry on the symbol's state (broker slot, tradingsymbol, order ids, filled
+  qty/price). A position with legs is flattened at the broker even after
+  `EMA_CONFLUENCE_MODE` goes back to paper — and a broker whose
+  `BROKER_N_EMA_ACTIVE` was turned off while holding a leg still gets a
+  session for the exit. A paper position (no legs) is never sold at a broker.
+* **An exit, once decided, is finished.** SL/Target set `exit_pending` on
+  the symbol and the tick retries any leg the broker refused until every leg
+  is flat, whatever spot does meanwhile; the trade is booked only then, at
+  the qty-weighted real fill. A roll is the same on the near month, then a
+  re-entry on the far one; if the far entry fails the account is flat and
+  the symbol goes back to `pending_scan` with an alert.
+
+Order failures raise `ema_confluence_order_failed` (bell + Telegram) once per
+symbol per day. Tests: `tests/test_ema_confluence_live.py`.
+
 ## Removed algos
 
 The EMA RTP live algo (five timeframe variants, `algo/rtp_railway_track/`)
@@ -164,4 +200,5 @@ scheduler jobs and tests. Its **backtest** (`Backtest/rtp_backtest_engine.py`
 and the `/api/backtest/rtp*` routes) stays. The per-user `EMA_RTP_*` /
 `RTP_*_STRIKE_MODE` / `BROKER_N_RTP_*` variables in `.users.json` are now
 dead and read by nothing. EMA Confluence (`algo/ema_confluence/`) was **not**
-removed — it is a separate, paper-only algo and still runs.
+removed — it is a separate algo and still runs (see "EMA Confluence live
+mode" above).

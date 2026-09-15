@@ -1,5 +1,5 @@
 """
-EMA Confluence Breakout — Live Algo (PAPER TRADE, Futures)
+EMA Confluence Breakout — Live Algo (Futures; paper by default, LIVE by flag)
 
 Live counterpart of the backtest in Backtest/ema_pullback_engine.py, scanning
 every symbol in EMA_SYMBOL_DEFAULTS (Backtest/ema_symbol_universe.py) — each
@@ -106,16 +106,63 @@ Gating (see env/Mine.env):
   EMA_CONFLUENCE_ACTIVE = true/false   — gates entries (paper fills); the
                                           thread always scans/logs regardless
                                           (same convention as TMF/RTP).
-  EMA_CONFLUENCE_MODE   = paper (default) | live (not implemented — falls
-                                          back to paper).
-  EMA_CONFLUENCE_LOTS   = 1             — paper lot count per entry.
+  EMA_CONFLUENCE_MODE   = paper (default) | live
+                                        paper: fills are simulated at the
+                                          future's LTP, nothing reaches a
+                                          broker.
+                                        live:  every entry, exit and roll is
+                                          a real MARKET order, product NRML
+                                          (carried overnight), at every
+                                          broker flagged below. See "Live
+                                          execution".
+  BROKER_<N>_EMA_ACTIVE = true          — per broker slot, alongside the
+                                          existing BROKER_<N>_ACTIVE and
+                                          BROKER_<N>_TYPE. Opts THAT account
+                                          in to this algo's live orders and
+                                          nothing else — it does not follow
+                                          from TMF_ACTIVE / OP_ACTIVE. Only
+                                          zerodha and fyers can carry an
+                                          NRML futures position here; a
+                                          flagged dhan/kotak/icici slot is
+                                          refused with an error at start-up.
+  BROKER_<N>_EMA_LOTS   = 1             — lots per entry for THAT broker;
+                                          falls back to EMA_CONFLUENCE_LOTS.
+  EMA_CONFLUENCE_LOTS   = 1             — lot count per entry (paper, and
+                                          the live default per broker).
   EMA_CONFLUENCE_ROLL_DAYS = 3          — trading days before expiry at which
                                           the contract roll fires (12:00 that
                                           day). Raising it far above 3 opens
                                           the window immediately, which is how
                                           a roll is exercised off-hours.
 
-This module is PAPER-TRADE ONLY — no real broker orders are ever placed.
+Live execution (EMA_CONFLUENCE_MODE=live):
+  The strategy is unchanged — the same spot-scale trigger/SL/Target decide
+  when to act; only what "act" means differs. On a trigger cross the algo
+  places a MARKET NRML order for the resolved futures contract at every
+  BROKER_<N>_EMA_ACTIVE broker, polls each order to its fill, and opens the
+  position on the qty-weighted average of the fills that came back (a broker
+  that rejects simply takes no part; if NONE holds anything the setup is
+  dropped to the next scan, exactly as a trigger that crossed with
+  EMA_CONFLUENCE_ACTIVE off). Every broker's holding is a `broker_legs` entry
+  on the symbol's state — broker slot, tradingsymbol, order ids, filled qty
+  and price — and it is THE LEG, not the current MODE flag, that decides how
+  a position is closed: a live position is flattened at the broker even if
+  the flag has since been turned back to paper, and a paper position is
+  never "sold" at a broker it was never bought at.
+
+  An SL/Target exit places the opposite MARKET order per leg. A leg whose
+  exit order is rejected stays open and is retried every tick under
+  `exit_pending` — the strategy has already spoken, so the spot price no
+  longer has a say — and the trade is booked to history only once every leg
+  is flat. A roll does the same on the near contract and then re-enters the
+  far one at the same brokers; a broker that cannot re-enter is flat and is
+  said so, loudly.
+
+  Order failures raise an in-app notification (ema_confluence_order_failed)
+  once per symbol per day, and an auth-shaped failure rebuilds the broker
+  sessions from env/Mine.env before retrying — the daily Kite login usually
+  lands after the 08:30 thread start, so the token cached at start is often
+  already dead (same lesson as TMF).
 """
 import json
 import logging
@@ -204,6 +251,75 @@ _FYERS_INDICES = {
 # so these are symbol-provider-only (Fyers/ICICI) — see _resolve_future.
 _BSE_UNDERLYINGS = {'SENSEX'}
 
+# ── Live execution ───────────────────────────────────────────────────────
+# Only these broker types can carry an NRML futures position through this
+# module: both take a plain tradingsymbol and a carry-forward product, and
+# both expose an order book the fill can be read back from. The others are
+# refused at start-up rather than silently skipped — a flag that says "trade
+# here" and does nothing is how an account ends up unhedged without anyone
+# noticing.
+_LIVE_BROKER_TYPES = ('zerodha', 'fyers')
+# Same hints TMF uses: an error shaped like this means the cached session is
+# stale, and the fix is a rebuild from env, not a retry on the dead token.
+_AUTH_ERROR_HINTS = ('api_key', 'access_token', 'unauthor', 'authenticat',
+                     'invalid session', 'session expired', 'token')
+# A MARKET order fills within a second or so; poll a few times before giving
+# up on confirming it this tick. Module-level so tests can zero the wait.
+_FILL_POLL_ATTEMPTS = 4
+_FILL_POLL_WAIT_SECS = 1.0
+# How many ticks an exit order may sit unconfirmed (order book unreachable,
+# say) before the leg is assumed filled at the mark. ~2 minutes at 15s.
+_EXIT_UNCONFIRMED_TICKS = 8
+# Passive rebuilds of the broker sessions are rate-limited so a dead login
+# cannot turn every tick into an env re-read; the entry path forces one.
+_BROKER_REFRESH_MIN_GAP_SECS = 60
+# The app-wide convention for the exchange freeze quantity: no single order
+# over 27 lots (split_quantity_by_freeze_limit in routes/api.py). Stock
+# futures have per-scrip freeze quantities of their own, but nothing in this
+# universe is sized anywhere near either cap at the default 1 lot.
+_FREEZE_LOTS = 27
+
+
+def _is_auth_error(err: Any) -> bool:
+    msg = str(err or '').lower()
+    return any(hint in msg for hint in _AUTH_ERROR_HINTS)
+
+
+def _bare_tradingsymbol(token: Any) -> str:
+    """'NSE:NHPC26SEPFUT' / 'NFO:NHPC26SEPFUT' -> 'NHPC26SEPFUT' — the
+    exchange tradingsymbol, which is the same string at every broker."""
+    return str(token or '').split(':', 1)[-1]
+
+
+def _lot_chunks(qty: int, lot_size: int) -> List[int]:
+    """Split a quantity (units) into orders of at most _FREEZE_LOTS lots."""
+    cap = max(1, _FREEZE_LOTS * max(1, int(lot_size or 1)))
+    chunks: List[int] = []
+    remaining = int(qty)
+    while remaining > 0:
+        chunk = min(remaining, cap)
+        chunks.append(chunk)
+        remaining -= chunk
+    return chunks
+
+
+def _legs_avg(legs: List[Dict[str, Any]], key: str, fallback: Optional[float]) -> Optional[float]:
+    """Qty-weighted average of `{key}_price` over legs, using `fallback` for a
+    leg whose fill price never came back. None only if nothing is priceable."""
+    notional = 0.0
+    qty = 0
+    for leg in legs:
+        q = int(leg.get(f'{key}_qty') or 0)
+        p = leg.get(f'{key}_price')
+        if p is None:
+            p = fallback
+        if q <= 0 or p is None:
+            continue
+        notional += q * float(p)
+        qty += q
+    return round(notional / qty, 2) if qty else None
+
+
 _instances: Dict[str, 'EmaConfluenceAlgo'] = {}
 
 # Monthly futures contract tail — 'NSE:NHPC26AUGFUT' / 'NFO:NHPC26AUGFUT'.
@@ -291,7 +407,12 @@ class _PrefixLogger(logging.LoggerAdapter):
 
 
 class EmaConfluenceAlgo:
-    """Live EMA Confluence Breakout signal detector + simulated futures executor."""
+    """Live EMA Confluence Breakout signal detector + futures executor (paper
+    fills by default, real broker orders under EMA_CONFLUENCE_MODE=live)."""
+
+    # Class-level default so an instance that never ran _monitor_loop — a
+    # test built with __new__, a REPL poke — is paper, never live.
+    _live = False
 
     def __init__(self, username: str):
         self.username = username
@@ -303,6 +424,18 @@ class EmaConfluenceAlgo:
         # Re-read from EMA_CONFLUENCE_ROLL_DAYS when the thread starts; the
         # default keeps the pure helpers usable straight off the constructor.
         self._roll_sessions = _ROLL_SESSIONS_BEFORE_EXPIRY
+        # Live execution. `_live` is EMA_CONFLUENCE_MODE at thread start;
+        # `_broker_list` the (idx, kind, service, lots) sessions built from
+        # the BROKER_N_EMA_ACTIVE flags. Both stay empty in paper mode — but
+        # see _monitor_loop: a paper-flagged thread still builds sessions when
+        # the state file holds live legs, because those must be closed at the
+        # broker whatever the flag now says.
+        self._live = False
+        self._broker_list: List[Dict[str, Any]] = []
+        self._last_broker_refresh_ts = 0.0
+        self._brokers_refreshed_on: Optional[str] = None
+        self._exit_only_sessions: Dict[int, Dict[str, Any]] = {}
+        self._order_alerts: Dict[str, str] = {}
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -311,7 +444,7 @@ class EmaConfluenceAlgo:
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True, name='EmaConfluenceAlgoThread')
         self._thread.start()
         _instances[self.username] = self
-        self.log.info("Monitoring thread started (paper mode)")
+        self.log.info(f"Monitoring thread started ({self._mode()} mode)")
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -381,6 +514,17 @@ class EmaConfluenceAlgo:
         for symbol in [s for s in state['stocks'] if s not in universe]:
             st = state['stocks'][symbol]
             phase = st.get('phase')
+            if phase == 'in_position' and st.get('broker_legs'):
+                # A LIVE position is a real contract at a broker — booking it
+                # on paper here would leave it there, managed by nothing. Keep
+                # the symbol, hand it to the tick loop as a decided exit, and
+                # let _tick drop it once every leg is flat (this runs at 08:30,
+                # when no order can be placed).
+                if st.get('exit_pending') != 'UNIVERSE_DROP':
+                    self.log.warning(f"{symbol}: dropped from the universe — its LIVE position "
+                                     f"will be flattened at the brokers on the first in-session tick")
+                st['exit_pending'] = 'UNIVERSE_DROP'
+                continue
             if phase == 'in_position':
                 mark = st.get('ltp')
                 if mark is None:
@@ -508,11 +652,407 @@ class EmaConfluenceAlgo:
         return (UserEnvManager.get_user_var(self.username, key) or default).strip()
 
     def _mode(self) -> str:
-        mode = self._uvar('EMA_CONFLUENCE_MODE', 'paper').lower()
-        if mode == 'live':
-            self.log.warning("EMA_CONFLUENCE_MODE=live requested but live execution is not implemented yet — running in paper mode")
-            return 'paper'
-        return 'paper'
+        return 'live' if self._uvar('EMA_CONFLUENCE_MODE', 'paper').lower() == 'live' else 'paper'
+
+    @staticmethod
+    def _mode_of(s: Dict[str, Any]) -> str:
+        """The mode a POSITION is in — decided by whether it holds broker legs,
+        never by the current flag (see the module docstring)."""
+        return 'live' if s.get('broker_legs') else 'paper'
+
+    # ── Live brokers ─────────────────────────────────────────────────────
+
+    def _broker_lots(self, idx: int) -> int:
+        for var in (f'BROKER_{idx}_EMA_LOTS', 'EMA_CONFLUENCE_LOTS'):
+            raw = self._uvar(var)
+            if raw:
+                try:
+                    return max(1, int(raw))
+                except ValueError:
+                    self.log.warning(f"{var}={raw!r} is not a lot count — ignored")
+        return 1
+
+    def _get_live_brokers(self) -> List[Dict[str, Any]]:
+        """One session per BROKER_N_ACTIVE + BROKER_N_EMA_ACTIVE slot:
+        {'idx', 'kind', 'name', 'svc', 'lots'}.
+
+        Drops this user's cached env first, for the same reason TMF does: the
+        daily Kite login rewrites env/Mine.env while this process runs and
+        UserEnvManager caches that file for the life of the process, so a
+        rebuild would otherwise hand back the token that just expired.
+        """
+        from trading_app.app.utils.user_env import UserEnvManager
+        UserEnvManager._user_env_cache.pop(self.username, None)
+
+        result: List[Dict[str, Any]] = []
+        for i in range(1, 21):
+            b_type = self._uvar(f'BROKER_{i}_TYPE', '').lower()
+            if not b_type:
+                continue
+            if self._uvar(f'BROKER_{i}_ACTIVE', 'false').lower() not in ('true', '1', 'yes'):
+                continue
+            if self._uvar(f'BROKER_{i}_EMA_ACTIVE', 'false').lower() not in ('true', '1', 'yes'):
+                continue
+            name = self._uvar(f'BROKER_{i}_NAME') or f'broker {i}'
+            if b_type not in _LIVE_BROKER_TYPES:
+                self.log.error(f"BROKER_{i}_EMA_ACTIVE=true on {name} ({b_type}) but only "
+                               f"{'/'.join(_LIVE_BROKER_TYPES)} can carry an NRML futures "
+                               f"position here — that account takes no part")
+                continue
+            b = self._build_broker(i, b_type, name)
+            if b:
+                result.append(b)
+        return result
+
+    def _build_broker(self, i: int, b_type: str, name: str) -> Optional[Dict[str, Any]]:
+        """One broker session, or None with the reason logged."""
+        try:
+            if b_type == 'zerodha':
+                from trading_app.service.provider_logic import get_kite
+                from trading_app.service.kite_order_services import KiteService, apply_kite_proxy
+                kite = get_kite(user=self.username, instance=i)
+                if not kite:
+                    self.log.warning(f"Broker {i} ({name}): Kite not connected — no session")
+                    return None
+                if os.getenv('STATIC_IP_KEY', '').strip():
+                    apply_kite_proxy(kite)
+                svc: Any = KiteService(kite_instance=kite)
+            elif b_type == 'fyers':
+                from trading_app.service.fyers_order_services import FyersOrderService
+                access_token = self._uvar(f'BROKER_{i}_ACCESS_TOKEN')
+                if not access_token:
+                    self.log.warning(f"Broker {i} ({name}): Fyers not authenticated — no session")
+                    return None
+                svc = FyersOrderService(app_id=self._uvar(f'BROKER_{i}_APP_ID'),
+                                        access_token=access_token)
+            else:
+                return None
+            return {'idx': i, 'kind': b_type, 'name': name, 'svc': svc,
+                    'lots': self._broker_lots(i)}
+        except Exception as e:
+            self.log.error(f"Broker {i} ({b_type}) init failed: {e}")
+            return None
+
+    def _refresh_brokers(self, reason: str, force: bool = False) -> bool:
+        """Rebuild every broker session from the env as it is right now.
+        Returns False when the rate limit swallowed the request."""
+        now = time.time()
+        if not force and (now - self._last_broker_refresh_ts) < _BROKER_REFRESH_MIN_GAP_SECS:
+            return False
+        self._last_broker_refresh_ts = now
+        self._broker_list = self._get_live_brokers()
+        self._exit_only_sessions = {}
+        summary = [f"{b['idx']}:{b['kind']}x{b['lots']}" for b in self._broker_list]
+        self.log.warning(f"Broker sessions rebuilt from env ({reason}) — live brokers: {summary or 'none'}")
+        return True
+
+    def _broker_for(self, idx: int) -> Optional[Dict[str, Any]]:
+        """The session for a broker that HOLDS a leg. Normally one of the
+        flagged brokers — but a leg outlives its flag: turning
+        BROKER_N_EMA_ACTIVE off while that account holds a contract must not
+        make the contract unreachable, so the session is built on demand from
+        BROKER_N_TYPE alone. It never joins _broker_list, so no NEW entry goes
+        to an account that has opted out."""
+        for b in self._broker_list:
+            if b['idx'] == idx:
+                return b
+        if idx in self._exit_only_sessions:
+            return self._exit_only_sessions[idx]
+        b_type = self._uvar(f'BROKER_{idx}_TYPE', '').lower()
+        if b_type not in _LIVE_BROKER_TYPES:
+            return None
+        self.log.warning(f"Broker {idx} holds a leg but is no longer flagged for this algo — "
+                         f"building a session for the exit only")
+        b = self._build_broker(idx, b_type, self._uvar(f'BROKER_{idx}_NAME') or f'broker {idx}')
+        if b:
+            self._exit_only_sessions[idx] = b   # until the next _refresh_brokers
+        return b
+
+    def _on_broker_error(self, err: Any, where: str) -> None:
+        if _is_auth_error(err):
+            self._refresh_brokers(f'{where} failed auth')
+
+    def _leg_symbol(self, b: Dict[str, Any], symbol: str, token: Any) -> str:
+        """The contract as THIS broker's order API wants it. Kite takes the bare
+        tradingsymbol (KiteService picks NFO/BFO off the underlying); Fyers
+        wants it exchange-prefixed."""
+        bare = _bare_tradingsymbol(token)
+        if b['kind'] == 'zerodha':
+            return bare
+        return f"{'BSE' if symbol in _BSE_UNDERLYINGS else 'NSE'}:{bare}"
+
+    def _place_leg(self, b: Dict[str, Any], symbol: str, tradingsymbol: str,
+                   action: str, qty: int) -> Dict[str, Any]:
+        """One MARKET carry-forward order at one broker. Never raises."""
+        try:
+            if b['kind'] == 'zerodha':
+                # place_option_order is the NFO/BFO order path with the
+                # market-protection fallback; the tradingsymbol override makes
+                # it a futures order, and strike/option_type are unused then.
+                return b['svc'].place_option_order(
+                    symbol=symbol, strike=0, option_type='FUT', transaction_type=action,
+                    quantity=int(qty), product='NRML', tradingsymbol=tradingsymbol)
+            # Fyers v3: side 1 = BUY, -1 = SELL (the service's SIDE_SELL
+            # constant says 2, which is not a Fyers value — the two other
+            # sell paths in the app hard-code -1 as well); type 2 = MARKET;
+            # MARGIN is the carry-forward product for F&O.
+            return b['svc'].place_order(
+                symbol=tradingsymbol, side=1 if action == 'BUY' else -1, quantity=int(qty),
+                order_type=2, product_type='MARGIN')
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def _fill_of(self, b: Dict[str, Any], order_ids: List[str]) -> Tuple[str, int, Optional[float]]:
+        """('FILLED' | 'REJECTED' | 'PENDING', filled_qty, avg_price) summed
+        over the freeze-limit chunks of one leg. PENDING while any chunk is
+        still working or unreadable; REJECTED only when nothing traded."""
+        svc = b['svc']
+        filled_qty = 0
+        notional = 0.0
+        pending = rejected = False
+        if b['kind'] == 'zerodha':
+            for oid in order_ids:
+                st = svc.get_order_status(oid)
+                if not st.get('success'):
+                    pending = True
+                    continue
+                status = str(st.get('status') or '').upper()
+                fq = int(st.get('filled_quantity') or 0)
+                ap = float(st.get('average_price') or 0)
+                if status == 'COMPLETE':
+                    filled_qty += fq
+                    notional += fq * ap
+                elif status in ('REJECTED', 'CANCELLED'):
+                    rejected = True
+                    filled_qty += fq            # a cancelled order can still have traded part-way
+                    notional += fq * ap
+                else:
+                    pending = True
+        else:
+            book = {str(o.get('id')): o for o in ((svc.get_orderbook() or {}).get('orders') or [])}
+            for oid in order_ids:
+                o = book.get(str(oid))
+                if not o:
+                    pending = True
+                    continue
+                # Fyers V3: 6=Pending, 4=Transit, 1=Cancelled, 2=Filled, 5=Rejected
+                raw = int(o.get('status') or 0)
+                fq = int(o.get('filledQty') or 0)
+                ap = float(o.get('tradedPrice') or o.get('avgPrice') or 0)
+                if raw == 2:
+                    filled_qty += fq
+                    notional += fq * ap
+                elif raw in (1, 5):
+                    rejected = True
+                    filled_qty += fq
+                    notional += fq * ap
+                else:
+                    pending = True
+        if pending:
+            return 'PENDING', filled_qty, (notional / filled_qty if filled_qty else None)
+        if filled_qty <= 0:
+            return 'REJECTED', 0, None
+        return 'FILLED', filled_qty, notional / filled_qty
+
+    def _poll_fills(self, legs: List[Dict[str, Any]], key: str) -> None:
+        """Poll each leg's `{key}_order_ids` until terminal or the attempts run
+        out. Writes `{key}_status` ('FILLED'/'REJECTED'), `{key}_qty` and
+        `{key}_price`; a leg still PENDING at the end is left with no status
+        for the caller to decide about."""
+        for attempt in range(_FILL_POLL_ATTEMPTS):
+            open_legs = [l for l in legs if l.get(f'{key}_order_ids') and l.get(f'{key}_status') is None]
+            if not open_legs:
+                return
+            if attempt and _FILL_POLL_WAIT_SECS:
+                time.sleep(_FILL_POLL_WAIT_SECS)
+            for leg in open_legs:
+                b = self._broker_for(leg['broker_idx'])
+                if b is None:
+                    continue
+                try:
+                    state, fq, ap = self._fill_of(b, leg[f'{key}_order_ids'])
+                except Exception as e:
+                    self.log.warning(f"broker {leg['broker_idx']}: {key} fill lookup failed: {e}")
+                    self._on_broker_error(e, f'{key} fill lookup')
+                    continue
+                if state == 'PENDING':
+                    continue
+                leg[f'{key}_status'] = state
+                leg[f'{key}_qty'] = int(fq)
+                leg[f'{key}_price'] = round(float(ap), 2) if ap else None
+
+    def _alert_order_failure(self, symbol: str, what: str, detail: str) -> None:
+        """One in-app alert per symbol per kind per day — a dead login fails
+        every symbol, and forty identical alerts is how the one that mattered
+        gets scrolled past. The log carries every occurrence."""
+        key = f'{symbol}:{what}'
+        today = date.today().isoformat()
+        if self._order_alerts.get(key) == today:
+            return
+        self._order_alerts[key] = today
+        if self._uvar('EMA_CONFLUENCE_NOTIFY', 'true').lower() == 'false':
+            return
+        try:
+            from trading_app.service.notification_service import create_notification
+            create_notification(
+                category='ema_confluence_order_failed',
+                title=f"EMA Confluence — {what.upper()} order failed: {symbol}",
+                summary=detail[:200],
+                data={'symbol': symbol, 'what': what, 'error': detail},
+            )
+        except Exception as e:
+            self.log.error(f"{symbol}: order-failure notification failed: {e}")
+        self._send_telegram(symbol, f"⚠️ EMA Confluence — {what.upper()} ORDER FAILED\n{symbol}\n{detail[:300]}",
+                            tag='order_failed')
+
+    def _place_entry_legs(self, symbol: str, s: Dict[str, Any], action: str
+                          ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """The entry MARKET order at every live broker. Returns the legs that
+        were accepted (order ids, not yet fills) and the errors from the rest."""
+        token = s.get('future_token')
+        lot_size = int(s.get('lot_size') or 1)
+        legs: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        for b in self._broker_list:
+            ts = self._leg_symbol(b, symbol, token)
+            qty = b['lots'] * lot_size
+            ids: List[str] = []
+            placed_qty = 0
+            err: Optional[str] = None
+            for chunk in _lot_chunks(qty, lot_size):
+                r = self._place_leg(b, symbol, ts, action, chunk)
+                if r.get('success'):
+                    ids.append(str(r.get('order_id')))
+                    placed_qty += chunk
+                else:
+                    err = str(r.get('error'))
+                    break
+            if ids:
+                legs.append({'broker_idx': b['idx'], 'kind': b['kind'], 'lots': b['lots'],
+                             'qty': placed_qty, 'tradingsymbol': ts, 'token': token,
+                             'entry_order_ids': ids})
+                self.log.info(f"[LIVE] {symbol}: entry {action} {ts} x{placed_qty} placed at "
+                              f"broker {b['idx']} ({b['kind']}) — order_id={ids}")
+            if err:
+                errors.append(f"broker {b['idx']} ({b['kind']}): {err}")
+                self.log.error(f"[LIVE] {symbol}: entry {action} {ts} FAILED at broker {b['idx']}: {err}")
+        return legs, errors
+
+    def _execute_live_entry(self, symbol: str, s: Dict[str, Any], action: str) -> List[Dict[str, Any]]:
+        """Enter at every live broker and confirm the fills. Returns the legs
+        that HOLD something; [] means every account is flat and the caller
+        must not open a position."""
+        if not self._broker_list:
+            self._refresh_brokers('entry with no broker sessions', force=True)
+        if not self._broker_list:
+            self._alert_order_failure(symbol, 'entry',
+                                      'EMA_CONFLUENCE_MODE=live but no zerodha/fyers broker carries '
+                                      'BROKER_N_EMA_ACTIVE=true (or none is logged in) — no order placed')
+            return []
+        legs, errors = self._place_entry_legs(symbol, s, action)
+        if not legs and any(_is_auth_error(e) for e in errors) \
+                and self._refresh_brokers('entry failed auth', force=True) and self._broker_list:
+            legs, errors = self._place_entry_legs(symbol, s, action)
+        if not legs:
+            self._alert_order_failure(symbol, 'entry', '; '.join(errors) or 'no broker accepted the order')
+            return []
+        self._poll_fills(legs, 'entry')
+        held: List[Dict[str, Any]] = []
+        for leg in legs:
+            if leg.get('entry_status') == 'REJECTED':
+                self.log.error(f"[LIVE] {symbol}: entry at broker {leg['broker_idx']} was rejected "
+                               f"after acceptance (order {leg['entry_order_ids']}) — that account is flat")
+                continue
+            if leg.get('entry_status') is None:
+                # Accepted, but not yet visible as COMPLETE. A MARKET order in
+                # a liquid future has filled; carry the leg at its ordered qty,
+                # priced off the mark until the order book catches up. It is
+                # marked so the audit trail says the fill was never read back.
+                leg['entry_status'] = 'UNCONFIRMED'
+                leg['entry_qty'] = leg['qty']
+                leg['entry_price'] = None
+                self.log.warning(f"[LIVE] {symbol}: entry at broker {leg['broker_idx']} accepted but "
+                                 f"its fill did not confirm within the poll window — carried at the mark")
+            held.append(leg)
+        if not held:
+            self._alert_order_failure(symbol, 'entry', 'every broker rejected the entry order')
+        return held
+
+    def _execute_live_exit(self, symbol: str, s: Dict[str, Any], reason: str) -> bool:
+        """Flatten every leg still open at a broker with the opposite MARKET
+        order. Returns True when the whole position is flat. A leg whose exit
+        is rejected keeps no order ids and is retried next call; one whose
+        order is accepted but never confirms is retried a few ticks and then
+        assumed filled at the mark (see _EXIT_UNCONFIRMED_TICKS)."""
+        legs = s.get('broker_legs') or []
+        action = 'SELL' if s['direction'] == 'Long' else 'BUY'
+        lot_size = int(s.get('lot_size') or 1)
+        if not self._broker_list:
+            self._refresh_brokers(f'{reason} exit with no broker sessions', force=True)
+        errors: List[str] = []
+        to_poll: List[Dict[str, Any]] = []
+        for leg in legs:
+            if leg.get('exit_status') in ('FILLED', 'UNCONFIRMED'):
+                continue
+            if leg.get('exit_order_ids'):
+                to_poll.append(leg)              # placed on an earlier tick, still confirming
+                continue
+            b = self._broker_for(leg['broker_idx'])
+            if b is None:
+                errors.append(f"broker {leg['broker_idx']}: no session")
+                continue
+            held_qty = int(leg.get('entry_qty') or leg.get('qty') or 0)
+            ids: List[str] = []
+            err: Optional[str] = None
+            for chunk in _lot_chunks(held_qty, lot_size):
+                r = self._place_leg(b, symbol, leg['tradingsymbol'], action, chunk)
+                if r.get('success'):
+                    ids.append(str(r.get('order_id')))
+                else:
+                    err = str(r.get('error'))
+                    break
+            if ids:
+                leg['exit_order_ids'] = ids
+                leg['exit_polls'] = 0
+                to_poll.append(leg)
+                self.log.info(f"[LIVE] {symbol}: {reason} exit {action} {leg['tradingsymbol']} "
+                              f"x{held_qty} placed at broker {b['idx']} — order_id={ids}")
+            if err:
+                errors.append(f"broker {b['idx']}: {err}")
+                self.log.error(f"[LIVE] {symbol}: {reason} exit at broker {b['idx']} FAILED: {err}")
+                self._on_broker_error(err, f'{reason} exit')
+        self._poll_fills(to_poll, 'exit')
+        for leg in to_poll:
+            held_qty = int(leg.get('entry_qty') or leg.get('qty') or 0)
+            if leg.get('exit_status') == 'FILLED' and int(leg.get('exit_qty') or 0) < held_qty:
+                # A MARKET order in a liquid future does not part-fill, so this
+                # is a broker-side anomaly (a chunk cancelled by the exchange,
+                # say). The leg is treated as closed — the retry loop cannot
+                # chase a quantity it has no order for — but it is not quiet.
+                errors.append(f"broker {leg['broker_idx']}: exit filled {leg.get('exit_qty')} of "
+                              f"{held_qty} — CHECK THE BROKER for the remainder")
+                self.log.error(f"[LIVE] {symbol}: exit at broker {leg['broker_idx']} filled only "
+                               f"{leg.get('exit_qty')} of {held_qty}; the remainder is NOT managed")
+                self._alert_order_failure(symbol, 'exit', errors[-1])
+            if leg.get('exit_status') == 'REJECTED':
+                errors.append(f"broker {leg['broker_idx']}: exit order {leg['exit_order_ids']} rejected")
+                self.log.error(f"[LIVE] {symbol}: exit at broker {leg['broker_idx']} rejected — will retry")
+                leg.pop('exit_order_ids', None)
+                leg['exit_status'] = None
+            elif leg.get('exit_status') is None:
+                leg['exit_polls'] = int(leg.get('exit_polls') or 0) + 1
+                if leg['exit_polls'] >= _EXIT_UNCONFIRMED_TICKS:
+                    leg['exit_status'] = 'UNCONFIRMED'
+                    leg['exit_qty'] = int(leg.get('entry_qty') or leg.get('qty') or 0)
+                    leg['exit_price'] = None
+                    self.log.warning(f"[LIVE] {symbol}: exit at broker {leg['broker_idx']} never "
+                                     f"confirmed — assumed filled at the mark; CHECK THE BROKER")
+        still_open = [l for l in legs if l.get('exit_status') not in ('FILLED', 'UNCONFIRMED')]
+        if still_open:
+            if errors:
+                self._alert_order_failure(symbol, 'exit', '; '.join(errors))
+            return False
+        return True
 
     # ── Data ─────────────────────────────────────────────────────────────
 
@@ -854,12 +1394,13 @@ class EmaConfluenceAlgo:
             self.log.warning(f"{label}: no usable candles for {len(no_data)} symbol(s) — "
                              f"NOT evaluated for {to_date}: {', '.join(sorted(no_data))}")
 
-    # ── Paper trade lifecycle ───────────────────────────────────────────
+    # ── Trade lifecycle ─────────────────────────────────────────────────
 
     def _fire_paper_entry(self, symbol: str, s: Dict[str, Any], spot: float,
                           fut_ltp: float, lots: int) -> None:
-        """The trigger broke on the UNDERLYING at `spot`; the paper order fills
-        on the FUTURE at `fut_ltp`.
+        """The trigger broke on the UNDERLYING at `spot`; the order fills on
+        the FUTURE — at `fut_ltp` in paper mode, at the brokers' actual fills
+        in live mode (the name predates the live path; it is THE entry).
 
         Both are stored because they do different jobs for the rest of the
         trade's life. The Target is derived from the SPOT fill — exactly as the
@@ -883,6 +1424,21 @@ class EmaConfluenceAlgo:
             else round(spot_entry * (1 - target_pct / 100), 2)
         lot_size = int(s.get('lot_size', 1) or 1)
         qty = max(1, lots) * lot_size
+        legs: List[Dict[str, Any]] = []
+        if self._live:
+            legs = self._execute_live_entry(symbol, s, 'BUY' if direction == 'Long' else 'SELL')
+            if not legs:
+                # No account holds anything, so there is no position to manage.
+                # Dropped to the next scan rather than left armed: the trigger
+                # is still crossed, and an armed setup would fire a fresh order
+                # every 15s at whatever is refusing them.
+                self.log.error(f"{symbol}: trigger broke at spot {spot} but no broker holds a "
+                               f"position — setup dropped, the next scan decides afresh")
+                self._reset_for_next_scan(s)
+                return
+            qty = sum(int(l.get('entry_qty') or 0) for l in legs)
+            entry_price = _legs_avg(legs, 'entry', fallback=entry_price) or entry_price
+            lots = sum(int(l.get('lots') or 0) for l in legs) or lots
 
         s['spot_entry_price'] = spot_entry
         s['entry_price']  = entry_price
@@ -893,10 +1449,16 @@ class EmaConfluenceAlgo:
         s['ltp']            = entry_price   # marked to market from the next tick on
         s['spot_ltp']       = spot_entry
         s['unrealized_pnl'] = 0.0
+        s['mode']           = 'live' if legs else 'paper'
+        if legs:
+            s['broker_legs'] = legs
+        else:
+            s.pop('broker_legs', None)
         self.log.info(
-            f"[PAPER] {symbol}: ENTERED {direction.upper()} — trigger {s['trigger_level']} broke at "
+            f"[{s['mode'].upper()}] {symbol}: ENTERED {direction.upper()} — trigger {s['trigger_level']} broke at "
             f"spot {spot_entry}; filled {s.get('future_month') or 'FUT'} @ {entry_price}. "
             f"sl={s['sl_level']} tgt={target_level} (both spot-scale) qty={qty}"
+            + (f" across brokers {[l['broker_idx'] for l in legs]}" if legs else '')
         )
         self._notify_new_entry(symbol, s, lots)
 
@@ -923,7 +1485,8 @@ class EmaConfluenceAlgo:
                 'future_month':  s.get('future_month'),
                 'signal_date':   s.get('signal_date'),
                 'entry_time':    s.get('entry_time'),
-                'mode':          'paper',
+                'mode':          self._mode_of(s),
+                'brokers':       [l['broker_idx'] for l in (s.get('broker_legs') or [])],
             }
         except Exception as e:
             self.log.error(f"{symbol}: entry notification payload failed: {e}")
@@ -983,9 +1546,17 @@ class EmaConfluenceAlgo:
             f"Target ₹{payload['target_price']}" + (f" ({tgt_pct}%)" if tgt_pct else ''),
             f"Qty    {payload['qty']} ({payload['lots']} lot)",
             f"Signal {payload.get('signal_date') or '-'} · entered {entered or '-'}",
-            "(paper trade)",
+            self._trade_tag(payload),
         ])
         self._send_telegram(symbol, message, tag='entry')
+
+    @staticmethod
+    def _trade_tag(payload: Dict[str, Any]) -> str:
+        """The last line of every Telegram alert: which kind of trade this was."""
+        if payload.get('mode') == 'live':
+            brokers = payload.get('brokers') or []
+            return f"(LIVE trade · brokers {brokers})" if brokers else "(LIVE trade)"
+        return "(paper trade)"
 
     # ── Roll notification ────────────────────────────────────────────────
     # Deliberately NOT the new-entry alert: a roll is the same swing trade
@@ -1001,7 +1572,8 @@ class EmaConfluenceAlgo:
         old_month = old_month or 'FUT'
         side = 'BUY' if s['direction'] == 'Long' else 'SELL'
         payload = {
-            'symbol': symbol, 'direction': side, 'mode': 'paper',
+            'symbol': symbol, 'direction': side, 'mode': self._mode_of(s),
+            'brokers': [l['broker_idx'] for l in (s.get('broker_legs') or [])],
             'from_month': old_month, 'to_month': new_month,
             'exit_price': round(float(near_ltp), 2), 'booked_pnl': booked_pnl,
             'entry_price': s.get('entry_price'), 'sl_price': s.get('sl_level'),
@@ -1032,7 +1604,7 @@ class EmaConfluenceAlgo:
             f"Target ₹{payload['target_price']}  (unchanged)",
             f"Qty    {payload['qty']} · roll #{payload['roll_count']}",
             f"Signal {payload.get('signal_date') or '-'}",
-            "(paper trade)",
+            self._trade_tag(payload),
         ])
         self._send_telegram(symbol, message, tag='roll')
 
@@ -1155,9 +1727,17 @@ class EmaConfluenceAlgo:
         entry_price = s['entry_price']
         qty         = s['qty']
         pnl = (exit_price - entry_price) * qty if direction == 'Long' else (entry_price - exit_price) * qty
+        legs = s.get('broker_legs') or []
         record = {
             'symbol': symbol, 'direction': 'BUY' if direction == 'Long' else 'SELL',
-            'mode': 'paper', 'qty': qty, 'lot_size': s.get('lot_size'),
+            'mode': self._mode_of(s), 'qty': qty, 'lot_size': s.get('lot_size'),
+            # The audit trail of a live trade: which account held what, and the
+            # order ids either side, so a history row can be matched to the
+            # broker's own book. Absent on a paper trade.
+            **({'broker_legs': [{k: l.get(k) for k in (
+                'broker_idx', 'kind', 'tradingsymbol', 'entry_order_ids', 'entry_qty',
+                'entry_price', 'entry_status', 'exit_order_ids', 'exit_qty', 'exit_price',
+                'exit_status')} for l in legs]} if legs else {}),
             'entry_price': entry_price, 'exit_price': round(exit_price, 2),
             'spot_entry_price': s.get('spot_entry_price'),
             'spot_exit_price': round(float(spot_price), 2) if spot_price is not None else None,
@@ -1179,7 +1759,7 @@ class EmaConfluenceAlgo:
         s['last_exit_reason'] = reason
         s['last_pnl']         = record['pnl']
         spot_note = f" (spot {record['spot_exit_price']} vs level)" if spot_price is not None else ''
-        self.log.info(f"[PAPER] {symbol}: EXIT ({reason}) @ {exit_price}{spot_note}, "
+        self.log.info(f"[{record['mode'].upper()}] {symbol}: EXIT ({reason}) @ {exit_price}{spot_note}, "
                       f"P&L ₹{record['pnl']}")
         # ROLL is excluded — _notify_roll covers it with the right wording.
         # Guarded so a notification failure can never lose the exit itself: the
@@ -1252,8 +1832,25 @@ class EmaConfluenceAlgo:
 
         old_month = s.get('future_month')
         old_token = s.get('future_token')
+        legs = s.get('broker_legs') or []
+        if legs:
+            # LIVE: the near leg really has to come off at the broker before
+            # anything is booked. Partial success (one broker out, another
+            # refusing) leaves the refusing legs on the near contract and the
+            # whole roll pending — roll_to_token stays set, so the next tick
+            # comes straight back here and retries only what is still open.
+            if not self._execute_live_exit(symbol, s, 'ROLL'):
+                if not s.get('roll_pending'):
+                    self.log.error(f"{symbol}: roll deferred — not every broker leg is off "
+                                   f"{old_token} yet; retrying each tick")
+                s['roll_pending'] = True
+                return False
+            near_fill = _legs_avg(legs, 'exit', fallback=float(near_ltp))
+            if near_fill is not None:
+                near_ltp = near_fill
         self._record_exit(symbol, s, float(near_ltp), 'ROLL')
         booked = s.get('last_pnl')
+        s.pop('roll_pending', None)
 
         s['future_token']       = far_token
         s['future_expiry']      = s.get('roll_to_expiry')
@@ -1265,9 +1862,29 @@ class EmaConfluenceAlgo:
             s.pop(k, None)
 
         entry_price = round(float(far_ltp), 2)
+        qty = max(1, lots) * int(s['lot_size'])
+        if legs:
+            # Re-enter the far month at the same brokers, sized the way they
+            # are flagged now. future_token/lot_size already name the far
+            # contract, which is what _execute_live_entry orders.
+            new_legs = self._execute_live_entry(symbol, s, 'BUY' if s['direction'] == 'Long' else 'SELL')
+            if not new_legs:
+                # Near leg gone, far leg never opened: every account is flat.
+                # There is no position left to carry, and the breakout that
+                # opened it is long past — so back to the scan, and say so.
+                self.log.error(f"[LIVE] {symbol}: ROLL left every broker FLAT — the near leg "
+                               f"{old_token} was closed but no far-month entry was accepted")
+                self._alert_order_failure(symbol, 'roll',
+                                          f"{symbol}: near month {old_month} closed but the far-month "
+                                          f"re-entry failed at every broker — position is flat")
+                self._reset_for_next_scan(s)
+                return True
+            s['broker_legs'] = new_legs
+            qty = sum(int(l.get('entry_qty') or 0) for l in new_legs)
+            entry_price = _legs_avg(new_legs, 'entry', fallback=entry_price) or entry_price
         s['entry_price']    = entry_price
         s['entry_time']     = datetime.now().isoformat()
-        s['qty']            = max(1, lots) * int(s['lot_size'])
+        s['qty']            = qty
         s['ltp']            = entry_price
         s['unrealized_pnl'] = 0.0
         s['phase']          = 'in_position'
@@ -1277,7 +1894,7 @@ class EmaConfluenceAlgo:
         # target_level and spot_entry_price are deliberately NOT touched here.
 
         self.log.info(
-            f"[PAPER] {symbol}: ROLLED {s['direction'].upper()} {old_month} -> {s['future_month']} "
+            f"[{self._mode_of(s).upper()}] {symbol}: ROLLED {s['direction'].upper()} {old_month} -> {s['future_month']} "
             f"({old_token} @ {near_ltp} -> {far_token} @ {entry_price}), booked ₹{booked}, "
             f"sl={s.get('sl_level')} tgt={s.get('target_level')} qty={s['qty']}"
         )
@@ -1371,6 +1988,14 @@ class EmaConfluenceAlgo:
         if not watching and not inpos:
             return
 
+        # First in-session tick of the day rebuilds the broker sessions: the
+        # thread starts at 08:30 and the daily Kite login usually lands after
+        # that, so the sessions built at start carry yesterday's dead token.
+        if (self._live or any(s.get('broker_legs') for s in inpos.values())) \
+                and self._brokers_refreshed_on != today_str:
+            self._brokers_refreshed_on = today_str
+            self._refresh_brokers('first in-session tick', force=True)
+
         tokens: Dict[str, Any] = {}
         for symbol, s in {**watching, **inpos}.items():
             token = self._ensure_future_token(provider, is_symbol_provider, symbol, s, now)
@@ -1440,6 +2065,17 @@ class EmaConfluenceAlgo:
                 self._reset_for_next_scan(s)
 
         for symbol, s in inpos.items():
+            if s.get('exit_pending'):
+                # A live exit already decided on an earlier tick, with legs
+                # still open at a broker. The strategy has spoken; the spot
+                # price no longer has a say — just keep flattening. A symbol
+                # dropped from the universe was kept only for this (see
+                # _retire_dropped_symbols) and leaves the state once flat.
+                retire = s.get('exit_pending') == 'UNIVERSE_DROP'
+                if self._finish_live_exit(symbol, s, ltps) and retire:
+                    self.log.info(f"{symbol}: retired from state — not in the universe and now flat")
+                    stocks.pop(symbol, None)
+                continue
             spot = self._decision_price(symbol, s, ltps)
             if spot is None:
                 continue
@@ -1471,6 +2107,15 @@ class EmaConfluenceAlgo:
                 self.log.warning(f"{symbol}: {exit_reason} hit at spot {spot} but the contract has "
                                  f"neither a quote nor a last mark — exit deferred a tick")
                 continue
+            if s.get('broker_legs'):
+                # LIVE: the fill is whatever the brokers give, not the quote.
+                # exit_pending survives the tick, so a leg the broker refused
+                # is retried until it is flat (see the top of this loop).
+                s['exit_pending']      = exit_reason
+                s['exit_pending_spot'] = spot
+                self.log.info(f"[LIVE] {symbol}: {exit_reason} hit at spot {spot} — flattening at the brokers")
+                self._finish_live_exit(symbol, s, ltps)
+                continue
             self._record_exit(symbol, s, float(exit_price), exit_reason, spot_price=spot)
             self._reset_for_next_scan(s)
 
@@ -1489,6 +2134,22 @@ class EmaConfluenceAlgo:
                 lots=lots,
                 held_listed=not s.get('future_delisted'),
             )
+
+    def _finish_live_exit(self, symbol: str, s: Dict[str, Any], ltps: Dict[str, float]) -> bool:
+        """Drive a decided live exit to completion: flatten what is still open,
+        and once every leg is out book the trade at the qty-weighted fill (a
+        leg whose fill never confirmed is priced at the mark). Returns True
+        when the position closed."""
+        reason = s.get('exit_pending') or 'SL'
+        if not self._execute_live_exit(symbol, s, reason):
+            return False
+        mark = ltps.get(symbol, s.get('ltp'))
+        exit_price = _legs_avg(s.get('broker_legs') or [], 'exit', fallback=mark)
+        if exit_price is None:
+            exit_price = mark if mark is not None else s.get('entry_price')
+        self._record_exit(symbol, s, float(exit_price), reason, spot_price=s.get('exit_pending_spot'))
+        self._reset_for_next_scan(s)
+        return True
 
     def _monitor_loop(self) -> None:
         try:
@@ -1530,7 +2191,25 @@ class EmaConfluenceAlgo:
             if self._roll_sessions != _ROLL_SESSIONS_BEFORE_EXPIRY:
                 self.log.warning(f"Rolling contracts {self._roll_sessions} trading days before "
                                  f"expiry (EMA_CONFLUENCE_ROLL_DAYS override)")
-            self._mode()  # logs the paper-only fallback warning once, if MODE=live was requested
+
+            self._live = self._mode() == 'live'
+            live_held = sorted(sym for sym, st in state['stocks'].items() if st.get('broker_legs'))
+            if self._live or live_held:
+                self._refresh_brokers('thread start', force=True)
+            if self._live:
+                if self._broker_list:
+                    self.log.warning(f"LIVE mode — real NRML futures orders at brokers "
+                                     f"{[(b['idx'], b['name'], b['lots']) for b in self._broker_list]}"
+                                     + (" (entries gated by EMA_CONFLUENCE_ACTIVE=false)" if not algo_active else ''))
+                else:
+                    self.log.error("EMA_CONFLUENCE_MODE=live but no zerodha/fyers broker carries "
+                                   "BROKER_N_EMA_ACTIVE=true (or none is logged in) — every trigger "
+                                   "will be refused until one does")
+            else:
+                self.log.info("PAPER mode — simulated fills, no broker orders")
+                if live_held:
+                    self.log.warning(f"EMA_CONFLUENCE_MODE is paper but {live_held} hold LIVE broker "
+                                     f"legs — those stay managed at the broker until they exit")
 
             while not self._stop_event.is_set():
                 now = datetime.now()
