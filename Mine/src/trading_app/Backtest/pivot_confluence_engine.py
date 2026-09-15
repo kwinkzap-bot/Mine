@@ -76,7 +76,7 @@ Deliberately NOT implemented (he mentions them; this engine cannot use them):
     His "small lots, small risk" sizing advice is the Lots field, not a rule.
 
 NOTE ON VWAP FOR INDICES. Index candles come back with volume 0, so VWAP would
-be undefined. As in vwap_engine.py, zero volume is treated as 1, which turns
+be undefined. Zero volume is treated as 1, which turns
 VWAP into a cumulative average of the session's typical price — the same series
 TradingView shows on a spot index chart.
 """
@@ -227,7 +227,7 @@ class PivotConfluenceEngine:
         # ── Session VWAP (rule 4) ─────────────────────────────────────────
         date_key = pd.Series(idx.date, index=idx)
         typical = (df['high'] + df['low'] + df['close']) / 3.0
-        # Index candles carry volume 0 → treat as 1, same as vwap_engine.py.
+        # Index candles carry volume 0 → treat as 1 (see the module docstring).
         vol = df['volume'].where(df['volume'] > 0, 1.0)
         pv = typical * vol
         vwap = (pv.groupby(date_key).cumsum() / vol.groupby(date_key).cumsum()).to_numpy(dtype=float)

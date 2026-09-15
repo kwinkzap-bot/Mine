@@ -359,7 +359,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // the last real symbol had (it's greyed out in that mode anyway).
         if ((symbol || '').toUpperCase() === ALL_STOCKS) return;
         const lotValue = lotValueForSymbol(symbol);
-        ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'obLotValue', 'emaLotValue'].forEach(function(id) {
+        ['rtpLotValue', 'scLotValue', 'obLotValue', 'emaLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
@@ -408,7 +408,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const rtpParamsRow   = document.getElementById('rtpParamsRow');
     const rtpFilterRow   = document.getElementById('rtpFilterRow');
     const rtpLotRow      = document.getElementById('rtpLotRow');
-    const vwapLotRow     = document.getElementById('vwapLotRow');
 
     function updateStrategyView() {
         if (!strategySelect) return;
@@ -432,8 +431,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (rtpFilterRow)   rtpFilterRow.style.display   = 'none';
         if (rtpLotRow)      rtpLotRow.style.display      = 'none';
         const smParamsRow   = document.getElementById('swingMomentumParamsRow');
-        const vwapParamsRow = document.getElementById('vwapParamsRow');
-        const vwapOptPanel  = document.getElementById('vwapOptimisePanel');
         const scParamsRow   = document.getElementById('secondCandleParamsRow');
         const scLotRow      = document.getElementById('secondCandleLotRow');
         const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
@@ -453,9 +450,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const pcLotRow      = document.getElementById('pivotConfluenceLotRow');
         const pcOptPanel    = document.getElementById('pivotConfluenceOptimisePanel');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
-        if (vwapParamsRow) vwapParamsRow.style.display = 'none';
-        if (vwapLotRow)    vwapLotRow.style.display    = 'none';
-        if (vwapOptPanel)  vwapOptPanel.style.display  = 'none';
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
         if (scOptPanel)    scOptPanel.style.display    = 'none';
@@ -486,7 +480,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -507,13 +501,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (rtpLotRow)    rtpLotRow.style.display    = 'grid';
             if (intervalSelect) intervalSelect.value = 'minute';
             if (startDateInput) startDateInput.value = '2017-01-01';
-
-        } else if (val === 'vwap') {
-            if (vwapParamsRow) vwapParamsRow.style.display = 'grid';
-            if (vwapLotRow)    vwapLotRow.style.display    = 'grid';
-            if (intervalSelect) intervalSelect.value = '5minute';
-            if (startDateInput) startDateInput.value = '2017-01-01';
-            updateVwapInvestment();
 
         } else if (val === 'second_candle') {
             if (scParamsRow) scParamsRow.style.display = 'grid';
@@ -626,15 +613,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
-    // VWAP investment display
-    window.updateVwapInvestment = function() {
-        const lots     = Math.max(1, parseInt(document.getElementById('vwapLots')?.value     || 1));
-        const lotValue = Math.max(1, parseFloat(document.getElementById('vwapLotValue')?.value || 65));
-        const total    = lots * 50000;
-        const el = document.getElementById('vwapInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
-    };
-
     // 2nd 30-Sec Candle investment display
     window.updateScInvestment = function() {
         const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
@@ -688,7 +666,7 @@ document.addEventListener('DOMContentLoaded', function() {
         success: ['rtp', 'second_candle', 'option_breakout', 'expiry_breakout',
                   'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         testing: ['scalp_pullback', 'pivot_confluence'],
-        failure: ['vwap'],
+        failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
     // switching status back restores the original labels and order.
@@ -820,7 +798,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const btPlaceholder = document.getElementById('btRightPlaceholder');
         const periodSec     = document.getElementById('periodBreakdownSection');
         const smOptPanel    = document.getElementById('smOptimisePanel');
-        const vwapOptPanel2 = document.getElementById('vwapOptimisePanel');
         const tmfOptPanel2  = document.getElementById('thirtyMinFakeoutOptimisePanel');
         if (btTradesSec)    btTradesSec.style.display    = 'none';
         if (btPlaceholder)  btPlaceholder.style.display  = 'none';
@@ -833,20 +810,12 @@ document.addEventListener('DOMContentLoaded', function() {
         setCollapsed(document.querySelector('#scalpPullbackOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#pivotConfluenceOptimisePanel .opt-header'), true);
         if (smOptPanel)     smOptPanel.style.display     = 'none';
-        if (vwapOptPanel2)  vwapOptPanel2.style.display  = 'none';
         if (tmfOptPanel2)   tmfOptPanel2.style.display   = 'none';
 
         try {
             const strat = strategySelect ? strategySelect.value : 'rtp';
             let endpoint = '/api/backtest/rtp';
 
-            // VWAP strategy
-            if (strat === 'vwap') {
-                endpoint = '/api/backtest/vwap';
-                payload.min_gap   = parseFloat(document.getElementById('vwapMinGap')?.value  || 30);
-                payload.tp_points = parseFloat(document.getElementById('vwapTP')?.value      || 150);
-                payload.sl_points = parseFloat(document.getElementById('vwapSL')?.value      || 50);
-            }
 
             // 2nd 30-Sec Candle breakout
             if (strat === 'second_candle') {
@@ -1509,7 +1478,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const { summary } = data;
         const isRtp  = strategySelect && strategySelect.value === 'rtp';
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
-        const isVwap = strategySelect && strategySelect.value === 'vwap';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
         // 30-Min Fakeout scans many symbols at once, each already sized
         // server-side to ~₹1,00,000/entry — no Lots/Lot Value input needed
@@ -1534,9 +1502,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
         const isOb   = strategySelect && strategySelect.value === 'option_breakout';
-        // 2nd-candle / Scalp Pullback / Pivot Confluence / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
-        const moneyLotsId    = isSc ? 'scLots'     : (isOb ? 'obLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : (isEma ? 'emaLots'     : 'vwapLots'))));
-        const moneyLotValId  = isSc ? 'scLotValue' : (isOb ? 'obLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue'))));
+        // 2nd-candle / Option Breakout / Scalp Pullback / Pivot Confluence / EMA Pullback share the ₹ cards, each reading its own lot inputs.
+        const moneyLotsId    = isSc ? 'scLots'     : (isOb ? 'obLots'     : (isSp ? 'spLots'     : (isPc ? 'pcLots'     : 'emaLots')));
+        const moneyLotValId  = isSc ? 'scLotValue' : (isOb ? 'obLotValue' : (isSp ? 'spLotValue' : (isPc ? 'pcLotValue' : 'emaLotValue')));
 
         // Candle Breakout booked on the option premium: the ₹ cards below are
         // unchanged (Lot Value ₹/pt multiplies either basis) — this only
@@ -1661,7 +1629,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc || isOb || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
+        } else if ((isSc || isOb || isSp || isPc || (isEma && !isEmaAll)) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1759,7 +1727,7 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (isMultiSymbol && rtpRow) {
             // Every field here is already sized server-side (TMF: ~₹1,00,000
             // per entry; EMA All Stocks: Lots × each stock's own lot size) —
-            // no Lots/Lot Value inputs to read, unlike the isVwap/isSc branch
+            // no Lots/Lot Value inputs to read, unlike the isSc branch
             // above.
             rtpRow.style.display = '';
 
@@ -1812,13 +1780,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc || isOb || isSp || isPc || isEma)
+        const lots2     = (isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc || isOb || isSp || isPc || isEma)
+        const lotValue2 = (isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc || isOb || isSp || isPc || isTmf || isEma;
+        const isMoney     = isRtp || isSc || isOb || isSp || isPc || isTmf || isEma;
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
@@ -2908,16 +2876,16 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // ── VWAP Optimise ─────────────────────────────────────────────────
-    // A single (non-per-timeframe) sortable results grid — VWAP and SM each
-    // have one. Same # / best-row-highlight / Use-button shape as the
+    // ── Single-grid Optimise (Swing Momentum, EMA Confluence) ─────────
+    // A single (non-per-timeframe) sortable results grid. Same # /
+    // best-row-highlight / Use-button shape as the
     // per-timeframe grids in _renderOptTfGrids, just without the grouping.
     function _mountSingleOptGrid(gridId, rows, legacyCols, defaultSortKey, applyFn, derivedSort) {
         const grid = document.getElementById(gridId);
         if (!grid) return;
         const columns = _mapLegacyOptColumns(legacyCols, { isLive: () => false, derivedSort: derivedSort || {} })
-            // Neither VWAP nor SM has a live-algo concept — drop the column
-            // rather than render one that's permanently off.
+            // SM has no live-algo concept here — drop the column rather
+            // than render one that's permanently off.
             .filter(c => c.label !== 'Live');
         // `_displayed` lives on the grid element itself, not a closure-local
         // var — the "Use" click listener below is wired only once (guarded by
@@ -2946,95 +2914,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    const VWAP_OPT_COLS = [
-        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
-        { label: 'Min Gap',       key: 'min_gap',        fmt: r => r.min_gap },
-        { label: 'SL',            key: 'sl_points',      fmt: r => r.sl_points },
-        { label: 'Target',        key: 'tp_points',      fmt: r => r.tp_points },
-        { label: 'Trades',        key: 'total_trades',   fmt: r => r.total_trades },
-        { label: 'Win%',          key: 'win_rate',       fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
-        { label: 'Net P&L (pts)', key: 'total_pnl',      fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
-        { label: 'Prof. Factor',  key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD',        key: 'max_drawdown',   fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
-        { label: '',              key: null,            fmt: () => '' },
-    ];
-
-    function renderVwapOptResults(data) {
-        const panel     = document.getElementById('vwapOptimisePanel');
-        const metaEl    = document.getElementById('vwapOptMeta');
-        const recalcBtn = document.getElementById('vwapRecalcOptBtn');
-
-        if (metaEl) {
-            let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
-            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
-            metaEl.textContent = meta;
-        }
-
-        _mountSingleOptGrid('vwapOptGrid', data.results || [], VWAP_OPT_COLS, 'total_pnl', applyVwapOptResult,
-            { win_rate: r => r.total_trades ? r.wins / r.total_trades : 0 });
-
-        if (panel)     panel.style.display     = '';
-        if (recalcBtn) recalcBtn.style.display = '';
-        if (data.best) applyVwapOptResult(data.best);
-    }
-
-    async function runVwapOptimise(recalculate) {
-        const symbol = symbolSearch.value.trim().toUpperCase();
-        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
-
-        const panel     = document.getElementById('vwapOptimisePanel');
-        const recalcBtn = document.getElementById('vwapRecalcOptBtn');
-        const optimBtn  = document.getElementById('runOptimiseBtn');
-        const activeBtn = recalculate ? recalcBtn : optimBtn;
-        const origText  = activeBtn ? activeBtn.textContent : '';
-        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
-        if (panel) panel.style.display = 'none';
-        _showOptLoader('Finding best params…', 'Sweeping gap / target / stop combos…');
-
-        try {
-            const resp = await fetch('/api/backtest/vwap/optimise', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    symbol,
-                    start_date:  '2017-01-01',
-                    end_date:    document.getElementById('endDate').value,
-                    interval:    document.getElementById('interval').value,
-                    recalculate,
-                })
-            });
-            const data = await resp.json();
-            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
-            renderVwapOptResults(data);
-        } catch (err) {
-            console.error('VWAP optimise error:', err);
-            window.showNotification('Optimisation request failed', 'error');
-        } finally {
-            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
-            _hideOptLoader();
-        }
-    }
-
-    function applyVwapOptResult(r) {
-        const minGap = document.getElementById('vwapMinGap');
-        const tp     = document.getElementById('vwapTP');
-        const sl     = document.getElementById('vwapSL');
-        if (minGap) minGap.value = r.min_gap;
-        if (tp)     tp.value     = r.tp_points;
-        if (sl)     sl.value     = r.sl_points;
-        if (window.showNotification) {
-            window.showNotification(
-                `Applied: Gap ${r.min_gap}  ·  SL ${r.sl_points}  ·  TGT ${r.tp_points}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
-            );
-        }
-    }
-
-    const vwapRecalcBtn = document.getElementById('vwapRecalcOptBtn');
-    if (vwapRecalcBtn) vwapRecalcBtn.addEventListener('click', () => runVwapOptimise(true));
-
     // ── EMA Confluence Breakout Optimise (Find Best Params) ─────────────────
     // Only two real free params — Direction and Target % — so a single flat
-    // grid (no per-timeframe grouping) sweeping both, same shape as VWAP's.
+    // grid (no per-timeframe grouping) sweeping both, same shape as SM's.
     // The sweep is ranked on NET ₹ now — futures fills, carry-forward rolls and
     // ₹1,000 per order — so the money columns are the ones that decide, and
     // Win% is the net-of-cost one (a combo that wins on points and loses on
@@ -3937,7 +3819,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (optimiseBtn)  optimiseBtn.addEventListener('click', () => {
         const strat = strategySelect ? strategySelect.value : 'rtp';
         if (strat === 'swing_momentum') _runSmOptimise(false);
-        else if (strat === 'vwap')      runVwapOptimise(false);
         else if (strat === 'second_candle') runScOptimise(false);
         else if (strat === 'option_breakout') runObOptimise(false);
         else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);

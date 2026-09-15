@@ -25,7 +25,6 @@
             </select>
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
-                <option value="vwap">📈 C/P VWAP Strategy</option>
                 <option value="second_candle">🕒 Candle Breakout</option>
                 <option value="option_breakout" selected>🎯 30-Sec Option Breakout</option>
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
@@ -165,38 +164,6 @@
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="rtpInvestmentDisplay" class="investment-display">₹50,000</div>
-                </div>
-            </div>
-
-            <!-- VWAP params -->
-            <div id="vwapParamsRow" class="form-row" style="display:none">
-                <div class="form-group">
-                    <label for="vwapMinGap">Min Gap (pts)</label>
-                    <input type="number" id="vwapMinGap" value="30" min="0" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="vwapTP">Target (pts)</label>
-                    <input type="number" id="vwapTP" value="150" min="1" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="vwapSL">Stop Loss (pts)</label>
-                    <input type="number" id="vwapSL" value="50" min="1" step="1">
-                </div>
-            </div>
-
-            <!-- VWAP position sizing -->
-            <div id="vwapLotRow" class="form-row" style="display:none">
-                <div class="form-group">
-                    <label for="vwapLots">Lots</label>
-                    <input type="number" id="vwapLots" value="1" min="1" max="50" step="1" oninput="updateVwapInvestment()">
-                </div>
-                <div class="form-group">
-                    <label for="vwapLotValue">Lot Value (₹/pt)</label>
-                    <input type="number" id="vwapLotValue" value="65" min="1" step="1" oninput="updateVwapInvestment()">
-                </div>
-                <div class="form-group">
-                    <label>Total Investment</label>
-                    <div id="vwapInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -882,21 +849,6 @@
                 <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js) -->
                 <div class="opt-table-wrap">
                     <div id="smOptGrid"></div>
-                </div>
-            </div>
-
-            <!-- VWAP Optimise results panel -->
-            <div id="vwapOptimisePanel" style="display:none;">
-                <div class="opt-header">
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 style="margin:0;">⚡ VWAP Parameter Optimisation Results</h4>
-                        <button id="vwapRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
-                    </div>
-                    <small id="vwapOptMeta"></small>
-                </div>
-                <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js) -->
-                <div class="opt-table-wrap">
-                    <div id="vwapOptGrid"></div>
                 </div>
             </div>
 

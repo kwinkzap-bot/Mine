@@ -155,8 +155,8 @@ def _fetch_day_vwap(symbol: str, date_str: str, provider) -> Optional[float]:
     """
     Fetch 1-minute candles for the underlying index on date_str and return the
     session's closing VWAP (cumulative(typical price × volume) / cumulative
-    volume, evaluated at the last bar of the day) — same formula as
-    VWAPBacktestEngine._calc_vwap (Backtest/vwap_engine.py). Index candles
+    volume, evaluated at the last bar of the day) — the same formula the
+    Pivot Confluence backtest uses for its VWAP filter. Index candles
     carry no traded volume, so a zero/missing volume bar falls back to weight
     1.0, degrading gracefully to an unweighted average of the typical price.
     """

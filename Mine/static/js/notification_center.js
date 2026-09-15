@@ -39,6 +39,29 @@
         } else {
             badge.style.display = 'none';
         }
+        // The "Mark all read" link only earns its place while there is
+        // something to clear.
+        const markAll = document.getElementById('notifMarkAllBtn');
+        if (markAll) markAll.style.display = count > 0 ? '' : 'none';
+    }
+
+    // Clears the badge in one go: flip every row locally first so the UI
+    // answers instantly, then tell the server; a failed POST is re-fetched so
+    // the list and badge fall back to the truth rather than staying optimistic.
+    async function markAllRead(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        notifications.forEach(n => { n.is_read = 1; });
+        renderList();
+        renderBadge(0);
+        try {
+            const res = await fetch('/api/notifications/read-all', { method: 'POST', credentials: 'same-origin' });
+            const data = await res.json();
+            if (!data.success) fetchNotifications();
+        } catch (err) {
+            console.error('Error marking all notifications read:', err);
+            fetchNotifications();
+        }
     }
 
     function renderList() {
@@ -199,6 +222,9 @@
         if (!bellBtn) return;
 
         bellBtn.addEventListener('click', toggleDropdown);
+
+        const markAllBtn = document.getElementById('notifMarkAllBtn');
+        if (markAllBtn) markAllBtn.addEventListener('click', markAllRead);
 
         document.addEventListener('click', (e) => {
             const wrapper = document.getElementById('notifBellWrapper');

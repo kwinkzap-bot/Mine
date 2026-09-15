@@ -72,6 +72,22 @@
     background: var(--scan-bg, #f9f9f9);
 }
 
+.notif-mark-all {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: #0284c7;
+    cursor: pointer;
+}
+
+.notif-mark-all:hover {
+    text-decoration: underline;
+}
+
 .notif-dropdown-list {
     max-height: 360px;
     overflow-y: auto;

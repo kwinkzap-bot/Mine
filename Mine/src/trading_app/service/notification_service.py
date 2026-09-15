@@ -101,6 +101,13 @@ def mark_read(notification_id: int) -> bool:
         return cur.rowcount > 0
 
 
+def mark_all_read() -> int:
+    """Mark every unread notification read; returns how many were flipped."""
+    with _connect() as conn:
+        cur = conn.execute('UPDATE notifications SET is_read = 1 WHERE is_read = 0')
+        return cur.rowcount
+
+
 def unread_count() -> int:
     with _connect() as conn:
         row = conn.execute(
