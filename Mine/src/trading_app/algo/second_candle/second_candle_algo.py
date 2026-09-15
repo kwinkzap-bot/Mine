@@ -1,8 +1,8 @@
 """
 2nd 30-Sec Candle Live Algo Trader
-Mirrors the EMA RTP Railway Track algo's shape (background thread, multi-broker
-delta-~0.90 NIFTY option execution, state/history JSON), but the signal is the
-2nd 30-Sec Candle breakout strategy (see Backtest/second_candle_engine.py).
+Background thread with multi-broker delta-~0.90 NIFTY option execution and
+state/history JSON; the signal is the 2nd 30-Sec Candle breakout strategy
+(see Backtest/second_candle_engine.py).
 
 Logic (NIFTY 30-second candles, ONE trade per day):
   • Read the Nth 30-sec candle of the day (default N=2) → its High/Low = the range.

@@ -192,8 +192,8 @@ class EmaPullbackEngine:
         df = self.daily_df
         # State left over when the data runs out, for callers that need to know
         # what this strategy would be HOLDING right now rather than just what it
-        # traded (the live algo adopts `pending_order` so a signal armed days or
-        # weeks ago is still watched — see ema_confluence_algo._scan_one).
+        # traded (`pending_order` is a signal armed days or weeks ago that is
+        # still being watched).
         # Exactly one of the two can be set: no new order is ever armed while a
         # position is open, and filling an order clears it.
         self.pending_order = None   # armed breakout order that never filled

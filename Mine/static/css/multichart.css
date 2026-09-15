@@ -1,4 +1,4 @@
-/* multichart.css — four live panes of one symbol. Compact by design: a 28px
+/* multichart.css — three live panes of one symbol. Compact by design: a 28px
    toolbar, 22px pane headers, and the rest of the viewport is chart.
    Colours come from the theme tokens in theme.css so the page follows the
    body theme like every other page. */
@@ -152,8 +152,8 @@
 /* ── grid + panes ────────────────────────────────────────────────────── */
 .mc-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: 1fr;
     gap: 6px;
     min-height: 360px;
 }
@@ -245,7 +245,7 @@
 /* Small screens: the toolbar and pane headers drop a size so the symbol,
    quote, Indicators and live dot still share one row. */
 @media (max-width: 900px) {
-    .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(4, minmax(220px, 1fr)); gap: 0px; }
+    .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(3, minmax(220px, 1fr)); gap: 0px; }
     .mc-page { --mc-ctl-h: 20px; }
     .mc-toolbar { gap: 4px 6px; min-height: 24px; }
     .mc-title { font-size: 11px; }

@@ -587,6 +587,13 @@ def _backfill(symbol: str) -> None:
             return
 
         today = _today().isoformat()
+        if datetime.now(IST).time() < MARKET_OPEN:
+            # Nothing has traded yet, so there is nothing to lay down; the
+            # top-up takes over from the bell. Said plainly rather than as
+            # "no 1-second history", which reads as a Breeze fault.
+            with _lock:
+                _BACKFILL[symbol] = 'unavailable:before the open'
+            return
         bars = adapter.historical_data(symbol, today, today, '1second', use_cache=False)
         if not bars:
             why = ''
@@ -767,6 +774,8 @@ def _topup(symbol: str) -> None:
         # was being fetched anyway.
         reached = rows[-1]['ts']
         if _rebuild(symbol, rows, reached):
+            with _lock:
+                _BACKFILL[symbol] = 'ready'      # history has arrived, whatever the first pass said
             logger.info(f"[TimeAndSales] topped {symbol} up to "
                         f"{datetime.fromtimestamp(reached, IST):%H:%M:%S} "
                         f"(+{len(rows)} bars, epoch {_EPOCH.get(symbol)})")
@@ -798,8 +807,14 @@ def _maybe_topup(symbol: str) -> None:
     with _lock:
         if symbol in _TOPUP_BUSY:
             return
-        if _BACKFILL.get(symbol) != 'ready':
+        if _BACKFILL.get(symbol) in ('idle', 'running'):
             return                               # the first pass owns the tape
+        # 'unavailable:*' is NOT terminal. The first pass has nothing to fetch
+        # for a tab opened before the bell, and no adapter at all for one opened
+        # during a restart before the Breeze login — and both used to freeze
+        # the tape as raw prints for the whole session (2026-09-14 and -15),
+        # because only 'ready' was let through here. The top-up walks from the
+        # open on its own, and flips the state once it has laid anything down.
         if _today().weekday() >= 5:
             return                               # Breeze answers weekends with nothing
         if monotonic() < _TOPUP_AT.get(symbol, 0.0):

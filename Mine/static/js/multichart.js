@@ -1,10 +1,10 @@
 /**
- * multichart.js — one symbol, four timeframes, live.
+ * multichart.js — one symbol, three timeframes, live.
  *
- * Four Lightweight Charts panes share a symbol, an indicator set (mine_cpr.js)
+ * Three Lightweight Charts panes share a symbol, an indicator set (mine_cpr.js)
  * and ONE poll: every tick fetches today's 1-minute bars once and each pane
- * re-buckets them into its own timeframe — 09:15-anchored, so 1-min → 3/5/60
- * is exact — and patches its forming bar with series.update(). Four live
+ * re-buckets them into its own timeframe — 09:15-anchored, so 1-min → 5/60
+ * is exact — and patches its forming bar with series.update(). Three live
  * charts, one broker request per tick.
  *
  * Bars are on the app's fake-IST grid (IST clock as UTC seconds), hence the
@@ -15,7 +15,8 @@
 
     const $ = id => document.getElementById(id);
     const STORE_KEY = 'multichart-v1';
-    const DEFAULT_TFS = ['minute', '3minute', '5minute', '60minute'];
+    const DEFAULT_TFS = ['minute', '5minute', '60minute'];
+    const PANE_COUNT = DEFAULT_TFS.length;
     const TF_OPTIONS = [
         ['minute', '1m'], ['2minute', '2m'], ['3minute', '3m'], ['5minute', '5m'], ['10minute', '10m'],
         ['15minute', '15m'], ['30minute', '30m'], ['60minute', '1h'], ['day', '1D'],
@@ -57,9 +58,9 @@
         try {
             const raw = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
             if (raw.symbol) state.symbol = String(raw.symbol).toUpperCase();
-            if (Array.isArray(raw.tfs) && raw.tfs.length === 4 && raw.tfs.every(t => TF_LABEL[t])) state.tfs = raw.tfs;
+            if (Array.isArray(raw.tfs) && raw.tfs.length === PANE_COUNT && raw.tfs.every(t => TF_LABEL[t])) state.tfs = raw.tfs;
             if (raw.settings && typeof raw.settings === 'object') state.settings = raw.settings;
-            if (Number.isInteger(raw.maximised)) state.maximised = raw.maximised;
+            if (Number.isInteger(raw.maximised) && raw.maximised >= 0 && raw.maximised < PANE_COUNT) state.maximised = raw.maximised;
         } catch (e) { /* first visit or blocked storage */ }
     }
     function save() {
@@ -601,7 +602,7 @@
         restore();
         initChrome();   // before fitGrid: the nav's height decides where the grid starts
         document.title = `${state.symbol} · Multichart`;
-        for (let i = 0; i < 4; i++) state.panes.push(buildPane(i));
+        for (let i = 0; i < PANE_COUNT; i++) state.panes.push(buildPane(i));
         if (state.maximised !== null) { const m = state.maximised; state.maximised = null; toggleMax(m); }
         fitGrid();
         linkCrosshairs();

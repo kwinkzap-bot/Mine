@@ -1,7 +1,7 @@
 """EMA Confluence Breakout — futures pricing / carry-forward layer.
 
-The live algo (algo/ema_confluence/ema_confluence_algo.py) decides on the
-UNDERLYING and trades the monthly FUTURE. Until this module existed the
+The strategy decides on the UNDERLYING and trades the monthly FUTURE — the
+way its live algo did before it was retired. Until this module existed the
 backtest did neither half of that: it decided AND booked on the underlying, so
 its P&L described a cash-equity trade nobody places. This layer closes the gap
 by taking the trade list the spot engine produced and re-pricing every fill on
@@ -27,11 +27,11 @@ strategy.
 Carry-forward
 -------------
 A monthly future dies but a multi-day swing does not, so an open position is
-ROLLED, mirroring `ema_confluence_algo._roll_position`: `_ROLL_SESSIONS`
-trading days before the held contract's expiry the near leg is booked out and
+ROLLED: `ROLL_SESSIONS_BEFORE_EXPIRY` trading days before the held
+contract's expiry the near leg is booked out and
 the same side is re-entered on the next month. On daily bars both legs are
 priced at that day's CLOSE of their own contract, which is the daily-bar
-equivalent of the live algo's 12:00 roll and — because both closes are real
+equivalent of a 12:00 roll and — because both closes are real
 quotes off real contracts — makes the roll spread a real cost rather than an
 assumed one. An exit that lands ON the roll day wins over the roll, same
 precedence as the live tick (SL/Target are evaluated before the roll there).
@@ -81,10 +81,6 @@ logger = logging.getLogger(__name__)
 BROKERAGE_PER_ORDER = 1000
 
 # Trading days before expiry at which the position moves to the next month.
-# Mirrors _ROLL_SESSIONS_BEFORE_EXPIRY in
-# algo/ema_confluence/ema_confluence_algo.py — the live algo's own roll
-# window, kept in step by tests/test_ema_futures_pricing.py rather than by an
-# import, so the backtest layer never pulls the live algo module in.
 ROLL_SESSIONS_BEFORE_EXPIRY = 3
 
 # A holiday moves an expiry by a day or two, never by a week.
@@ -181,10 +177,9 @@ def select_contract(day: date, timeline: List[Dict[str, Any]]) -> Optional[Dict[
     """The contract this strategy is on for `day`: the nearest one whose roll
     moment has not passed.
 
-    Same ABSOLUTE choice `ema_confluence_algo.select_contract` makes, and for
-    the same reason — it answers "what does a new entry open on?" and "has the
-    held contract rolled?" with one rule, so a position opened inside a roll
-    window cannot roll twice.
+    One ABSOLUTE choice, because it answers "what does a new entry open on?"
+    and "has the held contract rolled?" with one rule, so a position opened
+    inside a roll window cannot roll twice.
     """
     for c in timeline:
         if c['roll_day'] is None or day < c['roll_day']:

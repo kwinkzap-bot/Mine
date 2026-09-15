@@ -52,9 +52,9 @@ def get_data_provider(user: Optional[str] = None,
                      context: Optional[Union[str, Sequence[str]]] = None) -> Optional[Any]:
     """Returns the configured data provider (Kite, Fyers or ICICI Direct).
 
-    `context` (e.g. 'replay', 'backtest', 'algo_rtp') looks up a
+    `context` (e.g. 'replay', 'backtest', 'algo_sc') looks up a
     `{CONTEXT}_DATA_PROVIDER` override first (e.g. REPLAY_DATA_PROVIDER,
-    ALGO_RTP_DATA_PROVIDER) — one per route/algo that needs to sit on a
+    ALGO_SC_DATA_PROVIDER) — one per route/algo that needs to sit on a
     different broker than the rest of the app. If that override is unset, or
     its broker isn't reachable (not logged in / no adapter), resolution falls
     through to the global DATA_PROVIDER, then to Kite. Callers that pass no

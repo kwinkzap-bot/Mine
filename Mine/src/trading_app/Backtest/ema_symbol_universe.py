@@ -1,7 +1,6 @@
 """Per-stock Direction/Target for the EMA Confluence Breakout strategy — the
-single source of truth shared by the backtest routes (app/routes/api.py), the
-form (backtest.js) and the LIVE algo
-(algo/ema_confluence/ema_confluence_algo.py, which scans every key here).
+single source of truth shared by the backtest routes (app/routes/api.py) and
+the form (backtest.js).
 
 direction: 'long' (BUY Only), 'short' (Sell Only) or 'both'. target_pct is the
 Target % field (min 1%, see EmaPullbackEngine).

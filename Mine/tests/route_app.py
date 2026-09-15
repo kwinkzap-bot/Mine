@@ -1,9 +1,9 @@
 """Build the app's URL map without starting anything.
 
 `create_app()` is off limits here: it calls `init_extensions` ->
-`init_scheduler`, which registers 25 cron jobs and immediately restarts the
-eight live algos (`app/__init__.py:27` -> `extensions.py:83` ->
-`scheduler.py:1186`). Importing this module during market hours would place
+`init_scheduler`, which registers 14 cron jobs and immediately restarts the
+live algos (`app/__init__.py:27` -> `extensions.py:96` ->
+`scheduler.py:978`). Importing this module during market hours would place
 real orders.
 
 A bare `Flask()` with the eight blueprints registered at their real prefixes

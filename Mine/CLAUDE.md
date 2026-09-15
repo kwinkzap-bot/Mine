@@ -1,13 +1,14 @@
 # Mine — working notes
 
-Live-money intraday trading app. Flask + APScheduler, eight live algos, four
+Live-money intraday trading app. Flask + APScheduler, two live algo threads
+(2nd 30s Candle, 30-Min Fakeout) plus the Order Placement signal engine, four
 brokers. Treat every change as touching real orders.
 
 ## Hard rules
 
 **Never call `create_app()` outside the real app.** It runs
 `init_extensions` → `init_scheduler` (`app/__init__.py:27` →
-`extensions.py:83` → `scheduler.py:1186`), which registers 26 cron jobs and
+`extensions.py:96` → `scheduler.py:978`), which registers 14 cron jobs and
 immediately restarts the live algos. A test or REPL that imports it during
 market hours places real orders. Tests build a bare `Flask()` instead — see
 `tests/route_app.py`.
@@ -55,7 +56,7 @@ few seconds later. Booting it out is the real stop, and `bootstrap` puts it
 back.
 
 A restart takes ~8s to serve again and re-runs `init_scheduler`, so it
-re-registers the 26 cron jobs and **restarts the live algos** — the same reason
+re-registers the 14 cron jobs and **restarts the live algos** — the same reason
 `create_app()` is dangerous. Verify afterwards:
 
 ```bash
@@ -154,14 +155,13 @@ Every leg is a normal `MineOrderStore` record with `strategy='op'` plus
 reconciliation sweep and Exit all working on signal legs with no special case.
 Do not "tidy" that into a store of its own.
 
-## Known issues
+## Removed algos
 
-**RTP live logic has diverged from its backtest engine since 2026-07-09**
-(commit `91d8c45`). `tests/test_rtp_live_vs_backtest.py` is
-`xfail(strict=True)` with the bisect in its marker. Backtest-derived
-parameters do not describe live behaviour. Deciding which side is correct is
-a strategy call, not a refactor.
-
-Related but separate and **deliberate**: the backtest fills at the next bar's
-open, the live algo at the signal bar's close. Documented on both sides. Do
-not unify them while deduping — it changes live fill prices.
+The EMA RTP live algo (five timeframe variants, `algo/rtp_railway_track/`)
+and the EMA Confluence paper algo (`algo/ema_confluence/`) were removed on
+2026-09-15, with their `/api/algo/rtp*` and `/api/algo/ema-confluence/*`
+routes, Algo-page tabs, scheduler jobs and tests. The **backtests** for both
+strategies (`Backtest/rtp_backtest_engine.py`, `Backtest/ema_pullback_engine.py`
+and the `/api/backtest/rtp*`, `/api/backtest/ema-pullback*` routes) stay. The
+per-user `EMA_RTP_*` / `RTP_*_STRIKE_MODE` / `EMA_CONFLUENCE_*` variables in
+`.users.json` are now dead and read by nothing.

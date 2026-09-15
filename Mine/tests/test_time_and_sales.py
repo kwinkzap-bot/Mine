@@ -603,6 +603,40 @@ def test_a_topup_stands_down_while_the_first_pass_owns_the_tape():
     spy.assert_not_called()
 
 
+def test_a_failed_first_pass_does_not_lock_the_topup_out():
+    """2026-09-15: the tab was opened at 09:04, before the bell, so the backfill
+    had nothing to lay down and marked itself unavailable — and the top-up,
+    gated on 'ready', never ran. The whole session was raw prints (qty 65)
+    where the day before the archive shows Σ bars. The day before THAT it was
+    the same shape for a different reason: a restart at 09:37 with the Breeze
+    login not yet done. Neither is a reason to give up for the day."""
+    tas._BACKFILL[SYMBOL] = 'unavailable:before the open'
+    push(last_traded_time=1001, last_traded_qty=65, vol_traded_today=1000)
+    push(last_traded_time=1900, last_traded_qty=65, vol_traded_today=2000)
+
+    with mock.patch.object(tas, '_topup') as spy:
+        tas._maybe_topup(SYMBOL)
+    spy.assert_called_once()                         # it is let through...
+
+    with mock.patch.object(tas, '_tape_day', tas._today()):
+        _topup_with([_bar(1001, 500)])
+    assert tas._BACKFILL[SYMBOL] == 'ready'          # ...and history now owns the tape
+    assert [(r['ts'], r['src'], r['qty']) for r in rows()] == [
+        (1001, 'bar', 500), (1900, 'tick', 65)]
+
+
+def test_the_first_pass_does_not_ask_breeze_before_the_open():
+    fake = mock.Mock()
+    before = datetime.combine(tas._today(), time(9, 4), tzinfo=IST)
+    with mock.patch('trading_app.service.provider_logic.get_icici_adapter',
+                    return_value=fake), \
+         mock.patch.object(tas, 'datetime') as clock:
+        clock.now.return_value = before
+        tas._backfill(SYMBOL)
+    fake.historical_data.assert_not_called()
+    assert tas._BACKFILL[SYMBOL] == 'unavailable:before the open'
+
+
 # ── the archive ────────────────────────────────────────────────────────────
 
 def _archive_today():
