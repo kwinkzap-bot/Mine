@@ -396,6 +396,8 @@ def option_ltp(symbol: str, strike: int, option_type: str):
         _token, opt_sym = _get_cached_strike_token(service, provider, is_fyers,
                                                    symbol, strike, option_type)
         if not opt_sym:
+            logger.warning(f"[OrderPlacement API] {symbol} {strike}{option_type}: no tradingsymbol "
+                           f"from the {'Fyers' if is_fyers else 'Kite'} master — no quote")
             return None
         key = opt_sym if is_fyers else f'NFO:{opt_sym}'
         quote = (provider if is_fyers else effective).ltp([key]) or {}

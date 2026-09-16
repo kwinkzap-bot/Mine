@@ -151,6 +151,14 @@ sells at market. T2/T3 are ignored. Four things are load-bearing:
   must sit above the LTP; if it does not, nothing is placed and a
   `tg_call_skipped` alert says why. Same for SELL calls, non-index
   symbols, a back-month expiry, or no eligible broker.
+* **Nothing cold on the call's path.** The first live call (2026-09-16
+  09:49) was answered 12 s late — Fyers symbol-master download, strike-token
+  cache and Kite instrument dump all cold — and skipped against a premium
+  that had already moved. `tg_call_engine.prewarm` pays those costs when
+  the listener connects and again from the 5-minute watchdog; a call then
+  costs one live quote plus the orders, which go to every account in
+  parallel. `[TgCall] … chain X s, quote Y s` and `… in Z s from receipt`
+  in the log are the numbers to watch.
 * **With `TG_CALLS_ACTIVE=false` the listener still runs** and raises
   `tg_call_skipped` for every call it would have taken — that is the dry run
   that proves the parse path on real messages before the first order.

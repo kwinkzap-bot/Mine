@@ -106,9 +106,12 @@ def _alert(username, category, title, summary, data=None, once_key=None) -> None
 
     if _flag(username, 'TG_CALLS_NOTIFY', 'true'):
         try:
+            import json
             from trading_app.service.notification_service import create_notification
+            # The parsed plan carries a date (the expiry); the bell stores JSON.
+            safe = json.loads(json.dumps(data or {}, default=str))
             create_notification(category=category, title=title,
-                                summary=(summary or '')[:200], data=data or {})
+                                summary=(summary or '')[:200], data=safe)
         except Exception as e:
             logger.error(f"[TgCall] notification failed: {e}")
 
@@ -164,6 +167,63 @@ def limit_pct(username) -> float:
         return float(_uvar(username, 'TG_ENTRY_LIMIT_PCT', _DEFAULT_LIMIT_PCT))
     except (TypeError, ValueError):
         return _DEFAULT_LIMIT_PCT
+
+
+# ── keeping the road clear ────────────────────────────────────────────────
+
+def prewarm(username, symbols=('NIFTY', 'BANKNIFTY', 'SENSEX')) -> dict:
+    """Pay every cold-cache cost before a call arrives, not on it.
+
+    The first call of the day was answered twelve seconds late: the option
+    chain (a full Fyers symbol-master download), the strike-token cache and
+    the Kite instrument dump were all cold, and the entry the channel named
+    at 227 was read against a premium already at 236. Everything below is
+    cached process-wide with a TTL of 30 minutes or the day, so this is
+    called when the listener connects and again from the five-minute
+    watchdog — near-free once warm, and a call then costs one live quote and
+    the order itself.
+    """
+    from trading_app.app.routes.api import get_kite, resolve_standard_lot
+    from trading_app.app.routes.order_placement_api import _chain_meta, _spot, option_ltp
+    from trading_app.service.kite_order_services import KiteService
+
+    timings = {}
+
+    def timed(label, fn):
+        t = _time.time()
+        try:
+            fn()
+        except Exception as e:
+            logger.debug(f"[TgCall] prewarm {label} failed: {e}")
+        timings[label] = round(_time.time() - t, 2)
+
+    for sym in symbols:
+        timed(f'chain:{sym}', lambda s=sym: _chain_meta(s))
+        timed(f'lot:{sym}', lambda s=sym: resolve_standard_lot(s))
+        # One quote at the money loads the symbol master behind the
+        # strike-token cache; the strike a call names is then a local lookup.
+        def _atm(s=sym):
+            meta = _chain_meta(s) or {}
+            spot = _spot(s)
+            step = int(meta.get('step') or 50)
+            if spot and step:
+                option_ltp(s, int(round(spot / step) * step), 'CE')
+        timed(f'ltp:{sym}', _atm)
+
+    # The Kite instrument dump for every account a call would reach, so the
+    # tradingsymbol lookup at placement time reads the file, not the API.
+    for t in tg_targets(username):
+        if t['type'] in ('zerodha', 'kite') and t['lots']:
+            def _dump(i=t['instance']):
+                kite = get_kite(instance=i)
+                if kite:
+                    KiteService(kite_instance=kite).get_option_symbol('NIFTY', 23000, 'CE')
+            timed(f'kite:{t["instance"]}', _dump)
+
+    slow = {k: v for k, v in timings.items() if v >= 0.5}
+    logger.info(f"[TgCall] prewarm done in {round(sum(timings.values()), 2)}s"
+                + (f" — cold: {slow}" if slow else ""))
+    return timings
 
 
 # ── taking a call ─────────────────────────────────────────────────────────
@@ -228,6 +288,7 @@ def take_call(username, plan, meta=None) -> dict:
                                                             option_ltp)
     from trading_app.app.utils.mine_order_store import MineOrderStore
 
+    t_start = _time.time()
     meta = meta or {}
     symbol = str(plan.get('symbol') or '').upper()
     strike = int(plan.get('strike') or 0)
@@ -251,11 +312,15 @@ def take_call(username, plan, meta=None) -> dict:
     except Exception as e:
         logger.warning(f"[TgCall] chain meta unavailable: {e}")
         chain = {}
+    t_chain = _time.time()
     try:
         ltp = option_ltp(symbol, strike, option_type) if strike else None
     except Exception as e:
         logger.warning(f"[TgCall] quote unavailable: {e}")
         ltp = None
+    t_ltp = _time.time()
+    logger.info(f"[TgCall] {label}: chain {t_chain - t_start:.2f}s, quote {t_ltp - t_chain:.2f}s "
+                f"→ ltp {ltp}, entry {plan.get('entry')}")
 
     error = validate_call(username, plan, chain, ltp)
     if error:
@@ -305,8 +370,8 @@ def take_call(username, plan, meta=None) -> dict:
     })
     call_id = call['id']
 
-    summary = []
-    for t in eligible:
+    def place_at(t):
+        """This account's entry, chunked by the freeze limit. Never raises."""
         instance, lots = t['instance'], t['lots']
         results = []
         for chunk in lot_chunks(lots):
@@ -325,7 +390,21 @@ def take_call(username, plan, meta=None) -> dict:
                              exc_info=True)
                 results.append({'broker': t['type'], 'instance': instance,
                                 'success': False, 'error': str(e)})
+        return results
 
+    # Every account at once, not one after another: each placement is a
+    # broker round-trip, and the second account should not enter a second
+    # later than the first because of it.
+    if len(eligible) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(eligible), thread_name_prefix='TgCallEntry') as pool:
+            placed = list(pool.map(place_at, eligible))
+    else:
+        placed = [place_at(t) for t in eligible]
+
+    summary = []
+    for t, results in zip(eligible, placed):
+        instance, lots = t['instance'], t['lots']
         ok = [r for r in results if r.get('success')]
         error = next((r.get('error') for r in results if not r.get('success')), None)
 
@@ -370,7 +449,8 @@ def take_call(username, plan, meta=None) -> dict:
            f'SL-L BUY trigger {entry} limit {limit} · SL {stop} · T1 {target} · {brokers}',
            {'call_id': call_id, 'plan': plan, 'limit': limit, 'summary': summary})
     logger.info(f"[TgCall] {call_id} armed {label} trigger={entry} limit={limit} sl={stop} "
-                f"t1={target} → {len(accepted)}/{len(summary)} brokers")
+                f"t1={target} → {len(accepted)}/{len(summary)} brokers in "
+                f"{_time.time() - t_start:.2f}s from receipt")
     ensure_running(username, source='call')
     return {'success': True, 'call_id': call_id, 'summary': summary}
 
@@ -913,6 +993,15 @@ def tick(username, session_data=None) -> None:
             ltp = None
             if any(s.get('stage') == STAGE_LIVE for s in slots):
                 ltp = option_ltp(call['symbol'], call['strike'], call['option_type'])
+                if ltp is None:
+                    # Blind: the stop still rests at the exchange, but the
+                    # target is watched here and cannot be seen. Say so
+                    # loudly, once, so the position is managed by hand.
+                    _alert(username, 'tg_call_order_failed',
+                           f"Telegram call — NO QUOTE: {call['symbol']} {call['strike']} {call['option_type']}",
+                           f"Cannot read the premium, so target {call.get('target')} is NOT being "
+                           f"watched. The stop at {call['stop']} still rests. Manage this one by hand.",
+                           {'call_id': call['id']}, once_key=f"noquote:{call['id']}")
 
             for slot in slots:
                 stage = slot.get('stage')
@@ -978,4 +1067,4 @@ def stop() -> None:
 
 __all__ = ['take_call', 'validate_call', 'tg_targets', 'entry_limit', 'tick',
            'ensure_running', 'is_running', 'stop', 'stop_all_calls', 'call_records',
-           'remember_session', 'is_active', 'history', 'retract_call', 'amend_call']
+           'remember_session', 'is_active', 'history', 'retract_call', 'amend_call', 'prewarm']

@@ -797,6 +797,18 @@ class MarketScheduler:
             ensure_running(self._algo_username(), source=source)
         except Exception as e:
             logger.error(f"[TgCalls {source}] engine start failed: {e}", exc_info=True)
+        # Keep the chain, quote and instrument caches warm while the listener
+        # is up, so a call is answered from cache plus one live quote rather
+        # than from a cold symbol-master download.
+        try:
+            from trading_app.app.order_placement import tg_calls_listener
+            from trading_app.app.order_placement.tg_call_engine import prewarm
+            if tg_calls_listener.is_running():
+                import threading
+                threading.Thread(target=prewarm, args=(self._algo_username(),),
+                                 name='TgCallPrewarm', daemon=True).start()
+        except Exception as e:
+            logger.error(f"[TgCalls {source}] prewarm failed: {e}", exc_info=True)
 
     def _start_tg_calls(self) -> None:
         """9:10 AM weekdays: connect to the channel before the open."""

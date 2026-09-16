@@ -6,6 +6,7 @@ PDH↔R1 box being the CPR's own height) and compares it to the manual
 sheet. Pure functions over bar lists, so no broker and no create_app().
 """
 
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -362,3 +363,97 @@ def test_simulate_starts_after_the_setup_candle():
     assert naive['result'] == 'SL' and naive['entry_time'] == '09:20'
     r = svc.simulate_trade(bars, 'BUY', 105, 110, 98, setup_time='09:30')
     assert r['result'] == 'Target' and r['entry_time'] == '09:35' and r['exit_time'] == '09:40'
+
+
+# ── the Update button: extend the sheet from the chart ────────────────────
+
+def test_last_complete_session_waits_for_the_close():
+    before = datetime(2026, 9, 16, 15, 29, tzinfo=IST)
+    after = datetime(2026, 9, 16, 15, 30, tzinfo=IST)
+    assert svc.last_complete_session(before) == date(2026, 9, 15)
+    assert svc.last_complete_session(after) == date(2026, 9, 16)
+
+
+def test_candle_words_speak_the_sheet():
+    assert svc.candle_words({'text': 'Strong small Red · near PDL', 'colour': 'Red'}) == 'Strong small candle red near Prev Low'
+    assert svc.candle_words({'text': 'Doji · touched TC, BC', 'colour': 'Doji'}) == 'In decision candle(doji) near TC'
+    assert svc.candle_words({'text': 'Green', 'colour': 'Green'}) == 'Candle green'
+
+
+def _synthetic_session(n_daily=30):
+    """Daily history plus one session of 5-minute bars that fills a rule trade."""
+    daily = _daily(date(2026, 8, 1), n_daily)
+    ds = daily[-1]['date'].isoformat()
+    prev = daily[-2]
+    lv = svc.levels(prev['high'], prev['low'], prev['close'])
+    # Opens well above the CPR, then a strong red candle dips into it and
+    # closes back above -> the rule's "rejection from the CPR" BUY.
+    top = lv['tc']
+    bars = [
+        {'time': '09:15', 'open': top + 60, 'high': top + 70, 'low': top + 40, 'close': top + 50},
+        {'time': '09:20', 'open': top + 50, 'high': top + 55, 'low': top - 5, 'close': top + 45},
+        {'time': '09:25', 'open': top + 45, 'high': top + 70, 'low': top + 44, 'close': top + 65},
+        {'time': '09:30', 'open': top + 65, 'high': top + 90, 'low': top + 60, 'close': top + 85},
+    ]
+    bars += [{'time': f'{h:02d}:{m:02d}', 'open': top + 85, 'high': top + 300, 'low': top + 80, 'close': top + 250}
+             for h in range(10, 16) for m in range(0, 60, 5) if (h, m) < (15, 30)]
+    intraday = {d['date'].isoformat(): [{'time': '09:15', 'open': d['open'], 'high': d['open'] + 30,
+                                         'low': d['open'] - 30, 'close': d['open'] + 10}]
+                for d in daily[:-1]}
+    intraday[ds] = bars
+    return ds, daily, intraday
+
+
+def test_chart_row_is_shaped_like_an_imported_row():
+    ds, daily, intraday = _synthetic_session()
+    res = svc.analyse([{'date': ds}], daily, intraday)
+    row = svc.chart_row(res['rows'][0], intraday[ds])
+    imported = svc.load_manual('NIFTY')['rows'][0]
+    assert set(imported) <= set(row)                       # every key the import writes
+    assert row['date'] == ds
+    assert row['price_vs_daily'] == 'Above' and row['cpr_direction'] == 'Asc'
+    assert row['first_candle'].endswith('candle red') or 'candle' in row['first_candle']
+    assert row['note'].startswith('Analysis added from the chart')
+    assert 'Trade by rule' in row['note']
+    if row['trade']:
+        assert row['result'] in ('Target', 'SL', 'EOD', 'Both')
+        assert row['setup_time'] is not None and row['reason']
+
+
+def test_chart_row_is_none_without_bars():
+    assert svc.chart_row({'date': '2026-09-16', 'chart': None, 'error': 'no bars'}, []) is None
+
+
+def test_extend_appends_only_the_sessions_after_the_sheet(tmp_path, monkeypatch):
+    ds, daily, intraday = _synthetic_session()
+    last_have = daily[-3]['date']                          # the sheet ends two sessions back
+    monkeypatch.setattr(svc, 'MANUAL_DIR', str(tmp_path))
+    with open(tmp_path / 'NIFTY.json', 'w') as fh:
+        json.dump({'symbol': 'NIFTY', 'source': 'test', 'rows': [
+            {'date': last_have.isoformat(), 'price_vs_daily': 'Above', 'trade': None}]}, fh)
+    calls = []
+
+    def fake_fetch(symbol, first, last, fresh=False):
+        calls.append((symbol, first, last, fresh))
+        return daily, intraday
+    monkeypatch.setattr(svc, 'fetch_bars', fake_fetch)
+
+    out = svc.extend('NIFTY', upto=daily[-1]['date'])
+    assert calls == [('NIFTY', last_have + timedelta(days=1), daily[-1]['date'], True)]
+    assert out['added'] == [daily[-2]['date'].isoformat(), ds]
+    doc = json.load(open(tmp_path / 'NIFTY.json'))
+    assert [r['date'] for r in doc['rows']] == [last_have.isoformat()] + out['added']
+    assert doc['extended_at']
+    assert all('note' in r for r in doc['rows'][1:])
+
+    # Idempotent: a second click has nothing after the new last date.
+    again = svc.extend('NIFTY', upto=daily[-1]['date'])
+    assert again['added'] == [] and again['last'] == ds
+    assert len(calls) == 1                                  # no fetch when nothing to add
+
+
+def test_extend_route(client, monkeypatch):
+    monkeypatch.setattr(svc, 'extend', lambda symbol: {'success': True, 'symbol': symbol, 'added': ['2026-09-16']})
+    body = client.post('/api/trend/cpr-backtest/update', json={'symbol': 'nifty'}).get_json()
+    assert body['success'] and body['symbol'] == 'NIFTY' and body['added'] == ['2026-09-16']
+    assert client.get('/api/trend/cpr-backtest/update').status_code == 405

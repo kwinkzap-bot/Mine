@@ -26,6 +26,11 @@
     const REFRESH_MS = 5 * 60 * 1000;          // full re-fetch of every pane, heals gaps
     const RIGHT_OFFSET = 12;                   // bars of whitespace — Future CPR lives there
     const INITIAL_BARS = 80;                   // bars on screen after a load — the zoom the charts open at
+    const SPLIT_PX = 6;                        // the drag handle between two panes, also their spacing
+    const MIN_PANE = 140;                      // a pane can be dragged no narrower / shorter than this
+    const MIN_HEIGHT = 200, MAX_HEIGHT = 4000; // the grid height the bottom handle can set
+    const stackedMQ = window.matchMedia('(max-width: 900px)');   // one column, panes down the page
+    const isStacked = () => stackedMQ.matches;
 
     const CHART_THEMES = {
         light:  { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
@@ -42,6 +47,9 @@
         tfs: DEFAULT_TFS.slice(),
         settings: {},
         maximised: null,
+        cols: null,        // pane width shares side by side, summing to 1; null = equal
+        rows: null,        // pane height shares when stacked; null = equal
+        height: null,      // grid height in px set by the bottom handle; null = fit the window
         symbols: [],
         panes: [],
         marketOpen: null,
@@ -61,12 +69,17 @@
             if (Array.isArray(raw.tfs) && raw.tfs.length === PANE_COUNT && raw.tfs.every(t => TF_LABEL[t])) state.tfs = raw.tfs;
             if (raw.settings && typeof raw.settings === 'object') state.settings = raw.settings;
             if (Number.isInteger(raw.maximised) && raw.maximised >= 0 && raw.maximised < PANE_COUNT) state.maximised = raw.maximised;
+            if (validShares(raw.cols)) state.cols = raw.cols;
+            if (validShares(raw.rows)) state.rows = raw.rows;
+            if (Number.isFinite(raw.height) && raw.height >= MIN_HEIGHT) state.height = Math.min(raw.height, MAX_HEIGHT);
         } catch (e) { /* first visit or blocked storage */ }
     }
+    const validShares = a => Array.isArray(a) && a.length === PANE_COUNT && a.every(v => Number.isFinite(v) && v > 0);
     function save() {
         try {
             localStorage.setItem(STORE_KEY, JSON.stringify({
                 symbol: state.symbol, tfs: state.tfs, settings: state.settings, maximised: state.maximised,
+                cols: state.cols, rows: state.rows, height: state.height,
             }));
         } catch (e) { /* storage blocked — the page still works */ }
     }
@@ -472,15 +485,110 @@
         $('mcGrid').classList.toggle('max', state.maximised !== null);
         state.panes.forEach(p => p.node.classList.toggle('maxed', p.index === state.maximised));
         save();
+        applyLayout();
         fitGrid();
     }
 
+    /* ── resizable layout ────────────────────────────────────────────────── */
+    // Height: the bottom handle's value if it has been dragged, else the rest
+    // of the window. The charts are autoSize, so a pane that changes size
+    // redraws itself.
     function fitGrid() {
         const grid = $('mcGrid');
+        if (state.height !== null) { grid.style.height = `${state.height}px`; return; }
         const top = grid.getBoundingClientRect().top;
-        grid.style.height = `${Math.max(360, window.innerHeight - top - 8)}px`;
+        const handle = ($('mcHSplit') || {}).offsetHeight || 0;
+        grid.style.height = `${Math.max(360, window.innerHeight - top - handle - 8)}px`;
     }
     window.addEventListener('resize', fitGrid);
+
+    // Tracks: pane, handle, pane, handle, pane — across the row on a wide
+    // screen, down the column when stacked. The shares are fractions of the
+    // pane space (the handles are fixed), so a window resize keeps the split.
+    // A maximised pane leaves the templates to the .max rule.
+    function applyLayout() {
+        const grid = $('mcGrid');
+        const stacked = isStacked();
+        grid.classList.toggle('stacked', stacked);
+        if (state.maximised !== null) { grid.style.gridTemplateColumns = ''; grid.style.gridTemplateRows = ''; return; }
+        const equal = Array(PANE_COUNT).fill(1 / PANE_COUNT);
+        const tracks = shares => shares.map(f => `minmax(${MIN_PANE}px, ${f}fr)`).join(` ${SPLIT_PX}px `);
+        grid.style.gridTemplateColumns = stacked ? '1fr' : tracks(state.cols || equal);
+        grid.style.gridTemplateRows = stacked ? tracks(state.rows || equal) : '1fr';
+    }
+    stackedMQ.addEventListener('change', applyLayout);
+
+    // Shared drag loop: capture the pointer on the handle, feed each move's
+    // pixel delta to `onMove`, and save once on release. Charts under the
+    // pointer are switched off for the drag (.resizing) so a fast move over
+    // a canvas cannot start a pan.
+    function drag(e, bar, onMove) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        e.preventDefault();
+        const grid = $('mcGrid');
+        const x0 = e.clientX, y0 = e.clientY;
+        grid.classList.add('resizing'); bar.classList.add('active');
+        bar.setPointerCapture(e.pointerId);
+        const move = ev => onMove(ev.clientX - x0, ev.clientY - y0);
+        const end = () => {
+            bar.removeEventListener('pointermove', move);
+            bar.removeEventListener('pointerup', end);
+            bar.removeEventListener('pointercancel', end);
+            grid.classList.remove('resizing'); bar.classList.remove('active');
+            save();
+        };
+        bar.addEventListener('pointermove', move);
+        bar.addEventListener('pointerup', end);
+        bar.addEventListener('pointercancel', end);
+    }
+
+    // One handle between each pair of panes. Dragging moves size from one
+    // neighbour to the other and leaves the third alone; the pair is clamped
+    // at MIN_PANE each. Double-click makes the panes equal again.
+    function initSplitters() {
+        for (let k = 0; k < PANE_COUNT - 1; k++) {
+            const bar = document.createElement('div');
+            bar.className = 'mc-split';
+            bar.setAttribute('role', 'separator');
+            bar.title = 'Drag to resize · double-click for equal panes';
+            state.panes[k].node.after(bar);
+            bar.addEventListener('dblclick', () => {
+                if (isStacked()) state.rows = null; else state.cols = null;
+                save(); applyLayout();
+            });
+            bar.addEventListener('pointerdown', e => {
+                const stacked = isStacked();
+                const sizes = state.panes.map(p => { const r = p.node.getBoundingClientRect(); return stacked ? r.height : r.width; });
+                const a0 = sizes[k], b0 = sizes[k + 1];
+                drag(e, bar, (dx, dy) => {
+                    const d = Math.max(MIN_PANE - a0, Math.min(b0 - MIN_PANE, stacked ? dy : dx));
+                    const next = sizes.slice(); next[k] = a0 + d; next[k + 1] = b0 - d;
+                    const total = next.reduce((s, v) => s + v, 0);
+                    const shares = next.map(v => v / total);
+                    if (stacked) state.rows = shares; else state.cols = shares;
+                    applyLayout();
+                });
+            });
+        }
+    }
+
+    // The bar under the grid sets its height; taller than the window scrolls
+    // the page. Double-click goes back to filling the window.
+    function initHeightHandle() {
+        const bar = document.createElement('div');
+        bar.className = 'mc-hsplit'; bar.id = 'mcHSplit';
+        bar.setAttribute('role', 'separator');
+        bar.title = 'Drag to set the chart height · double-click to fit the window';
+        $('mcGrid').after(bar);
+        bar.addEventListener('dblclick', () => { state.height = null; save(); fitGrid(); });
+        bar.addEventListener('pointerdown', e => {
+            const h0 = $('mcGrid').getBoundingClientRect().height;
+            drag(e, bar, (dx, dy) => {
+                state.height = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.round(h0 + dy)));
+                fitGrid();
+            });
+        });
+    }
 
     /* ── symbol picker ───────────────────────────────────────────────────── */
     async function loadSymbols() {
@@ -603,7 +711,10 @@
         initChrome();   // before fitGrid: the nav's height decides where the grid starts
         document.title = `${state.symbol} · Multichart`;
         for (let i = 0; i < PANE_COUNT; i++) state.panes.push(buildPane(i));
+        initSplitters();
+        initHeightHandle();
         if (state.maximised !== null) { const m = state.maximised; state.maximised = null; toggleMax(m); }
+        applyLayout();
         fitGrid();
         linkCrosshairs();
         initPicker();

@@ -51,7 +51,10 @@
                 title="Hide the nav bar on this screen">▴</button>
     </div>
 
-    <!-- Three panes in a row; a pane's ⛶ swaps the grid for that pane alone. -->
+    <!-- Three panes in a row (stacked below 900px); a pane's ⛶ swaps the grid
+         for that pane alone. multichart.js drops a drag handle between each
+         pair of panes (width side by side, height when stacked) and a bar
+         under the grid that sets its height — both remembered per browser. -->
     <div class="mc-grid" id="mcGrid"></div>
 
     <!-- One pane. Cloned three times by multichart.js. -->

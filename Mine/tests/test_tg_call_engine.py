@@ -686,3 +686,63 @@ def test_the_engine_does_not_start_with_nothing_to_manage(broker, rows, env):
     assert TgCallStore.get_active() == []
     assert _REAL_ENSURE_RUNNING(USER, 'test') is False
     assert engine.is_running() is False
+
+
+# ── speed: nothing cold on the call's path ───────────────────────────────
+
+def test_an_alert_carrying_the_parsed_expiry_date_still_rings(broker, rows, env, alerts):
+    """The plan's expiry is a date; the bell stores JSON. The first live call
+    lost its bell alert to exactly this."""
+    import datetime as dt
+    op.option_ltp = lambda *a, **k: 90.0                # above the entry → skipped + alerted
+    take(expiry=dt.date(2026, 9, 22))
+    assert alerts and alerts[-1]['data']['plan']['expiry'] == '2026-09-22'
+
+
+def test_every_tg_account_is_entered_at_once(broker, rows, env, monkeypatch):
+    """Two accounts, two threads: the second must not wait for the first's
+    broker round-trip."""
+    env['BROKER_2_TG_ACTIVE'] = 'true'; env['BROKER_2_TG_LOTS'] = '1'
+    names = set()
+    orig = api.dispatch_stop_to_brokers
+
+    def slow_stop(**k):
+        import threading
+        names.add(threading.current_thread().name)
+        return orig(**k)
+    monkeypatch.setattr(api, 'dispatch_stop_to_brokers', slow_stop)
+    r = take()
+    assert sorted(x['instance'] for x in r['summary']) == [1, 2]
+    assert all(x['success'] for x in r['summary'])
+    assert names and all(n.startswith('TgCallEntry') for n in names)   # placed from the pool
+
+
+def test_prewarm_touches_chain_lot_quote_and_the_kite_dump(broker, rows, env, monkeypatch):
+    hits = []
+    monkeypatch.setattr(op, '_chain_meta', lambda s: hits.append(('chain', s)) or {'step': 50, 'expiry': None})
+    monkeypatch.setattr(op, '_spot', lambda s: hits.append(('spot', s)) or 23172.0)
+    monkeypatch.setattr(op, 'option_ltp', lambda s, k, t: hits.append(('ltp', s, k, t)) or 80.0)
+    monkeypatch.setattr(api, 'resolve_standard_lot', lambda s: hits.append(('lot', s)) or 75)
+
+    class K:
+        def __init__(self, kite_instance): pass
+        def get_option_symbol(self, s, k, t): hits.append(('kite', s, k, t)); return 'X'
+    monkeypatch.setattr('trading_app.service.kite_order_services.KiteService', K)
+    monkeypatch.setattr(api, 'get_kite', lambda *a, **k: object())
+
+    timings = engine.prewarm(USER, symbols=('NIFTY',))
+    assert ('chain', 'NIFTY') in hits and ('lot', 'NIFTY') in hits
+    assert ('ltp', 'NIFTY', 23150, 'CE') in hits            # the ATM strike, 23172 → 23150
+    assert ('kite', 'NIFTY', 23000, 'CE') in hits            # slot 1 is the only Kite TG slot
+    assert set(timings) == {'chain:NIFTY', 'lot:NIFTY', 'ltp:NIFTY', 'kite:1'}
+
+
+def test_a_live_position_with_no_quote_is_alerted_once_and_kept(broker, rows, env, alerts):
+    """SENSEX 74200PE on 2026-09-16: the quote was blank all day and the
+    target watch silently never fired. Now it says so."""
+    cid = taken(broker, rows)
+    op.option_ltp = lambda *a, **k: None
+    tick(); tick()
+    noquote = [a for a in alerts if 'NO QUOTE' in a['title']]
+    assert len(noquote) == 1 and 'T1' not in noquote[0]['title']
+    assert slot(cid)['stage'] == 'LIVE'                 # nothing rash: the stop still rests

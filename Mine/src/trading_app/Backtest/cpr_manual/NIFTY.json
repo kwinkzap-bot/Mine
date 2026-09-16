@@ -3011,6 +3011,25 @@
       "pnl": 191.0,
       "reason": "gap-up; 09:45 candle broke down through R1/PDH 23,448-23,487, closed 23,417; target 1:2 (CPR 23,379 is only 25 pts away, inside the 95-pt risk)",
       "setup_time": "09:45"
+    },
+    {
+      "date": "2026-09-16",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Wide",
+      "cpr_direction": "Dec",
+      "first_candle": "Big candle green near R3(cam)",
+      "boxes": "Big",
+      "trade": "SELL",
+      "entry": 23148.0,
+      "target": 22880.0,
+      "sl": 23282.0,
+      "result": "SL",
+      "pnl": -134.0,
+      "reason": "09:15 closed inside the CPR 23,198-23,356; 09:35 candle closed below it at 23,151 -> SELL under it; SL at the 09:15 high; target 1:2 (PDL 23,119 is only 29 pts away, inside the 134-pt risk)",
+      "setup_time": "09:35",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 158.1 pts (0.684%), 09:15 candle O 23201.6 H 23281.15 L 23186.55 C 23247.25 | Trade by rule: 09:15 closed inside the CPR 23,198-23,356; 09:35 candle closed below it at 23,151 -> SELL under it; SL at the 09:15 high; target 1:2 (PDL 23,119 is only 29 pts away, inside the 134-pt risk); chart replay SL 09:40 -> 13:05"
     }
-  ]
+  ],
+  "extended_at": "2026-09-16 19:23"
 }

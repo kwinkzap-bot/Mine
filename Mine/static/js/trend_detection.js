@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
     tdElems.cprSummary = document.getElementById('tdCprSummary');
     tdElems.cprGrid    = document.getElementById('tdCprBacktest');
     tdElems.cprNote    = document.getElementById('tdCprNote');
+    tdElems.cprUpdate  = document.getElementById('tdCprUpdate');
+    if (tdElems.cprUpdate) tdElems.cprUpdate.addEventListener('click', updateCprBacktest);
 
     tdElems.symbol.addEventListener('change', () => { loadMarketDirection(); loadCprBacktest(); });
 
@@ -213,6 +215,44 @@ async function loadCprBacktest() {
     }
 }
 
+// The Update button: POST /api/trend/cpr-backtest/update appends every
+// complete session after the sheet's last date (chart-read analysis, the
+// rule's trade), then the grid is reloaded. Nothing to add is a normal
+// answer — the button just says so in the meta line.
+async function updateCprBacktest() {
+    const btn = tdElems.cprUpdate;
+    const symbol = tdElems.symbol.value;
+    btn.disabled = true;
+    btn.textContent = 'Updating…';
+    try {
+        const res = await fetch('/api/trend/cpr-backtest/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol }),
+        });
+        const data = await res.json();
+        if (!data || !data.success) {
+            tdElems.cprNote.textContent = `Update failed: ${(data && data.error) || res.status}`;
+            return;
+        }
+        const added = data.added || [];
+        if (!added.length) {
+            tdElems.cprNote.textContent = `Up to date — the sheet already ends at ${data.last} and no complete session follows it`
+                + (data.skipped && data.skipped.length ? ` (${data.skipped.map(x => `${x.date}: ${x.error}`).join('; ')})` : '');
+            return;
+        }
+        await loadCprBacktest();
+        const trades = (data.trades || []).map(t => `${t.date} ${t.trade} ${_tdNum(t.entry, 0)} → ${t.result}${t.pnl != null ? ` (${t.pnl > 0 ? '+' : ''}${_tdNum(t.pnl, 0)})` : ''}`);
+        tdElems.cprNote.textContent = `Added ${added.length} session${added.length > 1 ? 's' : ''} from the chart: ${added.join(', ')}`
+            + (trades.length ? ` · ${trades.join(' · ')}` : ' · no trade by rule');
+    } catch (err) {
+        tdElems.cprNote.textContent = `Update failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Update';
+    }
+}
+
 const _tdCprCols = [
     { key: 'price_vs_daily',  label: 'Price vs Daily CPR',  chart: c => c.price_vs_daily,
       why: c => c.price_in_daily_cpr ? 'close inside CPR' : '' },
@@ -257,7 +297,9 @@ function renderCprBacktest(d) {
     const s = d.summary || {};
     const ag = s.agreement || {};
 
-    tdElems.cprMeta.textContent = `${d.symbol} · ${s.sessions || 0} sessions · ${s.rows || 0} rows · ${d.source || ''}`;
+    const lastDate = rows.reduce((m, r) => (r.date > m ? r.date : m), '') || null;
+    tdElems.cprMeta.textContent = `${d.symbol} · ${s.sessions || 0} sessions · ${s.rows || 0} rows · ${d.source || ''}`
+        + (lastDate ? ` · to ${lastDate}` : '') + (d.extended_at ? ` · extended ${d.extended_at}` : '');
 
     const pct = k => ag[k] && ag[k].pct != null ? `${ag[k].match}/${ag[k].total} (${ag[k].pct}%)` : '—';
     const pnlCls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';

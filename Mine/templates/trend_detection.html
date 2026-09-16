@@ -114,6 +114,21 @@
 
     .td-select:focus { border-color: var(--td-accent); }
 
+    .td-btn {
+        background: var(--td-bg);
+        border: 1px solid var(--td-border);
+        border-radius: 4px;
+        color: var(--td-text);
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 10px;
+        cursor: pointer;
+        font-family: inherit;
+        transition: border-color 0.15s;
+    }
+    .td-btn:hover:not(:disabled) { border-color: var(--td-accent); color: var(--td-accent); }
+    .td-btn:disabled { opacity: .55; cursor: default; }
+
     /* ── Card ─────────────────────────────────────────────────── */
     .td-card {
         background: var(--td-card);
@@ -221,7 +236,11 @@
     <div class="td-card" style="margin-bottom:10px;">
         <div class="td-card-hdr">
             <h2>CPR Manual vs Chart</h2>
-            <div class="td-card-hdr-meta" id="tdCprMeta"></div>
+            <div style="display:flex;align-items:center;gap:10px">
+                <div class="td-card-hdr-meta" id="tdCprMeta"></div>
+                <!-- Appends every complete session after the sheet's last date, read from the chart -->
+                <button type="button" class="td-btn" id="tdCprUpdate" title="Add the sessions the sheet has not reached yet, read from the chart">Update</button>
+            </div>
         </div>
         <div class="td-cpr-sum" id="tdCprSummary"></div>
         <div id="tdCprBacktest"><span style="font-size:11px;color:var(--td-muted)">Loading the CPR sheet…</span></div>

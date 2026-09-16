@@ -150,15 +150,62 @@
 /* Section / item / gate styles: css/components/mine_cpr.css (shared with OI Profile). */
 
 /* ── grid + panes ────────────────────────────────────────────────────── */
+/* The tracks are written by multichart.js (applyLayout): panes and the 6px
+   drag handles between them alternate — `Afr 6px Bfr 6px Cfr` across on a
+   wide screen, the same down the page when stacked — so the handles double
+   as the spacing and there is no gap. The values here are only the
+   pre-script fallback. */
 .mc-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 6px 1fr 6px 1fr;
     grid-template-rows: 1fr;
-    gap: 6px;
-    min-height: 360px;
+    min-height: 200px;
 }
 .mc-grid.max { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-.mc-grid.max .mc-pane:not(.maxed) { display: none; }
+.mc-grid.max .mc-pane:not(.maxed), .mc-grid.max .mc-split { display: none; }
+
+/* Drag handles. Between panes: a transparent track that lights up on hover
+   and while dragging; below the grid: an 8px bar with a short grip. While a
+   drag is on, the charts stop taking the pointer so a fast move over a
+   canvas cannot start a pan. */
+.mc-split {
+    position: relative;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+}
+.mc-split::after {
+    content: '';
+    position: absolute;
+    inset: 0 2px;
+    border-radius: 2px;
+    background: transparent;
+    transition: background .12s;
+}
+.mc-grid.stacked .mc-split { cursor: row-resize; }
+.mc-grid.stacked .mc-split::after { inset: 2px 0; }
+.mc-split:hover::after, .mc-split.active::after { background: var(--color-accent); }
+
+.mc-hsplit {
+    position: relative;
+    height: 8px;
+    flex-shrink: 0;
+    cursor: row-resize;
+    touch-action: none;
+    user-select: none;
+}
+.mc-hsplit::after {
+    content: '';
+    position: absolute;
+    left: 50%; top: 3px;
+    width: 48px; height: 2px;
+    margin-left: -24px;
+    border-radius: 2px;
+    background: var(--color-border);
+    transition: background .12s;
+}
+.mc-hsplit:hover::after, .mc-hsplit.active::after { background: var(--color-accent); }
+.mc-grid.resizing .mc-chart { pointer-events: none; }
 
 .mc-pane {
     display: flex;
@@ -245,7 +292,7 @@
 /* Small screens: the toolbar and pane headers drop a size so the symbol,
    quote, Indicators and live dot still share one row. */
 @media (max-width: 900px) {
-    .mc-grid { grid-template-columns: 1fr; grid-template-rows: repeat(3, minmax(220px, 1fr)); gap: 0px; }
+    /* .mc-grid tracks: multichart.js stacks the panes at this width (applyLayout). */
     .mc-page { --mc-ctl-h: 20px; }
     .mc-toolbar { gap: 4px 6px; min-height: 24px; }
     .mc-title { font-size: 11px; }

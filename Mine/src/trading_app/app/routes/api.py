@@ -281,6 +281,11 @@ def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol
     else:
         sym = kite_service.get_option_symbol(symbol, strike, opt_type, expiry_type=expiry_type)
         tok = kite_service.get_instrument_token(sym) if sym else None
+    if not sym:
+        # Never cache a miss: a symbol master that was still downloading, or
+        # a contract listed a minute from now, would otherwise be "not found"
+        # until 15:30 — and every quote behind it blank for the day.
+        return tok, sym
     today = datetime.now()
     expire_ts = today.replace(hour=15, minute=30, second=0, microsecond=0).timestamp()
     if now_ts > expire_ts:

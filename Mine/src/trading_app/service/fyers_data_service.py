@@ -1223,12 +1223,14 @@ class FyersDataServiceAdapter:
                     logger.debug(f"[FyersAdapter] Resolved option from FAST CACHE: {cache_key} -> {sym}")
                     return sym
 
-        # 2. Fallback to CSV Master
+        # 2. Fallback to CSV Master. SENSEX/BANKEX options live on BFO, not
+        #    NFO — searching NFO alone answered "no option found" for every
+        #    SENSEX strike, and a Telegram call on SENSEX 74200PE ran with no
+        #    quote behind its target watch (2026-09-16).
         from datetime import date as _date
-        instruments = self.instruments('NFO')  # Uses 1-hour cache
+        exchange = 'BFO' if root_upper in _BSE_FUTURE_ROOTS else 'NFO'
+        instruments = self.instruments(exchange)  # Uses 1-hour cache
         today = _date.today()
-        root_upper = root.strip().upper()
-        opt_upper = option_type.strip().upper()
 
         matches = []
         for inst in instruments:

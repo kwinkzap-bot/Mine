@@ -166,6 +166,7 @@
 /api/time-and-sales	api.time_and_sales	GET,HEAD,OPTIONS	True
 /api/token-status	api.token_status	GET,HEAD,OPTIONS	True
 /api/trend/cpr-backtest	trend.cpr_backtest	GET,HEAD,OPTIONS	True
+/api/trend/cpr-backtest/update	trend.cpr_backtest_update	OPTIONS,POST	True
 /api/underlying-price	api.get_underlying_price	GET,HEAD,OPTIONS	True
 /api/vega/history	api.vega_history	GET,HEAD,OPTIONS	True
 /api/watchlist/brokers	watchlist.brokers	GET,HEAD,OPTIONS	True

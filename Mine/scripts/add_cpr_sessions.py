@@ -35,32 +35,6 @@ from propose_cpr_trades import bars_for  # noqa: E402
 FILL = PatternFill('solid', fgColor='E2EFDA')   # light green: analysis written from the chart
 NOTE = 'Analysis added from the chart (Fyers 5-min)'
 
-# The chart's level names in the sheet's words.
-_LEVEL_WORDS = {'PDH': 'Prev High', 'PDL': 'Prev Low', 'Cam R3': 'R3(cam)', 'Cam S3': 'S3(cam)'}
-
-
-def candle_words(fc):
-    """The chart's first-candle reading in the sheet's vocabulary —
-    'Strong small candle red near Prev Low', 'In decision candle(doji) near CPR'."""
-    text = fc['text']
-    level = None
-    if ' · touched ' in text:
-        level = text.split(' · touched ')[1].split(', ')[0]
-    elif ' · near ' in text:
-        level = text.split(' · near ')[1]
-    head = text.split(' · ')[0]
-    if fc['colour'] == 'Doji':
-        words = 'In decision candle(doji)'
-    else:
-        parts = head.split()               # e.g. ['Strong', 'small', 'Red']
-        colour = parts[-1].lower()
-        adj = ' '.join(p.lower() for p in parts[:-1])
-        words = (adj.capitalize() + ' ' if adj else '') + f'candle {colour}'
-        words = words[0].upper() + words[1:]
-    if level:
-        words += ' near ' + _LEVEL_WORDS.get(level, level)
-    return words
-
 
 def pnl_formula(rn):
     return (f'=IF(OR(I{rn}="", J{rn}="", L{rn}=""), "", IF(L{rn}="Target", IF(J{rn}>I{rn}, J{rn}-I{rn}, I{rn}-J{rn}), '
@@ -106,7 +80,7 @@ def main(argv=None):
         vals = {
             2: f"Price {c['price_vs_daily']}",
             3: f"Price {c['price_vs_hourly']}" if c['price_vs_hourly'] else None,
-            4: c['cpr_type'], 5: c['cpr_direction'], 6: candle_words(fc), 7: c['boxes'],
+            4: c['cpr_type'], 5: c['cpr_direction'], 6: svc.candle_words(fc), 7: c['boxes'],
         }
         note = (f"{NOTE}: CPR {abs(c['levels']['tc'] - c['levels']['bc']):.1f} pts ({c['width_pct']}%), "
                 f"09:15 candle O {fc['open']} H {fc['high']} L {fc['low']} C {fc['close']}")

@@ -30,13 +30,16 @@ charts do.
 
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from trading_app.app.utils.logger import logger
 from trading_app.service.cpr_service import classify_cpr_width, cpr_width_pct
 
 MANUAL_DIR = os.path.join(os.path.dirname(__file__), '..', 'Backtest', 'cpr_manual')
+
+IST = timezone(timedelta(hours=5, minutes=30))
+SESSION_CLOSE = (15, 30)      # a session's bars are complete from here
 
 WIDTH_HISTORY_SESSIONS = 10   # sessions averaged for the Narrow/Medium/Wide reading
 CANDLE_HISTORY_SESSIONS = 20  # sessions averaged for the first-candle Small/Big reading
@@ -215,6 +218,35 @@ def describe_first_candle(c: Dict[str, float], lv: Dict[str, float],
         'touched': touched,
         'near': nearest[0] if nearest else None,
     }
+
+
+# The chart's level names in the sheet's words.
+_LEVEL_WORDS = {'PDH': 'Prev High', 'PDL': 'Prev Low', 'Cam R3': 'R3(cam)', 'Cam S3': 'S3(cam)'}
+
+
+def candle_words(fc: Dict[str, Any]) -> str:
+    """The chart's first-candle reading in the sheet's vocabulary —
+    'Strong small candle red near Prev Low', 'In decision candle(doji) near CPR'.
+    What scripts/add_cpr_sessions.py writes into column F, and what `extend`
+    puts on the manual side of a session the sheet has not reached."""
+    text = fc['text']
+    level = None
+    if ' · touched ' in text:
+        level = text.split(' · touched ')[1].split(', ')[0]
+    elif ' · near ' in text:
+        level = text.split(' · near ')[1]
+    head = text.split(' · ')[0]
+    if fc['colour'] == 'Doji':
+        words = 'In decision candle(doji)'
+    else:
+        parts = head.split()               # e.g. ['Strong', 'small', 'Red']
+        colour = parts[-1].lower()
+        adj = ' '.join(p.lower() for p in parts[:-1])
+        words = (adj.capitalize() + ' ' if adj else '') + f'candle {colour}'
+        words = words[0].upper() + words[1:]
+    if level:
+        words += ' near ' + _LEVEL_WORDS.get(level, level)
+    return words
 
 
 def manual_colour(text: Optional[str]) -> Optional[str]:
@@ -621,9 +653,11 @@ def _intraday_by_session(raw: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
     return by
 
 
-def fetch_bars(symbol: str, first: date, last: date) -> tuple:
+def fetch_bars(symbol: str, first: date, last: date, fresh: bool = False) -> tuple:
     """(daily, intraday-by-session) covering the manual sheet's dates, with
-    enough daily history in front for the averages and the previous week."""
+    enough daily history in front for the averages and the previous week.
+    `fresh` skips the hour-long cache — for `extend`, whose whole point is
+    the session that closed since the page last looked."""
     from trading_app.service import multichart_service as mc
     adapter = mc.provider()
     fy_symbol = mc.resolve_symbol(symbol)
@@ -632,7 +666,7 @@ def fetch_bars(symbol: str, first: date, last: date) -> tuple:
 
     daily_from = first - timedelta(days=(WIDTH_HISTORY_SESSIONS + CANDLE_HISTORY_SESSIONS) * 2 + 14)
     daily_raw = adapter.historical_data(fy_symbol, daily_from.isoformat(), last.isoformat(),
-                                        'day', use_cache=True, cache_ttl=3600.0)
+                                        'day', use_cache=not fresh, cache_ttl=3600.0)
     daily = [b for b in _daily_rows(daily_raw) if b['date'] < today or b['date'] <= last]
 
     # Intraday from a month before the first sheet date, so the first-candle
@@ -642,7 +676,7 @@ def fetch_bars(symbol: str, first: date, last: date) -> tuple:
     while start <= last:
         end = min(start + timedelta(days=INTRADAY_CHUNK_DAYS - 1), last)
         raw = adapter.historical_data(fy_symbol, start.isoformat(), end.isoformat(),
-                                      '5minute', use_cache=True, cache_ttl=3600.0)
+                                      '5minute', use_cache=not fresh, cache_ttl=3600.0)
         intraday.update(_intraday_by_session(raw))
         start = end + timedelta(days=1)
     return daily, intraday
@@ -665,6 +699,7 @@ def compare(symbol: str) -> Dict[str, Any]:
         'symbol': symbol.upper(),
         'source': doc.get('source'),
         'imported_at': doc.get('imported_at'),
+        'extended_at': doc.get('extended_at'),
         'rules': {
             'cpr_type': f'width vs {WIDTH_HISTORY_SESSIONS}-session average: <0.8x Narrow, >1.2x Wide',
             'boxes': f'CPR height as % of close: <{BOX_SMALL_MAX_PCT}% Small, >={BOX_BIG_MIN_PCT}% Big',
@@ -675,3 +710,95 @@ def compare(symbol: str) -> Dict[str, Any]:
         },
         **result,
     }
+
+
+# ── the Update button ─────────────────────────────────────────────────────
+
+def last_complete_session(now: Optional[datetime] = None) -> date:
+    """Today once its bars are all in (15:30 IST), else yesterday — the
+    replay needs the 15:15 square-off, so a half-day is never analysed."""
+    now = now.astimezone(IST) if now else datetime.now(IST)
+    if (now.hour, now.minute) >= SESSION_CLOSE:
+        return now.date()
+    return now.date() - timedelta(days=1)
+
+
+def chart_row(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """One manual-side row, in scripts/import_cpr_manual.py's shape, from
+    the chart's reading of a session the sheet has not reached: the
+    analysis columns as add_cpr_sessions.py would write them, the trade as
+    propose_cpr_trades.py would. None when the session has no bars."""
+    from trading_app.service.cpr_trade_rule import RULE_TAG, propose
+    c = r.get('chart')
+    if not c:
+        return None
+    fc = c['first_candle']
+    row: Dict[str, Any] = {
+        'date': r['date'],
+        'price_vs_daily': c['price_vs_daily'],
+        'price_vs_hourly': c['price_vs_hourly'],
+        'cpr_type': c['cpr_type'],
+        'cpr_direction': c['cpr_direction'],
+        'first_candle': candle_words(fc),
+        'boxes': c['boxes'],
+        'trade': None, 'entry': None, 'target': None, 'sl': None,
+        'result': None, 'pnl': None, 'reason': None, 'setup_time': None,
+    }
+    note = (f"Analysis added from the chart (Fyers 5-min): CPR {abs(c['levels']['tc'] - c['levels']['bc']):.1f} pts "
+            f"({c['width_pct']}%), 09:15 candle O {fc['open']} H {fc['high']} L {fc['low']} C {fc['close']}")
+    p, why, setup_i = propose(c, bars)
+    if p:
+        sim = simulate_trade(bars[setup_i:], p['trade'], p['entry'], p['target'], p['sl'])
+        if sim['result'] != 'No fill':
+            row.update(trade=p['trade'], entry=p['entry'], target=p['target'], sl=p['sl'],
+                       result=sim['result'], pnl=sim['pnl'], reason=why,
+                       setup_time=bars[setup_i]['time'])
+        note += (f" | {RULE_TAG}: {why}; chart replay {sim['result']}"
+                 + (f" {sim['entry_time']} -> {sim['exit_time']}" if sim['exit_time'] else ''))
+    else:
+        note += f" | {RULE_TAG}: {why}"
+    row['note'] = note
+    return row
+
+
+def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
+    """Append every complete session after the sheet's last date to
+    Backtest/cpr_manual/<SYMBOL>.json, read the way the scripts would have
+    written it into the workbook. Returns what was added; nothing is
+    written when there is nothing to add."""
+    doc = load_manual(symbol)
+    rows = doc.get('rows') or []
+    if not rows:
+        raise NoManualData(f'The {symbol.upper()} sheet is empty — nothing to extend from')
+    last_have = max(datetime.strptime(r['date'], '%Y-%m-%d').date() for r in rows)
+    upto = upto or last_complete_session()
+    first = last_have + timedelta(days=1)
+    if first > upto:
+        return {'success': True, 'symbol': symbol.upper(), 'added': [], 'last': last_have.isoformat()}
+
+    daily, intraday = fetch_bars(symbol, first, upto, fresh=True)
+    sessions = sorted(ds for ds in intraday if first <= date.fromisoformat(ds) <= upto)
+    added, skipped = [], []
+    if sessions:
+        res = analyse([{'date': ds} for ds in sessions], daily, intraday)
+        for r in res['rows']:
+            row = chart_row(r, intraday.get(r['date']) or [])
+            if row:
+                added.append(row)
+            else:
+                skipped.append({'date': r['date'], 'error': r.get('error')})
+    if added:
+        doc['rows'] = rows + added
+        doc['extended_at'] = datetime.now(IST).strftime('%Y-%m-%d %H:%M')
+        path = manual_path(symbol)
+        tmp = path + '.tmp'
+        with open(tmp, 'w') as fh:
+            json.dump(doc, fh, indent=2)
+        os.replace(tmp, path)
+    logger.info(f"[CPR backtest] {symbol.upper()}: extended {last_have} -> {upto}, "
+                f"{len(added)} sessions added, {len(skipped)} skipped")
+    return {'success': True, 'symbol': symbol.upper(), 'last': last_have.isoformat(),
+            'upto': upto.isoformat(), 'added': [r['date'] for r in added], 'skipped': skipped,
+            'trades': [{'date': r['date'], 'trade': r['trade'], 'entry': r['entry'],
+                        'target': r['target'], 'sl': r['sl'], 'result': r['result'], 'pnl': r['pnl']}
+                       for r in added if r['trade']]}

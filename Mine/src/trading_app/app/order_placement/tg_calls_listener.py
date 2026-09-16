@@ -236,6 +236,9 @@ async def _main(username, api_id, api_hash, channel_id):
             _status.update({'channel_id': channel_id, 'channel_title': title,
                             'connected': True, 'last_error': None})
             logger.info(f"[TgCalls] listener connected ({title})")
+            # Off the loop: the first prewarm downloads the symbol master.
+            threading.Thread(target=engine.prewarm, args=(username,),
+                             name='TgCallPrewarm', daemon=True).start()
 
             @client.on(events.NewMessage(chats=[entity]))
             async def _on_new_message(event):
