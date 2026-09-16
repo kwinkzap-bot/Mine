@@ -6726,10 +6726,38 @@ def exit_all_orders() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _fyers_option_symbol(fyers_svc, symbol, strike, option_type):
+    """The Fyers tradingsymbol for an index option, resolved the way the
+    order dispatcher resolves it: the Kite instrument dump picks the nearest
+    unexpired contract, and the Fyers symbol is that name behind an exchange
+    prefix. ``FyersOrderService.get_option_symbol`` is only the fallback — it
+    builds the current *monthly* name from the calendar, which is the wrong
+    contract on every weekly expiry."""
+    try:
+        from trading_app.service.kite_order_services import KiteService
+        kite = get_kite()
+        if kite:
+            kite_sym = KiteService(kite_instance=kite).get_option_symbol(symbol, strike, option_type)
+            if kite_sym:
+                prefix = 'BSE' if str(symbol).upper() == 'SENSEX' else 'NSE'
+                return f'{prefix}:{kite_sym}'
+    except Exception as e:
+        logger.warning(f'[fyers-symbol] Kite resolution failed for {symbol} {strike} {option_type}: {e}')
+    if hasattr(fyers_svc, 'get_option_symbol'):
+        return fyers_svc.get_option_symbol(symbol, strike, option_type)
+    return None
+
+
 def dispatch_stop_to_brokers(symbol, strike, option_type, trigger_price, action,
                              username, session_data, standard_lot,
-                             gate, lots_for, log_tag='place-sl'):
+                             gate, lots_for, log_tag='place-sl', limit_price=None):
     """Place one SL-M leg at every broker ``gate`` admits, and report each.
+
+    With ``limit_price`` the leg is a stop-limit (SL) instead: the trigger arms
+    it and the limit caps the fill. The Telegram-call engine enters that way —
+    a BUY that must not chase — while every stop that protects a position
+    stays SL-M, because a stop that can rest unfilled through a gap is not
+    protection.
 
     Shared by the OI Profile stop buttons and the Order Placement pad so both
     reach a broker through one tested path; what differs between them is only
@@ -6783,8 +6811,10 @@ def dispatch_stop_to_brokers(symbol, strike, option_type, trigger_price, action,
                 r = svc.place_stoploss_order(tradingsymbol=tradingsymbol,
                                               trigger_price=trigger_price,
                                               quantity=lot_qty,
-                                              transaction_type=action)
-                results.append({'broker': 'zerodha', 'instance': i, 'quantity': lot_qty, **r})
+                                              transaction_type=action,
+                                              limit_price=limit_price)
+                results.append({'broker': 'zerodha', 'instance': i, 'quantity': lot_qty,
+                                'order_type': 'SL' if limit_price else 'SL-M', **r})
             except Exception as e:
                 logger.error(f'[{log_tag}] zerodha_{i} error: {e}')
                 results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': str(e)})
@@ -6800,13 +6830,21 @@ def dispatch_stop_to_brokers(symbol, strike, option_type, trigger_price, action,
                     continue
                 fyers_svc = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
                 lot_qty = lots_for(i) * standard_lot
-                fyers_sym = fyers_svc.get_option_symbol(symbol, strike, option_type) if hasattr(fyers_svc, 'get_option_symbol') else None
+                fyers_sym = _fyers_option_symbol(fyers_svc, symbol, strike, option_type)
                 if not fyers_sym:
                     results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'Symbol resolution failed'})
                     continue
-                r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
-                                                    quantity=lot_qty, transaction_type=action)
-                results.append({'broker': 'fyers', 'instance': i, 'quantity': lot_qty, **r})
+                if limit_price:
+                    side = fyers_svc.SIDE_BUY if str(action).upper() == 'BUY' else fyers_svc.SIDE_SELL
+                    r = fyers_svc.place_order(symbol=fyers_sym, side=side, quantity=lot_qty,
+                                              order_type=3, limit_price=float(limit_price),
+                                              stop_price=float(trigger_price),
+                                              product_type='INTRADAY')
+                else:
+                    r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
+                                                        quantity=lot_qty, transaction_type=action)
+                results.append({'broker': 'fyers', 'instance': i, 'quantity': lot_qty,
+                                'order_type': 'SL' if limit_price else 'SL-M', **r})
             except Exception as e:
                 logger.error(f'[{log_tag}] fyers_{i} error: {e}')
                 results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': str(e)})
@@ -7972,6 +8010,10 @@ def exit_selected_records(username, session_data, select, log_tag='exit'):
                                  'errors': []})
 
     errors = []
+    # Every market exit sent, with its broker order ids, so a caller that
+    # books P&L can record the leg and read its fill back from the order
+    # book — _place_exit_leg writes no store record of its own.
+    exits = []
 
     # ── 1. cancel what is still resting ─────────────────────────────────
     for order in sorted(ours(), key=stops_first):
@@ -8079,6 +8121,10 @@ def exit_selected_records(username, session_data, select, log_tag='exit'):
             try:
                 ids = _place_exit_leg(kind, client, match, side, qty)
                 row(broker, instance)['exited_positions'] += 1
+                exits.append({'broker': broker, 'instance': instance,
+                              'symbol': underlying, 'strike': strike,
+                              'option_type': option_type, 'side': side,
+                              'quantity': qty, 'order_ids': [str(i) for i in (ids or [])]})
                 logger.info(f"[{log_tag}] {broker}_{instance} {label}: {side} {qty} "
                             f"(ours {abs(net)}, broker {abs(held)}) → {ids}")
             except Exception as e:
@@ -8100,6 +8146,7 @@ def exit_selected_records(username, session_data, select, log_tag='exit'):
         'exited_positions': exited,
         'summary': summary,
         'errors': errors,
+        'exits': exits,
         'error': errors[0] if errors else None,
     }
 
@@ -8132,8 +8179,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
 
     ``quantity`` is a count of LOTS, not units, and it is one number for every
     broker at once. That is right for a whole-position order and wrong for a
-    ladder leg: the Order Placement signal mode sells a third of each account's
-    own size at each target, and the accounts are not sized alike.
+    per-account leg — an engine sizing each account off that account's own
+    fill, where the accounts are not sized alike.
 
         lots_for(instance) -> int
 

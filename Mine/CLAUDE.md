@@ -84,78 +84,84 @@ endpoints, methods and `strict_slashes`. **If a refactor commit's `git diff`
 touches it, the public API moved.** Regenerate only deliberately, with
 `python tests/regenerate_route_inventory.py`, in its own commit.
 
-## Order Placement signal mode
+## Order Placement
 
-`/orderplacement` has two modes. **Single** places one order at every broker
-carrying `BROKER_N_OP_ACTIVE=true` and walks away, as it always did.
-**Signal** takes a pasted tip and manages the whole trade:
+`/orderplacement` places **one order** at every broker carrying
+`BROKER_N_OP_ACTIVE=true`, sized by `BROKER_N_OP_LOTS`, and walks away —
+MARKET, LIMIT or SL-M. Every record is `strategy='op'`, which is what the
+strip's price box, ✕, reconciliation sweep and Exit all key on.
+
+The hand-armed **Signal mode** (a pasted tip → 3-lot SL/T1/T2 ladder) was
+**removed on 2026-09-15** with its `/signal`, `/signal/parse`, `/signals`,
+`/signals/<id>/cancel` routes, the `op_signal_start` / `op_signal_watchdog`
+jobs and their tests. What remains of it is deliberately still there:
+`op_signal_engine.py` is now only the helper library the Telegram-call
+engine imports (`_place_stop_leg`, `_cancel_leg`, the session cache, the
+`OP_SIGNAL_EXIT_HOUR/MINUTE` cutoff, `lot_chunks`), and `op_signal_store.py`
+holds the stage constants and the atomic write. `BROKER_N_OP_SIGNAL_LOTS` in
+the env files is dead. The automatic side of the page is the section below.
+
+## Telegram calls (auto-trader)
+
+`app/order_placement/tg_calls_listener.py` watches one Telegram channel and
+`tg_call_engine.py` trades what it posts. The channel is a paid one the user
+is only a member of, so the **bot cannot read it** — the listener is a
+Telethon *user* session on the user's own account:
 
 ```
-NIFTY 23500 CE          entry  SL-M BUY, 3x lots, trigger 193
-BUY : 193               on fill  SL-M SELL 1 lot @175 + LIMIT 1 lot @206
-SL : 175                                            + LIMIT 1 lot @213
-Target : 206,213,220    T1 fills  stop trigger -> the actual entry fill
-                        T2 fills  stop trigger -> T1's actual fill
-                        SL fills  cancel the targets, market-exit the rest
-                        220 touched  cancel the stop, exit at market
+TG_CALLS_ACTIVE=true            # master switch; read per call, never cached
+TG_API_ID / TG_API_HASH         # my.telegram.org
+TG_CALLS_CHANNEL_ID=3942647299  # the number after '#-' on web.telegram.org/k
+TG_ENTRY_LIMIT_PCT=1            # entry limit = trigger × (1 + pct/100), up to the tick
+BROKER_N_TG_ACTIVE=true         # per slot, with BROKER_N_ACTIVE; zerodha/fyers ONLY
+BROKER_N_TG_LOTS=1              # per slot; no fallback to any OP size
 ```
 
-**The stop is one leg's worth, not the whole position**, and **target 3 has no
-order at all** — its lot is the one the stop is holding. Three lots held means
-three resting sell orders of one lot each, so working sell quantity equals the
-position exactly. Two consequences:
+The one-time login is `PYTHONPATH=src ../.venv/bin/python scripts/tg_login.py`,
+run **with the app booted out** (the SQLite session must not be shared). It
+leaves `env/tg_calls.session` — a credential, gitignored, **back it up with
+`Mine.env`**. `telethon` is in `pyproject.toml`; install it in the venv.
 
-* No short-option margin is ever asked for, and the race that makes emulated
-  OCO ladders unsafe — a stop covering more than is held, briefly — cannot
-  arise, because the stop never covers more than its own lot.
-* A stop hit is not the whole exit. The stop sells its lot at the exchange;
-  the engine cancels the targets and sells the rest at market a tick later.
-  T3 likewise needs the app alive. The stop does not.
+A message that `parse_signal` reads as a call (`NIFTY 23150 CE / BUY : 81 /
+SL : 65 / Target : 95,101,110`) becomes, per broker: a **stop-limit BUY**
+(trigger = BUY price, limit = +1 %) → on fill an **SL-M SELL for the whole
+filled qty** → **target 1 watched on LTP**; touching it cancels the stop and
+sells at market. T2/T3 are ignored. Four things are load-bearing:
 
-The stop is allocated **before** the targets, so a short fill loses a target
-rather than its protection.
+* **The stop covers the whole position and T1 rests nowhere.** A resting
+  LIMIT at T1 next to a full-size stop is twice the held quantity on the
+  sell side — margined as a fresh short and fillable twice. So T1 needs the
+  app alive (the LaunchAgent sees to that); the stop does not.
+* **New messages only, each id once.** Only `events.NewMessage` is
+  subscribed — the channel edits its posts, and an edit never trades.
+  Every id is written to `tg_calls.json` (`TgCallStore.mark_seen`) before
+  it is acted on, and anything older than `TG_CALLS_MAX_AGE_SECS` (90 s) at
+  receipt is dropped, so a reconnect's catch-up cannot re-fire a call.
+* **A call the market has run past is skipped, not chased.** A stop BUY
+  must sit above the LTP; if it does not, nothing is placed and a
+  `tg_call_skipped` alert says why. Same for SELL calls, non-index
+  symbols, a back-month expiry, or no eligible broker.
+* **With `TG_CALLS_ACTIVE=false` the listener still runs** and raises
+  `tg_call_skipped` for every call it would have taken — that is the dry run
+  that proves the parse path on real messages before the first order.
 
-Sizing is `BROKER_N_OP_SIGNAL_LOTS` — **lots per target leg**, so `=1` is a
-three-lot entry. There is no fallback to `BROKER_N_OP_LOTS`: that number sizes
-a whole single-mode order, and reading it as a per-target size would treble the
-position. A broker without the variable takes no part in a signal.
+Every leg is a `MineOrderStore` record with `strategy='op'`,
+`source='telegram'`, `signal_id='tg-…'`, `leg` in `ENTRY|SL|EXIT`, so the
+/orderplacement strip, ✕, reconcile and Exit all work on them unchanged;
+the page shows calls as read-only `TG` cards (no arm route, no Stand down). Jobs:
+`tg_calls_start` 09:10, `tg_calls_watchdog` every 5 min at :15; startup
+recovery reconnects after a restart. Status: `GET /api/order-placement/tg-calls`.
 
-Any leg over the 27-lot exchange freeze limit is **split** by `lot_chunks` —
-a 30-lot entry is 27 + 3, two orders at one account on one store record.
-Neither shared dispatcher splits by that cap (`split_quantity_by_freeze_limit`
-is only reached on the way out, by `_place_exit_leg`), so the engine does it.
-Two consequences that are easy to break:
-
-* `leg_fills` **sums** a broker's chunks and calls them finished only when
-  every chunk is terminal. Overwriting instead arms a ladder over 27 lots and
-  leaves the other 3 filling behind it, managed by nothing.
-* `_trail_stop` sends the trigger and **never a quantity**. A stop over the cap
-  is several orders; handing `_modify_order_at_brokers` a quantity would put
-  the whole figure on every chunk.
-
-Only Zerodha and Fyers can hold an SL-M (`dispatch_stop_to_brokers`), so a
-signal **refuses to arm at all** if any OP-enabled broker is Dhan or Kotak —
-a ladder whose stop cannot be placed is worse than no ladder.
-
-The engine (`app/order_placement/op_signal_engine.py`) is a daemon thread on a
-3s tick, started by the arm route and resurrected by `op_signal_watchdog`. It
-stands itself down when the last signal closes. Its state is
-`app/order_placement/op_signals.json` — gitignored, and load-bearing in exactly
-the way the other runtime files are.
-
-Two things in it are load-bearing and easy to break:
-
-* **The stop's quantity is never modified** — only its trigger. It was placed
-  at one leg's worth and stays there, which is what keeps working sell
-  quantity equal to the position through every target fill.
-* **`_reconcile_orphans` every 30s** flattens any account left on the wrong
-  side of the contract. Nothing should be able to get there now, which is
-  exactly why it stays: it is the check that the invariant above still holds.
-
-Every leg is a normal `MineOrderStore` record with `strategy='op'` plus
-`signal_id` and `leg`, which is what keeps the price box, the ✕, the
-reconciliation sweep and Exit all working on signal legs with no special case.
-Do not "tidy" that into a store of its own.
+**P&L ledger.** Every market exit gets its own `leg='EXIT'` record (from
+`exit_selected_records`' new `exits` list), so the status sweep reads the
+fill back; once a flat slot's sells cover its entry — or 90 s have passed —
+`_book_slot` appends a row to `app/order_placement/tg_trades_history.json`
+(**tracked**, like the algos' trade histories) with `pnl_per_lot` (points ×
+lot size) beside `pnl` (× lots at that account). The engine keeps ticking
+until every flat slot is booked (`TgCallStore.get_unbooked`). The 📒 Auto P&L
+button on /orderplacement reads `GET /api/order-placement/tg-calls/history`.
+Tests: `tests/test_tg_call_engine.py`, `test_tg_calls_listener.py`,
+`test_tg_call_store.py`.
 
 ## Swing Momentum value graph
 

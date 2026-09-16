@@ -170,6 +170,30 @@
             </table>`;
     }
 
+    // A Telegram-call alert's payload is a small bag of facts (the parsed
+    // plan, the reason, the broker summary), not a signal list. Show it as
+    // key/value rows, with the original message text under it when there is
+    // one — that is what the user wants to check against the channel.
+    function renderTgCall(payload) {
+        const skip = new Set(['text', 'plan', 'summary']);
+        const flat = {};
+        Object.entries(payload.plan || {}).forEach(([k, v]) => { flat[k] = v; });
+        Object.entries(payload).forEach(([k, v]) => { if (!skip.has(k)) flat[k] = v; });
+        const rows = Object.entries(flat).map(([k, v]) => `
+            <tr>
+                <td class="notif-detail-label">${escapeHtml(k.replace(/_/g, ' '))}</td>
+                <td class="notif-detail-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : String(v ?? '—'))}</td>
+            </tr>`).join('');
+        const brokers = (payload.summary || []).map(r => `
+            <tr>
+                <td class="notif-detail-label">${escapeHtml(r.name || r.broker || '')}</td>
+                <td class="notif-detail-value">${r.success ? `x${escapeHtml(String(r.lots))} placed` : `refused: ${escapeHtml(r.error || '')}`}</td>
+            </tr>`).join('');
+        return `<table class="notif-detail-table">${rows}</table>`
+            + (brokers ? `<div class="notif-modal-section-title">Brokers</div><table class="notif-detail-table">${brokers}</table>` : '')
+            + (payload.text ? `<div class="notif-modal-section-title">Message</div><pre class="notif-pre">${escapeHtml(payload.text)}</pre>` : '');
+    }
+
     async function openDetail(id) {
         closeDropdown();
         try {
@@ -191,6 +215,8 @@
                 html = renderEmaEntry(payload);
             } else if (n.category === 'rs_big_print') {
                 html = renderBigPrint(payload);
+            } else if (String(n.category || '').startsWith('tg_call')) {
+                html = renderTgCall(payload);
             } else {
                 html += renderSignalTable('BUY signals', payload.buy);
                 html += renderSignalTable('SELL signals', payload.sell);

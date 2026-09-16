@@ -18,6 +18,12 @@ Mine/src/trading_app/app/utils/bot_orders.json
 Mine/src/trading_app/app/utils/rtp_opt_cache.json
 Mine/src/trading_app/app/utils/sm_opt_cache.json
 Mine/src/trading_app/app/order_placement/op_signals.json
+Mine/src/trading_app/app/order_placement/tg_calls.json
+
+# Telethon user session for the Telegram-call listener — a login credential,
+# like Mine.env. Back it up with Mine.env; never track it.
+Mine/env/*.session
+Mine/env/*.session-journal
 
 # Scratch / throwaway scripts
 Mine/scratch/
@@ -89,7 +95,6 @@ npm-debug.log
 logs/
 
 # Environment
-.env
 .env.local
 .env.*.local
 

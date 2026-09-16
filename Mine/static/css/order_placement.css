@@ -776,65 +776,7 @@
     }
 }
 
-/* ── signal mode ──────────────────────────────────────────────────────────
-   The pad's second mode. It reuses the contract fields above it and adds two
-   things: the pasted tip, and the ladder read out of it. */
-
-.op-seg-mode button[data-value="signal"].active {
-  background: var(--color-info, #3b82f6);
-  color: #fff;
-}
-
-.op-hint-err { color: var(--color-danger, #dc2626); }
-
-.op-ladder-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 8px;
-}
-
-.op-ladder-grid .op-field { margin: 0; }
-
-/* Every label is two lines, whether or not it has a sub-label. "Target 3" is
-   the only one long enough to wrap on its own, and letting it do that pushes
-   its input half a line below the rest of the row. */
-.op-ladder-grid label {
-  display: block;
-  min-height: 2.3em;
-  line-height: 1.15;
-}
-
-.op-ladder-grid .op-lab-sub { display: block; }
-
-/* .op-input is sized by the flex rows it normally sits in; dropped into a grid
-   cell it falls back to a number input's intrinsic width and spills out of its
-   column. min-width:0 is the half that matters — without it the cell refuses
-   to shrink below that intrinsic width and the whole grid widens. */
-.op-ladder-grid .op-input {
-  width: 100%;
-  min-width: 0;
-}
-
-/* Which numbers are which, without having to read the labels twice. */
-.op-in-sl { border-left: 3px solid var(--color-danger, #dc2626); }
-.op-in-tgt { border-left: 3px solid var(--color-success, #16a34a); }
-
-.op-lab-sub {
-  font-weight: 400;
-  opacity: .6;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-}
-
-/* Target 3 is the one leg with no order behind it. The label says so in the
-   form, and the review bar says it again before anything is armed. */
-.op-lab-watch {
-  color: var(--color-warning, #d97706);
-  opacity: 1;
-}
-
-/* ── live signals ─────────────────────────────────────────────────────── */
+/* ── Telegram calls ───────────────────────────────────────────────────── */
 
 .op-signals-wrap { margin-bottom: 4px; }
 
@@ -859,6 +801,22 @@
   margin-right: 5px;
   border-radius: 50%;
   background: currentColor;
+  vertical-align: middle;
+}
+
+/* The Telegram badge sits after the engine badge, not against the far edge. */
+.op-engine.op-tg { margin-left: 10px; }
+.op-engine.op-tg:empty { display: none; }
+.op-engine.op-tg.is-dry { opacity: 1; color: var(--color-warning, #d97706); }
+.op-engine.op-tg.is-off { opacity: 1; color: var(--color-danger, #dc2626); text-transform: none; }
+
+.op-sig--tg { border-left-color: var(--color-warning, #d97706); }
+.op-sig-src {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--color-warning, #d97706);
+  color: #fff;
   vertical-align: middle;
 }
 
@@ -892,10 +850,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.op-sig-phase,
-.op-sig-x { margin-left: auto; }
-
 .op-sig-phase {
+  margin-left: auto;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .05em;
@@ -936,7 +892,88 @@
 }
 
 @media (max-width: 600px) {
-  .op-ladder-grid { grid-template-columns: repeat(2, 1fr); }
   .op-sig-broker { flex-wrap: wrap; }
   .op-sig-bname { min-width: 0; }
+}
+
+/* ── Auto P&L popup ───────────────────────────────────────────────────── */
+/* display:flex would beat the hidden attribute's UA rule, so say it here. */
+.op-modal-overlay[hidden] { display: none; }
+.op-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 6vh 16px;
+    background: rgba(0, 0, 0, .45);
+}
+.op-modal {
+    width: min(960px, 100%);
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface, #fff);
+    color: var(--color-text, #111);
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 10px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, .3);
+}
+.op-modal-hd {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    font-weight: 700;
+    border-bottom: 1px solid var(--color-border, #e5e7eb);
+}
+.op-modal-days {
+    margin-left: auto;
+    font-size: 12px;
+    padding: 4px 6px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 6px;
+    background: var(--color-surface, #fff);
+    color: inherit;
+}
+.op-modal-x {
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 6px;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: .6;
+}
+.op-modal-x:hover { opacity: 1; }
+.op-modal-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    padding: 12px 14px 0;
+}
+.op-tile {
+    padding: 8px 10px;
+    border: 1px solid var(--color-border, #e5e7eb);
+    border-radius: 8px;
+}
+.op-tile-k {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    opacity: .6;
+}
+.op-tile-v { font-size: 16px; font-weight: 700; margin-top: 2px; }
+.op-tile-v.pos { color: var(--color-success, #16a34a); }
+.op-tile-v.neg { color: var(--color-danger, #dc2626); }
+.op-modal-body {
+    padding: 12px 14px 14px;
+    overflow: auto;
+}
+.op-modal-note { font-size: 12px; opacity: .7; margin: 0 0 8px; }
+@media (max-width: 600px) {
+    .op-modal-overlay { padding: 8px; }
+    .op-modal { max-height: 94vh; }
 }

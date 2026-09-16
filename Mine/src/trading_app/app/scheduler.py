@@ -281,40 +281,34 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
-        # Order Placement signal engine. Unlike every algo here it is armed by
-        # hand, not by the clock: these two jobs exist only so a signal armed
-        # yesterday-afternoon, or one left live across a restart, is picked up
-        # again. ensure_running is a no-op when nothing is armed, so on most
-        # days both of these do nothing at all.
+        # Telegram calls: the channel listener comes up before the open so the
+        # first call of the day is not missed, and the same watchdog shape
+        # brings back either thread (listener, call engine) if it dies.
         self.scheduler.add_job(
-            self._start_op_signal,
+            self._start_tg_calls,
             CronTrigger(
                 day_of_week='mon-fri',
                 hour=9,
-                minute=14,
+                minute=10,
                 second=0,
                 timezone='Asia/Kolkata',
             ),
-            id='op_signal_start',
-            name='Order Placement Signal Engine Start',
+            id='tg_calls_start',
+            name='Telegram Calls Listener Start',
             replace_existing=True,
             misfire_grace_time=120,
         )
-
-        # Watchdog: the engine thread stands itself down when the last signal
-        # closes, so this is both the crash recovery and the way a signal armed
-        # mid-session gets an engine if the arm route's own start was missed.
         self.scheduler.add_job(
-            self._watchdog_op_signal,
+            self._watchdog_tg_calls,
             CronTrigger(
                 day_of_week='mon-fri',
                 hour='9-15',
                 minute='*/5',
-                second=45,
+                second=15,
                 timezone='Asia/Kolkata',
             ),
-            id='op_signal_watchdog',
-            name='Order Placement Signal Engine Watchdog',
+            id='tg_calls_watchdog',
+            name='Telegram Calls Watchdog',
             replace_existing=True,
             misfire_grace_time=60,
         )
@@ -783,37 +777,34 @@ class MarketScheduler:
         """Every 5 minutes during market hours: restart TMF thread if it crashed."""
         self._ensure_tmf_running(source='Watchdog')
 
-    # ── Order Placement signal engine ────────────────────────────────────────
+    # ── Telegram calls ───────────────────────────────────────────────────────
 
-    def _ensure_op_signal_running(self, source: str = '') -> None:
-        """Start the Order Placement signal engine if a signal is live.
-
-        Deliberately unlike the algos around it. There is no market-hours
-        window check and no *_ALGO_ENABLED kill switch, because there is
-        nothing here to switch off: the engine only ever runs when the user has
-        armed a signal by hand, it manages only what that signal placed, and it
-        stands itself down when the last one closes. Refusing to start it
-        outside a window would strand a live position with a ladder nobody is
-        watching — which is the one outcome worse than it running.
-
-        ensure_running is idempotent and returns False when nothing is armed,
-        so calling this from a cron, a watchdog and startup recovery alike
-        costs nothing on a day with no signals.
-        """
+    def _ensure_tg_calls_running(self, source: str = '') -> None:
+        """The channel listener, then the call engine. Both are idempotent
+        and windowed inside themselves: the listener only runs 09:05–15:31 on
+        a weekday and only with TG_API_* set; the engine only when a call is
+        live. TG_CALLS_ACTIVE is deliberately NOT checked here — with it off
+        the listener still runs and reports every call it would have taken,
+        which is how the parse path is proved on real messages before the
+        first order."""
         try:
-            from trading_app.app.order_placement.op_signal_engine import ensure_running
+            from trading_app.app.order_placement import tg_calls_listener
+            tg_calls_listener.ensure_running(self._algo_username(), source=source)
+        except Exception as e:
+            logger.error(f"[TgCalls {source}] listener start failed: {e}", exc_info=True)
+        try:
+            from trading_app.app.order_placement.tg_call_engine import ensure_running
             ensure_running(self._algo_username(), source=source)
         except Exception as e:
-            logger.error(f"[OpSignal {source}] _ensure_op_signal_running failed: {e}",
-                         exc_info=True)
+            logger.error(f"[TgCalls {source}] engine start failed: {e}", exc_info=True)
 
-    def _start_op_signal(self) -> None:
-        """9:14 AM weekdays: pick up anything left armed."""
-        self._ensure_op_signal_running(source='Scheduler')
+    def _start_tg_calls(self) -> None:
+        """9:10 AM weekdays: connect to the channel before the open."""
+        self._ensure_tg_calls_running(source='Scheduler')
 
-    def _watchdog_op_signal(self) -> None:
-        """Every 5 minutes: restart the engine if it died with a signal live."""
-        self._ensure_op_signal_running(source='Watchdog')
+    def _watchdog_tg_calls(self) -> None:
+        """Every 5 minutes: bring back the listener or the engine if either died."""
+        self._ensure_tg_calls_running(source='Watchdog')
 
     # ── EMA Confluence Breakout algo management (paper trade, futures) ────────
 
@@ -1104,11 +1095,11 @@ def init_scheduler(app):
         market_scheduler._ensure_sc_running(source='Startup')
         market_scheduler._ensure_tmf_running(source='Startup')
         market_scheduler._ensure_ema_confluence_running(source='Startup')
-        # And the Order Placement signal engine, for the case this restart is
-        # exactly what it has to survive: a live position with a stop and two
-        # targets resting at the broker, and a plan on disk that nothing is
-        # reading until this line runs.
-        market_scheduler._ensure_op_signal_running(source='Startup')
+        # And the Telegram-call engine, for the case this restart is exactly
+        # what it has to survive: a live position with a stop resting at the
+        # broker and a plan on disk that nothing is reading until this line
+        # runs — plus the channel listener itself.
+        market_scheduler._ensure_tg_calls_running(source='Startup')
         # Self-heal for the jobs a late start would have missed: the 8 PM
         # historic OI record, plus the 4:00 PM FII sector snapshot and 4:05 PM
         # EMA Narrow prewarm. Runs off-thread so a slow NSE fetch never blocks

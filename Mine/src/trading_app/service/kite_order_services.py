@@ -822,10 +822,16 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place option order: {e}")
             return {'success': False, 'error': str(e)}
 
-    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML', transaction_type: str = 'SELL', tag: Optional[str] = None) -> Dict[str, Any]:
+    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML', transaction_type: str = 'SELL', tag: Optional[str] = None, limit_price: Optional[float] = None) -> Dict[str, Any]:
         # See place_option_order: `tag` is the caller's idempotency key.
+        #
+        # `limit_price` turns the stop into an SL (stop-limit): the trigger
+        # arms it, the limit caps what it pays. Market protection is a SL-M
+        # concept — Kite rejects it on a plain SL — so it is dropped there.
         try:
-            logging.info(f"[KiteService] Placing SL order: {transaction_type} {tradingsymbol} x {quantity} @ trigger {trigger_price} ({product})")
+            kind = 'SL' if limit_price else 'SL-M'
+            logging.info(f"[KiteService] Placing {kind} order: {transaction_type} {tradingsymbol} x {quantity} @ trigger {trigger_price}"
+                         + (f" limit {limit_price}" if limit_price else "") + f" ({product})")
             mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
             
             # Map string transaction_type to Kite constants
@@ -842,11 +848,12 @@ class KiteService:
                 exchange=exchange,
                 transaction_type=txn_const,
                 quantity=int(quantity),
-                order_type=self.kite.ORDER_TYPE_SLM,
+                order_type=self.kite.ORDER_TYPE_SL if limit_price else self.kite.ORDER_TYPE_SLM,
+                price=float(limit_price) if limit_price else None,
                 trigger_price=float(trigger_price),
                 product=mapped_product,
                 variety=self.kite.VARIETY_REGULAR,
-                market_protection=-1,  # -1 enables automatic market protection
+                market_protection=None if limit_price else -1,  # -1 enables automatic market protection
                 tag=tag
             )
             return {'success': True, 'order_id': order_id, 'response': {'order_id': order_id}}

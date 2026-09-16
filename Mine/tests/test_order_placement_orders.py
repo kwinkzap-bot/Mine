@@ -595,6 +595,89 @@ def test_the_shared_stop_dispatcher_reports_brokers_it_cannot_serve(monkeypatch)
                         'error': 'Stop orders are not supported for dhan yet'}]
 
 
+class _FakeKite:
+    """Enough of a kiteconnect client for KiteService to build an order."""
+    PRODUCT_NRML = 'NRML'; PRODUCT_MIS = 'MIS'
+    TRANSACTION_TYPE_BUY = 'BUY'; TRANSACTION_TYPE_SELL = 'SELL'
+    EXCHANGE_NFO = 'NFO'; EXCHANGE_BFO = 'BFO'
+    ORDER_TYPE_SL = 'SL'; ORDER_TYPE_SLM = 'SL-M'
+    VARIETY_REGULAR = 'regular'
+
+    def __init__(self):
+        self.posted = []
+
+    def _post(self, route, url_args=None, params=None):
+        self.posted.append(params)
+        return {'order_id': 'K1'}
+
+
+@pytest.fixture
+def kite_slot(monkeypatch):
+    """One Zerodha slot backed by the fake client above; the tradingsymbol
+    lookup is pinned so no instrument dump is read."""
+    env = {'BROKER_1_TYPE': 'zerodha', 'BROKER_1_ACTIVE': 'true'}
+    monkeypatch.setattr(
+        'trading_app.app.utils.user_env.UserEnvManager.get_user_var',
+        staticmethod(lambda username, var, default='': env.get(var, default)))
+    kite = _FakeKite()
+    monkeypatch.setattr(api, 'get_kite', lambda *a, **k: kite)
+    monkeypatch.setattr('trading_app.service.kite_order_services.KiteService.get_option_symbol',
+                        lambda self, symbol, strike, opt, **k: f'{symbol}25SEP{strike}{opt}')
+    return kite
+
+
+def test_the_shared_stop_dispatcher_places_a_stop_limit_when_given_a_limit(kite_slot):
+    """The Telegram-call entry: trigger arms it, the limit caps it. Market
+    protection is an SL-M concept and Kite rejects it on a plain SL."""
+    results = api.dispatch_stop_to_brokers(
+        symbol='NIFTY', strike=23150, option_type='CE', trigger_price=81,
+        action='BUY', username='u', session_data={}, standard_lot=75,
+        gate=lambda i, b_type: True, lots_for=lambda i: 2, limit_price=81.85)
+
+    assert results[0]['success'] is True
+    assert results[0]['order_type'] == 'SL'
+    assert results[0]['quantity'] == 150
+    sent = kite_slot.posted[0]
+    assert sent['order_type'] == 'SL'
+    assert sent['price'] == 81.85
+    assert sent['trigger_price'] == 81.0
+    assert sent['transaction_type'] == 'BUY'
+    assert 'market_protection' not in sent
+
+
+def test_the_shared_stop_dispatcher_is_still_sl_m_without_a_limit(kite_slot):
+    results = api.dispatch_stop_to_brokers(
+        symbol='NIFTY', strike=23150, option_type='CE', trigger_price=65,
+        action='SELL', username='u', session_data={}, standard_lot=75,
+        gate=lambda i, b_type: True, lots_for=lambda i: 1)
+
+    assert results[0]['order_type'] == 'SL-M'
+    sent = kite_slot.posted[0]
+    assert sent['order_type'] == 'SL-M'
+    assert 'price' not in sent
+    assert sent['market_protection'] == -1
+
+
+def test_the_fyers_stop_symbol_is_the_nearest_contract_not_the_monthly(monkeypatch):
+    """FyersOrderService.get_option_symbol builds the current-month name from
+    the calendar, which is the wrong contract on every weekly expiry. The
+    stop branch now resolves through the Kite instrument dump like the
+    order dispatcher does, and only falls back to the guess without a Kite."""
+    class Svc:
+        def get_option_symbol(self, symbol, strike, opt):
+            return f'NSE:{symbol}25SEP{strike}{opt}'      # the monthly guess
+
+    monkeypatch.setattr('trading_app.service.kite_order_services.KiteService.get_option_symbol',
+                        lambda self, symbol, strike, opt, **k: f'{symbol}2591623150{opt}')
+
+    monkeypatch.setattr(api, 'get_kite', lambda *a, **k: object())
+    assert api._fyers_option_symbol(Svc(), 'NIFTY', 23150, 'CE') == 'NSE:NIFTY2591623150CE'
+    assert api._fyers_option_symbol(Svc(), 'SENSEX', 81000, 'PE') == 'BSE:SENSEX2591623150PE'
+
+    monkeypatch.setattr(api, 'get_kite', lambda *a, **k: None)
+    assert api._fyers_option_symbol(Svc(), 'NIFTY', 23150, 'CE') == 'NSE:NIFTY25SEP23150CE'
+
+
 def test_the_oi_profile_stop_route_still_gates_and_sizes_as_it_did(client, store, monkeypatch):
     """The OI Profile stop buttons share the dispatcher this page uses now.
 
@@ -696,10 +779,10 @@ def test_the_direction_rule_itself(client=None):
     assert op.stop_direction_error('BUY', 130, 0) is None
 
 
-# ── signal legs are ordinary orders ──────────────────────────────────────
-# The whole point of writing every signal leg as a strategy='op' record is that
+# ── a Telegram call's legs are ordinary orders ───────────────────────────
+# The whole point of writing every engine leg as a strategy='op' record is that
 # the routes above need no case for them. These are the tests that say so — if
-# one of them starts failing, a signal's stop has stopped being editable or
+# one of them starts failing, a call's stop has stopped being editable or
 # stopped being reachable by Exit all, which is worse than the feature not
 # existing.
 
@@ -707,8 +790,8 @@ def signal_leg(store, leg='SL', **over):
     record = {'symbol': 'NIFTY', 'strike': 24850, 'option_type': 'CE',
               'action': 'SELL', 'strategy': 'op', 'order_type': 'SL-M',
               'type': 'SL-M', 'price': 175.0, 'trigger_price': 175.0,
-              'quantity': 225, 'status': 'OPEN', 'source': 'orderplacement',
-              'signal_id': 'sig-abc123', 'leg': leg,
+              'quantity': 225, 'status': 'OPEN', 'source': 'telegram',
+              'signal_id': 'tg-abc123', 'leg': leg,
               'broker_order_ids': [{'broker': 'zerodha', 'instance': 1,
                                     'result': {'success': True, 'order_id': 'x1'}}]}
     record.update(over)
@@ -770,11 +853,11 @@ def test_exit_all_stands_the_engine_down_as_well_as_cancelling(client, env, stor
         return 3
 
     monkeypatch.setattr(
-        'trading_app.app.order_placement.op_signal_engine.stop_all_signals', stop_all)
+        'trading_app.app.order_placement.tg_call_engine.stop_all_calls', stop_all)
 
     res = client.post('/api/order-placement/exit-all')
     assert res.status_code == 200
-    assert res.get_json()['signals_stopped'] == 3
+    assert res.get_json()['tg_calls_stopped'] == 3
     assert called['reason'] == 'Exit all'
 
 

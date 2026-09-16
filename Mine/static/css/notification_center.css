@@ -258,3 +258,14 @@
 
 .notif-detail-pos { color: var(--color-pos, #16a34a); }
 .notif-detail-neg { color: var(--color-neg, #dc2626); }
+
+/* The original Telegram message under a tg_call_* alert, as it was posted. */
+.notif-pre {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg-secondary, #f7f7f7);
+    border-radius: 6px;
+}

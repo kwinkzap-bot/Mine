@@ -87,8 +87,6 @@
         orderType: 'SL-M',
         armed: false,       // the review bar is showing the order about to go
         bookSig: null,
-        mode: 'signal',     // 'signal' arms a ladder; 'single' places one order
-        plan: null,         // the last server reading of the pasted tip
         signalSig: null,
     };
 
@@ -439,8 +437,7 @@
         state.armed = false;
         $('opConfirm').hidden = true;
         $('opConfirmSend').disabled = false;
-        $('opConfirmSend').textContent =
-            state.mode === 'signal' ? 'Arm signal' : 'Place order';
+        $('opConfirmSend').textContent = 'Place order';
     }
 
     async function send() {
@@ -481,292 +478,184 @@
         }
     }
 
-    // ── signal mode ──────────────────────────────────────────────────
-    // A tip pasted here becomes one entry stop and a plan. Nothing on this
-    // side parses the text or decides whether it is armable: both are asked of
-    // /signal/parse, because this page is one caller of the arm route and a
-    // parser bug here would be a live order at the wrong strike.
-
     /** The active button's value in one of the pad's segments. */
     function segValue(hostId) {
         return $(hostId).querySelector('button.active')?.dataset.value || '';
     }
 
-    /** Set a segment from the parsed tip, through its own click handler so the
-     *  state it keeps and the redraws it triggers all happen as usual. */
-    function setSeg(hostId, value) {
-        const btn = [...$(hostId).querySelectorAll('button')]
-            .find(b => b.dataset.value === value);
-        if (btn && !btn.classList.contains('active')) btn.click();
-    }
-
-    const SIG_FIELDS = { entry: 'opSigEntry', stop: 'opSigStop' };
-    const SIG_TARGETS = ['opSigT1', 'opSigT2', 'opSigT3'];
-
-    function setMode(mode) {
-        state.mode = mode === 'signal' ? 'signal' : 'single';
-        const signal = state.mode === 'signal';
-        document.querySelectorAll('.op-signal-only')
-            .forEach(el => { el.hidden = !signal; });
-        document.querySelectorAll('.op-single-only')
-            .forEach(el => { el.hidden = signal; });
-        if (!signal) renderPriceField();          // it owns its own hidden state
-        $('opMode').querySelectorAll('button').forEach(b =>
-            b.classList.toggle('active', b.dataset.value === state.mode));
-        $('opPlace').textContent = signal ? 'Review signal' : 'Review order';
-        document.body.classList.toggle('op-signal-mode', signal);
-        // Never carry a half-typed ticket across a mode switch: what the
-        // review bar is showing is not what the other mode would send.
-        disarm();
-        setMsg('');
-        if (signal) readSignal();
-    }
-
-    /** The ladder as it stands on screen. */
-    function signalForm() {
-        const num = id => {
-            const v = parseFloat($(id).value);
-            return Number.isFinite(v) && v > 0 ? v : null;
-        };
-        const targets = SIG_TARGETS.map(num).filter(v => v !== null);
-        return {
-            symbol: $('opSymbol').value,
-            strike: parseInt($('opStrike').value, 10) || null,
-            option_type: segValue('opOptionType'),
-            action: segValue('opAction'),
-            entry: num(SIG_FIELDS.entry),
-            stop: num(SIG_FIELDS.stop),
-            targets: targets.length ? targets : null,
-        };
-    }
-
-    /** Ask the server what the ticket would do, and why it would refuse it.
-     *
-     *  Every check lives on the server, not here: this page is one caller of
-     *  the arm route, and a rule enforced only in this file is a rule a bad
-     *  request walks straight past.
-     */
-    async function readSignal() {
-        if (state.mode !== 'signal') return;
-        const payload = signalForm();
-        if (!payload.entry) {
-            $('opSignalRead').textContent = '';
-            $('opSignalPlan').textContent = '';
-            state.plan = null;
-            return;
-        }
-
-        try {
-            const res = await fetch(`${API}/signal/parse`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
-                body: JSON.stringify(payload),
-            });
-            const r = await res.json();
-            if (!r.success) {
-                state.plan = null;
-                $('opSignalRead').textContent = r.error || 'Could not read that';
-                $('opSignalRead').className = 'op-hint op-hint-err op-signal-only';
-                $('opSignalPlan').textContent = '';
-                return;
-            }
-            state.plan = r;
-
-            const p = r.plan || {};
-            $('opSignalRead').textContent =
-                `${p.action} ${p.symbol} ${p.strike} ${p.option_type}`
-                + (p.expiry ? ` · ${p.expiry}` : '')
-                + (r.ltp ? ` · premium ₹${money(r.ltp)}` : '');
-            $('opSignalRead').className = 'op-hint op-signal-only';
-            renderSignalPlan(r);
-        } catch (e) {
-            $('opSignalRead').textContent = e.message;
-            $('opSignalRead').className = 'op-hint op-hint-err op-signal-only';
-        }
-    }
-
-    /** What arming would do, per broker — and why it would not. */
-    function renderSignalPlan(r) {
-        const el = $('opSignalPlan');
-        if (r.error) {
-            el.innerHTML = `<span class="op-hint-err">${esc(r.error)}</span>`;
-            return;
-        }
-        const ready = (r.brokers || []).filter(b => b.signal_ready);
-        if (!ready.length) {
-            el.innerHTML = '<span class="op-hint-err">No broker is sized for signal mode — '
-                + 'set <code>BROKER_N_OP_SIGNAL_LOTS</code></span>';
-            return;
-        }
-        const where = ready.map(b =>
-            `${esc(b.name)} <em>${esc(b.signal_entry_lots)} lots</em>`).join(' · ');
-        const per = ready.length === 1 ? `${esc(ready[0].signal_lots)} lot` : 'one leg';
-        // Spelled out because the sizing is the part that surprises: the stop
-        // is a leg like the targets, not cover for the whole position.
-        el.innerHTML =
-            `Entry stop now at ${where}. On fill it becomes three equal orders of `
-            + `${per} each — stop, target 1, target 2 — so nothing more than the `
-            + `position is ever offered for sale. Target 3 `
-            + `(₹${money(r.target_3_watched)}) rides with the stop and is watched `
-            + `by the app.`;
-    }
-
-    async function reviewSignal() {
-        await readSignal();
-        const r = state.plan;
-        if (!r) { setMsg('Paste a signal first', 'err'); return; }
-        if (r.error) { setMsg(r.error, 'err'); return; }
-
-        const p = r.plan || {};
-        const ready = (r.brokers || []).filter(b => b.signal_ready);
-        const t = p.targets || [];
-        $('opConfirmText').innerHTML =
-            `<b class="op-${String(p.action).toLowerCase()}">${esc(p.action)}</b> `
-            + `${esc(p.symbol)} ${esc(p.strike)} ${esc(p.option_type)} · `
-            + `STOP ENTRY — triggers at ₹${money(p.entry)}<br>`
-            + `<span class="op-confirm-where">Going out now: the entry only, at `
-            + `${ready.map(b => `${esc(b.name)} ×${esc(b.signal_entry_lots)}`).join(', ')}.</span>`
-            + `<span class="op-confirm-where">On fill, three equal orders: stop `
-            + `₹${money(p.stop)}, T1 ₹${money(t[0])}, T2 ₹${money(t[1])}. `
-            + `T3 ₹${money(t[2])} rides with the stop, watched by the app. A stop `
-            + `hit cancels the targets and exits the rest at market.</span>`;
-        $('opConfirm').hidden = false;
-        $('opConfirmSend').textContent = 'Arm signal';
-        state.armed = true;
-        setMsg('');
-        $('opConfirmSend').focus();
-    }
-
-    async function sendSignal() {
-        const btn = $('opConfirmSend');
-        btn.disabled = true;
-        btn.textContent = 'Arming…';
-        try {
-            const res = await fetch(`${API}/signal`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
-                body: JSON.stringify(signalForm()),
-            });
-            const r = await res.json();
-            if (!r.success) throw new Error(r.error || 'Signal refused');
-            disarm();
-            const ok = (r.summary || []).filter(b => b.success);
-            setMsg(`Signal armed — entry stop resting at ${ok.length} broker`
-                   + `${ok.length === 1 ? '' : 's'}. The stop and targets go on when it fills.`,
-                   'ok');
-            toast('Signal armed', 'success');
-            state.signalSig = state.bookSig = null;
-            loadSignals();
-            loadBook();
-        } catch (e) {
-            btn.disabled = false;
-            btn.textContent = 'Retry';
-            setMsg(e.message, 'err');
-        }
-    }
-
-    // ── live signals ─────────────────────────────────────────────────
+    // ── Telegram calls ───────────────────────────────────────────────
+    // The automatic trades, above the strip rather than inside it: a call's
+    // legs are ordinary orders and still appear below, but which orders
+    // belong to which trade is not something a flat list can show. Cards are
+    // read-only — a call has no arm route and no Stand down; its legs are
+    // ordinary orders, so the strip's ✕ and Exit all are the way out.
 
     const STAGE_TEXT = {
         PENDING_ENTRY: 'waiting for the trigger',
-        LIVE: 'in — stop and targets working',
-        T1_DONE: 'target 1 booked · stop at entry',
-        T2_DONE: 'target 2 booked · stop at target 1',
+        LIVE: 'in — stop working, T1 watched',
         FLAT: 'out',
         NO_FILL: 'never triggered',
         DEAD: 'refused',
     };
 
-    function signalCard(s) {
-        const slots = Object.values(s.brokers || {});
+    function callCard(c) {
+        const slots = Object.values(c.brokers || {});
         const live = slots.filter(b => !['FLAT', 'NO_FILL', 'DEAD'].includes(b.stage));
-        const t = s.targets || [];
         const rows = slots.map(b => {
-            const stage = STAGE_TEXT[b.stage] || String(b.stage || '').toLowerCase();
+            const stage = (b.stage === 'FLAT' && b.exit_reason) ? `out · ${b.exit_reason}`
+                : STAGE_TEXT[b.stage] || String(b.stage || '').toLowerCase();
             const fill = b.entry_fill ? ` · in at ₹${money(b.entry_fill)}` : '';
             const held = b.open_qty ? ` · ${esc(b.open_qty)} held` : '';
-            const stop = b.stop_level ? ` · stop ₹${money(b.stop_level)}` : '';
+            const pnl = b.booked && b.pnl != null
+                ? ` · <b class="${b.pnl >= 0 ? 'op-buy' : 'op-sell'}">${esc(DataGrid.inr(b.pnl))}</b>`
+                  + ` (${esc(DataGrid.inr(b.pnl_per_lot))}/lot)` : '';
             return `<div class="op-sig-broker op-sig-${esc(String(b.stage || '').toLowerCase())}">`
                  + `<span class="op-sig-bname">${esc(b.name || `Broker ${b.instance}`)}</span>`
-                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${stop}</span></div>`;
+                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${pnl}</span></div>`;
         }).join('');
 
-        const done = ['DONE', 'CANCELLED', 'FAILED'].includes(s.phase);
-        return `<article class="op-sig${done ? ' op-sig--done' : ''}" data-id="${esc(s.id)}">`
+        const done = ['DONE', 'CANCELLED', 'FAILED', 'SKIPPED'].includes(c.phase);
+        return `<article class="op-sig op-sig--tg${done ? ' op-sig--done' : ''}" data-id="${esc(c.id)}">`
             + `<header class="op-sig-hd">`
-            + `<span class="op-sig-contract">${esc(s.action)} ${esc(s.symbol)} `
-            + `${esc(s.strike)}${esc(s.option_type)}</span>`
-            + `<span class="op-sig-ladder">₹${money(s.entry)} · SL ₹${money(s.stop)} · `
-            + `${t.map(v => `₹${money(v)}`).join(' → ')}</span>`
-            + (done
-                ? `<span class="op-sig-phase">${esc(String(s.phase).toLowerCase())}</span>`
-                : `<button class="op-btn op-btn-danger op-btn-sm op-sig-x" type="button"
-                           title="Cancel this signal's resting legs and square off what it holds"
-                           >Stand down</button>`)
+            + `<span class="op-sig-contract"><span class="op-sig-src">TG</span> `
+            + `${esc(c.action)} ${esc(c.symbol)} ${esc(c.strike)}${esc(c.option_type)}</span>`
+            + `<span class="op-sig-ladder">trigger ₹${money(c.entry)} · limit ₹${money(c.limit)} · `
+            + `SL ₹${money(c.stop)} · T1 ₹${money(c.target)} (watched)</span>`
+            + `<span class="op-sig-phase">${esc(String(c.phase).toLowerCase())}</span>`
             + `</header>${rows}`
             + (live.length ? '' : '<p class="op-sig-note">Nothing left working.</p>')
             + `</article>`;
     }
 
-    async function loadSignals() {
-        let data;
-        try {
-            const res = await fetch(`${API}/signals`);
-            if (!res.ok) return;
-            data = await res.json();
-        } catch (_) { return; }
-        if (!data.success) return;
+    // What the Telegram badge says, from the status route. Off means the
+    // master switch is off — the listener may still be up, reporting calls it
+    // would have taken; that is the dry run, and the badge says so.
+    function tgBadge(tg) {
+        if (!tg) return ['', ''];
+        const l = tg.listener || {};
+        if (l.running && l.connected) return [tg.active ? 'TG live' : 'TG dry run', tg.active ? ' is-on' : ' is-dry'];
+        if (l.running) return ['TG connecting', ''];
+        // The first clause only; the whole error is in the badge's tooltip.
+        if (l.last_error) return ['TG: ' + String(l.last_error).split(/[.—]/)[0].trim().toLowerCase(), ' is-off'];
+        return ['', ''];
+    }
 
-        const signals = data.signals || [];
+    async function loadSignals() {
+        let tg;
+        try {
+            const res = await fetch(`${API}/tg-calls`);
+            if (!res.ok) return;
+            tg = await res.json();
+        } catch (_) { return; }
+        if (!tg.success) return;
+
+        const calls = (tg.calls || []).slice()
+            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        const [tgText, tgClass] = tgBadge(tg);
         // Same redraw guard as the book: a card rebuilt under a press eats it.
-        const sig = JSON.stringify([data.engine_running, signals.map(s =>
-            [s.id, s.phase, Object.values(s.brokers || {}).map(b => [b.stage, b.open_qty,
-                                                                    b.stop_level])])]);
+        const sig = JSON.stringify([tg.engine_running, tgText, calls.map(c =>
+            [c.id, c.phase, Object.values(c.brokers || {}).map(b => [b.stage, b.open_qty, b.booked])])]);
         if (sig === state.signalSig) return;
         state.signalSig = sig;
 
-        $('opSignalsWrap').hidden = !signals.length;
-        $('opSignalCount').textContent = signals.length;
-        const running = data.engine_running;
+        $('opSignalsWrap').hidden = !(calls.length || tgText);
+        $('opSignalCount').textContent = calls.length;
+        const running = tg.engine_running;
         $('opEngine').textContent = running ? 'watching' : '';
         $('opEngine').className = 'op-engine' + (running ? ' is-on' : '');
-        $('opSignals').innerHTML = signals.map(signalCard).join('');
+        $('opTg').textContent = tgText;
+        $('opTg').className = 'op-engine op-tg' + tgClass;
+        const l = tg.listener || {};
+        $('opTg').title = l.last_error ? l.last_error
+            : l.channel_title ? `Listening to ${l.channel_title}` : 'Telegram calls';
+        $('opSignals').innerHTML = calls.map(callCard).join('');
     }
 
-    async function standDown(btn) {
-        const card = btn.closest('.op-sig');
-        // Two presses, like every other way out of a position on this page.
-        if (btn.dataset.armed !== '1') {
-            btn.dataset.armed = '1';
-            btn.textContent = 'Confirm?';
-            btn.classList.add('op-armed');
-            setTimeout(() => {
-                if (!btn.isConnected || btn.dataset.armed !== '1') return;
-                btn.dataset.armed = '0';
-                btn.textContent = 'Stand down';
-                btn.classList.remove('op-armed');
-            }, 3000);
+    // ── the auto-trader's P&L ledger ─────────────────────────────────
+    // One row per closed Telegram call per broker. The per-lot figure is the
+    // one to read across accounts of different size; the total is that
+    // times the lots the account traded.
+
+    const dt = ms => ms ? new Date(ms).toLocaleTimeString('en-IN',
+        { hour: '2-digit', minute: '2-digit' }) : '—';
+
+    function tile(label, value, tone) {
+        return `<div class="op-tile"><div class="op-tile-k">${esc(label)}</div>`
+             + `<div class="op-tile-v${tone ? ' ' + tone : ''}">${value}</div></div>`;
+    }
+
+    function openTgPnl() {
+        $('opTgPnlModal').hidden = false;
+        loadTgPnl();
+    }
+
+    function closeTgPnl() {
+        $('opTgPnlModal').hidden = true;
+    }
+
+    async function loadTgPnl() {
+        const days = $('opTgPnlDays').value;
+        $('opTgPnlBody').innerHTML = '<p class="op-modal-note">Loading…</p>';
+        let data;
+        try {
+            const res = await fetch(`${API}/tg-calls/history?days=${encodeURIComponent(days)}`);
+            data = await res.json();
+        } catch (e) {
+            data = { success: false, error: e.message };
+        }
+        if (!data.success) {
+            $('opTgPnlTiles').innerHTML = '';
+            $('opTgPnlBody').innerHTML = `<p class="op-modal-note">${esc(data.error || 'Unavailable')}</p>`;
             return;
         }
-        btn.disabled = true;
-        btn.textContent = 'Standing down…';
-        try {
-            const res = await fetch(`${API}/signals/${card.dataset.id}/cancel`,
-                                    { method: 'POST', headers: { 'X-CSRFToken': csrf() } });
-            const r = await res.json();
-            toast(r.success
-                ? `Signal stood down — ${r.cancelled_orders} cancelled, `
-                  + `${r.exited_positions} squared off`
-                : (r.error || 'Stand-down incomplete'), r.success ? 'success' : 'error');
-        } catch (e) {
-            toast(e.message, 'error');
-        }
-        state.signalSig = state.bookSig = null;
-        loadSignals();
-        loadBook();
-    }
 
-    // ── the book: what this page placed, still on this page ──────────
+        const t = data.totals || {};
+        const hit = t.booked ? Math.round(100 * t.wins / t.booked) : null;
+        $('opTgPnlTiles').innerHTML = [
+            tile('P&L per lot', DataGrid.inr(t.pnl_per_lot), DataGrid.sign(t.pnl_per_lot)),
+            tile('P&L total', DataGrid.inr(t.pnl), DataGrid.sign(t.pnl)),
+            tile('Avg / lot / trade', DataGrid.inr(t.avg_per_lot), DataGrid.sign(t.avg_per_lot)),
+            tile('Trades', `${esc(t.trades)}${t.incomplete ? ` <small>(${esc(t.incomplete)} unpriced)</small>` : ''}`),
+            tile('Win / loss', `${esc(t.wins)} / ${esc(t.losses)}${hit === null ? '' : ` <small>${hit}%</small>`}`),
+            tile('Lots traded', esc(t.lots)),
+        ].join('');
+
+        const rows = data.rows || [];
+        $('opTgPnlBody').innerHTML = '<div id="opTgPnlGrid"></div>';
+        DataGrid.mountSortable('opTgPnlGrid', {
+            rows,
+            empty: 'No automatic trades closed in this window.',
+            columns: [
+                { key: 'date', label: 'Date', sortable: true, strong: true },
+                { key: 'filled_at', label: 'In', format: v => dt(v) },
+                { key: 'flat_at', label: 'Out', format: v => dt(v) },
+                { key: 'symbol', label: 'Contract', sortable: true, strong: true,
+                  format: (v, r) => `${r.symbol} ${r.strike}${r.option_type}` },
+                { key: 'name', label: 'Broker', sortable: true },
+                { key: 'lots', label: 'Lots', align: 'right', sortable: true },
+                { key: 'entry_price', label: 'Entry', align: 'right', format: v => v == null ? '—' : money(v) },
+                { key: 'exit_price', label: 'Exit', align: 'right', format: v => v == null ? '—' : money(v) },
+                { key: 'points', label: 'Points', align: 'right', sortable: true,
+                  format: v => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2),
+                  tone: DataGrid.sign },
+                { key: 'pnl_per_lot', label: 'P&L / lot', align: 'right', strong: true, sortable: true,
+                  format: DataGrid.inr, tone: DataGrid.sign },
+                { key: 'pnl', label: 'P&L', align: 'right', strong: true, sortable: true,
+                  format: DataGrid.inr, tone: DataGrid.sign },
+                { key: 'exit_reason', label: 'Exit', sortable: true,
+                  format: (v, r) => (v || '—') + (r.complete === false ? ' (unpriced)' : ''),
+                  tone: (v, r) => r.complete === false ? 'warn' : '' },
+            ],
+            foot: [
+                { label: 'Total', colspan: 5 },
+                { label: esc(t.lots), align: 'right' },
+                { label: '', colspan: 3 },
+                { label: DataGrid.inr(t.pnl_per_lot), align: 'right', tone: DataGrid.sign(t.pnl_per_lot) },
+                { label: DataGrid.inr(t.pnl), align: 'right', tone: DataGrid.sign(t.pnl) },
+                { label: '' },
+            ],
+        });
+    }
 
     async function fetchBook() {
         try {
@@ -1015,15 +904,12 @@
     function init() {
         if (!$('opPlace')) return;
 
-        const reread = () => state.scheduleSignalRead && state.scheduleSignalRead();
-
         segment('opOptionType', v => {
             state.optionType = v;
             state.ltp = null;
             $('opLtpHint').textContent = '';
             renderContract();
             disarm();
-            reread();
         });
         segment('opAction', v => {
             state.action = v;
@@ -1031,7 +917,6 @@
             // hint under the trigger has to follow the side.
             renderPriceField();
             disarm();
-            reread();
         });
         segment('opOrderType', v => {
             state.orderType = v;
@@ -1061,37 +946,11 @@
         $('opLtp').addEventListener('click', fillLtp);
         $('opLimitPrice').addEventListener('input', disarm);
 
-        // Both presses route by mode. Neither review() nor reviewSignal() can
-        // reach a broker; only the second press does, and only through the one
-        // sender its own mode owns.
-        $('opPlace').addEventListener('click',
-            () => (state.mode === 'signal' ? reviewSignal() : review()));
+        // Two presses, always: review() cannot reach a broker; only send()
+        // does, and only from the review bar it shows.
+        $('opPlace').addEventListener('click', review);
         $('opConfirmCancel').addEventListener('click', () => { disarm(); setMsg(''); });
-        $('opConfirmSend').addEventListener('click',
-            () => (state.mode === 'signal' ? sendSignal() : send()));
-
-        segment('opMode', setMode);
-
-        // Debounced: every keystroke otherwise costs a quote and a chain read,
-        // against a request budget shared with the chart feeds.
-        let readTimer = null;
-        const scheduleRead = () => {
-            clearTimeout(readTimer);
-            readTimer = setTimeout(readSignal, 350);
-        };
-        state.scheduleSignalRead = scheduleRead;
-        [SIG_FIELDS.entry, SIG_FIELDS.stop, ...SIG_TARGETS].forEach(id =>
-            $(id).addEventListener('input', () => { disarm(); scheduleRead(); }));
-        // The contract is half the ticket. Changing the strike or the side has
-        // to re-run the checks too, or the pad goes on showing a plan for the
-        // contract it was on a moment ago.
-        $('opStrike').addEventListener('input', scheduleRead);
-        $('opSymbol').addEventListener('change', scheduleRead);
-
-        $('opSignals').addEventListener('click', (e) => {
-            const btn = e.target.closest('.op-sig-x');
-            if (btn) standDown(btn);
-        });
+        $('opConfirmSend').addEventListener('click', send);
 
         // Enter never places an order: it only ever gets as far as the review
         // bar, which is the same first press the button gives.
@@ -1099,7 +958,7 @@
             if (e.key !== 'Enter') return;
             if (e.target.closest('.op-confirm')) return;
             e.preventDefault();
-            if (state.mode === 'signal') reviewSignal(); else review();
+            review();
         });
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
@@ -1147,6 +1006,17 @@
             try { localStorage.setItem(CHROME_KEY, hidden ? '1' : '0'); } catch (_) { /* not fatal */ }
         });
 
+        // ── Auto P&L popup ───────────────────────────────────────────
+        $('opTgPnl').addEventListener('click', () => openTgPnl());
+        $('opTgPnlClose').addEventListener('click', closeTgPnl);
+        $('opTgPnlModal').addEventListener('click', e => {
+            if (e.target === $('opTgPnlModal')) closeTgPnl();
+        });
+        $('opTgPnlDays').addEventListener('change', () => loadTgPnl());
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && !$('opTgPnlModal').hidden) closeTgPnl();
+        });
+
         $('opReload').addEventListener('click', () => {
             state.bookSig = state.signalSig = null;
             loadConfig();
@@ -1155,9 +1025,7 @@
             loadSignals();
         });
 
-        // Paints the default mode's fields and disarms — the markup already
-        // ships in this state, so this is about state, not a redraw.
-        setMode(state.mode);
+        renderPriceField();
         loadConfig().then(loadContract);
         loadBook();
         loadSignals();
