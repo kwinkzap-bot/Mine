@@ -114,6 +114,74 @@ def test_the_listener_does_not_start_outside_the_window(env, monkeypatch):
     assert listener.is_running() is False
 
 
+# ── edits and deletions follow a call that is already in ─────────────────
+
+@pytest.fixture
+def followups(monkeypatch):
+    calls = {'amend': [], 'retract': []}
+    monkeypatch.setattr(engine, 'amend_call',
+                        lambda u, cid, plan, meta=None: calls['amend'].append((cid, plan, meta)))
+    monkeypatch.setattr(engine, 'retract_call',
+                        lambda u, cid, reason='': calls['retract'].append((cid, reason)))
+    monkeypatch.setattr(listener, '_FOLLOW_UP_WAIT_SECS', 0)
+    return calls
+
+
+def _taken_call(chat=CHAT, msg_id=5):
+    from trading_app.app.order_placement.tg_call_store import TgCallStore
+    return TgCallStore.create({'chat_id': chat, 'message_id': msg_id, 'phase': 'ENTRY_PENDING',
+                               'brokers': {}})
+
+
+def test_an_edit_to_a_taken_call_amends_it(env, followups):
+    c = _taken_call()
+    text = CALL.replace('SL : 65', 'SL : 70')
+    assert listener.handle_edited(USER, CHAT, 5, text, spawn=False) == 'edit handled'
+    (cid, plan, meta), = followups['amend']
+    assert cid == c['id'] and plan['stop'] == 70.0 and meta['message_id'] == 5
+
+
+def test_an_edit_to_a_message_that_was_never_a_call_is_ignored(env, followups):
+    _taken_call(msg_id=5)
+    listener.handle_edited(USER, CHAT, 6, CALL, spawn=False)      # a different message
+    assert followups['amend'] == []
+
+
+def test_an_edit_that_no_longer_parses_still_reaches_the_engine_to_say_so(env, followups):
+    c = _taken_call()
+    listener.handle_edited(USER, CHAT, 5, 'exit at cost', spawn=False)
+    (cid, plan, _), = followups['amend']
+    assert cid == c['id'] and 'error' in plan
+
+
+def test_deleting_a_taken_call_withdraws_it(env, followups):
+    c = _taken_call()
+    _taken_call(msg_id=6)
+    listener.handle_deleted(USER, CHAT, [5, 99], spawn=False)
+    assert followups['retract'] == [(c['id'], 'message deleted')]
+
+
+def test_a_deletion_without_a_chat_matches_on_the_message_id(env, followups):
+    c = _taken_call()
+    listener.handle_deleted(USER, None, [5], spawn=False)
+    assert followups['retract'] == [(c['id'], 'message deleted')]
+
+
+def test_a_follow_up_waits_for_a_call_still_being_placed(env, followups, monkeypatch):
+    """The channel edits seconds after posting; the entry may still be on
+    its way to the broker. The follow-up waits for the call to appear."""
+    monkeypatch.setattr(listener, '_FOLLOW_UP_WAIT_SECS', 5)
+    ticks = {'n': 0}
+
+    def fake_sleep(_):
+        ticks['n'] += 1
+        if ticks['n'] == 2:
+            _taken_call()                                  # placement lands now
+    monkeypatch.setattr(listener.time, 'sleep', fake_sleep)
+    listener.handle_edited(USER, CHAT, 5, CALL, spawn=False)
+    assert len(followups['amend']) == 1 and ticks['n'] == 2
+
+
 # ── the read-only status route ───────────────────────────────────────────
 
 def test_the_status_route_reports_listener_engine_and_targets(env, monkeypatch, tmp_path):

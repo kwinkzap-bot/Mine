@@ -132,11 +132,21 @@ sells at market. T2/T3 are ignored. Four things are load-bearing:
   LIMIT at T1 next to a full-size stop is twice the held quantity on the
   sell side — margined as a fresh short and fillable twice. So T1 needs the
   app alive (the LaunchAgent sees to that); the stop does not.
-* **New messages only, each id once.** Only `events.NewMessage` is
-  subscribed — the channel edits its posts, and an edit never trades.
-  Every id is written to `tg_calls.json` (`TgCallStore.mark_seen`) before
-  it is acted on, and anything older than `TG_CALLS_MAX_AGE_SECS` (90 s) at
-  receipt is dropped, so a reconnect's catch-up cannot re-fire a call.
+* **A new message is the only way in; edits and deletions follow a call
+  already taken.** `NewMessage` takes a call; every id is written to
+  `tg_calls.json` (`TgCallStore.mark_seen`) before it is acted on, and
+  anything older than `TG_CALLS_MAX_AGE_SECS` (90 s) at receipt is dropped,
+  so a reconnect's catch-up cannot re-fire one. `MessageDeleted` on a taken
+  call **withdraws it** (`retract_call`: cancel a resting entry, square off a
+  held position, booked as `message deleted`). `MessageEdited` on one
+  **moves it** (`amend_call`): entry → the resting stop-limit's trigger and
+  limit are modified (refused if the new entry is at/below LTP); stop → the
+  SL-M trigger is modified, and the tick keeps re-trying a refused move and
+  exits at market if the premium is already through the edited level; target
+  → the watched level moves. A contract change while resting withdraws and
+  re-takes; after a fill the position is kept on the new SL/T1 and alerted. A
+  chat line edited *into* a call fires nothing. Follow-ups wait up to 20 s for
+  a call whose entry is still being placed.
 * **A call the market has run past is skipped, not chased.** A stop BUY
   must sit above the LTP; if it does not, nothing is placed and a
   `tg_call_skipped` alert says why. Same for SELL calls, non-index

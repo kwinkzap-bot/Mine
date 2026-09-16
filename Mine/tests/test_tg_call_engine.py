@@ -58,6 +58,7 @@ class Broker:
     def __init__(self):
         self.calls = []
         self.stop_ok = True
+        self.modify_ok = True
         self.entry_fills = {}
 
     def log(self, kind, **detail):
@@ -91,6 +92,11 @@ def broker(monkeypatch):
         b.log('cancel', ids=_ids(legs))
         return {'success': True, 'summary': []}
 
+    def modify(legs, username, session_data, price=None, quantity=None, trigger_price=None):
+        b.log('modify', ids=_ids(legs), price=price, trigger=trigger_price, quantity=quantity)
+        return ({'success': True, 'summary': []} if b.modify_ok
+                else {'success': False, 'error': 'trigger price should be lower than LTP'})
+
     def flatten(username, session_data, select, log_tag='exit'):
         rows = select() or []
         b.log('flatten', tag=log_tag, ids=[o['id'] for o in rows])
@@ -118,6 +124,7 @@ def broker(monkeypatch):
     monkeypatch.setattr(api, '_dispatch_order_to_brokers',
                         lambda **k: pytest.fail('the call engine never places a LIMIT/MARKET itself'))
     monkeypatch.setattr(api, '_cancel_order_at_brokers', cancel)
+    monkeypatch.setattr(api, '_modify_order_at_brokers', modify)
     monkeypatch.setattr(api, 'exit_selected_records', flatten)
     monkeypatch.setattr(api, 'leg_fills', leg_fills)
     monkeypatch.setattr(api, '_reconcile_open_orders',
@@ -431,6 +438,152 @@ def test_exit_all_stands_every_call_down(broker, rows, env):
     assert engine.stop_all_calls(USER, {}) == 1
     assert call(cid)['phase'] == 'CANCELLED'
     assert TgCallStore.get_active() == []
+
+
+# ── the message was deleted ──────────────────────────────────────────────
+
+def test_deleting_the_message_cancels_a_resting_entry(broker, rows, env, alerts):
+    cid = take()['call_id']
+    r = engine.retract_call(USER, cid, reason='message deleted')
+    assert r == {'success': True, 'call_id': cid, 'cancelled': 1, 'flattened': 0}
+    assert 'cancel' in broker.kinds() and 'flatten' not in broker.kinds()
+    assert leg(rows, cid, 'ENTRY')['status'] == 'CANCELLED'
+    assert slot(cid)['stage'] == 'NO_FILL' and slot(cid)['exit_reason'] == 'message deleted'
+    assert call(cid)['phase'] == 'CANCELLED'
+    assert any(a['title'].startswith('Telegram call withdrawn') for a in alerts)
+    assert engine.history() == []                     # nothing traded, nothing booked
+
+
+def test_deleting_the_message_squares_off_a_held_position_and_books_it(broker, rows, env):
+    cid = taken(broker, rows)
+    before = len(broker.calls)
+    r = engine.retract_call(USER, cid)
+    assert r['flattened'] == 1
+    assert broker.kinds()[before:].count('flatten') == 1
+    assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'message deleted'
+    assert call(cid)['phase'] == 'CANCELLED'
+    exit_leg(rows, cid).update({'status': 'EXECUTED', 'entry_price': 83.0})
+    tick(ltp=83.0)
+    (row,) = engine.history()
+    assert row['exit_reason'] == 'message deleted' and row['pnl_per_lot'] == round(1.5 * LOT, 2)
+
+
+def test_a_deleted_message_for_a_finished_call_does_nothing(broker, rows, env):
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('CANCELLED', None, 0)
+    tick()
+    assert call(cid)['phase'] == 'DONE'
+    before = len(broker.calls)
+    assert engine.retract_call(USER, cid)['already'] == 'DONE'
+    assert len(broker.calls) == before
+
+
+# ── the message was edited ───────────────────────────────────────────────
+
+def edited(cid, **over):
+    plan = {**PLAN, **over, 'source_text': 'edited'}
+    return engine.amend_call(USER, cid, plan, {'message_id': 1, 'chat_id': 9, 'text': 'edited'})
+
+
+def test_editing_the_entry_moves_the_resting_stop_limit(broker, rows, env):
+    cid = take()['call_id']
+    r = edited(cid, entry=84.0)
+    assert r['success'], r
+    m = broker.of('modify')[-1]
+    assert m['trigger'] == 84.0 and m['price'] == engine.entry_limit(84.0, 1) == 84.85
+    e = leg(rows, cid, 'ENTRY')
+    assert e['trigger_price'] == 84.0 and e['price'] == 84.85
+    assert call(cid)['entry'] == 84.0 and call(cid)['limit'] == 84.85
+
+
+def test_editing_the_entry_below_the_market_is_refused_and_the_order_left_alone(broker, rows, env):
+    cid = take()['call_id']                            # LTP is 70
+    r = edited(cid, entry=69.0, stop=60.0)
+    assert not r['success'] and 'entry not moved' in r['problems'][0]
+    assert 'modify' not in broker.kinds()
+    assert call(cid)['entry'] == 81.0
+    assert call(cid)['stop'] == 60.0                   # the stop edit still counts
+
+
+def test_editing_the_stop_moves_the_live_sl_m(broker, rows, env):
+    cid = taken(broker, rows)
+    r = edited(cid, stop=70.0)
+    assert r['success'], r
+    m = broker.of('modify')[-1]
+    assert m['trigger'] == 70.0 and m['price'] is None and m['quantity'] is None
+    assert leg(rows, cid, 'SL')['trigger_price'] == 70.0
+    assert call(cid)['stop'] == 70.0
+
+
+def test_a_refused_stop_move_is_retried_by_the_tick_on_the_new_level(broker, rows, env):
+    cid = taken(broker, rows)
+    broker.modify_ok = False
+    r = edited(cid, stop=70.0)
+    assert not r['success'] and 'stop modify refused' in r['problems'][0]
+    assert call(cid)['stop'] == 70.0                   # the plan moved anyway
+    assert leg(rows, cid, 'SL')['trigger_price'] == 65.0
+
+    broker.modify_ok = True
+    tick(ltp=80.0)                                      # the tick tries again
+    assert broker.of('modify')[-1]['trigger'] == 70.0
+    assert leg(rows, cid, 'SL')['trigger_price'] == 70.0
+
+
+def test_a_stale_stop_is_cancelled_and_the_position_sold_once_the_edited_level_is_through(
+        broker, rows, env):
+    cid = taken(broker, rows)
+    broker.modify_ok = False
+    edited(cid, stop=70.0)
+    before = len(broker.calls)
+    tick(ltp=69.0)                                      # through 70, old stop still at 65
+    kinds = broker.kinds()[before:]
+    assert 'cancel' in kinds and 'flatten' in kinds and kinds.index('cancel') < kinds.index('flatten')
+    assert slot(cid)['exit_reason'] == 'edited stop breached'
+
+
+def test_editing_the_target_moves_the_watched_level(broker, rows, env):
+    cid = taken(broker, rows)
+    edited(cid, targets=[90.0, 101.0, 110.0])
+    assert call(cid)['target'] == 90.0
+    tick(ltp=90.0)
+    assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'T1 hit'
+
+
+def test_editing_the_stop_before_the_fill_arms_the_stop_at_the_new_level(broker, rows, env):
+    cid = take()['call_id']
+    edited(cid, stop=70.0)
+    assert 'modify' not in broker.kinds()             # nothing at the broker yet
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
+    tick()
+    assert broker.of('stop')[-1]['trigger'] == 70.0
+
+
+def test_editing_to_another_contract_while_resting_replaces_the_call(broker, rows, env):
+    cid = take()['call_id']
+    r = edited(cid, strike=23200)
+    assert call(cid)['phase'] == 'CANCELLED'
+    assert leg(rows, cid, 'ENTRY')['status'] == 'CANCELLED'
+    new = r['replaced_by']
+    assert new and new != cid and call(new)['strike'] == 23200
+    assert broker.of('stop')[-1]['trigger'] == 81.0    # the fresh entry
+
+
+def test_editing_to_another_contract_after_the_fill_keeps_the_position(broker, rows, env, alerts):
+    cid = taken(broker, rows)
+    r = edited(cid, strike=23200, stop=70.0)
+    assert 'contract changed after fill' in r['problems']
+    assert call(cid)['phase'] == 'ENTRY_PENDING' and slot(cid)['stage'] == 'LIVE'
+    assert call(cid)['strike'] == 23150 and call(cid)['stop'] == 70.0
+    assert any('different contract' in a['title'] for a in alerts)
+
+
+def test_an_edit_that_is_no_longer_a_call_leaves_the_trade_alone(broker, rows, env, alerts):
+    cid = taken(broker, rows)
+    before = len(broker.calls)
+    r = engine.amend_call(USER, cid, {'error': 'No entry price'}, {})
+    assert not r['success'] and len(broker.calls) == before
+    assert call(cid)['stop'] == 65.0
+    assert any('unreadable' in a['title'] for a in alerts)
 
 
 # ── the P&L ledger ───────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + EMA Confluence + Swing Momentum + OI Crossover tabs */
+/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + EMA Confluence + Swing Momentum tabs */
 'use strict';
 
 let _scStatusTimer     = null;
@@ -6,7 +6,7 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade changes
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'sc', 'tmf', 'ema-confluence', 'swing-momentum', 'oi-crossover'];
+const _ALGO_TABS = ['active', 'sc', 'tmf', 'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -441,10 +441,6 @@ function algoSwitch(tab) {
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
     if (typeof _emacClearTimers === 'function') _emacClearTimers();
-    // The scanner polls on a 60s timer of its own and draws an SVG on every
-    // refresh — both wasted while its tab is hidden, so it is stopped here
-    // and started again below only when its tab is the one being shown.
-    if (window.OIX) window.OIX.deactivate();
     if (tab === 'active') {
         _activeFetchAll();
     } else if (tab === 'sc') {
@@ -459,8 +455,6 @@ function algoSwitch(tab) {
         _emacFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
-    } else if (tab === 'oi-crossover') {
-        if (window.OIX) window.OIX.activate();
     }
 }
 

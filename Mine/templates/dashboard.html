@@ -16,6 +16,10 @@
      nothing applies until an element opts in by carrying that class. -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/algo.css') }}?v={{ sv('css/algo.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/finance.css') }}?v={{ sv('css/finance.css') }}">
+<!-- OI Crossover (dash_oi_crossover.html) sits in the same .sw-wrap shell
+     as Swing Trade and borrows the Algo page's Logic pill + sheet, so both
+     of the stylesheets above are load-bearing for it too. -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/oi_crossover.css') }}?v={{ sv('css/oi_crossover.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/time_and_sales.css') }}?v={{ sv('css/time_and_sales.css') }}">
 {% endblock %}
 
@@ -32,6 +36,7 @@
     <button class="dash-tab" id="dash-tab-markets"     onclick="dashSwitch('markets')">🏢 Markets</button>
     <button class="dash-tab" id="dash-tab-contracts"   onclick="dashSwitch('contracts')">📜 Contracts</button>
     <button class="dash-tab" id="dash-tab-historic-oi" onclick="dashSwitch('historic-oi')">📈 Historic OI</button>
+    <button class="dash-tab" id="dash-tab-oi-crossover" onclick="dashSwitch('oi-crossover')">🔀 OI Crossover</button>
     <button class="dash-tab" id="dash-tab-watchlist"   onclick="dashSwitch('watchlist')">👁 Watchlist</button>
     <button class="dash-tab" id="dash-tab-finance"     onclick="dashSwitch('finance')">💰 Finance</button>
     <button class="dash-tab" id="dash-tab-time-sales"  onclick="dashSwitch('time-sales')">🎞️ Time &amp; Sales</button>
@@ -341,13 +346,15 @@
 <div class="dash-panel" id="dash-historic-oi-panel"><iframe class="dash-iframe" id="dash-historic-oi-frame" data-src="/historic-oi?embed=1" title="Historic OI"></iframe></div>
 <div class="dash-panel" id="dash-watchlist-panel"><iframe class="dash-iframe" id="dash-watchlist-frame" data-src="/watchlist?embed=1" title="Watchlist"></iframe></div>
 
+{% include 'dash_oi_crossover.html' %}
+
 {% endblock %}
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['pcr', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'contracts', 'historic-oi', 'watchlist', 'finance', 'time-sales'];
+const _DASH_TABS = ['pcr', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'contracts', 'historic-oi', 'oi-crossover', 'watchlist', 'finance', 'time-sales'];
 
 const _IFRAME_TABS = ['trading', 'orders', 'portfolio', 'markets', 'contracts', 'historic-oi', 'watchlist'];
 
@@ -379,6 +386,13 @@ function dashSwitch(tab, pushState) {
         // Unlike the other tabs, this one polls every second. Leaving it
         // running behind Portfolio would poll until the browser is closed.
         tasStopLoop();
+    }
+    // The scanner polls on a 60s timer of its own and draws an SVG on every
+    // refresh — both wasted while its tab is hidden, so it is stopped on
+    // every switch and started again only when its tab is the one shown.
+    if (window.OIX) window.OIX.deactivate();
+    if (tab === 'oi-crossover') {
+        if (window.OIX) window.OIX.activate();
     }
     if (_IFRAME_TABS.includes(tab)) {
         const f = document.getElementById('dash-' + tab + '-frame');
@@ -1399,4 +1413,6 @@ function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
 <script src="{{ url_for('static', filename='js/vega.js') }}?v={{ sv('js/vega.js') }}"></script>
 <script src="{{ url_for('static', filename='js/finance.js') }}?v={{ sv('js/finance.js') }}"></script>
 <script src="{{ url_for('static', filename='js/time_and_sales.js') }}?v={{ sv('js/time_and_sales.js') }}"></script>
+<!-- Registers window.OIX; dashSwitch() starts and stops it with the tab. -->
+<script src="{{ url_for('static', filename='js/oi_crossover.js') }}?v={{ sv('js/oi_crossover.js') }}"></script>
 {% endblock %}

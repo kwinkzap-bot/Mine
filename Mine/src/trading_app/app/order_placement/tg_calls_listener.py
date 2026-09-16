@@ -15,14 +15,15 @@ message the instant it lands — the "every second" watch the user asked for,
 without a request budget. It runs on its own asyncio loop on a daemon thread;
 the Flask app and the scheduler never touch that loop.
 
-**New messages only.** The handler is subscribed to ``events.NewMessage`` and
-nothing else. The channel edits its posts after the fact (a call retyped at
-15:08 that first went out at 14:50), and an edit is never a reason to trade:
-a call already taken must not fire twice, and a chat line edited into a call
-is not a call anyone was meant to act on at that moment. Every id seen is
+**A new message is the only way in; edits and deletions follow a call that
+is already in.** ``NewMessage`` is what takes a call. Every id seen is
 written to ``TgCallStore`` before anything else happens, so a reconnect's
-catch-up cannot re-fire it; and anything older than ``TG_CALLS_MAX_AGE_SECS``
-at receipt is dropped for the same reason.
+catch-up cannot re-fire it; anything older than ``TG_CALLS_MAX_AGE_SECS`` at
+receipt is dropped for the same reason. ``MessageEdited`` on a message that
+became a call moves that call's numbers (``tg_call_engine.amend_call``) —
+never a chat line edited into a call, which fires nothing. ``MessageDeleted``
+on one withdraws it (``retract_call``): the entry is cancelled if resting,
+the position squared off if held.
 
 **The broker never sees this thread.** A message that parses as a call is
 handed to ``tg_call_engine.take_call`` on a fresh worker thread. Everything
@@ -151,6 +152,62 @@ def handle_text(username, chat_id, message_id, text, msg_date=None, edit_date=No
     return 'call'
 
 
+# The channel posts a call and edits it seconds later; the entry from the
+# first version may still be on its way to the brokers when the edit lands.
+# So an edit or a deletion waits this long for the call to appear in the
+# store before giving up on it.
+_FOLLOW_UP_WAIT_SECS = 20
+
+
+def _wait_for_call(chat_id, message_id):
+    deadline = time.time() + _FOLLOW_UP_WAIT_SECS
+    while True:
+        call = TgCallStore.find_by_message(chat_id, message_id)
+        if call or time.time() >= deadline:
+            return call
+        time.sleep(1)
+
+
+def handle_edited(username, chat_id, message_id, text, spawn=True):
+    """An edited message: if it is one of our calls, move the trade to the
+    new numbers. A message that was never a call stays that way."""
+    def _run():
+        call = _wait_for_call(chat_id, message_id)
+        if not call:
+            logger.info(f"[TgCalls] edit on {chat_id}/{message_id}: not one of our calls — ignored")
+            return
+        plan = parse_signal(text or '')
+        plan['source_text'] = (text or '')[:2000]
+        logger.info(f"[TgCalls] edit on {chat_id}/{message_id} → call {call['id']}")
+        engine.amend_call(username, call['id'], plan,
+                          {'message_id': message_id, 'chat_id': chat_id, 'text': (text or '')[:2000]})
+
+    if spawn:
+        threading.Thread(target=_run, name=f'TgEdit-{message_id}', daemon=True).start()
+        return 'edit queued'
+    _run()
+    return 'edit handled'
+
+
+def handle_deleted(username, chat_id, message_ids, spawn=True):
+    """Deleted messages: withdraw every call among them. Telegram does not
+    always say which chat a deletion came from, so ``chat_id`` may be None —
+    the message id alone is matched then."""
+    def _run():
+        for mid in message_ids or []:
+            call = _wait_for_call(chat_id, mid)
+            if not call:
+                continue
+            logger.info(f"[TgCalls] message {chat_id}/{mid} deleted → withdrawing call {call['id']}")
+            engine.retract_call(username, call['id'], reason='message deleted')
+
+    if spawn:
+        threading.Thread(target=_run, name='TgDelete', daemon=True).start()
+        return 'delete queued'
+    _run()
+    return 'delete handled'
+
+
 # ── the Telethon side ─────────────────────────────────────────────────────
 
 async def _main(username, api_id, api_hash, channel_id):
@@ -189,6 +246,23 @@ async def _main(username, api_id, api_hash, channel_id):
                     logger.info(f"[TgCalls] message {m.id}: {verdict}")
                 except Exception as e:
                     logger.error(f"[TgCalls] handler failed on {m.id}: {e}", exc_info=True)
+
+            @client.on(events.MessageEdited(chats=[entity]))
+            async def _on_edited(event):
+                m = event.message
+                try:
+                    logger.info(f"[TgCalls] message {m.id} edited: "
+                                f"{handle_edited(username, event.chat_id, m.id, m.message or '')}")
+                except Exception as e:
+                    logger.error(f"[TgCalls] edit handler failed on {m.id}: {e}", exc_info=True)
+
+            @client.on(events.MessageDeleted(chats=[entity]))
+            async def _on_deleted(event):
+                try:
+                    logger.info(f"[TgCalls] messages deleted {list(event.deleted_ids)}: "
+                                f"{handle_deleted(username, event.chat_id, list(event.deleted_ids))}")
+                except Exception as e:
+                    logger.error(f"[TgCalls] delete handler failed: {e}", exc_info=True)
 
             backoff = 5
             # Telethon's own run_until_disconnected would block past the

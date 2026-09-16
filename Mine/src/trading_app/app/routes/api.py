@@ -7378,10 +7378,12 @@ def _modify_order_at_brokers(broker_legs, username, session_data, price=None, qu
     that already filled will be refused by its broker, and that must not hide a
     successful edit on the others.
 
-    trigger_price edits a resting SL-M and is mutually exclusive with price:
-    what moves on a stop is its trigger, and sending a plain price would convert
-    the stop into a LIMIT order sitting at that price — silently removing the
-    protection the order exists to provide.
+    trigger_price alone edits a resting SL-M: what moves on a stop is its
+    trigger, and sending a plain price would convert the stop into a LIMIT
+    order sitting at that price — silently removing the protection the order
+    exists to provide. trigger_price AND price together edit a resting SL
+    (stop-limit) — the Telegram-call entry — moving both numbers and naming
+    the order type so the limit is kept.
     """
     legs = _broker_order_legs(broker_legs)
     if not legs:
@@ -7407,6 +7409,7 @@ def _modify_order_at_brokers(broker_legs, username, session_data, price=None, qu
                         order_id=order_id,
                         trigger_price=trigger_price,
                         quantity=int(quantity) if quantity else None,
+                        limit_price=float(price) if price is not None else None,
                     )
                 else:
                     params = {'variety': 'regular', 'order_id': order_id}
@@ -7426,9 +7429,9 @@ def _modify_order_at_brokers(broker_legs, username, session_data, price=None, qu
                     # FyersOrderService.place_stoploss_order).
                     res = client.modify_order(
                         order_id=order_id,
-                        order_type=4,
+                        order_type=3 if price is not None else 4,   # 3 = SL, 4 = SL-M
                         stop_price=float(trigger_price),
-                        limit_price=float(trigger_price),
+                        limit_price=float(price if price is not None else trigger_price),
                         quantity=int(quantity) if quantity else None,
                     )
                 else:

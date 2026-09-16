@@ -862,8 +862,13 @@ class KiteService:
             return {'success': False, 'error': str(e)}
 
     def modify_stoploss_order(self, order_id: str, trigger_price: float,
-                              quantity: Optional[int] = None, variety: str = 'regular') -> Dict[str, Any]:
-        """Move a resting SL-M order's trigger price.
+                              quantity: Optional[int] = None, variety: str = 'regular',
+                              limit_price: Optional[float] = None) -> Dict[str, Any]:
+        """Move a resting SL-M order's trigger price — or, with ``limit_price``,
+        a resting SL (stop-limit) order's trigger and limit together. The
+        order type is sent explicitly either way: a modify that names only a
+        price would turn the stop into a plain LIMIT, and one that names SL-M
+        on a stop-limit would drop its limit.
 
         Goes through _put directly instead of kite.modify_order for the same
         reason placement goes through _safe_place_order: the SDK exposes no
@@ -886,6 +891,12 @@ class KiteService:
                 'trigger_price': float(trigger_price),
                 'market_protection': -1,   # -1 enables automatic market protection
             }
+            if limit_price:
+                # Stop-limit: market protection is an SL-M concept and Kite
+                # rejects it on a plain SL.
+                params['order_type'] = self.kite.ORDER_TYPE_SL
+                params['price'] = float(limit_price)
+                del params['market_protection']
             if quantity:
                 params['quantity'] = int(quantity)
 

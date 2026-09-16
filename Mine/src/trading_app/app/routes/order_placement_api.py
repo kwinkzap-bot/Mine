@@ -29,6 +29,7 @@ reaches the other panel's positions, and neither is an account-wide
 liquidation.
 """
 
+import math
 import time as _time
 
 from flask import Blueprint, jsonify, request, session
@@ -674,10 +675,19 @@ def update_price(order_id: str):
         # On an SL-M the edited number is the stop's trigger, not a limit.
         # Sending it as a price would convert the stop into a LIMIT resting
         # there — silently removing the protection the order exists for.
-        is_stop = str(order.get('order_type') or order.get('type') or '').upper().startswith('SL')
+        kind = str(order.get('order_type') or order.get('type') or '').upper()
+        is_stop = kind.startswith('SL')
+        # A stop-limit (the Telegram-call entry) carries a limit above its
+        # trigger; the strip's one number moves the trigger, and the limit
+        # follows by the same offset it was placed with.
+        is_stop_limit = kind == 'SL'
+        new_limit = None
+        if is_stop_limit:
+            offset = max(float(order.get('price') or 0) - float(order.get('trigger_price') or 0), 0)
+            new_limit = math.ceil((new_price + offset) * 20 - 1e-9) / 20
         result = _modify_order_at_brokers(
             order.get('broker_order_ids'), _user(), dict(session),
-            price=None if is_stop else new_price,
+            price=new_limit if is_stop_limit else (None if is_stop else new_price),
             trigger_price=new_price if is_stop else None)
         if not result.get('success'):
             # A refused modify usually means the order filled while the strip
@@ -693,7 +703,7 @@ def update_price(order_id: str):
             return jsonify({'success': False, 'error': result.get('error'),
                             'summary': result.get('summary', [])}), 400
 
-        MineOrderStore.update_price(order_id, new_price)
+        MineOrderStore.update_price(order_id, new_limit if is_stop_limit else new_price)
         if is_stop:
             MineOrderStore.update_order(order_id, {'trigger_price': new_price})
         return jsonify({'success': True, 'price': new_price, 'is_stop': is_stop,

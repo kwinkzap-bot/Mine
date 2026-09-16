@@ -542,9 +542,30 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
             TgCallStore.update_broker(call_id, instance, {'legs': {**legs, 'SL': placed}})
             sl = _record(placed)
 
-    if ltp is not None and reached(exit_side('BUY'), ltp, float(call['stop'])) and not _is_resting(sl):
+    # A resting stop that is not at the plan's level — the channel edited the
+    # SL and the broker refused the move — is retried here every tick. If the
+    # premium is already through the edited level, the stale order is not
+    # protection any more: it is cancelled and the position sold at market.
+    want = float(call['stop'])
+    if _is_resting(sl) and abs(float(sl.get('trigger_price') or 0) - want) >= 0.05:
+        if ltp is not None and reached(exit_side('BUY'), ltp, want):
+            logger.error(f"[TgCall] {call_id} broker {instance}: premium {ltp} is through the "
+                         f"edited stop {want} while the old one rests at {sl.get('trigger_price')} "
+                         f"— exiting at market")
+            _cancel_leg(sl, username, session_data)
+            _flatten(call, slot, username, session_data, 'edited stop breached')
+            return
+        from trading_app.app.routes.api import _modify_order_at_brokers
+        from trading_app.app.utils.mine_order_store import MineOrderStore
+        r = _modify_order_at_brokers(sl.get('broker_order_ids'), username, session_data,
+                                     trigger_price=want)
+        if r.get('success'):
+            MineOrderStore.update_order(sl['id'], {'price': want, 'trigger_price': want})
+            logger.info(f"[TgCall] {call_id} broker {instance}: stop moved to {want}")
+
+    if ltp is not None and reached(exit_side('BUY'), ltp, want) and not _is_resting(sl):
         logger.error(f"[TgCall] {call_id} broker {instance}: premium {ltp} is through the "
-                     f"{call['stop']} stop with nothing resting — exiting at market")
+                     f"{want} stop with nothing resting — exiting at market")
         _flatten(call, slot, username, session_data, 'stop breached, no order resting')
 
 
@@ -584,6 +605,185 @@ def stop_all_calls(username, session_data, reason='exit-all') -> int:
 
 def call_records(call_id: str) -> list:
     return signal_records(call_id)
+
+
+# ── the channel changed its mind ──────────────────────────────────────────
+# A call is only as good as the message it came from. The channel deletes a
+# call it regrets and edits one it mistyped, and the trade has to follow —
+# an entry resting on a number nobody stands behind any more is the wrong
+# trade, and a stop at the old level after the caller moved it is the wrong
+# stop.
+
+def retract_call(username, call_id, reason='message deleted') -> dict:
+    """The message is gone, so the trade goes with it: cancel an entry still
+    resting, square off a position already held. Booked like any other exit."""
+    call = TgCallStore.get(call_id)
+    if not call:
+        return {'success': False, 'error': 'No such call'}
+    if call.get('phase') in ('DONE', 'CANCELLED', 'FAILED', 'SKIPPED'):
+        return {'success': True, 'call_id': call_id, 'already': call.get('phase')}
+
+    session_data = _session(username)
+    cancelled = flattened = 0
+    for slot in list((call.get('brokers') or {}).values()):
+        stage = slot.get('stage')
+        if stage in BROKER_DONE_STAGES:
+            continue
+        if stage == STAGE_PENDING_ENTRY:
+            _cancel_leg(_record(slot.get('entry_record_id')), username, session_data)
+            TgCallStore.update_broker(call_id, slot['instance'],
+                                      {'stage': STAGE_NO_FILL, 'exit_reason': reason})
+            cancelled += 1
+            continue
+        _flatten(call, slot, username, session_data, reason)
+        flattened += 1
+
+    TgCallStore.update(call_id, {'phase': 'CANCELLED', 'cancel_reason': reason,
+                                 'finished_at': int(_time.time() * 1000)})
+    label = f"{call['symbol']} {call['strike']} {call['option_type']}"
+    _alert(username, 'tg_call_exit', f'Telegram call withdrawn — {label}',
+           f'{reason}: {cancelled} entry order(s) cancelled, {flattened} position(s) squared off',
+           {'call_id': call_id, 'reason': reason})
+    logger.info(f"[TgCall] {call_id} withdrawn ({reason}): {cancelled} cancelled, {flattened} flattened")
+    ensure_running(username, source='retract')          # to book what was flattened
+    return {'success': True, 'call_id': call_id, 'cancelled': cancelled, 'flattened': flattened}
+
+
+def _same_contract(call, plan) -> bool:
+    return (str(call.get('symbol')).upper() == str(plan.get('symbol')).upper()
+            and int(call.get('strike') or 0) == int(plan.get('strike') or 0)
+            and str(call.get('option_type')).upper() == str(plan.get('option_type')).upper())
+
+
+def amend_call(username, call_id, plan, meta=None) -> dict:
+    """The message was edited: move the trade to the new numbers.
+
+    * entry changed, entry still resting  → modify the stop-limit (trigger + limit)
+    * stop changed, position live         → modify the SL-M's trigger
+    * target changed                      → the watched level moves; nothing at a broker
+    * contract changed, entry resting     → the old entry is withdrawn and the
+                                            new text is taken as a fresh call
+    * contract changed, position live     → the position is kept and managed on
+                                            the new stop/target; alerted
+
+    An edit that no longer parses as a call, or that puts a number on the
+    wrong side of the market, leaves the trade exactly as it was and says so.
+    """
+    from trading_app.app.routes.api import _modify_order_at_brokers
+    from trading_app.app.routes.order_placement_api import option_ltp, stop_direction_error
+    from trading_app.app.utils.mine_order_store import MineOrderStore
+
+    call = TgCallStore.get(call_id)
+    if not call:
+        return {'success': False, 'error': 'No such call'}
+    label = f"{call['symbol']} {call['strike']} {call['option_type']}"
+    if call.get('phase') in ('DONE', 'CANCELLED', 'FAILED', 'SKIPPED'):
+        return {'success': True, 'call_id': call_id, 'already': call.get('phase')}
+
+    if 'error' in plan:
+        _alert(username, 'tg_call_skipped', f'Telegram call edited into something unreadable — {label}',
+               f"Trade left as it was. {plan['error']}", {'call_id': call_id})
+        return {'success': False, 'error': plan['error']}
+
+    try:
+        entry, stop = float(plan['entry']), float(plan['stop'])
+        target = float((plan.get('targets') or [None])[0])
+    except (TypeError, ValueError):
+        return {'success': False, 'error': 'the edited call has no usable numbers'}
+    if not (stop < entry < target):
+        _alert(username, 'tg_call_skipped', f'Telegram call edit ignored — {label}',
+               f'Edited numbers do not make a trade (SL {stop}, entry {entry}, T1 {target}). Left as it was.',
+               {'call_id': call_id})
+        return {'success': False, 'error': 'edited numbers are not a ladder'}
+
+    session_data = _session(username)
+    slots = list((call.get('brokers') or {}).values())
+    pending = [s for s in slots if s.get('stage') == STAGE_PENDING_ENTRY]
+    live = [s for s in slots if s.get('stage') == STAGE_LIVE]
+    changes, problems = [], []
+
+    # ── the contract itself changed ───────────────────────────────────
+    if not _same_contract(call, plan):
+        if pending and not live:
+            retract_call(username, call_id, reason='message edited to another contract')
+            new_meta = {**(meta or {}), 'text': (meta or {}).get('text') or plan.get('source_text')}
+            result = take_call(username, plan, new_meta)
+            return {'success': True, 'call_id': call_id, 'replaced_by': result.get('call_id'),
+                    'result': result}
+        _alert(username, 'tg_call_order_failed',
+               f'Telegram call edited to a different contract — {label}',
+               f"The position is already held in {label}; it stays, managed on the edited "
+               f"SL {stop} / T1 {target}. Check the channel.",
+               {'call_id': call_id, 'plan': plan})
+        problems.append('contract changed after fill')
+
+    # ── entry ─────────────────────────────────────────────────────────
+    old_entry = float(call.get('entry') or 0)
+    if pending and entry != old_entry:
+        try:
+            ltp = option_ltp(call['symbol'], call['strike'], call['option_type'])
+        except Exception:
+            ltp = None
+        wrong = stop_direction_error('BUY', entry, ltp)
+        if wrong:
+            problems.append(f'entry not moved: {wrong}')
+        else:
+            limit = entry_limit(entry, limit_pct(username))
+            for slot in pending:
+                rec = _record(slot.get('entry_record_id'))
+                if not _is_resting(rec):
+                    continue
+                r = _modify_order_at_brokers(rec.get('broker_order_ids'), username, session_data,
+                                             price=limit, trigger_price=entry)
+                if r.get('success'):
+                    MineOrderStore.update_order(rec['id'], {'price': limit, 'trigger_price': entry})
+                    changes.append(f"{slot.get('name')}: entry {old_entry} → {entry} (limit {limit})")
+                else:
+                    problems.append(f"{slot.get('name')}: entry modify refused — {r.get('error')}")
+            TgCallStore.update(call_id, {'entry': entry, 'limit': limit})
+    elif live and entry != old_entry:
+        problems.append(f'entry {old_entry} → {entry} ignored: already filled')
+
+    # ── stop ──────────────────────────────────────────────────────────
+    old_stop = float(call.get('stop') or 0)
+    if stop != old_stop:
+        moved_any = False
+        for slot in live:
+            sl = _record((slot.get('legs') or {}).get('SL'))
+            if not _is_resting(sl):
+                continue                          # the tick re-places it at call['stop']
+            r = _modify_order_at_brokers(sl.get('broker_order_ids'), username, session_data,
+                                         trigger_price=stop)
+            if r.get('success'):
+                MineOrderStore.update_order(sl['id'], {'price': stop, 'trigger_price': stop})
+                changes.append(f"{slot.get('name')}: stop {old_stop} → {stop}")
+                moved_any = True
+            else:
+                problems.append(f"{slot.get('name')}: stop modify refused — {r.get('error')}")
+        # The plan's number moves regardless: a pending entry arms its stop
+        # from it, and a refused modify is retried against it by the tick.
+        TgCallStore.update(call_id, {'stop': stop})
+        if not live and pending:
+            changes.append(f'stop {old_stop} → {stop} (for when the entry fills)')
+        elif live and not moved_any and not any('stop modify' in p for p in problems):
+            changes.append(f'stop {old_stop} → {stop}')
+
+    # ── target ────────────────────────────────────────────────────────
+    old_target = float(call.get('target') or 0)
+    if target != old_target:
+        TgCallStore.update(call_id, {'target': target,
+                                     'targets': [float(t) for t in plan.get('targets') or [target]]})
+        changes.append(f'T1 {old_target} → {target}')
+
+    TgCallStore.update(call_id, {'edited_at': int(_time.time() * 1000),
+                                 'source_text': (plan.get('source_text') or (meta or {}).get('text') or '')[:2000]})
+    if changes or problems:
+        _alert(username, 'tg_call_taken' if not problems else 'tg_call_order_failed',
+               f'Telegram call edited — {label}',
+               ' · '.join(changes + problems) or 'no change',
+               {'call_id': call_id, 'changes': changes, 'problems': problems, 'plan': plan})
+    logger.info(f"[TgCall] {call_id} amended: {changes} problems={problems}")
+    return {'success': not problems, 'call_id': call_id, 'changes': changes, 'problems': problems}
 
 
 # ── booking the P&L ───────────────────────────────────────────────────────
@@ -778,4 +978,4 @@ def stop() -> None:
 
 __all__ = ['take_call', 'validate_call', 'tg_targets', 'entry_limit', 'tick',
            'ensure_running', 'is_running', 'stop', 'stop_all_calls', 'call_records',
-           'remember_session', 'is_active', 'history']
+           'remember_session', 'is_active', 'history', 'retract_call', 'amend_call']

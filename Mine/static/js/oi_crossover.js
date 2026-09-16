@@ -10,9 +10,9 @@
    whole set once and narrowing it in the browser keeps every dropdown
    instant and costs one request per refresh instead of one per keystroke.
 
-   Lives as a tab on the Algo page, so it exposes window.OIX.activate() /
+   Lives as a tab on the Dashboard, so it exposes window.OIX.activate() /
    .deactivate() and does nothing until the tab is opened — a hidden tab
-   must not hold a 60s poll open. algoSwitch() in algo.js drives both.
+   must not hold a 60s poll open. dashSwitch() in dashboard.html drives both.
    ================================================================ */
 
 (function () {
@@ -1439,9 +1439,9 @@
     // ── lifecycle ────────────────────────────────────────────────────
 
     // Wiring happens once, on the first activation, and the poll runs only
-    // while the tab is on screen. Nothing here fires at page load: the Algo
-    // page loads this file for a tab the user may never open, and a scanner
-    // that polls regardless would cost a request a minute for nothing.
+    // while the tab is on screen. Nothing here fires at page load: the
+    // Dashboard loads this file for a tab the user may never open, and a
+    // scanner that polls regardless would cost a request a minute for nothing.
     function activate() {
         if (!$('oixGrid')) return;          // panel not on this page
         if (!state.started) {

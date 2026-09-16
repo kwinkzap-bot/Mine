@@ -97,12 +97,12 @@ def oi_profile():
 @require_user_auth
 @login_required
 def oi_crossover():
-    """OI Crossover scanner – now a tab on the Algo page.
+    """OI Crossover scanner – now a Dashboard tab (it was an Algo tab before).
 
     Kept as a redirect rather than deleted: it was a top-level nav entry, so
     bookmarks and any link out to it still land on the scanner.
     """
-    return redirect(url_for('pages.algo') + '#oi-crossover')
+    return redirect(url_for('pages.dashboard') + '#oi-crossover')
 
 @pages_bp.route('/orderplacement')
 @require_user_auth

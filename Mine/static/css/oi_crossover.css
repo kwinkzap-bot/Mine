@@ -10,6 +10,12 @@
 
 .oix-page {
     padding-bottom: 24px;
+    /* The Logic pill (.ag-info-btn, algo.css) reads --ag-accent/-dim, which
+       algo.css defines on .algo-page — on the Dashboard there is none, so
+       alias the two here or the pill drops to its light-blue fallback and
+       stops following the theme switcher. */
+    --ag-accent:     var(--color-accent);
+    --ag-accent-dim: var(--color-accent-dim);
 }
 
 /* ── Topbar extras ────────────────────────────────────────────── */

@@ -645,6 +645,46 @@ def test_the_shared_stop_dispatcher_places_a_stop_limit_when_given_a_limit(kite_
     assert 'market_protection' not in sent
 
 
+def test_a_stop_limit_edit_from_the_strip_moves_trigger_and_limit_together(client, env, store,
+                                                                             monkeypatch):
+    """The Telegram-call entry is an SL (stop-limit). The strip's one number
+    moves its trigger; the limit follows by the offset it was placed with,
+    and both go to the broker — a trigger-only modify would turn it into an
+    SL-M and drop the limit."""
+    record = MineOrderStore.add_order({
+        'symbol': 'NIFTY', 'strike': 23150, 'option_type': 'CE', 'action': 'BUY',
+        'strategy': 'op', 'order_type': 'SL', 'type': 'SL', 'price': 81.85,
+        'trigger_price': 81.0, 'quantity': 150, 'status': 'OPEN', 'source': 'telegram',
+        'signal_id': 'tg-1', 'leg': 'ENTRY',
+        'broker_order_ids': [{'broker': 'zerodha', 'instance': 1, 'order_id': 'K1', 'success': True}]})
+    seen = {}
+    monkeypatch.setattr(api, '_modify_order_at_brokers',
+                        lambda legs, u, s, price=None, quantity=None, trigger_price=None:
+                        seen.update({'price': price, 'trigger_price': trigger_price})
+                        or {'success': True, 'summary': [], 'brokers_targeted': 1})
+    res = client.put(f"/api/order-placement/orders/{record['id']}/price", json={'price': 84.0})
+    assert res.status_code == 200
+    assert seen == {'price': 84.85, 'trigger_price': 84.0}
+    assert record['trigger_price'] == 84.0 and record['price'] == 84.85
+
+
+def test_the_modify_path_sends_a_stop_limit_when_given_both_numbers(kite_slot):
+    kite = kite_slot
+    posted = []
+    kite._put = lambda route, url_args=None, params=None: posted.append(params) or {'order_id': 'K1'}
+    r = api._modify_order_at_brokers([{'broker': 'zerodha', 'instance': 1, 'order_id': 'K1'}],
+                                     'u', {}, price=84.85, trigger_price=84.0)
+    assert r['success']
+    assert posted[0]['order_type'] == 'SL' and posted[0]['price'] == 84.85
+    assert posted[0]['trigger_price'] == 84.0 and 'market_protection' not in posted[0]
+
+    posted.clear()
+    api._modify_order_at_brokers([{'broker': 'zerodha', 'instance': 1, 'order_id': 'K1'}],
+                                 'u', {}, trigger_price=70.0)
+    assert posted[0]['order_type'] == 'SL-M' and posted[0]['market_protection'] == -1
+    assert 'price' not in posted[0]
+
+
 def test_the_shared_stop_dispatcher_is_still_sl_m_without_a_limit(kite_slot):
     results = api.dispatch_stop_to_brokers(
         symbol='NIFTY', strike=23150, option_type='CE', trigger_price=65,

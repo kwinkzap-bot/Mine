@@ -163,6 +163,20 @@ class TgCallStore:
             return {}
 
     @staticmethod
+    def find_by_message(chat_id, message_id) -> dict:
+        """The call a channel message became, if it became one. ``chat_id``
+        None matches on the message id alone (a deletion update need not
+        name its chat)."""
+        with _lock:
+            for c in TgCallStore._load()['calls']:
+                if str(c.get('message_id')) != str(message_id):
+                    continue
+                if chat_id is not None and str(c.get('chat_id')) != str(chat_id):
+                    continue
+                return c
+            return {}
+
+    @staticmethod
     def get_unbooked() -> list:
         """Calls with a slot that is flat but whose P&L is not yet written —
         the engine keeps ticking for these after the last position closes."""
