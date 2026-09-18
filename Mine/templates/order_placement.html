@@ -222,13 +222,18 @@
     <div class="op-modal" role="dialog" aria-modal="true" aria-labelledby="opTgPnlTitle">
       <header class="op-modal-hd">
         <span id="opTgPnlTitle">Auto-trade P&amp;L — per lot</span>
-        <select class="op-modal-days" id="opTgPnlDays" title="Window">
-          <option value="1">Today</option>
-          <option value="7">7 days</option>
-          <option value="30" selected>30 days</option>
-          <option value="90">90 days</option>
-          <option value="0">All</option>
-        </select>
+        <span class="op-modal-filters">
+          <select class="op-modal-days" id="opTgPnlBroker" title="Broker">
+            <option value="">All brokers</option>
+          </select>
+          <select class="op-modal-days" id="opTgPnlDays" title="Window">
+            <option value="1">Today</option>
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+            <option value="0">All</option>
+          </select>
+        </span>
         <button class="op-modal-x" id="opTgPnlClose" type="button" aria-label="Close">×</button>
       </header>
       <div class="op-modal-tiles" id="opTgPnlTiles"></div>

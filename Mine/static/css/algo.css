@@ -2154,3 +2154,11 @@ body.ocean-theme .sm-gl-overlay {
     max-width: 130px;
 }
 .ag-strike-mode:focus { outline: 2px solid var(--ag-accent, #2563eb); outline-offset: 1px; }
+
+/* ── 30-Min Fakeout Live/Paper toggle (TMF_MODE) ─────────────────────────── */
+/* Same segmented look as the period tabs; the LIVE side goes red when it is
+   the active one so the header reads at a glance which book new entries go to. */
+#tmfModeToggle .rtp-period-tab.active[data-mode="live"] {
+    background: var(--ag-neg);
+    border-color: var(--ag-neg);
+}

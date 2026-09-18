@@ -930,8 +930,33 @@ function oipRefreshVolumeBars(index) {
 // — a full re-filter per step is both correct and cheap at that size, where an
 // index- or exact-time-matched incremental update would simply miss most steps
 // and leave the line frozen mid-play.
+//
+// Each snapshot is snapped to the candle it falls in (the last bar at or
+// before it, latest snapshot per bar wins). Lightweight Charts gives every
+// distinct time across ALL series its own slot on the time scale, so raw
+// second-level snapshot times added ~300 slots inside one session: the axis
+// stretched there, and everything addressed by bar index — the Mine CPR
+// shelves — landed four sessions to the left of its candles.
+let _oipMaxPainSnap = { src: null, candles: null, pts: [] };
 function oipMaxPainPoints() {
-    return (oipOIData?.max_pain_history || []).filter(d => d && isFinite(d.value) && d.value > 0);
+    const raw = oipOIData?.max_pain_history || [];
+    const c = oipFullCandles;
+    if (_oipMaxPainSnap.src === raw && _oipMaxPainSnap.candles === c) return _oipMaxPainSnap.pts;
+    const valid = raw.filter(d => d && isFinite(d.value) && d.value > 0);
+    let pts = valid;
+    if (c && c.length) {
+        const byBar = new Map();
+        for (const d of valid) {
+            // last candle with time <= d.time
+            let lo = 0, hi = c.length - 1, at = -1;
+            while (lo <= hi) { const mid = (lo + hi) >> 1; if (c[mid].time <= d.time) { at = mid; lo = mid + 1; } else hi = mid - 1; }
+            if (at < 0) continue;
+            byBar.set(c[at].time, d.value);
+        }
+        pts = [...byBar.entries()].map(([time, value]) => ({ time, value })).sort((a, b) => a.time - b.time);
+    }
+    _oipMaxPainSnap = { src: raw, candles: c, pts };
+    return pts;
 }
 
 function oipRefreshMaxPain(maxTime) {
@@ -1089,6 +1114,19 @@ function oipSyncIndexToRoundStrikeOnce() {
             // there is no pointer to attribute this to.
             window._oipSyncTimeScale(rs, oipOIChart,
                                      (typeof oipRSInterval !== 'undefined') && oipRSInterval === oipInterval);
+            // Round Strike's window is a couple of hours of 1-minute bars; on
+            // the 5-minute index chart that is two dozen bars filling the width,
+            // too coarse to read a session against its CPR. Open at half that
+            // zoom (twice the window, right edge kept) — the first drag still
+            // pairs the two charts as before. setVisibleRange also flattened
+            // the right-hand gap, so the chart's own rightOffset is put back:
+            // that whitespace is where the Future CPR block draws.
+            const ts = oipOIChart.timeScale();
+            const bs = ts.options().barSpacing;
+            if (bs) {
+                ts.applyOptions({ barSpacing: Math.max(ts.options().minBarSpacing || 0.5, bs / 2) });
+                ts.scrollToPosition(ts.options().rightOffset || 0, false);
+            }
         } catch (e) {
             console.warn('[Replay] initial time-scale sync failed:', e);
         }

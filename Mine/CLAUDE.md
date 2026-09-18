@@ -2,8 +2,11 @@
 
 Live-money intraday trading app. Flask + APScheduler, three live algo threads
 (2nd 30s Candle — **paper only since 2026-09-15**, it has no order path —
-30-Min Fakeout, and EMA Confluence — paper by default, **live under
-`EMA_CONFLUENCE_MODE=live`**, see below) plus the Order Placement signal
+30-Min Fakeout — live by default, **paper under `TMF_MODE=paper`**, the
+Live/Paper toggle on its Algo tab, re-read at every entry so no restart, a
+paper leg has `broker_idx=0` and never reaches a broker while a leg already
+at the broker is managed there until flat — and EMA Confluence — paper by
+default, **live under `EMA_CONFLUENCE_MODE=live`**, see below) plus the Order Placement signal
 engine, four brokers. Treat every change as touching real orders.
 
 ## Hard rules

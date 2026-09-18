@@ -3029,7 +3029,25 @@
       "reason": "09:15 closed inside the CPR 23,198-23,356; 09:35 candle closed below it at 23,151 -> SELL under it; SL at the 09:15 high; target 1:2 (PDL 23,119 is only 29 pts away, inside the 134-pt risk)",
       "setup_time": "09:35",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 158.1 pts (0.684%), 09:15 candle O 23201.6 H 23281.15 L 23186.55 C 23247.25 | Trade by rule: 09:15 closed inside the CPR 23,198-23,356; 09:35 candle closed below it at 23,151 -> SELL under it; SL at the 09:15 high; target 1:2 (PDL 23,119 is only 29 pts away, inside the 134-pt risk); chart replay SL 09:40 -> 13:05"
+    },
+    {
+      "date": "2026-09-17",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Inside",
+      "first_candle": "Strong candle green near R3(cam)",
+      "boxes": "Small",
+      "trade": "BUY",
+      "entry": 23224.0,
+      "target": 23325.0,
+      "sl": 23195.0,
+      "result": "Target",
+      "pnl": 101.0,
+      "reason": "09:15 opened below the CPR 23,200-23,212 and closed above it at 23,256, near Cam R3 23,264 -> no entry on the first candle; 10:05 closed above PDH 23,285 and R1 23,296 (high 23,325 at 10:10), then broke back down; 11:05 tested the CPR (low 23,214) and the 11:10 candle closed green on it -> BUY; target the day high 23,325; SL below the CPR (BC 23,200)",
+      "setup_time": "11:10",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 11.5 pts (0.049%), 09:15 candle O 23195.25 H 23263.25 L 23193.65 C 23255.95 | Trade by hand (17 Sept, from the chart): BUY 23,224 on the 11:10 green candle at the CPR after the R1/PDH breakout failed; chart replay Target 11:15 -> 12:05"
     }
   ],
-  "extended_at": "2026-09-16 19:23"
+  "extended_at": "2026-09-17 17:02"
 }

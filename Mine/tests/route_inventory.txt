@@ -38,6 +38,7 @@
 /api/algo/swing-momentum/value-history/snapshot	api.sm_live_value_snapshot	OPTIONS,POST	True
 /api/algo/thirty-min-fakeout/history	api.algo_tmf_history	GET,HEAD,OPTIONS	True
 /api/algo/thirty-min-fakeout/history	api.algo_tmf_history_delete	DELETE,OPTIONS	True
+/api/algo/thirty-min-fakeout/mode	api.algo_tmf_mode	GET,HEAD,OPTIONS,POST	True
 /api/algo/thirty-min-fakeout/start	api.algo_tmf_start	OPTIONS,POST	True
 /api/algo/thirty-min-fakeout/status	api.algo_tmf_status	GET,HEAD,OPTIONS	True
 /api/algo/thirty-min-fakeout/stop	api.algo_tmf_stop	OPTIONS,POST	True

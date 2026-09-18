@@ -593,6 +593,40 @@
         $('opTgPnlModal').hidden = true;
     }
 
+    // The same sums the history route makes, over whatever subset of its
+    // rows the broker filter leaves — so a broker's tiles add up to its
+    // rows, and "All brokers" reproduces the route's own totals.
+    function tgTotals(rows) {
+        const booked = rows.filter(r => r.pnl != null);
+        const perLot = booked.filter(r => r.pnl_per_lot != null).map(r => Number(r.pnl_per_lot));
+        const sum = a => a.reduce((s, v) => s + v, 0);
+        const r2 = v => Math.round(v * 100) / 100;
+        return {
+            trades: rows.length,
+            booked: booked.length,
+            wins: booked.filter(r => r.pnl > 0).length,
+            losses: booked.filter(r => r.pnl < 0).length,
+            lots: sum(rows.map(r => Number(r.lots) || 0)),
+            pnl: r2(sum(booked.map(r => Number(r.pnl)))),
+            pnl_per_lot: r2(sum(perLot)),
+            avg_per_lot: perLot.length ? r2(sum(perLot) / perLot.length) : null,
+            incomplete: rows.filter(r => r.complete === false).length,
+        };
+    }
+
+    // The broker dropdown lists the accounts that traded in the window.
+    // A selection survives a window change as long as that account is
+    // still in it; otherwise it falls back to All.
+    function fillTgBrokers(rows) {
+        const sel = $('opTgPnlBroker');
+        const prev = sel.value;
+        const names = [...new Set(rows.map(r => r.name).filter(Boolean))].sort();
+        sel.innerHTML = '<option value="">All brokers</option>'
+            + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+        sel.value = names.includes(prev) ? prev : '';
+    }
+
+    // The window is a fetch; the broker is a filter over what it returned.
     async function loadTgPnl() {
         const days = $('opTgPnlDays').value;
         $('opTgPnlBody').innerHTML = '<p class="op-modal-note">Loading…</p>';
@@ -604,12 +638,21 @@
             data = { success: false, error: e.message };
         }
         if (!data.success) {
+            state.tgPnlRows = null;
             $('opTgPnlTiles').innerHTML = '';
             $('opTgPnlBody').innerHTML = `<p class="op-modal-note">${esc(data.error || 'Unavailable')}</p>`;
             return;
         }
+        state.tgPnlRows = data.rows || [];
+        fillTgBrokers(state.tgPnlRows);
+        renderTgPnl();
+    }
 
-        const t = data.totals || {};
+    function renderTgPnl() {
+        if (!state.tgPnlRows) return;
+        const broker = $('opTgPnlBroker').value;
+        const rows = broker ? state.tgPnlRows.filter(r => r.name === broker) : state.tgPnlRows;
+        const t = tgTotals(rows);
         const hit = t.booked ? Math.round(100 * t.wins / t.booked) : null;
         $('opTgPnlTiles').innerHTML = [
             tile('P&L per lot', DataGrid.inr(t.pnl_per_lot), DataGrid.sign(t.pnl_per_lot)),
@@ -620,11 +663,11 @@
             tile('Lots traded', esc(t.lots)),
         ].join('');
 
-        const rows = data.rows || [];
         $('opTgPnlBody').innerHTML = '<div id="opTgPnlGrid"></div>';
         DataGrid.mountSortable('opTgPnlGrid', {
             rows,
-            empty: 'No automatic trades closed in this window.',
+            empty: broker ? `No automatic trades closed at ${broker} in this window.`
+                          : 'No automatic trades closed in this window.',
             columns: [
                 { key: 'date', label: 'Date', sortable: true, strong: true },
                 { key: 'filled_at', label: 'In', format: v => dt(v) },
@@ -1013,6 +1056,7 @@
             if (e.target === $('opTgPnlModal')) closeTgPnl();
         });
         $('opTgPnlDays').addEventListener('change', () => loadTgPnl());
+        $('opTgPnlBroker').addEventListener('change', () => renderTgPnl());
         document.addEventListener('keydown', e => {
             if (e.key === 'Escape' && !$('opTgPnlModal').hidden) closeTgPnl();
         });

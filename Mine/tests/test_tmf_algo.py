@@ -461,3 +461,134 @@ def test_a_non_auth_positions_failure_does_not_churn_the_session(algo, monkeypat
 
     assert algo._get_broker_mis_positions(flaky) == {}
     assert algo._broker_list == [(1, flaky)]
+
+
+# ── 8. Paper mode (TMF_MODE=paper): record everything, place nothing ──────────
+
+class ExplodingService(FakeService):
+    """A broker session no paper path may ever reach."""
+
+    def place_equity_order(self, *a, **k):
+        raise AssertionError('paper mode placed a real order')
+
+    def place_equity_sl_order(self, *a, **k):
+        raise AssertionError('paper mode placed a real SL order')
+
+    def cancel_order(self, *a, **k):
+        raise AssertionError('paper mode cancelled a real order')
+
+    def get_orderbook_by_id(self):
+        raise AssertionError('paper mode read a real orderbook')
+
+
+@pytest.fixture
+def paper(algo, monkeypatch):
+    monkeypatch.setattr(algo, '_uvar', lambda key, default='': 'paper' if key == 'TMF_MODE' else default)
+    monkeypatch.setattr(algo, '_compute_target', lambda *a, **k: 1300.0)
+    return algo
+
+
+def _paper_round_trip(algo, svc):
+    """Trigger → simulated fill → in_position, through the same tick path a
+    live entry takes."""
+    s = {'direction': 'short', 'trigger': 1334.4, 'sl_level': 1343.6, 'ltp': 1331.2}
+    algo._fire_entry('VOLTAS', s, capital_per_trade=100000, algo_active=True)
+    assert s['phase'] == 'pending_entry'
+    algo._check_entry_fill(None, False, 'VOLTAS', s, {}, now_mins=660, cutoff_mins=905)
+    return s
+
+
+def test_paper_entry_fills_at_the_crossing_price_and_places_nothing(paper):
+    """Even with a live-armed broker in the list, paper sends it nothing —
+    and it does not need TMF_ALGO_ACTIVE either."""
+    svc = ExplodingService()
+    paper._broker_list = [(1, svc)]
+    s = _paper_round_trip(paper, svc)
+
+    assert s['mode'] == 'paper'
+    assert s['phase'] == 'in_position'
+    assert s['entry_price'] == 1331.2, 'paper fills at the price that crossed the trigger'
+    assert s['target_level'] == 1300.0
+    leg = s['broker_positions'][0]
+    assert leg['paper'] is True and leg['broker_idx'] == 0
+    assert leg['sl_order_id'] is None and leg['target_order_id'] is None
+    assert svc.placed == [] and svc.cancelled == []
+
+
+def test_paper_entry_needs_neither_kill_switch_nor_broker(paper):
+    paper._broker_list = []
+    s = {'direction': 'long', 'trigger': 1274.8, 'sl_level': 1268.7, 'ltp': 1276.0}
+    paper._fire_entry('BDL', s, capital_per_trade=100000, algo_active=False)
+    assert s['phase'] == 'pending_entry'
+    assert s['broker_positions'][0]['paper'] is True
+
+
+def test_paper_sl_is_watched_on_the_ltp_and_booked_at_the_level(paper):
+    svc = ExplodingService()
+    paper._broker_list = [(1, svc)]
+    s = _paper_round_trip(paper, svc)
+
+    paper._mark_to_market(s, 1340.0)          # between SL and target: nothing
+    paper._check_position_exit('VOLTAS', s, {})
+    assert s['phase'] == 'in_position'
+
+    paper._mark_to_market(s, 1344.0)          # through the stop
+    paper._check_position_exit('VOLTAS', s, {})
+    assert s['phase'] == 'done'
+    assert s['exit_reason'] == 'SL Hit'
+    assert s['exit_price'] == 1343.6
+    qty = s['qty']
+    assert s['realized_pnl'] == round((1331.2 - 1343.6) * qty, 2)
+    assert svc.placed == [] and svc.cancelled == []
+
+
+def test_paper_target_is_watched_on_the_ltp(paper):
+    svc = ExplodingService()
+    paper._broker_list = [(1, svc)]
+    s = _paper_round_trip(paper, svc)
+    paper._mark_to_market(s, 1299.0)
+    paper._check_position_exit('VOLTAS', s, {})
+    assert s['phase'] == 'done' and s['exit_reason'] == 'Target Hit'
+    assert s['exit_price'] == 1300.0
+
+
+def test_paper_square_off_books_the_last_mark(paper, tmp_path):
+    import json
+    svc = ExplodingService()
+    paper._broker_list = [(1, svc)]
+    s = _paper_round_trip(paper, svc)
+    paper._mark_to_market(s, 1320.5)
+    paper._square_off('VOLTAS', s)
+    assert s['phase'] == 'done' and s['exit_reason'] == 'Time Exit'
+    assert s['exit_price'] == 1320.5
+    assert svc.placed == [] and svc.cancelled == []
+
+    rows = json.load(open(tmp_path / 'all.json'))
+    assert rows[0]['mode'] == 'paper'
+    assert rows[0]['reason'] == 'Time Exit'
+
+
+def test_live_records_are_tagged_live(algo, monkeypatch, tmp_path):
+    """The Book column reads `mode`; a live leg must say so explicitly."""
+    import json
+    monkeypatch.setattr(algo, '_uvar', lambda key, default='': default)
+    svc = FakeService()
+    algo._broker_list = [(1, svc)]
+    s = {'direction': 'long', 'trigger': 100.0, 'sl_level': 99.0,
+         'broker_positions': [{'broker_idx': 1, 'filled': True, 'entry_price': 100.0, 'filled_qty': 10}]}
+    algo._record_exit('X', s, s['broker_positions'][0], 101.0, 'Target Hit')
+    assert json.load(open(tmp_path / 'all.json'))[0]['mode'] == 'live'
+
+
+def test_a_live_leg_is_still_managed_at_the_broker_after_the_flip_to_paper(paper):
+    """The leg decides, not the flag: flipping to paper mid-day must not
+    orphan a position that is already at the broker."""
+    svc = FakeService()
+    paper._broker_list = [(1, svc)]
+    s = {'direction': 'short', 'trigger': 1334.4, 'sl_level': 1343.6, 'ltp': 1331.2, 'qty': 100,
+         'phase': 'in_position', 'entry_price': 1331.0, 'target_level': 1300.0,
+         'broker_positions': [{'broker_idx': 1, 'filled': True, 'entry_price': 1331.0, 'filled_qty': 100,
+                               'entry_order_id': '1', 'sl_order_id': '2', 'target_order_id': '3'}]}
+    paper._square_off('VOLTAS', s)
+    assert svc.cancelled == ['2', '3']
+    assert svc.placed and svc.placed[0]['txn'] == 'BUY'

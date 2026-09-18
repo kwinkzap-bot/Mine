@@ -12,6 +12,12 @@ let _tmfStocksData   = {};   // last-fetched {symbol: {phase, direction, ...}}
 let _tmfCapitalPerTrade = 100000;   // equity-curve starting value, from TMF_CAPITAL_PER_TRADE
 let _tmfHistoryTrades   = [];       // last-fetched trade list, kept for period-tab redraws
 let _tmfDashPeriod      = 'monthly';// active P&L-breakdown period tab
+let _tmfBook            = 'all';    // history/dashboard book filter: all | live | paper
+let _tmfMode            = null;     // last-fetched TMF_MODE (live | paper)
+
+// A record's book. Rows written before TMF_MODE existed carry no `mode`,
+// and every one of those was a real fill.
+function _tmfModeOf(t) { return t && t.mode === 'paper' ? 'paper' : 'live'; }
 
 const _TMF_PHASE_LABEL = {
     pending_scan:  'Not scanned yet',
@@ -68,16 +74,25 @@ function _tmfRenderStatus(data) {
                             : (data.enabled === false ? 'Stopped (manual)' : 'Stopped');
     }
 
+    _tmfMode = data.mode === 'paper' ? 'paper' : 'live';
     const modeBadge = document.getElementById('tmfModeBadge');
     if (modeBadge) {
-        if (data.live_armed) {
+        if (_tmfMode === 'paper') {
+            modeBadge.className = 'dg-badge dg-badge--info';
+            modeBadge.textContent = 'PAPER';
+            modeBadge.title = 'Fills simulated at the traded price and recorded — no order reaches any broker';
+        } else if (data.live_armed) {
             modeBadge.className = 'dg-badge dg-badge--neg';
             modeBadge.textContent = 'LIVE ORDERS';
+            modeBadge.title = 'Real MIS orders at ' + (data.active_brokers || 0) + ' Zerodha slot(s)';
         } else {
             modeBadge.className = 'dg-badge dg-badge--warn';
             modeBadge.textContent = 'SCAN ONLY';
+            modeBadge.title = 'Live mode, but TMF_ALGO_ACTIVE is off or no Zerodha slot has BROKER_N_TMF_ACTIVE — signals are logged, nothing is placed or recorded';
         }
     }
+    document.querySelectorAll('#tmfModeToggle .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.mode === _tmfMode));
 
     const upd = document.getElementById('tmfLastUpd');
     if (upd) upd.textContent = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -135,6 +150,10 @@ function _tmfRenderStocks() {
             { key: 'phase', label: 'Status',
               badge: v => _TMF_PHASE_TONE[v] || 'neutral',
               format: v => _TMF_PHASE_LABEL[v] || v },
+            // Set at trigger time, so only rows that reached an entry carry it.
+            { key: 'mode', label: 'Book',
+              format: v => v ? v.toUpperCase() : '—',
+              badge: v => v === 'paper' ? 'info' : (v === 'live' ? 'neg' : 'neutral') },
             { key: 'direction', label: 'Direction',
               format: v => v ? (v === 'short' ? 'SELL' : 'BUY') : '—',
               tone: v => v === 'short' ? 'neg' : (v === 'long' ? 'pos' : undefined) },
@@ -211,9 +230,11 @@ function _tmfPnlTip(t) {
            `Flat ₹${_TMF_BROKERAGE_PER_TRADE} per round trip`;
 }
 
-function _tmfRenderHistory(trades) {
-    _tmfHistoryTrades = trades || [];
-    _tmfRenderDashboard(_tmfHistoryTrades);
+function _tmfRenderHistory(allTrades) {
+    _tmfHistoryTrades = allTrades || [];
+    const trades = _tmfBook === 'all' ? _tmfHistoryTrades
+                 : _tmfHistoryTrades.filter(t => _tmfModeOf(t) === _tmfBook);
+    _tmfRenderDashboard(trades);
 
     const countEl = document.getElementById('tmfHistCount');
     const body    = document.getElementById('tmfHistBody');
@@ -226,6 +247,10 @@ function _tmfRenderHistory(trades) {
         columns: [
             { key: 'date', label: 'Date' },
             { key: 'symbol', label: 'Symbol', strong: true },
+            // `render`, not `badge`: a record with no mode key is live, not blank.
+            { key: 'mode', label: 'Book',
+              render: (_, t) => DataGrid.badge(_tmfModeOf(t).toUpperCase(),
+                                               _tmfModeOf(t) === 'paper' ? 'info' : 'neg') },
             { key: 'direction', label: 'Direction', tone: v => v === 'SELL' ? 'neg' : 'pos' },
             { key: 'entry_time', label: 'Entry Time', format: v => v ? _tmfFmtTime(v) : '—' },
             { key: 'exit_time', label: 'Exit Time', format: v => v ? _tmfFmtTime(v) : '—' },
@@ -760,6 +785,35 @@ function tmfShowLogic() {
 //    + 5-min watchdog). Stop is durable — it persists TMF_ALGO_ENABLED=false
 //    so it stays down across days and restarts, and Start re-arms that daily
 //    schedule as well as launching the thread now. ───────────────────────
+
+function tmfSetBook(book) {
+    _tmfBook = book;
+    document.querySelectorAll('#tmfBookTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.book === book));
+    _tmfRenderHistory(_tmfHistoryTrades);
+}
+
+// ── Live / Paper (TMF_MODE). Persisted, re-read by the thread at every
+//    entry — so it applies from the next trigger with no restart. A position
+//    already at the broker keeps being managed there until it is flat.
+function _tmfSetMode(mode) {
+    if (mode === _tmfMode) return;
+    if (mode === 'live' &&
+        !confirm('Switch the 30-Min Fakeout algo to LIVE? From the next trigger onwards, real MIS orders will be placed at every TMF-enabled Zerodha slot.')) return;
+    if (mode === 'paper' &&
+        !confirm('Switch the 30-Min Fakeout algo to PAPER? New entries will be simulated and only recorded — no order is sent. Any position already at the broker keeps being managed there until it is flat.')) return;
+    fetch('/api/algo/thirty-min-fakeout/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Mode change failed: ' + (d.error || 'Unknown error')); return; }
+            _tmfFetchStatus();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
 
 function _tmfStart() {
     fetch('/api/algo/thirty-min-fakeout/start', { method: 'POST' })

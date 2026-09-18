@@ -18,6 +18,13 @@
             <span>Logic</span>
         </button>
         <span id="tmfModeBadge" class="dg-badge dg-badge--warn">SCAN ONLY</span>
+        <!-- Live/Paper — TMF_MODE. Paper keeps the record without sending a
+             single order; the thread re-reads it at every entry, no restart. -->
+        <div class="rtp-period-tabs tmf-mode-toggle" id="tmfModeToggle" style="margin-left:0"
+             title="Live: real MIS orders at every TMF-enabled Zerodha slot. Paper: fills simulated at the traded price, record only — nothing sent to any broker. Applies from the next entry; a position already at the broker is managed there until flat.">
+            <button class="rtp-period-tab" data-mode="live"  onclick="_tmfSetMode('live')">Live</button>
+            <button class="rtp-period-tab" data-mode="paper" onclick="_tmfSetMode('paper')">Paper</button>
+        </div>
         <span id="tmfRunBadge" class="ag-badge inactive">
             <span class="ag-badge-dot"></span>
             <span id="tmfRunBadgeText">Stopped</span>
@@ -62,6 +69,14 @@
     <div class="ag-card" id="tmfDashCard" style="display:none">
         <div class="ag-card-hdr">
             <span class="ag-card-title">Live Performance</span>
+            <!-- Which book the stats, curve, breakdown and history grid show.
+                 Records written before the toggle existed carry no mode and
+                 count as live. -->
+            <div class="rtp-period-tabs" id="tmfBookTabs" style="margin-left:12px">
+                <button class="rtp-period-tab active" data-book="all"   onclick="tmfSetBook('all')">All</button>
+                <button class="rtp-period-tab"        data-book="live"  onclick="tmfSetBook('live')">Live</button>
+                <button class="rtp-period-tab"        data-book="paper" onclick="tmfSetBook('paper')">Paper</button>
+            </div>
             <span id="tmfDashMeta" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
             <span id="tmfDashNet" style="font-size:12px;font-weight:800"></span>
         </div>

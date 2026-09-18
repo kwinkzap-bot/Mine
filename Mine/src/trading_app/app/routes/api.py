@@ -9069,12 +9069,18 @@ def algo_tmf_status() -> EndpointResponse:
             if (UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '') or '').strip().lower() == 'zerodha':
                 active_brokers += 1
         capital_per_trade = float(UserEnvManager.get_user_var(username, 'TMF_CAPITAL_PER_TRADE', '100000') or 100000)
+        # Live/Paper toggle (TMF_MODE; default live, the way the algo has
+        # always run). Paper needs no kill-switch and no broker: every fill
+        # is simulated and only recorded, so live_armed is false in paper
+        # even with everything else configured.
+        mode = _tmf_mode(username)
 
         return jsonify({
             'success': True,
             'running': bool(instance and instance.is_running()),
             'enabled': enabled,
-            'live_armed': bool(algo_active and active_brokers > 0),
+            'mode': mode,
+            'live_armed': bool(mode == 'live' and algo_active and active_brokers > 0),
             'algo_active': algo_active,
             'active_brokers': active_brokers,
             'capital_per_trade': capital_per_trade,
@@ -9085,6 +9091,40 @@ def algo_tmf_status() -> EndpointResponse:
         })
     except Exception as e:
         logger.error(f'[tmf/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _tmf_mode(username: str) -> str:
+    from trading_app.app.utils.user_env import UserEnvManager
+    raw = (UserEnvManager.get_user_var(username, 'TMF_MODE', 'live') or 'live').strip().lower()
+    return 'paper' if raw == 'paper' else 'live'
+
+
+@api_bp.route('/algo/thirty-min-fakeout/mode', methods=['GET', 'POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_tmf_mode() -> EndpointResponse:
+    """Get or set the 30-Min Fakeout execution mode — 'live' (real MIS
+    orders at every TMF-enabled Zerodha slot) or 'paper' (fills simulated
+    at the traded price, record only). Persisted as TMF_MODE; the running
+    thread re-reads it at every entry, so no restart is needed. A position
+    already at the broker is unaffected — it is managed there until flat."""
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        if request.method == 'POST':
+            data = request.get_json(silent=True) or {}
+            mode = str(data.get('mode', '')).strip().lower()
+            if mode not in ('live', 'paper'):
+                return jsonify({'success': False, 'error': "mode must be 'live' or 'paper'"}), 400
+            if not UserEnvManager.save_user_var(username, 'TMF_MODE', mode):
+                return jsonify({'success': False, 'error': 'Failed to save setting'}), 500
+            logger.warning(f'[tmf/mode] {username} switched 30-Min Fakeout to {mode.upper()}')
+            return jsonify({'success': True, 'mode': mode})
+        return jsonify({'success': True, 'mode': _tmf_mode(username)})
+    except Exception as e:
+        logger.error(f'[tmf/mode] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

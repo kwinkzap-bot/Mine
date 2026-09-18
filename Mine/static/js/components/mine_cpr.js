@@ -14,12 +14,16 @@
  * seconds, chart told `timezone: 'Etc/UTC'`), so every date split below uses
  * the UTC getters on purpose.
  *
- * Elements address the x-axis by BAR INDEX, not time: the primitive maps them
- * with `timeScale.logicalToCoordinate`, which also works past the last bar,
- * so a running period, a virgin band and the Future CPR can all draw into the
- * right-hand whitespace. A `series.update()` appends a bar without shifting
- * earlier indices, and every live tick recomputes against the current array
- * anyway.
+ * Elements address the x-axis by BAR INDEX into the candle array, and carry
+ * that bar's TIME beside it (`t1`/`t2`). The primitive resolves the time to
+ * the chart's logical index (`timeScale.timeToIndex`) and only falls back to
+ * the raw index when it cannot. The two differ whenever another series on
+ * the pane has points off the candle grid — Replay's max-pain line once
+ * carried second-level OI-snapshot times, and the ~300 extra logical slots
+ * they added in one session pushed every candle after it right by that
+ * much, so index-addressed shelves landed four sessions too far left. Past
+ * the last bar (the Future CPR, a running period's right edge) there is no
+ * time to look up, so those go by offset from the last bar's index.
  */
 window.MineCPR = (function () {
     'use strict';
@@ -37,7 +41,7 @@ window.MineCPR = (function () {
         pdhR1Box: true, pdlS1Box: true, histPdhl: true,     // PDH/PDL on — the one default that departs from the script
         boxTransp: 92,                        // PDH↔R1 / PDL↔S1 fills: lighter than the script's 85 so the candles stay readable inside them
         virgin: true, virginExtend: true, virginTransp: 65,
-        futureCpr: false,
+        futureCpr: true,                      // on, unlike the script's input: the TradingView chart it mirrors runs with it on
         // Weekly CPR overlaid on lower timeframes, its own colour so it reads
         // apart from the daily shelf; virgin weeks deeper still.
         weeklyCpr: true, weeklyShadow: true, weeklyTransp: 82, weeklyBack: 26,
@@ -123,7 +127,31 @@ window.MineCPR = (function () {
     }
     const dayStart = t => t - (t % 86400);                 // midnight of that day
     const sessionStart = t => dayStart(t) + SESSION_OPEN;  // 09:15 of that day
-    const isMonday = t => new Date(t * 1000).getUTCDay() === 1;
+    const dayOfWeek = t => new Date(t * 1000).getUTCDay(); // Sun=0 … Sat=6
+    const isMonday = t => dayOfWeek(t) === 1;
+    const isWeekday = t => { const w = dayOfWeek(t); return w >= 1 && w <= 5; };
+    // Last calendar day (a grid midnight) of the period holding t: the day
+    // itself, the week's Sunday, the month's or the year's last day.
+    function periodLastDay(t, anchor) {
+        const d = new Date(t * 1000);
+        if (anchor === 'week') return dayStart(t) + (6 - ((d.getUTCDay() + 6) % 7)) * 86400;
+        if (anchor === 'month') return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0) / 1000;
+        if (anchor === 'year') return Date.UTC(d.getUTCFullYear() + 1, 0, 0) / 1000;
+        return dayStart(t);
+    }
+    // Weekdays (Mon–Fri) in (fromDay, toDay], both grid midnights — the
+    // sessions left after fromDay, holidays aside.
+    function weekdaysBetween(fromDay, toDay) {
+        let n = 0;
+        for (let d = fromDay + 86400; d <= toDay; d += 86400) if (isWeekday(d)) n++;
+        return n;
+    }
+    // The first weekday after a period's last day: where the next one opens.
+    function nextPeriodOpen(lastDay) {
+        let d = lastDay + 86400;
+        while (!isWeekday(d)) d += 86400;
+        return d;
+    }
 
     /* ── grouping ────────────────────────────────────────────────────────── */
     // Consecutive runs of candles sharing a period key, with running H/L/C.
@@ -285,6 +313,33 @@ window.MineCPR = (function () {
         const dailyByPeriod = useDaily ? periodOhlcFromDaily(daily, anchor) : null;
         const periods = groupBy(candles, t => periodKey(t, anchor));
 
+        // Where the running period ends and how wide the next one is, in bars
+        // past the last one — the script's `time_close(resolution)` and its
+        // Future CPR's next_start → next_end. An intraday or daily chart knows
+        // its calendar: today's session runs to 15:30, and a weekly / monthly
+        // / yearly pivot period runs on through the weekdays left in it, one
+        // session of bars each (holidays aside), so on a 1h chart mid-week the
+        // running week's CPR reaches Friday's close and the Future CPR starts
+        // on Monday — not beside the last candle. A weekly / monthly chart
+        // has no such clock: the running period ends at the last bar and the
+        // next one is as wide as the last complete one.
+        const lastTime = candles[lastIdx].time;
+        const sessionBars = tf.intraday ? Math.max(1, Math.ceil((SESSION_CLOSE - SESSION_OPEN) / tf.secs)) : 1;   // ceil: the 15:15 bar on 30m/1h is a short one
+        const clocked = tf.intraday || tf.isDaily;
+        const today = dayStart(lastTime);
+        // Today's last bar: the rest of the session on an intraday chart, the bar itself on a daily one.
+        const sessionEndIdx = tf.intraday
+            ? lastIdx + Math.max(0, Math.ceil((sessionStart(lastTime) + (SESSION_CLOSE - SESSION_OPEN) - lastTime) / tf.secs) - 1)
+            : lastIdx;
+        const periodEnd = periodLastDay(lastTime, anchor);
+        const liveEndIdx = clocked ? sessionEndIdx + weekdaysBetween(today, periodEnd) * sessionBars : lastIdx;
+        const nextBars = clocked
+            ? weekdaysBetween(periodEnd, periodLastDay(nextPeriodOpen(periodEnd), anchor)) * sessionBars
+            : (periods.length > 1 ? periods[periods.length - 2].endIdx - periods[periods.length - 2].startIdx + 1 : sessionBars);
+        // …and where the running week ends (`time_close("W")`), for the weekly
+        // shelf and the Monday box, whatever the pivot anchor is.
+        const weekEndIdx = clocked ? sessionEndIdx + weekdaysBetween(today, periodLastDay(lastTime, 'week')) * sessionBars : lastIdx;
+
         if (S.cpr && periods.length > 1) {
             const showR = ['r1', 'r2', 'r3', 'r4'].filter(k => S[k]);
             const showS = ['s1', 's2', 's3', 's4'].filter(k => S[k]);
@@ -308,12 +363,15 @@ window.MineCPR = (function () {
                             if (touches(periods[p].startIdx, periods[p].endIdx) >= 0) hit = p;
                         }
                         if (hit < 0) extendRight = true;          // never touched — into the future
-                        else x2 = periods[hit].endIdx;             // stop at the end of the touch day
+                        else x2 = hit === periods.length - 1 ? liveEndIdx : periods[hit].endIdx;   // stop at the end of the touch day
                     }
                 }
                 // The running period's levels are the ones being traded against,
-                // so they run to the right edge — unless Future CPR needs that room.
-                if (isLive && !S.futureCpr) extendRight = true;
+                // so they run to the right edge — unless Future CPR needs that
+                // room, in which case they stop where the session does and the
+                // next session's block starts (as the script draws them).
+                const liveX2 = S.futureCpr ? liveEndIdx : cur.endIdx;
+                if (isLive) { if (S.futureCpr) x2 = liveX2; else extendRight = true; }
 
                 const x1 = cur.startIdx;
                 const lbl = S.labels;
@@ -337,7 +395,7 @@ window.MineCPR = (function () {
                 // pivot type: Camarilla only changes R3/S3 (its own pair below),
                 // the R/S arrays hold the traditional / fibonacci levels
                 // regardless, exactly like pdhR1Box reads lv.r1 under Camarilla.
-                const rx2 = cur.endIdx, rExt = isLive && !S.futureCpr;
+                const rx2 = isLive ? liveX2 : cur.endIdx, rExt = isLive && !S.futureCpr;
                 for (const k of showR) els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv[k], color: COLORS.r, width: 1, label: lbl && k.toUpperCase() });
                 for (const k of showS) els.push({ kind: 'line', x1, x2: rx2, extendRight: rExt, y: lv[k], color: COLORS.s, width: 1, label: lbl && k.toUpperCase() });
                 if (S.shadow && S.r1 && S.r2) els.push({ kind: 'rect', x1, x2: rx2, extendRight: rExt, y1: lv.r2, y2: lv.r1, fill: withAlpha(COLORS.rFill, S.rsTransp) });
@@ -357,23 +415,28 @@ window.MineCPR = (function () {
             }
         }
 
-        // ── Future CPR: next period's levels from the running period, dashed,
-        //    drawn in the whitespace past the last bar.
+        // ── Future CPR: the next period's levels from the running period's
+        //    H/L/C so far, dashed, one period wide in the whitespace after the
+        //    running session ends — the script's next_start → next_end block.
+        //    The running period is read from the candles alone: the exchange
+        //    daily row for today is the WHOLE day once the day is over, and a
+        //    replay stepping through 11:00 must not see the afternoon's range.
         if (S.futureCpr && periods.length) {
             const run = periods[periods.length - 1];
-            const src = (dailyByPeriod && dailyByPeriod[run.key]) || run;
-            // Today's exchange bar may lag the intraday feed; take the wider of the two.
-            const H = Math.max(src.high, run.high), L = Math.min(src.low, run.low), C = run.close;
-            const lv = pivotLevels(H, L, C, S.kind);
-            const f = { kind: 'line', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, dash: [4, 3], width: 1 };
+            const lv = pivotLevels(run.high, run.low, run.close, S.kind);
+            const fx1 = liveEndIdx + 1, fx2 = liveEndIdx + nextBars;
+            const f = { kind: 'line', x1: fx1, x2: fx2, extendRight: false, dash: [4, 3], width: 1 };
+            const box = (y1, y2, fill) => ({ kind: 'rect', x1: fx1, x2: fx2, extendRight: false, y1: Math.max(y1, y2), y2: Math.min(y1, y2), fill });
             els.push(Object.assign({}, f, { y: lv.pp, color: COLORS.cpr }));
             els.push(Object.assign({}, f, { y: lv.bc, color: COLORS.cpr }));
             els.push(Object.assign({}, f, { y: lv.tc, color: COLORS.cpr }));
-            if (S.shadow) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.bc, lv.tc), y2: Math.min(lv.bc, lv.tc), fill: withAlpha(COLORS.cprFill, S.cprTransp) });
+            if (S.shadow) els.push(box(lv.bc, lv.tc, withAlpha(COLORS.cprFill, S.cprTransp)));
             for (const k of ['r1', 'r2', 'r3', 'r4']) if (S[k]) els.push(Object.assign({}, f, { y: lv[k], color: COLORS.r }));
             for (const k of ['s1', 's2', 's3', 's4']) if (S[k]) els.push(Object.assign({}, f, { y: lv[k], color: COLORS.s }));
-            if (S.pdhR1Box) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.pdh, lv.r1), y2: Math.min(lv.pdh, lv.r1), fill: withAlpha(COLORS.pdhBox, S.boxTransp) });
-            if (S.pdlS1Box) els.push({ kind: 'rect', x1: lastIdx + 1, x2: lastIdx + 1, extendRight: true, y1: Math.max(lv.pdl, lv.s1), y2: Math.min(lv.pdl, lv.s1), fill: withAlpha(COLORS.pdlBox, S.boxTransp) });
+            if (S.shadow && S.r1 && S.r2) els.push(box(lv.r1, lv.r2, withAlpha(COLORS.rFill, S.rsTransp)));
+            if (S.shadow && S.s1 && S.s2) els.push(box(lv.s1, lv.s2, withAlpha(COLORS.sFill, S.rsTransp)));
+            if (S.pdhR1Box) els.push(box(lv.pdh, lv.r1, withAlpha(COLORS.pdhBox, S.boxTransp)));
+            if (S.pdlS1Box) els.push(box(lv.pdl, lv.s1, withAlpha(COLORS.pdlBox, S.boxTransp)));
             if (S.camR3S3 && S.kind === 'camarilla') {
                 els.push(Object.assign({}, f, { y: lv.cr3, color: COLORS.cam, width: 2 }));
                 els.push(Object.assign({}, f, { y: lv.cs3, color: COLORS.cam, width: 2 }));
@@ -426,7 +489,7 @@ window.MineCPR = (function () {
                         }
                     }
                 }
-                if (isLive && !S.futureCpr) extendRight = true;
+                if (isLive) { if (S.futureCpr) x2 = weekEndIdx; else extendRight = true; }
 
                 const x1 = cur.startIdx, lbl = S.labels;
                 if (S.weeklyShadow) {
@@ -475,7 +538,7 @@ window.MineCPR = (function () {
                 }
                 if (firstIdx < 0) continue;
                 const isToday = d === days.length - 1;
-                els.push({ kind: 'rect', x1: firstIdx, x2: day.endIdx, extendRight: isToday && !S.futureCpr, y1: hi, y2: lo,
+                els.push({ kind: 'rect', x1: firstIdx, x2: isToday && S.futureCpr ? sessionEndIdx : day.endIdx, extendRight: isToday && !S.futureCpr, y1: hi, y2: lo,
                            fill: withAlpha(color, 90), stroke: color, strokeWidth: 1 });
             }
         };
@@ -495,9 +558,18 @@ window.MineCPR = (function () {
                 }
                 if (firstIdx < 0) continue;
                 const isLive = w === weeks.length - 1;
-                els.push({ kind: 'rect', x1: firstIdx, x2: wk.endIdx, extendRight: isLive && !S.futureCpr, y1: hi, y2: lo,
+                els.push({ kind: 'rect', x1: firstIdx, x2: isLive && S.futureCpr ? weekEndIdx : wk.endIdx, extendRight: isLive && !S.futureCpr, y1: hi, y2: lo,
                            fill: 'rgba(0,0,0,0)', stroke: COLORS.monday, strokeWidth: 2 });
             }
+        }
+
+        // Stamp every element with the times behind its indices (see the header):
+        // an index past the last bar has no time, so it is anchored to the last
+        // bar instead and the primitive offsets from there.
+        for (const e of els) {
+            e.t1 = e.x1 <= lastIdx ? candles[e.x1].time : null;
+            e.t2 = e.x2 <= lastIdx ? candles[e.x2].time : null;
+            if (e.t1 === null || (!e.extendRight && e.t2 === null)) { e.tLast = lastTime; e.xLast = lastIdx; }
         }
 
         return { elements: els, lines, tf, anchor };
@@ -532,9 +604,22 @@ window.MineCPR = (function () {
                     const half = Math.max(1, (ts.options().barSpacing || 6) / 2);
                     const yOf = p => { if (p == null || !isFinite(p)) return null; const c = series.priceToCoordinate(p); return c === null ? null : Math.round(c * vr); };
 
+                    // Candle index -> the chart's logical index, by the bar's
+                    // time (see the header); by offset from the last bar when
+                    // the index is past it; the raw index only as a last resort.
+                    const byTime = typeof ts.timeToIndex === 'function';
+                    const logicalOf = (x, t, e) => {
+                        if (byTime) {
+                            if (t != null) { const i = ts.timeToIndex(t, true); if (i != null) return i; }
+                            else if (e.tLast != null) { const i = ts.timeToIndex(e.tLast, true); if (i != null) return i + (x - e.xLast); }
+                        }
+                        return x;
+                    };
+
                     // Horizontal span in device pixels, or null when off-screen.
                     const spanOf = e => {
-                        const cx1 = ts.logicalToCoordinate(e.x1), cx2 = e.extendRight ? null : ts.logicalToCoordinate(e.x2);
+                        const cx1 = ts.logicalToCoordinate(logicalOf(e.x1, e.t1, e));
+                        const cx2 = e.extendRight ? null : ts.logicalToCoordinate(logicalOf(e.x2, e.t2, e));
                         if (cx1 === null && !e.extendRight) return null;
                         // Half a bar of overhang each side so a shelf spans its
                         // whole period instead of stopping mid-candle.

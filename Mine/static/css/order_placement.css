@@ -928,8 +928,12 @@
     font-weight: 700;
     border-bottom: 1px solid var(--color-border, #e5e7eb);
 }
-.op-modal-days {
+.op-modal-filters {
     margin-left: auto;
+    display: flex;
+    gap: 6px;
+}
+.op-modal-days {
     font-size: 12px;
     padding: 4px 6px;
     border: 1px solid var(--color-border, #e5e7eb);

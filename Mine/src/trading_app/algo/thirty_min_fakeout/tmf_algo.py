@@ -32,6 +32,18 @@ at trigger time (capital_per_trade x TMF_EQUITY_LEVERAGE / trigger price)
 and that same quantity is used for the entry, SL, and Target orders.
 
 Gating (see env/Mine.env):
+  TMF_MODE=live                        — 'live' (default) places real MIS
+                                          orders; 'paper' simulates every
+                                          fill at the traded price and only
+                                          keeps the record (history rows
+                                          carry mode='paper'). Set by the
+                                          Live/Paper toggle on the Algo
+                                          page; read at every entry, so it
+                                          takes effect at the next trigger.
+                                          Paper needs neither TMF_ALGO_ACTIVE
+                                          nor a broker slot. A leg already at
+                                          the broker is managed there until
+                                          flat whatever the flag says.
   TMF_ALGO_ACTIVE=true                 — global kill-switch. The monitor
                                           thread always scans and logs
                                           signals regardless of this flag
@@ -153,6 +165,12 @@ _ENTRY_ORDER_TTL_SECS = 120
 _ENTRY_MARKETABLE_PAD = 0.002   # 0.2%
 
 _DEFAULT_TICK_SIZE = 0.05  # fallback when the broker's tick map is unavailable
+
+# The broker_idx a paper leg carries. No broker slot is numbered 0, so every
+# helper that looks a slot up (_svc_for, _cancel_broker_order, the
+# reconciliation sweep) finds nothing for it — a paper leg can never reach a
+# broker by accident. See TMF_MODE in _fire_entry.
+_PAPER_IDX = 0
 
 # Zerodha reports a dead session per-request, and an order rejected for it comes
 # back looking exactly like any other rejection ("Incorrect `api_key` or
@@ -330,6 +348,23 @@ class TMFAlgo:
     def _uvar(self, key: str, default: str = '') -> str:
         from trading_app.app.utils.user_env import UserEnvManager
         return (UserEnvManager.get_user_var(self.username, key) or default).strip()
+
+    def _mode(self) -> str:
+        """TMF_MODE — 'live' (default: real MIS orders, the way this algo has
+        always run) or 'paper' (every fill is simulated at the traded price
+        and only the record is kept; nothing reaches a broker). Read per
+        entry, not once at thread start, so the Live/Paper toggle on the
+        Algo page takes effect at the next trigger without a restart.
+
+        The flag only decides NEW entries. A leg already at the broker is
+        managed at the broker until it is flat whatever the flag says
+        (its broker_idx is a real slot), and a paper leg (broker_idx
+        _PAPER_IDX) is never sent anywhere — the leg decides, not the flag."""
+        return 'paper' if self._uvar('TMF_MODE', 'live').lower() == 'paper' else 'live'
+
+    @staticmethod
+    def _is_paper(bp: Dict[str, Any]) -> bool:
+        return bool(bp.get('paper'))
 
     # ── Broker ───────────────────────────────────────────────────────────
 
@@ -576,6 +611,32 @@ class TMFAlgo:
         s['entry_time'] = datetime.now().isoformat()
         # Start of the entry order's life — see _ENTRY_ORDER_TTL_SECS.
         s['entry_placed_ts'] = time.time()
+        mode = self._mode()
+        s['mode'] = mode
+
+        # Priced through the last traded price so the LIMIT is marketable —
+        # see _ENTRY_MARKETABLE_PAD. `ltp` is the price this same tick just
+        # marked (the crossing price); the trigger is only the fallback for
+        # the rare tick where the batch LTP call came back empty.
+        ref  = float(s.get('ltp') or trigger)
+
+        if mode == 'paper':
+            # Paper: filled on the spot at the crossing price — the touch-or-
+            # better price the backtest assumes — with no order anywhere. The
+            # leg goes through _check_entry_fill like a real one (that is
+            # where the Target is computed), which skips the SL/Target
+            # placement for it; the tick then watches SL/Target on the LTP.
+            # Neither TMF_ALGO_ACTIVE nor a broker slot gates this: nothing
+            # can be lost, and the record is the whole point of paper.
+            s['entry_limit_price'] = ref
+            s['broker_positions'] = [{
+                'broker_idx': _PAPER_IDX, 'paper': True, 'entry_order_id': 'PAPER',
+                'filled': True, 'entry_price': ref, 'filled_qty': qty,
+            }]
+            s['phase'] = 'pending_entry'
+            logger.info(f"[TMF] {symbol}: {direction.upper()} trigger hit @ {trigger} — "
+                        f"PAPER fill x{qty} @ {ref} (no order placed)")
+            return
 
         if not algo_active or not self._broker_list:
             s['phase'] = 'done'
@@ -584,11 +645,6 @@ class TMFAlgo:
             return
 
         transaction = 'SELL' if direction == 'short' else 'BUY'
-        # Priced through the last traded price so the LIMIT is marketable —
-        # see _ENTRY_MARKETABLE_PAD. `ltp` is the price this same tick just
-        # marked (the crossing price); the trigger is only the fallback for
-        # the rare tick where the batch LTP call came back empty.
-        ref  = float(s.get('ltp') or trigger)
         tick = self._tick_size_for(symbol)
         if direction == 'short':
             limit_price = _round_to_tick(min(ref, trigger) * (1 - _ENTRY_MARKETABLE_PAD), tick, 'down')
@@ -744,6 +800,14 @@ class TMFAlgo:
 
         exit_txn = 'BUY' if direction == 'short' else 'SELL'
         for bp in live_positions:
+            if self._is_paper(bp):
+                # No resting legs: _check_position_exit watches the levels on
+                # the LTP instead.
+                bp['sl_order_id'] = None
+                bp['target_order_id'] = None
+                logger.info(f"[TMF] {symbol}: PAPER position @ {entry_price} x{bp['filled_qty']} — "
+                            f"watching SL {s['sl_level']}, Target {target_level} on LTP")
+                continue
             svc = self._svc_for(bp['broker_idx'])
             if svc is None:
                 continue
@@ -764,6 +828,9 @@ class TMFAlgo:
         for bp in s.get('broker_positions', []):
             if not bp.get('filled') or bp.get('closed'):
                 continue
+            if self._is_paper(bp):
+                self._check_paper_exit(symbol, s, bp)
+                continue
             ob = orderbooks.get(bp['broker_idx'], {})
             sl_order  = ob.get(bp.get('sl_order_id') or '')
             tgt_order = ob.get(bp.get('target_order_id') or '')
@@ -781,6 +848,22 @@ class TMFAlgo:
             bp.get('closed') for bp in s['broker_positions'] if bp.get('filled')
         ):
             s['phase'] = 'done'
+
+    def _check_paper_exit(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any]) -> None:
+        """A paper leg has no SL/Target orders resting anywhere, so the levels
+        are watched on the price the tick just marked. Booked at the level
+        itself, the way the backtest fills a stop or a target; SL checked
+        before Target, same convention as the broker path."""
+        ltp = s.get('ltp')
+        if ltp is None:
+            return
+        ltp = float(ltp)
+        sl, tgt = s.get('sl_level'), s.get('target_level')
+        short = s['direction'] == 'short'
+        if sl is not None and ((short and ltp >= sl) or (not short and ltp <= sl)):
+            self._close_leg(symbol, s, bp, float(sl), 'SL Hit')
+        elif tgt is not None and ((short and ltp <= tgt) or (not short and ltp >= tgt)):
+            self._close_leg(symbol, s, bp, float(tgt), 'Target Hit')
 
     def _close_leg(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any], exit_price: float,
                     reason: str, cancel_sl: bool = False, cancel_target: bool = False) -> None:
@@ -816,6 +899,9 @@ class TMFAlgo:
             'entry_time': s.get('entry_time', ''), 'exit_time': datetime.now().isoformat(),
             'broker_idx': bp['broker_idx'], 'entry_order_id': bp.get('entry_order_id'),
             'sl_order_id': bp.get('sl_order_id'), 'target_order_id': bp.get('target_order_id'),
+            # Which book this leg belongs to. Older records carry no key and
+            # are live — every trade before TMF_MODE existed was.
+            'mode': 'paper' if self._is_paper(bp) else 'live',
         }
         self._append_history(record)
         # Mirror the closed leg onto the stock's own state too (the history file
@@ -892,6 +978,19 @@ class TMFAlgo:
         all_closed = True
         for bp in s.get('broker_positions', []):
             if not bp.get('filled') or bp.get('closed'):
+                continue
+            if self._is_paper(bp):
+                # Nothing at a broker to cancel or close: book the exit at
+                # the last marked price (the SL level if the day never
+                # marked one), the way the backtest's time exit fills.
+                ltp = s.get('ltp') or s.get('sl_level')
+                if not ltp:
+                    all_closed = False
+                    s['exit_reason'] = 'Square-off skipped — no price reference available'
+                    logger.error(f"[TMF] {symbol}: no usable price for the PAPER square-off — left open")
+                    continue
+                bp['closed'] = True
+                self._record_exit(symbol, s, bp, round(float(ltp), 2), 'Time Exit')
                 continue
             svc = self._svc_for(bp['broker_idx'])
             if svc is None:
@@ -1378,8 +1477,17 @@ class TMFAlgo:
         # in this same tick rather than only on the next one.
         pending_syms = [sym for sym, s in stocks.items() if s['phase'] == 'pending_entry']
         inpos_syms   = [sym for sym, s in stocks.items() if s['phase'] == 'in_position']
-        if (pending_syms or inpos_syms) and self._broker_list:
-            orderbooks = {idx: svc.get_orderbook_by_id() for idx, svc in self._broker_list}
+        if pending_syms or inpos_syms:
+            # Orderbooks only matter to legs that are at a broker; paper legs
+            # are resolved off the LTP marked above, so a paper-only day never
+            # touches the broker here (and needs no broker to be configured).
+            needs_broker = any(
+                not self._is_paper(bp)
+                for sym in pending_syms + inpos_syms
+                for bp in stocks[sym].get('broker_positions', [])
+            )
+            orderbooks = ({idx: svc.get_orderbook_by_id() for idx, svc in self._broker_list}
+                          if needs_broker and self._broker_list else {})
             for symbol in pending_syms:
                 try:
                     self._check_entry_fill(provider, is_symbol_provider, symbol, stocks[symbol], orderbooks, now_mins, cutoff_mins)
@@ -1453,7 +1561,8 @@ class TMFAlgo:
 
             self._broker_list = self._get_active_brokers()
             if not self._broker_list:
-                logger.warning("[TMF] No active Zerodha broker configured for TMF — scanning only, no orders will be placed")
+                logger.warning("[TMF] No active Zerodha broker configured for TMF — scanning only, "
+                               "no orders will be placed (paper fills still recorded under TMF_MODE=paper)")
 
             capital_per_trade = float(self._uvar('TMF_CAPITAL_PER_TRADE', '100000') or 100000)
             exit_hour   = int(self._uvar('TMF_EXIT_HOUR', '15') or 15)
@@ -1469,7 +1578,8 @@ class TMFAlgo:
             max_sl_risk: Optional[float] = None
             if self._uvar('TMF_USE_SL_RISK_FILTER', 'false').lower() == 'true':
                 max_sl_risk = float(self._uvar('TMF_MAX_SL_RISK', '5000') or 5000)
-            logger.info(f"[TMF] Config — capital/trade ₹{capital_per_trade:,.0f}, cutoff {exit_hour:02d}:{exit_minute:02d}, "
+            logger.info(f"[TMF] Config — mode {self._mode().upper()} (TMF_MODE, re-read per entry), "
+                        f"capital/trade ₹{capital_per_trade:,.0f}, cutoff {exit_hour:02d}:{exit_minute:02d}, "
                         f"orders {'ON' if algo_active else 'OFF'}, max SL risk "
                         f"{('₹%s' % format(max_sl_risk, ',.0f')) if max_sl_risk is not None else 'unlimited'}")
 
