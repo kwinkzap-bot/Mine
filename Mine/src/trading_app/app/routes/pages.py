@@ -221,6 +221,14 @@ def trend_detection():
     """Market regime trend detection page."""
     return render_template('trend_detection.html')
 
+@pages_bp.route('/cpr-logic')
+@require_user_auth
+@login_required
+def cpr_logic():
+    """CPR Manual vs Chart: the hand-analysed CPR sheet beside the chart's
+    reading and the option leg behind every trade."""
+    return render_template('cpr_logic.html')
+
 @pages_bp.route('/algo')
 @require_user_auth
 @login_required

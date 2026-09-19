@@ -1,0 +1,43 @@
+/* CPR Logic page — the CPR Manual vs Chart grid. Sits on the .td-* chrome from trend_detection.css. */
+
+/* ── CPR Manual vs Chart ─────────────────────────────────────
+   Each analysis cell stacks the sheet's reading over the chart's
+   and tints by agreement; the numbers behind the chart's verdict
+   sit under it in small type so a disagreement can be judged
+   without opening the detail row. */
+.td-cpr-cell { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+.td-cpr-manual { font-weight: 700; }
+.td-cpr-chart  { color: var(--dg-text-2, var(--td-muted)); }
+.td-cpr-why    { font-size: 9.5px; color: var(--dg-text-3, var(--td-muted)); font-variant-numeric: tabular-nums; }
+.dg-table .dg-td.td-cpr-ok  { background: color-mix(in srgb, var(--dg-pos) 6%, transparent); }
+.dg-table .dg-td.td-cpr-bad { background: color-mix(in srgb, var(--dg-neg) 6%, transparent); }
+.dg-table .dg-td.td-cpr-asc { background: color-mix(in srgb, var(--dg-pos) 12%, transparent); }
+.dg-table .dg-td.td-cpr-dec { background: color-mix(in srgb, var(--dg-neg) 12%, transparent); }
+/* Price vs CPR / CPR: several readings stacked in one cell, each on its
+   own labelled, tinted line. */
+.td-cpr-group { display: flex; flex-direction: column; gap: 2px; }
+.td-cpr-part  { display: flex; align-items: flex-start; gap: 5px; padding: 1px 4px; border-radius: 3px; }
+.td-cpr-part-label { flex: 0 0 40px; font-size: 9.5px; color: var(--dg-text-3, var(--td-muted)); line-height: 1.5; text-transform: uppercase; letter-spacing: .02em; }
+.td-cpr-part.td-cpr-ok  { background: color-mix(in srgb, var(--dg-pos) 8%, transparent); }
+.td-cpr-part.td-cpr-bad { background: color-mix(in srgb, var(--dg-neg) 8%, transparent); }
+.td-cpr-part.td-cpr-asc { background: color-mix(in srgb, var(--dg-pos) 14%, transparent); }
+.td-cpr-part.td-cpr-dec { background: color-mix(in srgb, var(--dg-neg) 14%, transparent); }
+/* Trade: side on top, then Entry / Target / SL with the reach time beside the price. */
+.td-cpr-side  { font-weight: 700; padding: 0 4px; }
+.td-cpr-level { align-items: baseline; }
+.td-cpr-level .td-cpr-part-label { flex-basis: 40px; }
+.td-cpr-price { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+.td-cpr-est   { font-weight: 500; color: var(--dg-text-2, var(--td-muted)); }
+.td-cpr-opt-wait { font-size: 10px; color: var(--dg-text-3, var(--td-muted)); font-style: italic; }
+.td-cpr-sum { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.td-cpr-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--td-border); border-radius: 999px; font-size: 11px; color: var(--td-muted); white-space: nowrap; }
+.td-cpr-chip b { color: var(--td-text); font-variant-numeric: tabular-nums; }
+.td-cpr-chip .pos { color: var(--dg-pos); }
+.td-cpr-chip .neg { color: var(--dg-neg); }
+.dg-table .td-cpr-row-nodata .dg-td { opacity: .55; }
+.td-cpr-multi { font-size: 10.5px; font-weight: 700; color: var(--td-accent); white-space: nowrap; }
+.td-cpr-subgrid { padding: 6px 8px 2px 28px; }
+.td-cpr-subgrid .dg-table { font-size: 10.5px; }
+.td-cpr-reason { min-width: 260px; max-width: 420px; white-space: normal; font-size: 10.5px; }
+.td-cpr-reason b { color: var(--td-muted); font-weight: 700; margin-right: 3px; }
+.td-cpr-note { font-size: 10px; color: var(--td-muted); margin-top: 6px; line-height: 1.4; }

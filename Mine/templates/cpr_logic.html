@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}CPR Logic{% endblock %}
+
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}?v={{ sv('css/active_contracts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/trend_detection.css') }}?v={{ sv('css/trend_detection.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cpr_logic.css') }}?v={{ sv('css/cpr_logic.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="td-page" id="tdPage">
+
+    <!-- Controls -->
+    <div class="td-controls">
+        <div class="td-ctrl-title">
+            📐 CPR Logic
+        </div>
+        <div class="td-ctrl-inputs">
+            <div class="td-ctrl-group">
+                <!-- Only symbols with an imported sheet (Backtest/cpr_manual/<SYMBOL>.json) have a grid -->
+                <select id="tdSymbol" class="td-select">
+                    <option value="NIFTY" selected>NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                    <option value="FINNIFTY">FINNIFTY</option>
+                    <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                    <option value="SENSEX">SENSEX</option>
+                </select>
+            </div>
+            <div class="td-ctrl-group">
+                <!-- Which strike the Option column prices: ATM to the entry, or the strike
+                     whose premium at the entry minute was nearest the chosen number -->
+                <select id="tdCprStrike" class="td-select" title="Strike for the Option column">
+                    <option value="">Current strike</option>
+                    <option value="150">Premium ≈ 150</option>
+                    <option value="200" selected>Premium ≈ 200</option>
+                    <option value="250">Premium ≈ 250</option>
+                    <option value="300">Premium ≈ 300</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- CPR Manual vs Chart: the hand-analysed CPR sheet beside the chart's own reading -->
+    <div class="td-card" style="margin-bottom:10px;">
+        <div class="td-card-hdr">
+            <h2>CPR Manual vs Chart</h2>
+            <div style="display:flex;align-items:center;gap:10px">
+                <div class="td-card-hdr-meta" id="tdCprMeta"></div>
+                <!-- Appends every complete session after the sheet's last date, read from the chart -->
+                <button type="button" class="td-btn" id="tdCprUpdate" title="Add the sessions the sheet has not reached yet, read from the chart">Update</button>
+            </div>
+        </div>
+        <div class="td-cpr-sum" id="tdCprSummary"></div>
+        <div id="tdCprBacktest"><span style="font-size:11px;color:var(--td-muted)">Loading the CPR sheet…</span></div>
+        <div class="td-cpr-note" id="tdCprNote"></div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/cpr_logic.js') }}?v={{ sv('js/cpr_logic.js') }}"></script>
+<script>
+    (function () {
+        const page = document.getElementById('tdPage');
+        window.AppTheme.syncTheme(window.AppTheme.getActiveTheme(), [page]);
+        window.addEventListener('themechanged', e => {
+            window.AppTheme.applyThemeClass(page, e.detail.theme);
+        });
+    })();
+</script>
+{% endblock %}

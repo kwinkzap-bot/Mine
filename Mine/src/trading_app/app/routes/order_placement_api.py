@@ -708,6 +708,11 @@ def update_price(order_id: str):
         MineOrderStore.update_price(order_id, new_limit if is_stop_limit else new_price)
         if is_stop:
             MineOrderStore.update_order(order_id, {'trigger_price': new_price})
+        # A Telegram-call leg moved by hand: the engine must manage on the
+        # new number, not move the order back to the channel's.
+        if str(order.get('signal_id') or '').startswith('tg-'):
+            from trading_app.app.order_placement.tg_call_engine import note_manual_edit
+            note_manual_edit(order, new_price, new_limit)
         return jsonify({'success': True, 'price': new_price, 'is_stop': is_stop,
                         'brokers_targeted': result.get('brokers_targeted'),
                         'summary': result.get('summary', [])})

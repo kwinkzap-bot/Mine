@@ -150,6 +150,12 @@ sells at market. T2/T3 are ignored. Four things are load-bearing:
   re-takes; after a fill the position is kept on the new SL/T1 and alerted. A
   chat line edited *into* a call fires nothing. Follow-ups wait up to 20 s for
   a call whose entry is still being placed.
+* **A stop moved by hand on the strip is that account's level.** The price
+  box's PUT calls `note_manual_edit`, which writes `stop_level` on the slot;
+  `slot_stop()` (hand-set level, else the call's `stop`) is what the tick
+  re-places, retries and breach-guards against — it never moves the order
+  back to the channel's number. A later channel edit clears the override.
+  Editing a resting ENTRY row moves the call's entry/limit the same way.
 * **A call the market has run past is skipped, not chased.** A stop BUY
   must sit above the LTP; if it does not, nothing is placed and a
   `tg_call_skipped` alert says why. Same for SELL calls, non-index
@@ -183,6 +189,30 @@ until every flat slot is booked (`TgCallStore.get_unbooked`). The 📒 Auto P&L
 button on /orderplacement reads `GET /api/order-placement/tg-calls/history`.
 Tests: `tests/test_tg_call_engine.py`, `test_tg_calls_listener.py`,
 `test_tg_call_store.py`.
+
+## CPR Logic page — option legs
+
+The CPR Manual vs Chart grid lives on **`/cpr-logic`** (`templates/cpr_logic.html`,
+`static/js/cpr_logic.js`; moved off the Trend page 2026-09-19, which keeps
+only its `.td-*` chrome in `static/css/trend_detection.css`). The sheet
+(`service/cpr_backtest_service.py`, `Backtest/cpr_manual/<SYMBOL>.json`) is
+written in NIFTY points, but the order that would go out is an option, so
+a second call, `GET /api/trend/cpr-backtest/options[&premium=150|200|250|300]`
+(`service/cpr_option_service.py`), prices every trade's leg: **CE for a BUY,
+PE for a SELL, the weekly expiry running that day**, the strike whose
+premium at the entry minute was nearest the page's strike dropdown
+(**default ≈200**; "Current strike" is ATM to the entry) (`pick_strike` walks the
+ladder from ATM, one Breeze request per strike looked at), read off the
+contract's own 1-minute candles.
+The index trade is replayed on 1-minute index bars (fill from the bar after
+the 5-minute setup candle, then first of target/SL) and the premium is the
+option's close at those minutes; a level never reached is an estimate
+(`≈`, the entry premium moved by the day's least-squares delta), never a
+fill. Only Breeze serves an expired contract, so the columns need an ICICI
+login and say `ICICI login` without one. One Breeze request per trade,
+disk-cached per settled session (`icici_data_service.historical_option_minutes`),
+so the first read of the sheet is ~70 s and later ones are instant. Tests:
+`tests/test_cpr_option_service.py`.
 
 ## Swing Momentum value graph
 

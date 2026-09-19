@@ -1,1 +1,163 @@
-/* Styles for trend_detection are inlined in templates/trend_detection.html */
+/* Trend page chrome (.td-*): themes, controls, cards. Shared with the CPR Logic page. */
+
+:root {
+    --td-bg:      #090e17;
+    --td-card:    #111827;
+    --td-border:  #1f2937;
+    --td-text:    #f8fafc;
+    --td-muted:   #94a3b8;
+    --td-accent:  #3b82f6;
+}
+
+.td-page.light-theme {
+    --td-bg:     #f1f5f9;
+    --td-card:   #ffffff;
+    --td-border: #cbd5e1;
+    --td-text:   #0f172a;
+    --td-muted:  #475569;
+    --td-accent: #2563eb;
+}
+
+.td-page.forest-theme {
+    --td-bg:     #060c09;
+    --td-card:   #0a1410;
+    --td-border: #142820;
+    --td-text:   #e8f7f0;
+    --td-muted:  #6ba88f;
+    --td-accent: #10b981;
+}
+
+.td-page.cream-theme {
+    --td-bg:     #fdfbf7;
+    --td-card:   #fdfbf7;
+    --td-border: #e6dfd3;
+    --td-text:   #433c35;
+    --td-muted:  #7c7267;
+    --td-accent: #b45309;
+}
+
+.td-page.ocean-theme {
+    --td-bg:     #f3f8fc;
+    --td-card:   #ffffff;
+    --td-border: #dbebfa;
+    --td-text:   #1e293b;
+    --td-muted:  #64748b;
+    --td-accent: #0284c7;
+}
+
+.td-page {
+    background: var(--td-bg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--td-text);
+    font-size: 12px;
+}
+
+/* ── Controls ─────────────────────────────────────────────── */
+.td-controls {
+    background: var(--td-card);
+    border: 1px solid var(--td-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.td-ctrl-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--td-text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.td-ctrl-inputs {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.td-ctrl-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.td-select {
+    background: var(--td-bg);
+    border: 1px solid var(--td-border);
+    border-radius: 4px;
+    color: var(--td-text);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    outline: none;
+    transition: border-color 0.15s;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.td-select:focus { border-color: var(--td-accent); }
+
+.td-btn {
+    background: var(--td-bg);
+    border: 1px solid var(--td-border);
+    border-radius: 4px;
+    color: var(--td-text);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: border-color 0.15s;
+}
+.td-btn:hover:not(:disabled) { border-color: var(--td-accent); color: var(--td-accent); }
+.td-btn:disabled { opacity: .55; cursor: default; }
+
+/* ── Card ─────────────────────────────────────────────────── */
+.td-card {
+    background: var(--td-card);
+    border: 1px solid var(--td-border);
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.td-card-hdr {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--td-border);
+    padding-bottom: 6px;
+}
+
+.td-card-hdr h2 {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--td-text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0;
+}
+
+.td-card-hdr-meta {
+    font-size: 10px;
+    color: var(--td-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+/* .ac-page (from active_contracts.css) is borrowed here only for its --ac-*
+   theme variables. Its own height:calc(100vh - 60px) is meant for the
+   standalone Contracts page (table fills the rest of the viewport) — it
+   must not apply here, where .ac-page just wraps a small analysis block. */
+.td-page .ac-page { height: auto; }

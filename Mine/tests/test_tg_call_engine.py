@@ -746,3 +746,59 @@ def test_a_live_position_with_no_quote_is_alerted_once_and_kept(broker, rows, en
     noquote = [a for a in alerts if 'NO QUOTE' in a['title']]
     assert len(noquote) == 1 and 'T1' not in noquote[0]['title']
     assert slot(cid)['stage'] == 'LIVE'                 # nothing rash: the stop still rests
+
+
+# ── a stop moved by hand on the strip ────────────────────────────────────
+
+def sl_row(rows_, cid):
+    return leg(rows_, cid, 'SL')
+
+
+def test_a_stop_moved_by_hand_is_this_accounts_level_and_never_moved_back(broker, rows, env):
+    cid = taken(broker, rows)
+    sl = sl_row(rows, cid)
+    # What the strip's price box does: the broker modify, then the record.
+    sl.update({'price': 72.0, 'trigger_price': 72.0})
+    r = engine.note_manual_edit(sl, 72.0)
+    assert r == {'call_id': cid, 'stop_level': 72.0, 'instances': [1]}
+    assert slot(cid)['stop_level'] == 72.0 and slot(cid)['stop_source'] == 'manual'
+    assert call(cid)['stop'] == 65.0                   # the plan is untouched
+
+    before = len(broker.calls)
+    tick(ltp=80.0); tick(ltp=80.0)
+    assert 'modify' not in broker.kinds()[before:]     # not moved back to 65
+
+
+def test_the_breach_guard_and_the_re_placement_use_the_hand_set_level(broker, rows, env):
+    cid = taken(broker, rows)
+    sl = sl_row(rows, cid)
+    engine.note_manual_edit(sl, 72.0)
+    sl['status'] = 'REJECTED'                          # gone in a way the user did not do
+    tick(ltp=80.0)
+    assert broker.of('stop')[-1]['trigger'] == 72.0    # re-placed at the hand-set level
+
+    # The re-placed stop is a new record; cancel it by hand and breach 72.
+    next(o for o in rows if o['id'] == slot(cid)['legs']['SL'])['status'] = 'CANCELLED'
+    tick(ltp=71.0)                                     # through 72, nothing resting
+    assert slot(cid)['exit_reason'] == 'stop breached, no order resting'
+
+
+def test_a_channel_edit_of_the_stop_overrides_a_hand_set_level(broker, rows, env):
+    cid = taken(broker, rows)
+    engine.note_manual_edit(sl_row(rows, cid), 72.0)
+    edited(cid, stop=70.0)
+    assert slot(cid)['stop_level'] is None and slot(cid)['stop_source'] == 'channel'
+    assert broker.of('modify')[-1]['trigger'] == 70.0
+    assert engine.slot_stop(call(cid), slot(cid)) == 70.0
+
+
+def test_an_entry_moved_by_hand_updates_the_plan(broker, rows, env):
+    cid = take()['call_id']
+    entry = leg(rows, cid, 'ENTRY')
+    engine.note_manual_edit(entry, 84.0, 84.85)
+    assert call(cid)['entry'] == 84.0 and call(cid)['limit'] == 84.85
+
+
+def test_a_hand_edit_on_a_leg_that_is_not_a_call_is_ignored(broker, rows, env):
+    assert engine.note_manual_edit({'signal_id': 'sig-old', 'leg': 'SL'}, 1.0) == {}
+    assert engine.note_manual_edit({'leg': 'SL'}, 1.0) == {}

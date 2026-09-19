@@ -50,12 +50,52 @@ through the Trend page's reasons: trade the REJECTION, not the break.
                the CPRs price sits: under its low — or under a level lying
                just beneath it — SL over its high, target 1:2 (12 Feb 2026:
                SELL 25,844 under S2, SL 25,909; squared off at 15:15).
+    09:15 BREAK WITH A LONG WICK — any CPR width. The 09:15 candle opens
+               inside the PDL/S1 box and closes under it, but is not strong:
+               a lower wick of half its range or more says the level was
+               bought once already. Not an entry by itself — wait for the
+               09:20 candle. A small red one (half the 09:15 range at most)
+               that holds inside that wick, under the 09:15 close and over
+               its low, confirms: SELL under its low, SL over the 09:15
+               high, target 1:2 (7 Sept 2026: 09:15 O 23,883 between PDL
+               23,896 and S1 23,860, C 23,859, low 23,819; 09:20 red 23,859
+               -> 23,838 -> SELL 23,837, SL 23,892, target 23,727). Mirror
+               for a green 09:15 through PDH/R1 with a long upper wick.
     GAP open  past both R1 and PDH (or both S1 and PDL): wait for price to
                come back to that R1/PDH zone. A strong close back above it
                is the reversal -> BUY; a close under it is the breakdown ->
                SELL; never reached -> no trade (3 Feb 2026: open 26,308,
                R1/PDH 25,108-25,238 never seen). Gap-down is the mirror.
+               While the zone is still out of reach, a BASE is the other
+               way in: after the 09:15 candle, two or more small candles
+               (none strong, none bigger than the 09:15 one) with at least
+               two of them red, then the first strong green candle -> BUY
+               over its high AND the 09:15 high (price must clear the
+               first candle), SL under its low, target the near edge of
+               the S1/PDL zone — the gap fill (11 Sept 2026: gap-down open
+               23,270, seven small candles 09:20-09:50, six red, 09:55
+               strong green to 23,263 -> BUY 23,279 over the 09:15 high
+               23,277, SL 23,243, target PDL 23,380).
+               Gap-up is the mirror: a base under R1/PDH, small candles
+               with two green, the first strong red -> SELL, target PDH/R1.
 
+    VIRGIN CPR at PDH/R1 — the late rejection, by LATE_SETUP_UNTIL and
+               the one setup that may follow a stopped-out trade. Narrow
+               CPR (small box) only, and the rejection candle no bigger
+               than SIGNAL_MAX_PCT of price (29 Jun 2026: wide CPR, big
+               box, a 60-pt candle -> excluded). When
+               yesterday's CPR was never touched yesterday (a virgin CPR)
+               and sits on today's PDH/R1 box, a strong red candle that
+               pokes into that stack and closes back under PDH/R1, with
+               price above today's CPR, is a SELL under its low; SL over
+               its own high; target the CPR's far line (BC) — and if the
+               candle that reaches it is a strong red close through the
+               CPR, the target moves on to PDL (1 Sept 2026: 31 Aug's CPR
+               24,133-24,161 over PDH 24,129 / R1 24,142; 11:30 candle to
+               24,143, closed 24,125 -> SELL 24,122, SL 24,145; 13:10
+               broke the CPR -> target PDL 23,994, hit 13:50). Mirror: a
+               virgin CPR under PDL/S1, a strong green rejection -> BUY,
+               target TC, then PDH on a strong break up.
     Target     the next level in the trade's direction (PDL/S1/S2/S3/Cam S3
                below, PDH/R1/R2/R3/Cam R3 above). If that is further than
                FAR_TARGET_X times the risk, a 1:1 target is used instead —
@@ -89,9 +129,14 @@ STRONG_BODY = 0.6        # the rejection candle must close with a body >= 60% of
 GAP_MIN_PCT = 0.25       # an open this far past R1/PDH (S1/PDL) is a gap day, not an "above" day
 NARROW_PCT = 0.13        # CPR under this % of price is Narrow on the sheet's scale -> a trend day is expected
 WICK_MIN = 0.5           # the 09:15 candle's rejection wick must be at least half its range
+INSIDE_MAX = 0.5         # the 09:20 confirmation candle is at most half the 09:15 range
 TREND_SL_PCT = 0.025     # trend-day stop sits this close under the breakout candle (~6 pts)
 TREND_RR = 2.0           # trend-day target is 1:2
+BASE_MIN_BARS = 2        # a gap-day base is at least this many small candles after 09:15 ...
+BASE_MIN_COUNTER = 2     # ... at least this many of them against the fill (red on a gap-down)
 SETUP_UNTIL = '11:00'    # last bar that may be the rejection candle
+LATE_SETUP_UNTIL = '13:00'   # ... the virgin-CPR rejection may come this late
+SIGNAL_MAX_PCT = 0.15    # a rejection candle bigger than this % of price is too large to trade off (29 Jun 2026: 60 pts)
 RULE_TAG = 'Trade by rule'
 
 
@@ -128,8 +173,8 @@ def propose(chart, bars):
     # PDL/S1 (or PDH/R1): the move has started — trade it off that candle,
     # whichever side of the CPRs price is on (12 Feb 2026).
     rng1 = c1['high'] - c1['low']
+    lo_wall, hi_wall = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1'])), (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
     if narrow and rng1 > 0 and abs(c1['close'] - c1['open']) / rng1 >= STRONG_BODY:
-        lo_wall, hi_wall = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1'])), (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
         if c1['close'] < c1['open'] and c1['open'] >= lo_wall[0] - tol and c1['close'] < lo_wall[0]:
             step = [(n, y) for n, y in named if c1['low'] - px * TOUCH_PCT / 100 <= y < c1['low']]
             entry = math.floor(min(step, key=lambda t: t[1])[1]) if step else math.floor(c1['low'] - 1)
@@ -148,6 +193,41 @@ def propose(chart, bars):
                    f"PDH/R1 {hi_wall[0]:,.0f}-{hi_wall[1]:,.0f} and closed above it at {c1['close']:,.0f} -> BUY over it"
                    + (f" (over {step[0][0]} {step[0][1]:,.0f})" if step else '') + "; SL under its low; target 1:2")
             return ({'trade': 'BUY', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, 0)
+
+    # The same break with a long wick on the break's side, at any CPR
+    # width: the 09:15 candle opened inside the PDL/S1 box and closed under
+    # it, but a lower wick of half its range or more says the level was
+    # bought once already — not an entry by itself. The 09:20 candle
+    # decides: a small red one holding inside that wick (under the 09:15
+    # close, over its low) confirms the break, and the entry is under it
+    # (7 Sept 2026). Mirror for a green break over PDH/R1.
+    if rng1 > 0 and len(bars) > 1 and abs(c1['close'] - c1['open']) / rng1 < STRONG_BODY:
+        c2 = bars[1]
+        rng2 = c2['high'] - c2['low']
+        lower_wick, upper_wick = min(c1['open'], c1['close']) - c1['low'], c1['high'] - max(c1['open'], c1['close'])
+        small2 = rng2 <= rng1 * INSIDE_MAX
+        if (c1['close'] < c1['open'] and lo_wall[0] - tol <= c1['open'] <= lo_wall[1] + tol and c1['close'] < lo_wall[0]
+                and lower_wick / rng1 >= WICK_MIN
+                and c2['close'] < c2['open'] and small2 and c2['low'] >= c1['low'] - tol and c2['high'] <= c1['close'] + tol):
+            entry = math.floor(c2['low'] - 1)
+            sl = math.ceil(c1['high'] + 1.5)
+            target = entry - TREND_RR * (sl - entry)
+            why = (f"09:15 candle opened at {c1['open']:,.0f} inside PDL/S1 {lo_wall[0]:,.0f}-{lo_wall[1]:,.0f} and closed below it "
+                   f"at {c1['close']:,.0f}, but with a {lower_wick:.0f}-pt lower wick — waited for 09:20; "
+                   f"{c2['time']} small red candle held inside the wick ({c2['high']:,.0f}-{c2['low']:,.0f}) -> SELL under it; "
+                   f"SL over the 09:15 high; target 1:{TREND_RR:g}")
+            return ({'trade': 'SELL', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, 1)
+        if (c1['close'] > c1['open'] and hi_wall[0] - tol <= c1['open'] <= hi_wall[1] + tol and c1['close'] > hi_wall[1]
+                and upper_wick / rng1 >= WICK_MIN
+                and c2['close'] > c2['open'] and small2 and c2['high'] <= c1['high'] + tol and c2['low'] >= c1['close'] - tol):
+            entry = math.ceil(c2['high'] + 1)
+            sl = math.floor(c1['low'] - 1.5)
+            target = entry + TREND_RR * (entry - sl)
+            why = (f"09:15 candle opened at {c1['open']:,.0f} inside PDH/R1 {hi_wall[0]:,.0f}-{hi_wall[1]:,.0f} and closed above it "
+                   f"at {c1['close']:,.0f}, but with a {upper_wick:.0f}-pt upper wick — waited for 09:20; "
+                   f"{c2['time']} small green candle held inside the wick ({c2['low']:,.0f}-{c2['high']:,.0f}) -> BUY over it; "
+                   f"SL under the 09:15 low; target 1:{TREND_RR:g}")
+            return ({'trade': 'BUY', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, 1)
 
     # A gap beyond the first pivot pair is its own case: the open sits past
     # R1 AND PDH (or past S1 AND PDL), so the CPR is out of reach and the
@@ -201,6 +281,47 @@ def propose(chart, bars):
             twhy = '1:1' + (f' ({level[0]} {level[1]:,.0f} is {abs(level[1] - entry):.0f} pts away)' if level else '')
         return ({'trade': side, 'entry': float(round(entry)), 'target': float(round(target)),
                  'sl': float(round(sl))}, f'{why}; target {twhy}')
+
+    def base_trade(i, b, strong, is_buy):
+        """Gap day, zone not yet reached: the bar either extends the base
+        (small, not strong) or, as the first strong candle in the fill's
+        direction after a base of BASE_MIN_BARS with BASE_MIN_COUNTER
+        against it, is the entry — over its high (under its low), stop
+        under its low (over its high), target the zone's near edge."""
+        nonlocal base_n, base_counter, base_ok
+        if not strong:
+            base_n += 1
+            base_counter += (b['close'] < b['open']) if is_buy else (b['close'] > b['open'])
+            base_ok = base_ok and b['high'] - b['low'] <= rng1
+            return None
+        fires = base_ok and base_n >= BASE_MIN_BARS and base_counter >= BASE_MIN_COUNTER and (b['close'] > b['open']) == is_buy
+        base_ok = False                          # the first strong candle is the entry or there is none
+        if not fires:
+            return None
+        # The entry waits for price to clear the 09:15 candle as well as the
+        # strong one — a BUY over both highs, a SELL under both lows.
+        if is_buy:
+            entry, sl = math.ceil(max(b['high'], c1['high']) + 1), math.floor(b['low'] - 1.5)
+            level = ('PDL' if lv['pdl'] <= lv['s1'] else 'S1', zone[0])
+        else:
+            entry, sl = math.floor(min(b['low'], c1['low']) - 1), math.ceil(b['high'] + 1.5)
+            level = ('PDH' if lv['pdh'] >= lv['r1'] else 'R1', zone[1])
+        risk = abs(entry - sl)
+        reward = (level[1] - entry) if is_buy else (entry - level[1])
+        if reward < NEAR_TARGET_X * risk:
+            target = entry + TREND_RR * risk if is_buy else entry - TREND_RR * risk
+            twhy = f'1:{TREND_RR:g} ({level[0]} {level[1]:,.0f} is only {reward:.0f} pts away, inside the {risk:.0f}-pt risk)'
+        else:
+            target, twhy = level[1], f'{level[0]} {level[1]:,.0f} (the gap fill)'
+        colour = 'green' if is_buy else 'red'
+        why = (f"{'gap-down' if is_buy else 'gap-up'} open {c1['open']:,.0f} {'under S1/PDL' if is_buy else 'over R1/PDH'} "
+               f"{zone[0]:,.0f}-{zone[1]:,.0f}, never reached; {bars[1]['time']}-{bars[i - 1]['time']} base of {base_n} small candles "
+               f"({base_counter} {'red' if is_buy else 'green'}); {b['time']} strong {colour} candle -> "
+               f"{'BUY over' if is_buy else 'SELL under'} it"
+               + (f" and the 09:15 {'high' if is_buy else 'low'} {c1['high' if is_buy else 'low']:,.0f}"
+                  if (c1['high'] > b['high'] if is_buy else c1['low'] < b['low']) else '')
+               + f"; SL {'under its low' if is_buy else 'over its high'}; target {twhy}")
+        return ({'trade': 'BUY' if is_buy else 'SELL', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why)
 
     # Narrow CPR with the open clear of both CPRs: a trend day is expected.
     # If the 09:15 candle rejects the other side (a long wick, close at the
@@ -273,6 +394,11 @@ def propose(chart, bars):
                           + f" and no rejection from it by {SETUP_UNTIL} — no trade"), None
 
     reached = False
+    # The gap-day base: small candles after 09:15 while the zone is still
+    # out of reach. A strong candle either completes it (the trigger) or
+    # ends it — the first strong candle is the entry or there is none.
+    base_n = base_counter = 0
+    base_ok = True
     for i, b in enumerate(bars):
         if b['time'] > SETUP_UNTIL:
             break
@@ -289,7 +415,13 @@ def propose(chart, bars):
             # Wait for price to come down to R1/PDH: a strong close back
             # above the zone is the reversal (BUY), a close under it the
             # breakdown (SELL). The 09:15 candle itself never triggers.
-            if i == 0 or b['low'] > zone[1]:
+            if i == 0:
+                continue
+            if b['low'] > zone[1]:
+                if not reached:
+                    made = base_trade(i, b, strong, False)
+                    if made:
+                        return (*made, i)
                 continue
             reached = True
             if green and b['close'] > zone[1]:
@@ -306,7 +438,13 @@ def propose(chart, bars):
                     return (*made, i)
             continue
         if side_open == 'gap-down':
-            if i == 0 or b['high'] < zone[0]:
+            if i == 0:
+                continue
+            if b['high'] < zone[0]:
+                if not reached:
+                    made = base_trade(i, b, strong, True)
+                    if made:
+                        return (*made, i)
                 continue
             reached = True
             if red and b['close'] < zone[0]:
@@ -421,3 +559,112 @@ def propose(chart, bars):
                       + ('reached but neither reversed nor broke by ' if reached else 'never reached by ') + SETUP_UNTIL
                       + ' — no trade'), None
     return None, f'no rejection candle by {SETUP_UNTIL}', None
+
+
+def virgin_cpr_rejection(chart, bars, start=1):
+    """(trade, why, setup-bar index) for the first strong rejection from
+    the PDH/R1 (PDL/S1) box that yesterday's virgin CPR sits on, from bar
+    `start` up to LATE_SETUP_UNTIL; None when there is none. The trade
+    carries `extend`: the level the target moves to when the bar reaching
+    the CPR's far line is a strong close through the CPR."""
+    lv, y = chart['levels'], chart.get('prev_cpr')
+    if not y or not y.get('virgin') or chart['width_pct'] >= NARROW_PCT:     # narrow CPR / small box only
+        return None
+    px = bars[0]['close']
+    tol = px * TOUCH_PCT / 100
+    max_rng = px * SIGNAL_MAX_PCT / 100
+    hi = (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
+    lo = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1']))
+    on_top = y['tc'] >= hi[0] - tol and y['bc'] <= hi[1] + tol      # the virgin CPR overlaps the PDH/R1 box
+    below = y['bc'] <= lo[1] + tol and y['tc'] >= lo[0] - tol
+    if not (on_top or below):
+        return None
+    for i, b in enumerate(bars[start:], start=start):
+        if b['time'] > LATE_SETUP_UNTIL:
+            break
+        rng = b['high'] - b['low']
+        if rng <= 0 or rng > max_rng:                # a very large candle puts the stop too far for the CPR target
+            continue
+        strong = abs(b['close'] - b['open']) / rng >= STRONG_BODY
+        at_bottom = (b['high'] - b['close']) / rng >= 0.85
+        at_top = (b['close'] - b['low']) / rng >= 0.85
+        if (on_top and b['close'] < b['open'] and (strong or at_bottom)
+                and b['high'] >= hi[0] - tol and b['close'] < hi[0] and b['low'] > lv['tc']):
+            entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1)
+            why = (f"virgin CPR {y['bc']:,.0f}-{y['tc']:,.0f} (yesterday's, untouched) on PDH/R1 {hi[0]:,.0f}-{hi[1]:,.0f}; "
+                   f"{b['time']} candle rejected from it (high {b['high']:,.0f}, closed {b['close']:,.0f}) -> SELL under it; "
+                   f"SL over its high; target the CPR (BC {lv['bc']:,.0f}), PDL {lv['pdl']:,.0f} if a strong red candle breaks the CPR")
+            return ({'trade': 'SELL', 'entry': float(entry), 'target': float(round(lv['bc'])), 'sl': float(sl),
+                     'extend': {'level': float(round(lv['pdl'])), 'name': 'PDL', 'through': float(lv['bc'])}}, why, i)
+        if (below and b['close'] > b['open'] and (strong or at_top)
+                and b['low'] <= lo[1] + tol and b['close'] > lo[1] and b['high'] < lv['bc']):
+            entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1)
+            why = (f"virgin CPR {y['bc']:,.0f}-{y['tc']:,.0f} (yesterday's, untouched) under PDL/S1 {lo[0]:,.0f}-{lo[1]:,.0f}; "
+                   f"{b['time']} candle rejected from it (low {b['low']:,.0f}, closed {b['close']:,.0f}) -> BUY over it; "
+                   f"SL under its low; target the CPR (TC {lv['tc']:,.0f}), PDH {lv['pdh']:,.0f} if a strong green candle breaks the CPR")
+            return ({'trade': 'BUY', 'entry': float(entry), 'target': float(round(lv['tc'])), 'sl': float(sl),
+                     'extend': {'level': float(round(lv['pdh'])), 'name': 'PDH', 'through': float(lv['tc'])}}, why, i)
+    return None
+
+
+def simulate(bars, trade):
+    """cpr_backtest_service.simulate_trade on a rule trade, from its setup
+    bar. A trade with `extend` runs to its target first; if the bar that
+    reaches it is a strong candle closing through the CPR (past `through`),
+    the target is replaced by the extended level and the run goes on, with
+    the same stop. The returned trade dict has the target actually used."""
+    sim = svc.simulate_trade(bars, trade['trade'], trade['entry'], trade['target'], trade['sl'])
+    ext = trade.get('extend')
+    if not ext or sim['result'] != 'Target':
+        return sim, trade
+    k = next(i for i, b in enumerate(bars) if b['time'] == sim['exit_time'])
+    b = bars[k]
+    rng = b['high'] - b['low']
+    is_buy = trade['trade'] == 'BUY'
+    broke = (rng > 0 and abs(b['close'] - b['open']) / rng >= STRONG_BODY
+             and ((b['close'] > ext['through']) if is_buy else (b['close'] < ext['through'])))
+    if not broke:
+        return sim, trade
+    used = dict(trade, target=ext['level'])
+    entry, sl, target = trade['entry'], trade['sl'], ext['level']
+    for x in bars[k + 1:]:
+        hit_t = x['high'] >= target if is_buy else x['low'] <= target
+        hit_s = x['low'] <= sl if is_buy else x['high'] >= sl
+        if hit_t and hit_s:
+            return {'result': 'Both', 'pnl': None, 'entry_time': sim['entry_time'], 'exit_time': x['time']}, used
+        if hit_t:
+            return {'result': 'Target', 'pnl': round(abs(target - entry), 2), 'entry_time': sim['entry_time'], 'exit_time': x['time']}, used
+        if hit_s:
+            return {'result': 'SL', 'pnl': round(-abs(sl - entry), 2), 'entry_time': sim['entry_time'], 'exit_time': x['time']}, used
+    sq = next((x for x in bars if x['time'] >= svc.SQUARE_OFF), None)
+    exit_px, exit_t = (sq['open'], sq['time']) if sq else (bars[-1]['close'], bars[-1]['time'])
+    return {'result': 'EOD', 'pnl': round(exit_px - entry if is_buy else entry - exit_px, 2),
+            'entry_time': sim['entry_time'], 'exit_time': exit_t}, used
+
+
+def propose_all(chart, bars):
+    """Every trade the rule takes in the session, replayed: a list of
+    (trade, why, setup-bar index, sim). The first is `propose`'s — or,
+    when that finds nothing, the virgin-CPR rejection. A first trade that
+    is stopped out (or never fills) may be followed by one more: the
+    virgin-CPR rejection after its exit. The trade dicts carry the target
+    actually used; a session with no trade is one (None, why, None, None)."""
+    p, why, i = propose(chart, bars)
+    if not p:
+        late = virgin_cpr_rejection(chart, bars)
+        if late:
+            p, why, i = late
+    if not p:
+        return [(None, why, None, None)]
+    sim, used = simulate(bars[i:], p)
+    out = [(used, why, i, sim)]
+    if sim['result'] in ('SL', 'No fill'):
+        after = sim['exit_time'] if sim['result'] == 'SL' else bars[i]['time']
+        start = next((k for k, b in enumerate(bars) if b['time'] > after), len(bars))
+        late = virgin_cpr_rejection(chart, bars, start)
+        if late:
+            p2, why2, i2 = late
+            sim2, used2 = simulate(bars[i2:], p2)
+            sim2['after'] = sim['result']
+            out.append((used2, why2, i2, sim2))
+    return out

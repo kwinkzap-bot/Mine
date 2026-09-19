@@ -668,6 +668,26 @@ def test_a_stop_limit_edit_from_the_strip_moves_trigger_and_limit_together(clien
     assert record['trigger_price'] == 84.0 and record['price'] == 84.85
 
 
+def test_moving_a_telegram_stop_from_the_strip_tells_the_engine(client, env, store, monkeypatch):
+    """Without this the engine's stale-stop sync would move the order back to
+    the channel's level three seconds later."""
+    record = MineOrderStore.add_order({
+        'symbol': 'NIFTY', 'strike': 23150, 'option_type': 'CE', 'action': 'SELL',
+        'strategy': 'op', 'order_type': 'SL-M', 'type': 'SL-M', 'price': 65.0,
+        'trigger_price': 65.0, 'quantity': 150, 'status': 'OPEN', 'source': 'telegram',
+        'signal_id': 'tg-1', 'leg': 'SL',
+        'broker_order_ids': [{'broker': 'zerodha', 'instance': 1, 'order_id': 'K2', 'success': True}]})
+    monkeypatch.setattr(api, '_modify_order_at_brokers',
+                        lambda *a, **k: {'success': True, 'summary': [], 'brokers_targeted': 1})
+    noted = []
+    monkeypatch.setattr('trading_app.app.order_placement.tg_call_engine.note_manual_edit',
+                        lambda order, price, limit=None: noted.append((order['id'], price, limit)))
+    res = client.put(f"/api/order-placement/orders/{record['id']}/price", json={'price': 72.0})
+    assert res.status_code == 200
+    assert noted == [(record['id'], 72.0, None)]
+    assert record['trigger_price'] == 72.0
+
+
 def test_the_modify_path_sends_a_stop_limit_when_given_both_numbers(kite_slot):
     kite = kite_slot
     posted = []

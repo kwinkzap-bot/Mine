@@ -452,6 +452,47 @@ def test_extend_appends_only_the_sessions_after_the_sheet(tmp_path, monkeypatch)
     assert len(calls) == 1                                  # no fetch when nothing to add
 
 
+def test_analyse_reads_yesterdays_cpr_and_whether_it_was_virgin():
+    ds, daily, intraday = _synthetic_session()
+    res = svc.analyse([{'date': ds}], daily, intraday)
+    c = res['rows'][0]['chart']
+    prev2 = daily[-3]
+    y = svc.levels(prev2['high'], prev2['low'], prev2['close'])
+    assert c['prev_cpr']['bc'] == round(y['bc'], 2) and c['prev_cpr']['tc'] == round(y['tc'], 2)
+    prev = daily[-2]
+    assert c['prev_cpr']['virgin'] == (not (prev['low'] <= y['tc'] and prev['high'] >= y['bc']))
+
+
+def test_chart_rows_writes_one_row_per_trade_and_extend_keeps_both(tmp_path, monkeypatch):
+    ds, daily, intraday = _synthetic_session()
+    bars = intraday[ds]
+    two = [({'trade': 'SELL', 'entry': 100.0, 'target': 90.0, 'sl': 105.0}, 'first', 1,
+            {'result': 'SL', 'pnl': -5.0, 'entry_time': '09:25', 'exit_time': '09:30'}),
+           ({'trade': 'SELL', 'entry': 98.0, 'target': 80.0, 'sl': 101.0}, 'virgin CPR second', 3,
+            {'result': 'Target', 'pnl': 18.0, 'entry_time': '09:35', 'exit_time': '10:00', 'after': 'SL'})]
+    import trading_app.service.cpr_trade_rule as rule
+    monkeypatch.setattr(rule, 'propose_all', lambda chart, bars: two)
+    res = svc.analyse([{'date': ds}], daily, intraday)
+    rows = svc.chart_rows(res['rows'][0], bars)
+    assert [r['setup_time'] for r in rows] == [bars[1]['time'], bars[3]['time']]
+    assert rows[0]['result'] == 'SL' and rows[1]['result'] == 'Target' and rows[1]['reason'] == 'virgin CPR second'
+    assert rows[0]['first_candle'] == rows[1]['first_candle']            # the analysis repeats, as the sheet does
+    assert rows[0]['note'].startswith('Analysis added from the chart') and 'Trade by rule:' in rows[0]['note']
+    assert rows[1]['note'].startswith("Trade by rule (2nd, after the first trade's SL):")
+    assert svc.chart_row(res['rows'][0], bars) == rows[0]
+
+    monkeypatch.setattr(svc, 'MANUAL_DIR', str(tmp_path))
+    with open(tmp_path / 'NIFTY.json', 'w') as fh:
+        json.dump({'symbol': 'NIFTY', 'source': 'test', 'rows': [
+            {'date': daily[-2]['date'].isoformat(), 'price_vs_daily': 'Above', 'trade': None}]}, fh)
+    monkeypatch.setattr(svc, 'fetch_bars', lambda symbol, first, last, fresh=False: (daily, intraday))
+    out = svc.extend('NIFTY', upto=daily[-1]['date'])
+    assert out['added'] == [ds]                                           # one session ...
+    doc = json.load(open(tmp_path / 'NIFTY.json'))
+    assert [r['date'] for r in doc['rows']][1:] == [ds, ds]                # ... two rows
+    assert len(out['trades']) == 2
+
+
 def test_extend_route(client, monkeypatch):
     monkeypatch.setattr(svc, 'extend', lambda symbol: {'success': True, 'symbol': symbol, 'added': ['2026-09-16']})
     body = client.post('/api/trend/cpr-backtest/update', json={'symbol': 'nifty'}).get_json()

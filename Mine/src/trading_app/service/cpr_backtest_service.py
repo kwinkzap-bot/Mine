@@ -548,6 +548,12 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
             'first_candle': candle,
             'levels': {k: _r(v) for k, v in lv.items()},
             'weekly': {k: _r(wlv[k]) for k in ('pp', 'bc', 'tc')} if wlv else None,
+            # Yesterday's CPR, and whether yesterday's range left it untouched
+            # — a virgin CPR, the level the trade rule's late rejection needs
+            # stacked on PDH/R1 (1 Sept 2026: 31 Aug's 24,133-24,161 over
+            # PDH 24,129 / R1 24,142).
+            'prev_cpr': {'pp': _r(lv_y['pp']), 'bc': _r(lv_y['bc']), 'tc': _r(lv_y['tc']),
+                         'virgin': not (prev['low'] <= lv_y['tc'] and prev['high'] >= lv_y['bc'])},
             'prev_session': {'date': prev['date'].isoformat(), 'high': _r(prev['high']),
                              'low': _r(prev['low']), 'close': _r(prev['close'])},
             'day': {'open': _r(daily[idx]['open']), 'high': _r(daily[idx]['high']),
@@ -723,17 +729,30 @@ def last_complete_session(now: Optional[datetime] = None) -> date:
     return now.date() - timedelta(days=1)
 
 
-def chart_row(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """One manual-side row, in scripts/import_cpr_manual.py's shape, from
+def rule_note(why: str, sim: Optional[Dict[str, Any]], second: bool = False) -> str:
+    """The column-O note for a rule trade: the reason and the chart replay."""
+    from trading_app.service.cpr_trade_rule import RULE_TAG
+    tag = f"{RULE_TAG} (2nd, after the first trade's {sim and sim.get('after') or 'SL'})" if second else RULE_TAG
+    if not sim:
+        return f"{tag}: {why}"
+    return (f"{tag}: {why}; chart replay {sim['result']}"
+            + (f" {sim['entry_time']} -> {sim['exit_time']}" if sim['exit_time'] else '')
+            + (f", squared off at {sim['exit_time']}, P&L {sim['pnl']:+.0f}" if sim['result'] == 'EOD' and sim['pnl'] is not None else ''))
+
+
+def chart_rows(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The manual-side rows, in scripts/import_cpr_manual.py's shape, from
     the chart's reading of a session the sheet has not reached: the
-    analysis columns as add_cpr_sessions.py would write them, the trade as
-    propose_cpr_trades.py would. None when the session has no bars."""
-    from trading_app.service.cpr_trade_rule import RULE_TAG, propose
+    analysis columns as add_cpr_sessions.py would write them, the trades
+    as propose_cpr_trades.py would — one row per trade, the analysis
+    repeated on each as the sheet does, a single untraded row when the
+    rule finds nothing. Empty when the session has no bars."""
+    from trading_app.service.cpr_trade_rule import propose_all
     c = r.get('chart')
     if not c:
-        return None
+        return []
     fc = c['first_candle']
-    row: Dict[str, Any] = {
+    base: Dict[str, Any] = {
         'date': r['date'],
         'price_vs_daily': c['price_vs_daily'],
         'price_vs_hourly': c['price_vs_hourly'],
@@ -744,21 +763,24 @@ def chart_row(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> Optional[Dict[st
         'trade': None, 'entry': None, 'target': None, 'sl': None,
         'result': None, 'pnl': None, 'reason': None, 'setup_time': None,
     }
-    note = (f"Analysis added from the chart (Fyers 5-min): CPR {abs(c['levels']['tc'] - c['levels']['bc']):.1f} pts "
-            f"({c['width_pct']}%), 09:15 candle O {fc['open']} H {fc['high']} L {fc['low']} C {fc['close']}")
-    p, why, setup_i = propose(c, bars)
-    if p:
-        sim = simulate_trade(bars[setup_i:], p['trade'], p['entry'], p['target'], p['sl'])
-        if sim['result'] != 'No fill':
+    analysis = (f"Analysis added from the chart (Fyers 5-min): CPR {abs(c['levels']['tc'] - c['levels']['bc']):.1f} pts "
+                f"({c['width_pct']}%), 09:15 candle O {fc['open']} H {fc['high']} L {fc['low']} C {fc['close']}")
+    rows = []
+    for k, (p, why, setup_i, sim) in enumerate(propose_all(c, bars)):
+        row = dict(base)
+        if p and sim['result'] != 'No fill':
             row.update(trade=p['trade'], entry=p['entry'], target=p['target'], sl=p['sl'],
                        result=sim['result'], pnl=sim['pnl'], reason=why,
                        setup_time=bars[setup_i]['time'])
-        note += (f" | {RULE_TAG}: {why}; chart replay {sim['result']}"
-                 + (f" {sim['entry_time']} -> {sim['exit_time']}" if sim['exit_time'] else ''))
-    else:
-        note += f" | {RULE_TAG}: {why}"
-    row['note'] = note
-    return row
+        row['note'] = (analysis + ' | ' if k == 0 else '') + rule_note(why, sim if p else None, second=k > 0)
+        rows.append(row)
+    return rows
+
+
+def chart_row(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The first of `chart_rows` — the session's row, or its first trade."""
+    rows = chart_rows(r, bars)
+    return rows[0] if rows else None
 
 
 def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
@@ -782,9 +804,9 @@ def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
     if sessions:
         res = analyse([{'date': ds} for ds in sessions], daily, intraday)
         for r in res['rows']:
-            row = chart_row(r, intraday.get(r['date']) or [])
-            if row:
-                added.append(row)
+            rows_for = chart_rows(r, intraday.get(r['date']) or [])
+            if rows_for:
+                added.extend(rows_for)
             else:
                 skipped.append({'date': r['date'], 'error': r.get('error')})
     if added:
@@ -798,7 +820,7 @@ def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
     logger.info(f"[CPR backtest] {symbol.upper()}: extended {last_have} -> {upto}, "
                 f"{len(added)} sessions added, {len(skipped)} skipped")
     return {'success': True, 'symbol': symbol.upper(), 'last': last_have.isoformat(),
-            'upto': upto.isoformat(), 'added': [r['date'] for r in added], 'skipped': skipped,
+            'upto': upto.isoformat(), 'added': list(dict.fromkeys(r['date'] for r in added)), 'skipped': skipped,
             'trades': [{'date': r['date'], 'trade': r['trade'], 'entry': r['entry'],
                         'target': r['target'], 'sl': r['sl'], 'result': r['result'], 'pnl': r['pnl']}
                        for r in added if r['trade']]}

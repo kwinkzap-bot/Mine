@@ -616,17 +616,19 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
         # CANCELLED by hand on the strip is left alone — that was a decision —
         # and the price guard below still covers the position.
         lots = int(slot.get('open_lots') or 0) or max(open_qty // (int(call.get('lot_size') or 1) or 1), 1)
-        placed = _place_stop_leg(call, instance, lots, float(call['stop']),
+        placed = _place_stop_leg(call, instance, lots, slot_stop(call, slot),
                                  username, session_data, source='telegram')
         if placed:
             TgCallStore.update_broker(call_id, instance, {'legs': {**legs, 'SL': placed}})
             sl = _record(placed)
 
-    # A resting stop that is not at the plan's level — the channel edited the
-    # SL and the broker refused the move — is retried here every tick. If the
-    # premium is already through the edited level, the stale order is not
-    # protection any more: it is cancelled and the position sold at market.
-    want = float(call['stop'])
+    # A resting stop that is not at this account's level — the channel edited
+    # the SL and the broker refused the move — is retried here every tick. A
+    # level the user set by hand on the strip IS this account's level (see
+    # note_manual_edit), so it is never moved back. If the premium is already
+    # through the wanted level, the stale order is not protection any more:
+    # it is cancelled and the position sold at market.
+    want = slot_stop(call, slot)
     if _is_resting(sl) and abs(float(sl.get('trigger_price') or 0) - want) >= 0.05:
         if ltp is not None and reached(exit_side('BUY'), ltp, want):
             logger.error(f"[TgCall] {call_id} broker {instance}: premium {ltp} is through the "
@@ -685,6 +687,51 @@ def stop_all_calls(username, session_data, reason='exit-all') -> int:
 
 def call_records(call_id: str) -> list:
     return signal_records(call_id)
+
+
+# ── the user changed their mind ───────────────────────────────────────────
+
+def slot_stop(call, slot) -> float:
+    """The level this account's stop is meant to rest at: a hand-set level
+    on the slot wins over the call's plan."""
+    return float(slot.get('stop_level') or call['stop'])
+
+
+def note_manual_edit(order, new_price, new_limit=None) -> dict:
+    """The strip's price box moved one of this engine's legs. Record it, so
+    the tick manages the position on the number the user chose instead of
+    moving the order back to the plan's.
+
+    * SL leg   → that account's ``stop_level``. Per account, deliberately:
+                 a stop moved by hand on one account says nothing about the
+                 other. A later edit of the channel message overrides it.
+    * ENTRY leg → the call's entry and limit (still resting, so it is one
+                 order per account anyway; the plan follows it).
+    """
+    call_id = str(order.get('signal_id') or '')
+    if not call_id.startswith('tg-'):
+        return {}
+    call = TgCallStore.get(call_id)
+    if not call:
+        return {}
+    leg = str(order.get('leg') or '').upper()
+    instances = {int(l.get('instance') or 0) for l in (order.get('broker_order_ids') or [])}
+
+    if leg == 'SL':
+        for i in instances:
+            TgCallStore.update_broker(call_id, i, {'stop_level': float(new_price),
+                                                   'stop_source': 'manual'})
+        logger.info(f"[TgCall] {call_id} broker(s) {sorted(instances)}: stop set by hand to {new_price}")
+        return {'call_id': call_id, 'stop_level': float(new_price), 'instances': sorted(instances)}
+
+    if leg == 'ENTRY':
+        updates = {'entry': float(new_price)}
+        if new_limit:
+            updates['limit'] = float(new_limit)
+        TgCallStore.update(call_id, updates)
+        logger.info(f"[TgCall] {call_id}: entry set by hand to {new_price} (limit {new_limit})")
+        return {'call_id': call_id, **updates}
+    return {}
 
 
 # ── the channel changed its mind ──────────────────────────────────────────
@@ -841,8 +888,13 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
             else:
                 problems.append(f"{slot.get('name')}: stop modify refused — {r.get('error')}")
         # The plan's number moves regardless: a pending entry arms its stop
-        # from it, and a refused modify is retried against it by the tick.
+        # from it, and a refused modify is retried against it by the tick. A
+        # level set by hand earlier is superseded — the channel spoke later.
         TgCallStore.update(call_id, {'stop': stop})
+        for slot in slots:
+            if slot.get('stop_level'):
+                TgCallStore.update_broker(call_id, slot['instance'],
+                                          {'stop_level': None, 'stop_source': 'channel'})
         if not live and pending:
             changes.append(f'stop {old_stop} → {stop} (for when the entry fills)')
         elif live and not moved_any and not any('stop modify' in p for p in problems):
@@ -1067,4 +1119,5 @@ def stop() -> None:
 
 __all__ = ['take_call', 'validate_call', 'tg_targets', 'entry_limit', 'tick',
            'ensure_running', 'is_running', 'stop', 'stop_all_calls', 'call_records',
-           'remember_session', 'is_active', 'history', 'retract_call', 'amend_call', 'prewarm']
+           'remember_session', 'is_active', 'history', 'retract_call', 'amend_call', 'prewarm',
+           'note_manual_edit', 'slot_stop']

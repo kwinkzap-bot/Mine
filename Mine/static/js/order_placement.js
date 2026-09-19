@@ -506,12 +506,15 @@
                 : STAGE_TEXT[b.stage] || String(b.stage || '').toLowerCase();
             const fill = b.entry_fill ? ` · in at ₹${money(b.entry_fill)}` : '';
             const held = b.open_qty ? ` · ${esc(b.open_qty)} held` : '';
+            // A stop moved by hand on the strip is this account's own level.
+            const stop = b.stop_level && b.stage === 'LIVE'
+                ? ` · stop ₹${money(b.stop_level)} (manual)` : '';
             const pnl = b.booked && b.pnl != null
                 ? ` · <b class="${b.pnl >= 0 ? 'op-buy' : 'op-sell'}">${esc(DataGrid.inr(b.pnl))}</b>`
                   + ` (${esc(DataGrid.inr(b.pnl_per_lot))}/lot)` : '';
             return `<div class="op-sig-broker op-sig-${esc(String(b.stage || '').toLowerCase())}">`
                  + `<span class="op-sig-bname">${esc(b.name || `Broker ${b.instance}`)}</span>`
-                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${pnl}</span></div>`;
+                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${stop}${pnl}</span></div>`;
         }).join('');
 
         const done = ['DONE', 'CANCELLED', 'FAILED', 'SKIPPED'].includes(c.phase);

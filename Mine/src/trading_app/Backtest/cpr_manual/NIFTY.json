@@ -215,14 +215,15 @@
       "cpr_direction": "Asc",
       "first_candle": "Red candle close below the S1 but bit candle",
       "boxes": "Medium",
-      "trade": null,
-      "entry": null,
-      "target": null,
-      "sl": null,
-      "result": null,
-      "pnl": null,
-      "reason": null,
-      "setup_time": null
+      "trade": "SELL",
+      "entry": 25568.0,
+      "target": 25394.0,
+      "sl": 25655.0,
+      "result": "EOD",
+      "pnl": -24.25,
+      "reason": "09:15 candle opened at 25,653 inside PDL/S1 25,613-25,662 and closed below it at 25,597, but with a 69-pt lower wick \u2014 waited for 09:20; 09:20 small red candle held inside the wick (25,598-25,569) -> SELL under it; SL over the 09:15 high; target 1:2",
+      "setup_time": "09:20",
+      "note": "Trade by rule: 09:15 candle opened at 25,653 inside PDL/S1 25,613-25,662 and closed below it at 25,597, but with a 69-pt lower wick \u2014 waited for 09:20; 09:20 small red candle held inside the wick (25,598-25,569) -> SELL under it; SL over the 09:15 high; target 1:2; chart replay EOD 09:25 -> 15:15, squared off at 15:15, P&L -24"
     },
     {
       "date": "2026-01-20",
@@ -511,7 +512,8 @@
       "result": null,
       "pnl": null,
       "reason": null,
-      "setup_time": null
+      "setup_time": null,
+      "note": "Trade by rule: gap-up open 25,889 over R1/PDH 25,704-25,768, never reached; 09:20-09:30 base of 3 small candles (2 green); 09:35 strong red candle -> SELL under it; SL over its high; target 1:2 (R1 25,768 is only 12 pts away, inside the 29-pt risk); chart replay No fill"
     },
     {
       "date": "2026-02-10",
@@ -1320,14 +1322,15 @@
       "cpr_direction": "Dec",
       "first_candle": "In decision candle(doji) near S3",
       "boxes": "Medium",
-      "trade": null,
-      "entry": null,
-      "target": null,
-      "sl": null,
-      "result": null,
-      "pnl": null,
-      "reason": null,
-      "setup_time": null
+      "trade": "BUY",
+      "entry": 24249.0,
+      "target": 24315.0,
+      "sl": 24202.0,
+      "result": "SL",
+      "pnl": -47.0,
+      "reason": "gap-down open 24,202 under S1/PDL 24,315-24,353, never reached; 09:20-09:35 base of 4 small candles (2 red); 09:40 strong green candle -> BUY over it; SL under its low; target S1 24,315 (the gap fill)",
+      "setup_time": "09:40",
+      "note": "Trade by rule: gap-down open 24,202 under S1/PDL 24,315-24,353, never reached; 09:20-09:35 base of 4 small candles (2 red); 09:40 strong green candle -> BUY over it; SL under its low; target S1 24,315 (the gap fill); chart replay SL 09:45 -> 10:45"
     },
     {
       "date": "2026-04-24",
@@ -1684,7 +1687,8 @@
       "result": null,
       "pnl": null,
       "reason": null,
-      "setup_time": null
+      "setup_time": null,
+      "note": "Trade by rule: gap-up open 23,940 over R1/PDH 23,813-23,836, never reached; 09:20-09:25 base of 2 small candles (2 green); 09:30 strong red candle -> SELL under it and the 09:15 low 23,923; SL over its high; target PDH 23,836 (the gap fill); chart replay No fill"
     },
     {
       "date": "2026-05-26",
@@ -2075,7 +2079,8 @@
       "result": null,
       "pnl": null,
       "reason": null,
-      "setup_time": null
+      "setup_time": null,
+      "note": "Trade by rule: price above the weekly CPR (24,023-24,045) but below the daily CPR (24,087-24,150): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade"
     },
     {
       "date": "2026-06-30",
@@ -2857,7 +2862,26 @@
       "result": "SL",
       "pnl": -79.0,
       "reason": "09:15 candle rejected from the CPR (high 24,083 into 24,061-24,074, closed 24,041); target 1:2 (PDL 23,994 is only 22 pts away, inside the 79-pt risk)",
-      "setup_time": "09:15"
+      "setup_time": "09:15",
+      "note": "Trade by rule: 09:15 candle rejected from the CPR (high 24,083 into 24,061-24,074, closed 24,041); target 1:2 (PDL 23,994 is only 22 pts away, inside the 79-pt risk); chart replay SL 09:45 -> 11:05"
+    },
+    {
+      "date": "2026-09-01",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Dec",
+      "first_candle": "Strong candle red near S3(cam)",
+      "boxes": "Small",
+      "trade": "SELL",
+      "entry": 24122.0,
+      "target": 23994.0,
+      "sl": 24145.0,
+      "result": "Target",
+      "pnl": 128.0,
+      "reason": "virgin CPR 24,133-24,161 (yesterday's, untouched) on PDH/R1 24,129-24,142; 11:30 candle rejected from it (high 24,143, closed 24,125) -> SELL under it; SL over its high; target the CPR (BC 24,061), PDL 23,994 if a strong red candle breaks the CPR",
+      "setup_time": "11:30",
+      "note": "Trade by rule (2nd, after the first trade's SL): virgin CPR 24,133-24,161 (yesterday's, untouched) on PDH/R1 24,129-24,142; 11:30 candle rejected from it (high 24,143, closed 24,125) -> SELL under it; SL over its high; target the CPR (BC 24,061), PDL 23,994 if a strong red candle breaks the CPR; chart replay Target 11:35 -> 13:50"
     },
     {
       "date": "2026-09-02",
@@ -2918,14 +2942,15 @@
       "cpr_direction": "Asc",
       "first_candle": "Candle red near S1",
       "boxes": "Medium",
-      "trade": null,
-      "entry": null,
-      "target": null,
-      "sl": null,
-      "result": null,
-      "pnl": null,
-      "reason": null,
-      "setup_time": null
+      "trade": "SELL",
+      "entry": 23837.0,
+      "target": 23727.0,
+      "sl": 23892.0,
+      "result": "EOD",
+      "pnl": 76.7,
+      "reason": "09:15 candle opened at 23,883 inside PDL/S1 23,860-23,896 and closed below it at 23,859, but with a 40-pt lower wick \u2014 waited for 09:20; 09:20 small red candle held inside the wick (23,861-23,838) -> SELL under it; SL over the 09:15 high; target 1:2",
+      "setup_time": "09:20",
+      "note": "Trade by rule: 09:15 candle opened at 23,883 inside PDL/S1 23,860-23,896 and closed below it at 23,859, but with a 40-pt lower wick \u2014 waited for 09:20; 09:20 small red candle held inside the wick (23,861-23,838) -> SELL under it; SL over the 09:15 high; target 1:2; chart replay EOD 09:25 -> 15:15, squared off at 15:15, P&L +77"
     },
     {
       "date": "2026-09-08",
@@ -2986,14 +3011,15 @@
       "cpr_direction": "Dec",
       "first_candle": "Candle red near S3",
       "boxes": "Small",
-      "trade": null,
-      "entry": null,
-      "target": null,
-      "sl": null,
-      "result": null,
-      "pnl": null,
-      "reason": null,
-      "setup_time": null
+      "trade": "BUY",
+      "entry": 23279.0,
+      "target": 23380.0,
+      "sl": 23243.0,
+      "result": "Target",
+      "pnl": 101.0,
+      "reason": "gap-down open 23,270 under S1/PDL 23,380-23,407, never reached; 09:20-09:50 base of 7 small candles (6 red); 09:55 strong green candle -> BUY over it and the 09:15 high 23,277; SL under its low; target PDL 23,380 (the gap fill)",
+      "setup_time": "09:55",
+      "note": "Trade by rule: gap-down open 23,270 under S1/PDL 23,380-23,407, never reached; 09:20-09:50 base of 7 small candles (6 red); 09:55 strong green candle -> BUY over it and the 09:15 high 23,277; SL under its low; target PDL 23,380 (the gap fill); chart replay Target 10:05 -> 13:50"
     },
     {
       "date": "2026-09-15",
@@ -3047,7 +3073,25 @@
       "reason": "09:15 opened below the CPR 23,200-23,212 and closed above it at 23,256, near Cam R3 23,264 -> no entry on the first candle; 10:05 closed above PDH 23,285 and R1 23,296 (high 23,325 at 10:10), then broke back down; 11:05 tested the CPR (low 23,214) and the 11:10 candle closed green on it -> BUY; target the day high 23,325; SL below the CPR (BC 23,200)",
       "setup_time": "11:10",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 11.5 pts (0.049%), 09:15 candle O 23195.25 H 23263.25 L 23193.65 C 23255.95 | Trade by hand (17 Sept, from the chart): BUY 23,224 on the 11:10 green candle at the CPR after the R1/PDH breakout failed; chart replay Target 11:15 -> 12:05"
+    },
+    {
+      "date": "2026-09-18",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "In decision candle(doji) near R3(cam)",
+      "boxes": "Small",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": null,
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 5.3 pts (0.023%), 09:15 candle O 23334.7 H 23360.55 L 23315.4 C 23323.45 | Trade by rule: price below the weekly CPR (23,452-23,561) but above the daily CPR (23,273-23,279): SELL only on a close below the daily CPR \u2014 never closed below it by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-09-17 17:02"
+  "extended_at": "2026-09-18 19:12"
 }
