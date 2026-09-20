@@ -30,6 +30,20 @@
                 </select>
             </div>
             <div class="td-ctrl-group">
+                <!-- Year filter: the years the sheet covers; one year, or all of them -->
+                <select id="tdCprYear" class="td-select" title="Show one year of the sheet">
+                    <option value="">All years</option>
+                </select>
+            </div>
+            <div class="td-ctrl-group">
+                <!-- Strategy filter: a multi-select of the setups on the sheet; the grid shows
+                     only the sessions whose trade came from a ticked setup -->
+                <div class="td-msel" id="tdCprStrategyFilter">
+                    <button type="button" class="td-select td-msel-btn" id="tdCprStrategyFilterBtn" title="Show only the sessions traded by these setups">All strategies ▾</button>
+                    <div class="td-msel-panel hidden" id="tdCprStrategyFilterPanel"></div>
+                </div>
+            </div>
+            <div class="td-ctrl-group">
                 <!-- Which strike the Option column prices: ATM to the entry, or the strike
                      whose premium at the entry minute was nearest the chosen number -->
                 <select id="tdCprStrike" class="td-select" title="Strike for the Option column">
@@ -49,6 +63,8 @@
             <h2>CPR Manual vs Chart</h2>
             <div style="display:flex;align-items:center;gap:10px">
                 <div class="td-card-hdr-meta" id="tdCprMeta"></div>
+                <!-- Every setup the rule takes: how often it was used and how it did -->
+                <button type="button" class="td-btn" id="tdCprStrategies" title="The strategies behind the sheet's trades: uses, wins, losses, P&amp;L">Strategy list</button>
                 <!-- Appends every complete session after the sheet's last date, read from the chart -->
                 <button type="button" class="td-btn" id="tdCprUpdate" title="Add the sessions the sheet has not reached yet, read from the chart">Update</button>
             </div>
@@ -56,6 +72,37 @@
         <div class="td-cpr-sum" id="tdCprSummary"></div>
         <div id="tdCprBacktest"><span style="font-size:11px;color:var(--td-muted)">Loading the CPR sheet…</span></div>
         <div class="td-cpr-note" id="tdCprNote"></div>
+    </div>
+
+    <!-- Strategy list popup -->
+    <div class="td-modal hidden" id="tdCprStrategyModal">
+        <div class="td-modal-card">
+            <div class="td-card-hdr">
+                <h2>Strategy list</h2>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                    <div class="td-card-hdr-meta" id="tdCprStrategyMeta"></div>
+                    <input type="search" class="td-select td-strat-search" id="tdCprStrategySearch" placeholder="Search a setup…" title="Filter by name or words in the setup">
+                    <select class="td-select" id="tdCprStrategySort" title="Sort the cards">
+                        <option value="trades">Most used</option>
+                        <option value="opt_pnl">Best option P&amp;L</option>
+                        <option value="win_pct">Best win rate</option>
+                        <option value="opt_avg">Best per trade</option>
+                        <option value="last">Recently used</option>
+                        <option value="name">A → Z</option>
+                    </select>
+                    <!-- Re-reads the sheet and the chart so the tally reflects the latest rule changes -->
+                    <button type="button" class="td-btn" id="tdCprStrategyRefresh" title="Re-read the sheet and recount">Update</button>
+                    <button type="button" class="td-btn" id="tdCprStrategyClose" title="Close (Esc)">✕</button>
+                </div>
+            </div>
+            <!-- The totals across every strategy -->
+            <div class="td-strat-totals" id="tdCprStrategyTotals"></div>
+            <!-- One card per setup; click a card to open its how-to -->
+            <div class="td-strat-list" id="tdCprStrategyGrid"></div>
+            <div class="td-cpr-note">One card per setup the trade rule takes, read off each trade's reason. Click a card to open or close its
+                how-to. <b>Win</b> / <b>loss</b> by the sheet's P&amp;L sign; <b>P&amp;L (Opt)</b> is the premium made on the option legs of those
+                trades at the strike rule picked in the dropdown; the index points are the sheet's own figure.</div>
+        </div>
     </div>
 
 </div>

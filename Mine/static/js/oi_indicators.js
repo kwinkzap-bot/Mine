@@ -1040,16 +1040,18 @@ function oipCalculateVWAP(candles) {
     // every single candle and returned an empty series, which is why VWAP drew
     // nothing on the Replay chart while working fine on the option panes.
     //
-    // When the whole series is volume-less, weight each bar equally: that makes
+    // When a period is volume-less, weight each of its bars equally: that makes
     // it a running average of the typical price, which is what VWAP degrades to
-    // without volume and what charting platforms plot for an index. A series
-    // that HAS volume is untouched.
-    const volumeless = !candles.some(c => (c.volume || 0) > 0);
-    let cumPV = 0, cumV = 0, lastDate = null;
+    // without volume and what charting platforms plot for an index. A period
+    // that HAS volume is untouched. Decided per anchor period, not once for the
+    // series: Fyers' index history carries volume from 2025-07-01 and zero
+    // before it, so one flag for the lot dropped every older bar.
+    const volumeByPeriod = _oipVolumeByPeriod(candles, anchor);
+    let cumPV = 0, cumV = 0, lastDate = null, volumeless = true;
     const result = [];
     candles.forEach(c => {
         const date = _oipPeriodKey(c.time, anchor);
-        if (date !== lastDate) { cumPV = 0; cumV = 0; lastDate = date; }
+        if (date !== lastDate) { cumPV = 0; cumV = 0; lastDate = date; volumeless = !volumeByPeriod[date]; }
         const vol = volumeless ? 1 : (c.volume || 0);
         if (vol <= 0) return;
         cumPV += ((c.high + c.low + c.close) / 3) * vol;
@@ -1060,6 +1062,13 @@ function oipCalculateVWAP(candles) {
         }
     });
     return result;
+}
+
+// Which anchor periods of `candles` carry any traded volume at all.
+function _oipVolumeByPeriod(candles, anchor) {
+    const out = {};
+    for (const c of candles) if ((c.volume || 0) > 0) out[_oipPeriodKey(c.time, anchor)] = true;
+    return out;
 }
 
 // CVWAP — alias for the current-period VWAP (the trading day on an intraday
@@ -1077,21 +1086,23 @@ function oipCalculateCVWAP(candles) {
 // `vol <= 0` skip would drop every candle and leave each period's closing VWAP
 // null — which is exactly why both of these drew nothing on the Replay chart
 // while CVWAP, which already had the fallback, drew fine. Weight each bar
-// equally in that case; a series that HAS volume is untouched.
+// equally in that case, per period (see oipCalculateVWAP); a period that HAS
+// volume is untouched.
 function _oipClosingVwapByPeriod(candles) {
     const anchor = oipAnchorPeriod();
     const dateOf = (t) => _oipPeriodKey(t, anchor);
-    const volumeless = !candles.some(c => (c.volume || 0) > 0);
+    const volumeByPeriod = _oipVolumeByPeriod(candles, anchor);
 
     const finalVwap = {};
     const dayOrder = [];
-    let cumPV = 0, cumV = 0, lastDate = null, lastVwap = null;
+    let cumPV = 0, cumV = 0, lastDate = null, lastVwap = null, volumeless = true;
     candles.forEach(c => {
         const date = dateOf(c.time);
         if (date !== lastDate) {
             if (lastDate !== null) finalVwap[lastDate] = lastVwap;
             cumPV = 0; cumV = 0; lastVwap = null; lastDate = date;
             dayOrder.push(date);
+            volumeless = !volumeByPeriod[date];
         }
         const vol = volumeless ? 1 : (c.volume || 0);
         if (vol <= 0) return;

@@ -17,6 +17,29 @@ document.addEventListener('DOMContentLoaded', () => {
     tdElems.cprNote    = document.getElementById('tdCprNote');
     tdElems.cprUpdate  = document.getElementById('tdCprUpdate');
     tdElems.cprStrike  = document.getElementById('tdCprStrike');
+    tdElems.year        = document.getElementById('tdCprYear');
+    tdElems.year.addEventListener('change', () => {
+        _tdCprState.year = tdElems.year.value;
+        try { localStorage.setItem('cpr-logic-year', _tdCprState.year); } catch (e) { /* no storage */ }
+        if (_tdCprState.data) renderCprBacktest(_tdCprState.data);
+    });
+    try { _tdCprState.year = localStorage.getItem('cpr-logic-year') || ''; } catch (e) { /* no storage */ }
+    tdElems.filterBtn   = document.getElementById('tdCprStrategyFilterBtn');
+    tdElems.filterPanel = document.getElementById('tdCprStrategyFilterPanel');
+    tdElems.filterBtn.addEventListener('click', e => { e.stopPropagation(); tdElems.filterPanel.classList.toggle('hidden'); });
+    tdElems.filterPanel.addEventListener('click', e => e.stopPropagation());
+    document.addEventListener('click', () => tdElems.filterPanel.classList.add('hidden'));
+    try { _tdCprState.filter = new Set(JSON.parse(localStorage.getItem('cpr-logic-strategy-filter') || '[]')); } catch (e) { /* no storage */ }
+    tdElems.strategyModal = document.getElementById('tdCprStrategyModal');
+    tdElems.strategyGrid  = document.getElementById('tdCprStrategyGrid');
+    tdElems.strategyMeta  = document.getElementById('tdCprStrategyMeta');
+    document.getElementById('tdCprStrategies').addEventListener('click', showCprStrategies);
+    document.getElementById('tdCprStrategyClose').addEventListener('click', hideCprStrategies);
+    document.getElementById('tdCprStrategyRefresh').addEventListener('click', refreshCprStrategies);
+    document.getElementById('tdCprStrategySort').addEventListener('change', renderCprStrategyCards);
+    document.getElementById('tdCprStrategySearch').addEventListener('input', renderCprStrategyCards);
+    tdElems.strategyModal.addEventListener('click', e => { if (e.target === tdElems.strategyModal) hideCprStrategies(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCprStrategies(); });
     tdElems.cprUpdate.addEventListener('click', updateCprBacktest);
     tdElems.symbol.addEventListener('change', loadCprBacktest);
     // A new strike choice only re-reads the option legs; the sheet stays.
@@ -65,10 +88,236 @@ async function loadCprBacktest() {
     }
 }
 
+// ---- Strategy list ----
+// The setups the rule takes, from summary.strategies, as cards: a stat
+// strip per setup (uses, win/loss, win rate, option P&L) and, opened on
+// click, the setup in words — when, entry, stop, target, example.
+const _tdStratOpen = new Set();                 // cards left open across re-renders
+
+function _tdCprStrategyRows() {
+    const d = _tdCprState.data;
+    const list = ((d.summary && d.summary.strategies) || []).map(s => Object.assign({}, s, { opt_pnl: 0, opt_n: 0 }));
+    const o = _tdCprState.options;
+    const ready = o && o.status === 'ready';
+    const byName = Object.fromEntries(list.map(s => [s.name, s]));
+    for (const s of list) s.days = [];
+    // Every trade of every setup, with its option leg when the legs are in.
+    for (const r of d.rows) r.trades.forEach((t, i) => {
+        const s = byName[t.strategy];
+        if (!s) return;
+        const leg = ready ? _tdCprLeg(r.date, i) : null;
+        if (leg && leg.pnl != null) { s.opt_pnl += leg.pnl; s.opt_n += 1; }
+        s.days.push({ date: r.date, i, m: t.manual, c: t.chart, leg });
+    });
+    for (const s of list) { s.opt_avg = s.opt_n ? s.opt_pnl / s.opt_n : 0; s.days.sort((a, b) => b.date.localeCompare(a.date)); }
+    return { list, ready, lot: ready ? o.summary.lot : null, rule: ready ? (o.premium ? `≈${o.premium} strike` : 'ATM') : null };
+}
+
+function showCprStrategies() {
+    const d = _tdCprState.data;
+    if (!d) return;
+    const { list, ready, lot, rule } = _tdCprStrategyRows();
+    const total = list.reduce((a, s) => a + s.trades, 0);
+    tdElems.strategyMeta.textContent = `${d.symbol} · ${list.length} strategies · ${total} trades` + (rule ? ` · option P&L at ${rule}` : '');
+
+    // Totals strip
+    const wins = list.reduce((a, s) => a + s.wins, 0), losses = list.reduce((a, s) => a + s.losses, 0);
+    const optPnl = list.reduce((a, s) => a + s.opt_pnl, 0), idxPnl = list.reduce((a, s) => a + s.pnl, 0);
+    const best = list.filter(s => s.opt_n).sort((a, b) => b.opt_pnl - a.opt_pnl)[0];
+    const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
+    const tile = (l, v, s = '') => `<div class="td-strat-total"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
+    document.getElementById('tdCprStrategyTotals').innerHTML =
+        tile('Trades', total, `${list.length} setups`) +
+        tile('Win / loss', `<span class="dg-pos">${wins}</span> / <span class="dg-neg">${losses}</span>`, wins + losses ? `${Math.round(100 * wins / (wins + losses))}% win rate` : '') +
+        tile('Option P&L', ready ? `<span class="${cls(optPnl)}">${_tdNum(optPnl, 0)}</span> pts` : 'reading…', ready && lot ? `₹${_tdNum(optPnl * lot, 0)} per lot` : '') +
+        tile('Index P&L', `<span class="${cls(idxPnl)}">${_tdNum(idxPnl, 0)}</span> pts`, 'the sheet\'s figure') +
+        tile('Best setup', best ? _tdEsc(best.name) : '—', best ? `<span class="${cls(best.opt_pnl)}">${_tdNum(best.opt_pnl, 0)}</span> option pts` : '');
+
+    renderCprStrategyCards();
+    tdElems.strategyModal.classList.remove('hidden');
+    document.body.classList.add('td-modal-open');       // the page stops scrolling behind the popup
+}
+
+function renderCprStrategyCards() {
+    const { list, ready, lot } = _tdCprStrategyRows();
+    const sortKey = document.getElementById('tdCprStrategySort').value;
+    const q = document.getElementById('tdCprStrategySearch').value.trim().toLowerCase();
+    const text = s => [s.name, s.how && s.how.setup, s.how && s.how.entry, s.how && s.how.target].join(' ').toLowerCase();
+    const rows = list.filter(s => !q || text(s).includes(q));
+    const desc = k => (a, b) => (b[k] ?? -Infinity) - (a[k] ?? -Infinity) || b.trades - a.trades;
+    const sorters = { trades: desc('trades'), opt_pnl: desc('opt_pnl'), win_pct: desc('win_pct'), opt_avg: desc('opt_avg'),
+                      last: (a, b) => (b.last || '').localeCompare(a.last || ''), name: (a, b) => a.name.localeCompare(b.name) };
+    rows.sort(sorters[sortKey] || sorters.trades);
+
+    const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
+    const stat = (l, v, s = '') => `<div class="td-strat-stat"><span class="l">${l}</span><span class="v">${v}</span>${s ? `<span class="s">${s}</span>` : ''}</div>`;
+    const opt = (s, v, fmt) => !ready ? '<span class="td-cpr-opt-wait">reading…</span>' : s.opt_n ? `<span class="${cls(v)}">${fmt(v)}</span>` : '<span class="dg-muted">—</span>';
+    const row = (k, label, v, extra = '') => `<div class="td-strat-row ${extra}"><span class="k ${k}">${label}</span><span>${_tdEsc(v || '—')}</span></div>`;
+    const html = rows.map(s => {
+        const wl = s.wins + s.losses;
+        const bar = wl ? `<div class="td-strat-bar"><i class="w" style="width:${100 * s.wins / wl}%"></i><i class="x" style="width:${100 * s.losses / wl}%"></i></div>` : '';
+        const how = s.how || {};
+        return `<div class="td-strat-card${_tdStratOpen.has(s.name) ? ' open' : ''}" data-name="${_tdEsc(s.name)}">
+            <div class="td-strat-head">
+                <div class="td-strat-name">${_tdEsc(s.name)}<small>${_tdEsc((how.setup || '').split(/\.\s|\s—\s/)[0])}</small>${bar}</div>
+                ${stat('Used', s.trades, s.last ? `last ${s.last}` : '')}
+                ${stat('Win / loss', `<span class="dg-pos">${s.wins}</span> / <span class="dg-neg">${s.losses}</span>`, s.flat ? `${s.flat} flat` : '')}
+                ${stat('Win rate', s.win_pct == null ? '—' : `${_tdNum(s.win_pct, 0)}%`, `T ${s.targets} · SL ${s.stops} · EOD ${s.eod}`)}
+                ${stat('Option P&L', opt(s, s.opt_pnl, x => _tdNum(x, 0)), ready && lot && s.opt_n ? `₹${_tdNum(s.opt_pnl * lot, 0)}/lot` : '')}
+                ${stat('Per trade', opt(s, s.opt_avg, x => _tdNum(x, 1)), 'option pts')}
+                ${stat('Index', `<span class="${cls(s.pnl)}">${_tdNum(s.pnl, 0)}</span>`, 'pts')}
+                <div class="td-strat-chev">▶</div>
+            </div>
+            <div class="td-strat-body">
+                ${row('setup', 'Setup', how.setup, 'setup')}
+                ${row('entry', 'Entry', how.entry)}
+                ${row('stop', 'Stop', how.stop)}
+                ${row('target', 'Target', how.target)}
+                ${how.example ? row('example', 'Example', how.example, 'example') : ''}
+                ${_tdCprStrategyDays(s, ready, lot)}
+            </div>
+        </div>`;
+    }).join('');
+    tdElems.strategyGrid.innerHTML = html || `<div class="td-strat-empty">No setup matches “${_tdEsc(q)}”</div>`;
+    tdElems.strategyGrid.querySelectorAll('.td-strat-head').forEach(h => h.addEventListener('click', () => {
+        const card = h.parentElement, name = card.dataset.name;
+        card.classList.toggle('open');
+        if (card.classList.contains('open')) _tdStratOpen.add(name); else _tdStratOpen.delete(name);
+    }));
+}
+
+// The days a setup traded, newest first: the index trade and its result,
+// and the option leg's P&L when the legs are in.
+function _tdCprStrategyDays(s, ready, lot) {
+    if (!s.days.length) return '';
+    const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : 'dg-muted';
+    const res = r => r === 'Target' ? 'dg-pos' : r === 'SL' ? 'dg-neg' : '';
+    const rows = s.days.map(({ date, m, c, leg }) => {
+        const opt = !ready ? '<span class="td-cpr-opt-wait">reading…</span>'
+                  : leg && leg.pnl != null ? `<span class="${cls(leg.pnl)}">${_tdNum(leg.pnl, 2)}</span><small>₹${_tdNum(leg.pnl * (lot || 0), 0)}</small>`
+                  : '<span class="dg-muted">—</span>';
+        const contract = leg && leg.strike ? `${leg.strike} ${leg.option_type}` : '';
+        const when = c && c.entry_time ? `${c.entry_time}${c.exit_time ? ' → ' + c.exit_time : ''}` : '';
+        return `<tr>
+            <td class="d">${date}</td>
+            <td><b class="${m.trade === 'BUY' ? 'dg-pos' : 'dg-neg'}">${m.trade}</b></td>
+            <td class="n">${_tdNum(m.entry, 0)}</td>
+            <td class="n">${_tdNum(m.sl, 0)}</td>
+            <td class="n">${_tdNum(m.target, 0)}</td>
+            <td><span class="${res(m.result)}">${_tdEsc(m.result || '—')}</span><small>${_tdEsc(when)}</small></td>
+            <td class="n"><span class="${cls(m.pnl)}">${m.pnl == null ? '—' : _tdNum(m.pnl, 0)}</span></td>
+            <td class="n">${opt}<small>${_tdEsc(contract)}</small></td>
+        </tr>`;
+    }).join('');
+    const idx = s.days.reduce((a, x) => a + (x.m.pnl || 0), 0);
+    return `<div class="td-strat-days">
+        <div class="td-strat-days-hd">Days traded <span>${s.days.length} · index ${_tdNum(idx, 0)} pts${ready && s.opt_n ? ` · option ${_tdNum(s.opt_pnl, 2)} pts` : ''}</span></div>
+        <table class="td-strat-tbl">
+            <thead><tr><th>Date</th><th>Side</th><th class="n">Entry</th><th class="n">SL</th><th class="n">Target</th><th>Result</th><th class="n">Index pts</th><th class="n">Option pts</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    </div>`;
+}
+
+function hideCprStrategies() {
+    tdElems.strategyModal.classList.add('hidden');
+    document.body.classList.remove('td-modal-open');
+}
+
+// The popup's Update: re-read the sheet and the chart (the same call the
+// page loads with), redraw the main grid from it, and recount the
+// strategies — so a rule change or a sheet edit shows without a reload.
+async function refreshCprStrategies() {
+    const btn = document.getElementById('tdCprStrategyRefresh');
+    const symbol = tdElems.symbol.value;
+    btn.disabled = true;
+    btn.textContent = 'Updating…';
+    try {
+        const res = await fetch(`/api/trend/cpr-backtest?symbol=${encodeURIComponent(symbol)}`);
+        const data = await res.json();
+        if (!data || !data.success) {
+            tdElems.strategyMeta.textContent = `Update failed: ${(data && data.error) || res.status}`;
+            return;
+        }
+        _tdCprState.data = data;
+        renderCprBacktest(data);          // keeps the option legs already loaded
+        showCprStrategies();
+        tdElems.strategyMeta.textContent += ` · updated ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+    } catch (err) {
+        tdElems.strategyMeta.textContent = `Update failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Update';
+    }
+}
+
 // The grid's last payload and the option legs behind its trades. The legs
 // come from a second call — one Breeze request per trade, so a cold read
 // of a long sheet takes a minute — and the grid re-renders when they land.
-const _tdCprState = { data: null, options: null };
+const _tdCprState = { data: null, options: null, filter: new Set(), year: '' };   // filter: the ticked strategy names (empty = all); year: '' = all
+
+// ---- Year filter ----
+// The years the sheet's dates span, newest first; picking one shows that
+// year's sessions only. The choice is kept across reloads.
+function renderCprYearFilter() {
+    const d = _tdCprState.data;
+    if (!d) return;
+    const years = [...new Set(d.rows.map(r => r.date.slice(0, 4)))].sort().reverse();
+    if (_tdCprState.year && !years.includes(_tdCprState.year)) _tdCprState.year = '';
+    tdElems.year.innerHTML = `<option value="">All years</option>` + years.map(y => {
+        const n = d.rows.filter(r => r.date.startsWith(y)).length;
+        return `<option value="${y}"${y === _tdCprState.year ? ' selected' : ''}>${y} (${n})</option>`;
+    }).join('');
+    tdElems.year.classList.toggle('td-msel-on', !!_tdCprState.year);
+}
+
+function _tdCprYearMatches(r) {
+    return !_tdCprState.year || r.date.startsWith(_tdCprState.year);
+}
+
+// ---- Strategy filter ----
+// The dropdown next to the symbol: one checkbox per setup on the sheet,
+// with its trade count and index P&L. Ticked setups filter the grid to
+// the sessions they traded; nothing ticked shows every session.
+function _tdCprFilterActive() {
+    return _tdCprState.filter.size > 0;
+}
+
+function _tdCprRowMatches(r) {
+    return !_tdCprFilterActive() || r.trades.some(t => _tdCprState.filter.has(t.strategy));
+}
+
+function renderCprStrategyFilter() {
+    const d = _tdCprState.data;
+    if (!d) return;
+    const list = ((d.summary && d.summary.strategies) || []).slice().sort((a, b) => b.trades - a.trades);
+    const names = new Set(list.map(s => s.name));
+    for (const n of [..._tdCprState.filter]) if (!names.has(n)) _tdCprState.filter.delete(n);   // a setup no longer on the sheet
+    const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : 'dg-muted';
+    tdElems.filterPanel.innerHTML =
+        `<div class="td-msel-hd"><button type="button" class="td-btn" data-act="all">All</button><button type="button" class="td-btn" data-act="none">None</button></div>` +
+        list.map(s => `<label class="td-msel-row"><input type="checkbox" value="${_tdEsc(s.name)}"${_tdCprState.filter.has(s.name) ? ' checked' : ''}>`
+            + `<span>${_tdEsc(s.name)}</span><span class="n">${s.trades}</span><span class="pnl ${cls(s.pnl)}">${_tdNum(s.pnl, 0)}</span></label>`).join('');
+    tdElems.filterPanel.querySelectorAll('input').forEach(cb => cb.addEventListener('change', () => {
+        if (cb.checked) _tdCprState.filter.add(cb.value); else _tdCprState.filter.delete(cb.value);
+        _tdCprFilterChanged();
+    }));
+    tdElems.filterPanel.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+        _tdCprState.filter = b.dataset.act === 'all' ? new Set(list.map(s => s.name)) : new Set();
+        renderCprStrategyFilter();
+        _tdCprFilterChanged();
+    }));
+    const n = _tdCprState.filter.size;
+    tdElems.filterBtn.textContent = !n ? 'All strategies ▾'
+        : n === 1 ? `${[..._tdCprState.filter][0]} ▾` : `${n} strategies ▾`;
+    tdElems.filterBtn.classList.toggle('td-msel-on', n > 0);
+}
+
+function _tdCprFilterChanged() {
+    try { localStorage.setItem('cpr-logic-strategy-filter', JSON.stringify([..._tdCprState.filter])); } catch (e) { /* no storage */ }
+    renderCprStrategyFilter();
+    if (_tdCprState.data) renderCprBacktest(_tdCprState.data);
+}
 
 // The strike choice: '' for ATM, else the premium the strike is picked by.
 function _tdCprPremium() {
@@ -320,12 +569,28 @@ function renderCprBacktest(d) {
 
     // Row-level fields the grid reads by key (sort, format) come from the
     // manual side; the chart side is reached through `r.chart`.
-    const gridRows = rows.map(r => Object.assign({}, r.manual, r));
+    renderCprYearFilter();
+    const shown = rows.filter(r => _tdCprYearMatches(r) && _tdCprRowMatches(r));
+    const gridRows = shown.map(r => Object.assign({}, r.manual, r));
+    if (_tdCprFilterActive() || _tdCprState.year) {
+        // The filtered tally: only the trades of the ticked setups, and their option legs.
+        const trades = shown.flatMap(r => r.trades.map((t, i) => ({ t, leg: _tdCprLeg(r.date, i) })).filter(x => !_tdCprFilterActive() || _tdCprState.filter.has(x.t.strategy)));
+        const pnl = trades.reduce((a, x) => a + (x.t.manual.pnl || 0), 0);
+        const wins = trades.filter(x => (x.t.manual.pnl || 0) > 0).length;
+        const opt = trades.reduce((a, x) => a + (x.leg && x.leg.pnl != null ? x.leg.pnl : 0), 0);
+        const ready = _tdCprState.options && _tdCprState.options.status === 'ready';
+        const pcls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+        const label = [_tdCprState.year || '', _tdCprFilterActive() ? `${_tdCprState.filter.size} strateg${_tdCprState.filter.size === 1 ? 'y' : 'ies'}` : ''].filter(Boolean).join(' · ');
+        tdElems.cprSummary.innerHTML += `<span class="td-cpr-chip td-cpr-chip-filter">${_tdEsc(label)}: <b>${shown.length}</b> sessions · <b>${trades.length}</b> trades · `
+            + `<b class="${pcls(pnl)}">${_tdNum(pnl, 0)}</b> pts · ${wins}/${trades.length} wins`
+            + (ready ? ` · option <b class="${pcls(opt)}">${_tdNum(opt, 2)}</b> pts` : '') + `</span>`;
+    }
+    renderCprStrategyFilter();
 
     DataGrid.mountSortable(tdElems.cprGrid, {
         rows: gridRows,
         columns,
-        empty: 'The sheet has no analysed sessions yet',
+        empty: _tdCprFilterActive() || _tdCprState.year ? 'No session matches the year / strategy filter' : 'The sheet has no analysed sessions yet',
         defaultSort: { key: 'date', dir: 'desc' },   // newest session on top
         rowClass: r => (r.chart ? '' : 'td-cpr-row-nodata') + (r.trades.length > 1 ? ' td-cpr-row-multi' : ''),
         detail: r => r.trades.length > 1 ? _tdCprTradesGrid(r) : '',   // only multi-trade days expand

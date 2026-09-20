@@ -87,11 +87,13 @@ def test_leg_prices_entry_and_the_level_that_closed_it_and_estimates_the_other()
 
 
 def test_leg_books_the_stop_at_its_minute():
-    spot = _minutes('09:15', [120] * 5 + [120 - i for i in range(30)], step=0.4)   # falls through 110 then 100
-    opt = _minutes('09:15', [60] * 5 + [60 - 0.5 * i for i in range(30)])
+    # Rises 105 -> 112 (fills the 110 stop at 09:25), then falls through 100.
+    path = [105] * 5 + [105 + i for i in range(8)] + [112 - i for i in range(1, 15)]
+    spot = _minutes('09:15', path, step=0.4)
+    opt = _minutes('09:15', [50 + 0.5 * (x - 105) for x in path])       # 0.5 delta on the same path
     leg = svc.option_leg(_buy(), _con(), spot, opt, lot=65)
-    assert leg['result'] == 'SL' and leg['entry'] == 55.0 and leg['sl'] == 50.0
-    assert leg['estimated'] == ['target'] and leg['pnl'] == -5.0
+    assert leg['result'] == 'SL' and leg['entry_time'] == '09:25' and leg['entry'] == 52.5   # spot 110 -> 52.5
+    assert leg['sl'] == 47.5 and leg['estimated'] == ['target'] and leg['pnl'] == -5.0
 
 
 def test_leg_squares_off_at_the_1515_open():

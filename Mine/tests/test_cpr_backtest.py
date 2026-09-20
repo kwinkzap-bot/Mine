@@ -498,3 +498,69 @@ def test_extend_route(client, monkeypatch):
     body = client.post('/api/trend/cpr-backtest/update', json={'symbol': 'nifty'}).get_json()
     assert body['success'] and body['symbol'] == 'NIFTY' and body['added'] == ['2026-09-16']
     assert client.get('/api/trend/cpr-backtest/update').status_code == 405
+
+
+def test_simulate_fills_at_the_open_when_a_bar_opens_past_the_entry():
+    """A stop entry: the 13:15 bar on 3 Jun 2026 opened at 23,303 over a
+    BUY at 23,300 and never traded 23,300 itself — it is filled, at the open."""
+    bars = [
+        {'time': '13:10', 'open': 23287.0, 'high': 23298.35, 'low': 23275.7, 'close': 23298.35},
+        {'time': '13:15', 'open': 23302.95, 'high': 23326.3, 'low': 23300.3, 'close': 23307.8},
+        {'time': '13:20', 'open': 23309.95, 'high': 23400.0, 'low': 23308.65, 'close': 23395.0},
+    ]
+    sim = svc.simulate_trade(bars, 'BUY', 23300.0, 23393.0, 23274.0, '13:10')
+    assert sim['result'] == 'Target' and sim['entry_time'] == '13:15' and sim['fill'] == 23302.95
+    assert sim['pnl'] == pytest.approx(23393.0 - 23302.95)
+
+
+def test_virgin_cprs_lists_the_untouched_ones_lowest_first():
+    def bar(d, h, l, c):
+        return {'date': date(2026, 4, d), 'open': c, 'high': h, 'low': l, 'close': c}
+    daily = [bar(1, 110, 100, 105),   # -> CPR for the 2nd around 105
+             bar(2, 130, 120, 125),   # gapped over it: the 2nd's CPR (from the 1st) untouched
+             bar(3, 150, 140, 145),   # the 3rd's CPR (from the 2nd, ~125) untouched too
+             bar(4, 146, 141, 143),   # the 4th's CPR (from the 3rd, ~145) — touched by the 4th itself
+             bar(5, 160, 150, 155)]
+    out = svc.virgin_cprs(daily, 4)   # as of the 5th
+    assert [v['date'] for v in out] == ['2026-04-02', '2026-04-03']
+    assert out[0]['bc'] < out[1]['bc']
+
+
+def test_strategy_of_reads_the_rules_reasons():
+    assert svc.strategy_of('09:15 closed inside the CPR 22,771-22,902 on a 125-pt candle — no stop at its far end; 10:00 candle closed above the CPR at 22,914; 10:05 cross candle came back to TC') == 'Inside CPR → cross candle'
+    assert svc.strategy_of('09:15 closed inside the CPR 25,600-25,640; 09:40 candle closed above it') == 'Inside CPR → breakout candle'
+    assert svc.strategy_of('09:15 candle opened at 24,152 inside PDL/S1 24,117-24,155, traded over and under it and closed back inside at 24,119, but a 70-pt candle is too big to enter under — waited for 09:20') == 'Big 09:15 break → 09:20 entry'
+    assert svc.strategy_of('gap-down open 23,270 under S1/PDL, never reached; base of 7 small candles') == 'Gap day'
+    assert svc.strategy_of('gap-up; 10:15 candle came to R1/PDH and reversed up on a 64-pt candle — too big to enter over; Cam R3 sits inside the box, so that close over the box is the breakout and the retest to Cam R3 is the trade') == 'Gap day → Cam R3 · S3 retest'
+    assert svc.strategy_of('09:25 candle rejected from R1 (high 24,306, closed 24,287) -> SELL under it') == 'Rejection from PDH/R1 · PDL/S1'
+    assert svc.strategy_of('09:15 candle rejected from the CPR (high 23,448 into 23,393-23,453)') == 'Rejection from the CPR'
+    assert svc.strategy_of(None) == 'Other'
+    assert svc.strategy_of('09:15 opened below the CPR and closed above it; 11:05 tested the CPR (low 23,214) and the 11:10 candle closed green on it -> BUY') == 'CPR retest after a failed box break'
+
+
+def test_summarise_tallies_strategies():
+    rows = [
+        {'date': '2026-04-07', 'match': {}, 'trades': [
+            {'manual': {'reason': '10:05 cross candle came back to TC', 'pnl': -38.0, 'result': 'SL'}, 'chart': None, 'match': None},
+        ]},
+        {'date': '2026-04-09', 'match': {}, 'trades': [
+            {'manual': {'reason': '09:35 cross candle came back to BC', 'pnl': 53.0, 'result': 'Target'}, 'chart': None, 'match': None},
+            {'manual': {'reason': 'gap-up; base', 'pnl': None, 'result': 'Both'}, 'chart': None, 'match': None},
+        ]},
+    ]
+    st = {s['name']: s for s in svc.summarise(rows)['strategies']}
+    cc = st['Inside CPR → cross candle']
+    assert (cc['trades'], cc['wins'], cc['losses'], cc['pnl'], cc['win_pct'], cc['last']) == (2, 1, 1, 15.0, 50.0, '2026-04-09')
+    assert cc['targets'] == 1 and cc['stops'] == 1
+    assert st['Gap day']['flat'] == 1 and st['Gap day']['win_pct'] is None
+
+
+def test_every_strategy_has_a_description():
+    for _t, name, how in svc._STRATEGIES:
+        assert svc.strategy_how(name) == how
+        assert all(how[k] for k in ('setup', 'entry', 'stop', 'target', 'example'))
+    assert 'no current setup matches' in svc.strategy_how('Other')['setup']
+    rows = [{'date': '2026-04-07', 'match': {}, 'trades': [
+        {'manual': {'reason': '10:05 cross candle came back to TC', 'pnl': -38.0, 'result': 'SL'}, 'chart': None, 'match': None}]}]
+    st = svc.summarise(rows)['strategies'][0]
+    assert st['name'] == 'Inside CPR → cross candle' and st['how']['setup'].startswith('09:15 closes inside the daily CPR')

@@ -213,15 +213,21 @@ window.MineCPR = (function () {
     // of the last three closing VWAPs, each held flat across the current day.
     // An index carries no volume — every bar weighs the same in that case,
     // which is the running typical-price average charting platforms plot.
+    // Decided PER SESSION, not once for the whole set: Fyers' NIFTY history
+    // carries volume from 2025-07-01 and zero before it, so a Replay window
+    // spanning that date has volume on its newer sessions only. One flag for
+    // the lot skipped every older bar and the line simply stopped there.
     function vwaps(candles) {
-        const volumeless = !candles.some(c => (c.volume || 0) > 0);
+        const volumeByDay = {};
+        for (const c of candles) if ((c.volume || 0) > 0) volumeByDay[dayKey(c.time)] = true;
         const cur = [], finalByDay = {}, dayOrder = [];
-        let cumPV = 0, cumV = 0, day = null, last = null;
+        let cumPV = 0, cumV = 0, day = null, last = null, volumeless = true;
         for (const c of candles) {
             const d = dayKey(c.time);
             if (d !== day) {
                 if (day !== null) finalByDay[day] = last;
                 cumPV = 0; cumV = 0; last = null; day = d; dayOrder.push(d);
+                volumeless = !volumeByDay[d];
             }
             const v = volumeless ? 1 : (c.volume || 0);
             if (v <= 0) continue;
@@ -747,7 +753,7 @@ window.MineCPR = (function () {
             { key: 'shadow', label: 'CPR shadow', sub: true },
             { key: 'kind', type: 'select', label: 'Type', options: [['camarilla', 'Camarilla'], ['traditional', 'Traditional'], ['fibonacci', 'Fibonacci']] },
             { key: 'pivotTf', type: 'select', label: 'Pivots timeframe', options: [['auto', 'Auto'], ['day', 'Daily'], ['week', 'Weekly'], ['month', 'Monthly']] },
-            { key: 'pivotsBack', type: 'number', label: 'Pivots back', min: 1, max: 200 },
+            { key: 'pivotsBack', type: 'number', label: 'Pivots back', min: 1 },
             { key: 'dailyBased', label: 'Use daily-based values' },
             { key: 'camR3S3', label: 'R3 / S3 (Camarilla)', color: COLORS.cam },
             { row: 'R levels', keys: ['r1', 'r2', 'r3', 'r4'], color: COLORS.r },
@@ -765,7 +771,7 @@ window.MineCPR = (function () {
             { key: 'weeklyShadow', label: 'Weekly shadow', sub: true, color: COLORS.weeklyFill },
             { key: 'weeklyVirgin', label: 'Highlight virgin weekly CPR', sub: true, color: COLORS.weeklyVirginFill },
             { key: 'weeklyVirginExtend', label: 'Extend until touched', sub: true },
-            { key: 'weeklyBack', type: 'number', label: 'Weeks back', min: 1, max: 200, sub: true },
+            { key: 'weeklyBack', type: 'number', label: 'Weeks back', min: 1, sub: true },
         ] },
         { title: 'Multi CPR', gate: 'showMCPR', gateLabel: '≤15m', items: [
             { key: 'multiCpr', label: 'Multi CPR' },
@@ -814,7 +820,7 @@ window.MineCPR = (function () {
                         it.options.map(([v, l]) => `<option value="${v}" ${get(it.key) === v ? 'selected' : ''}>${l}</option>`).join('') +
                         `</select></label>`;
                 } else if (it.type === 'number') {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}" max="${it.max}" value="${get(it.key)}"></label>`;
+                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}"${it.max != null ? ` max="${it.max}"` : ''} value="${get(it.key)}"></label>`;
                 } else {
                     html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><input type="checkbox" data-key="${it.key}" ${get(it.key) ? 'checked' : ''}>${swatch(it.color)}<span>${it.label}</span>${gateTag(it.gate, it.gateLabel)}</label>`;
                 }
@@ -825,7 +831,7 @@ window.MineCPR = (function () {
     }
 
     // One change listener for every control rendered above: coerces the value
-    // (numbers clamped to their min/max), hands it to set(key, value), then
+    // (numbers clamped to their min, and max when the item has one), hands it to set(key, value), then
     // onChange(). Rendered controls are found by data-key, so the container
     // may hold other, page-specific controls too — those are left alone.
     function bindSettings(container, set, onChange) {
@@ -834,7 +840,7 @@ window.MineCPR = (function () {
             if (!key) return;
             let v;
             if (el.type === 'checkbox') v = el.checked;
-            else if (el.type === 'number') { v = Math.max(+el.min, Math.min(+el.max, parseInt(el.value, 10) || +el.min)); el.value = v; }
+            else if (el.type === 'number') { v = Math.max(+el.min, parseInt(el.value, 10) || +el.min); if (el.max !== '') v = Math.min(+el.max, v); el.value = v; }
             else v = el.value;
             set(key, v);
             if (onChange) onChange(key, v);

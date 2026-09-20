@@ -266,40 +266,53 @@ def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Opti
                    setup_time: Optional[str] = None) -> Dict[str, Any]:
     """What the session's bars say the trade did: fill at the first bar after
     the setup candle (09:15 unless `setup_time` says otherwise) that trades
-    through the entry, then whichever of target / SL a later bar reaches
-    first. Bar-level, so a bar reaching both is 'Both' rather than a guess.
-    Still open at SQUARE_OFF -> 'EOD' at that price."""
+    through the entry — at the entry, or at the bar's open when it opened
+    past the level, as a stop order would — then whichever of target / SL a
+    later bar reaches first. Bar-level, so a bar reaching both is 'Both'
+    rather than a guess. Still open at SQUARE_OFF -> 'EOD' at that price.
+    `pnl` is from the fill, and `fill` says what that was."""
     if not trade or entry is None or target is None or sl is None:
         return {'result': None, 'pnl': None, 'entry_time': None, 'exit_time': None}
     is_buy = trade == 'BUY'
     filled_at = None
+    fill = entry
     start = 1                                       # the 09:15 candle is the setup, not a fill
     if setup_time:
         start = next((i + 1 for i, b in enumerate(bars) if b['time'] >= setup_time), len(bars))
     for i, b in enumerate(bars[start:], start=start):
         if filled_at is None:
-            if b['low'] <= entry <= b['high']:
+            # The entry is a stop order: it fills when the bar trades through
+            # the level, and at the bar's open when the bar opened already
+            # past it (3 Jun 2026: BUY 23,300, the 13:15 bar opened 23,303).
+            if (b['high'] >= entry) if is_buy else (b['low'] <= entry):
                 filled_at = i
+                fill = max(entry, b['open']) if is_buy else min(entry, b['open'])
             else:
                 continue
         hit_t = (b['high'] >= target) if is_buy else (b['low'] <= target)
         hit_s = (b['low'] <= sl) if is_buy else (b['high'] >= sl)
+        if i == filled_at and ((b['open'] <= sl) if is_buy else (b['open'] >= sl)):
+            # The fill bar OPENED beyond the stop: its far extreme came before
+            # the entry triggered, not after (3 Mar 2025: the 09:40 bar opened
+            # 22,184 over a 22,183 stop and filled a SELL at 22,151 on the
+            # way down). The stop cannot have been hit yet.
+            hit_s = False
         if hit_t and hit_s:
-            return {'result': 'Both', 'pnl': None,
+            return {'result': 'Both', 'pnl': None, 'fill': fill,
                     'entry_time': bars[filled_at]['time'], 'exit_time': b['time']}
         if hit_t:
-            return {'result': 'Target', 'pnl': _r(abs(target - entry)),
+            return {'result': 'Target', 'pnl': _r(target - fill if is_buy else fill - target), 'fill': fill,
                     'entry_time': bars[filled_at]['time'], 'exit_time': b['time']}
         if hit_s:
-            return {'result': 'SL', 'pnl': _r(-abs(sl - entry)),
+            return {'result': 'SL', 'pnl': _r(sl - fill if is_buy else fill - sl), 'fill': fill,
                     'entry_time': bars[filled_at]['time'], 'exit_time': b['time']}
     if filled_at is None:
-        return {'result': 'No fill', 'pnl': None, 'entry_time': None, 'exit_time': None}
+        return {'result': 'No fill', 'pnl': None, 'fill': None, 'entry_time': None, 'exit_time': None}
     # Neither side reached: squared off at 15:15 — the price at that moment
     # is the 15:15 bar's open (the last close when the day ends earlier).
     sq = next((b for b in bars if b['time'] >= SQUARE_OFF), None)
     exit_px, exit_t = (sq['open'], sq['time']) if sq else (bars[-1]['close'], bars[-1]['time'])
-    return {'result': 'EOD', 'pnl': _r(exit_px - entry if is_buy else entry - exit_px),
+    return {'result': 'EOD', 'pnl': _r(exit_px - fill if is_buy else fill - exit_px), 'fill': fill,
             'entry_time': bars[filled_at]['time'], 'exit_time': exit_t}
 
 
@@ -488,7 +501,7 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
 
     out_rows = []
     for m in sessions_from(manual_rows):
-        trades = [{'manual': t, 'chart': None, 'match': None} for t in m['trades']]
+        trades = [{'manual': t, 'chart': None, 'match': None, 'strategy': strategy_of(t.get('reason'))} for t in m['trades']]
         row: Dict[str, Any] = {'manual': m, 'date': m['date'], 'chart': None,
                                'match': {}, 'trades': trades}
         out_rows.append(row)
@@ -554,6 +567,11 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
             # PDH 24,129 / R1 24,142).
             'prev_cpr': {'pp': _r(lv_y['pp']), 'bc': _r(lv_y['bc']), 'tc': _r(lv_y['tc']),
                          'virgin': not (prev['low'] <= lv_y['tc'] and prev['high'] >= lv_y['bc'])},
+            # Every earlier session's CPR that no session since has traded
+            # through — the virgin CPRs still standing at today's open, the
+            # supports/resistances a trade's target stops at (30 Apr 2026:
+            # 15 Apr's 23,732-23,806 under a SELL from 23,929).
+            'virgin_cprs': virgin_cprs(daily, idx),
             'prev_session': {'date': prev['date'].isoformat(), 'high': _r(prev['high']),
                              'low': _r(prev['low']), 'close': _r(prev['close'])},
             'day': {'open': _r(daily[idx]['open']), 'high': _r(daily[idx]['high']),
@@ -563,6 +581,7 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
 
         for t in trades:
             tm = t['manual']
+            t['strategy'] = strategy_of(tm.get('reason'))
             sim = simulate_trade(bars, tm['trade'], tm['entry'], tm['target'], tm['sl'], tm.get('setup_time'))
             t['chart'] = dict(sim, reasons=explain_trade(tm, ladder, candle, daily_side['side']))
             t['match'] = (_eq(tm.get('result'), sim['result'])
@@ -581,6 +600,20 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
     return {'rows': out_rows, 'summary': summarise(out_rows)}
 
 
+def virgin_cprs(daily: List[Dict[str, Any]], idx: int) -> List[Dict[str, Any]]:
+    """The CPRs of sessions before `daily[idx]` that no session from their
+    own day up to yesterday has traded through, lowest first. A CPR is
+    touched when a session's range overlaps it."""
+    out = []
+    for j in range(1, idx):
+        q = daily[j - 1]
+        lv = levels(q['high'], q['low'], q['close'])
+        if any(b['low'] <= lv['tc'] and b['high'] >= lv['bc'] for b in daily[j:idx]):
+            continue
+        out.append({'date': daily[j]['date'].isoformat(), 'bc': _r(lv['bc']), 'tc': _r(lv['tc'])})
+    return sorted(out, key=lambda v: v['bc'])
+
+
 def _eq(a: Optional[str], b: Optional[str]) -> Optional[bool]:
     if a is None or b is None:
         return None
@@ -591,12 +624,202 @@ _MATCH_KEYS = ('price_vs_daily', 'price_vs_hourly', 'cpr_type', 'cpr_direction',
                'boxes', 'first_candle', 'result')
 
 
+# The setups the trade rule takes, read back off the reason it writes —
+# each (test, name, how) in order, first match wins. The phrases are the
+# ones cpr_trade_rule.propose puts in `why`; `how` is the setup in words
+# for the Strategy list: when it applies, the entry, the stop, the target
+# and the worked example. A reason none of them fits is "Other".
+def _how(setup, entry, stop, target, example):
+    return {'setup': setup, 'entry': entry, 'stop': stop, 'target': target, 'example': example}
+
+
+_STRATEGIES = (
+    (lambda r: 'wicked out of it both ways' in r, 'Inside CPR, wicked both ways → the box decides', _how(
+        "The 09:15 candle opens and closes inside the CPR but its high is over TC and its low under BC — both CPR lines are spent, "
+        "so the day is decided at the box. The first close over the PDH/R1 box (under the PDL/S1 box) is the break candle.",
+        "The candle after the break decides: through the break candle's high → BUY over it (continuation); a close back under the box "
+        "is the failure → SELL under that candle. Mirror at the lower box. A continuation with a virgin CPR's edge inside its risk is refused "
+        "(support/resistance too close), and the day then trades the rejection back across the whole box the other way.",
+        "Continuation: under the break candle's low. Failure: over the break candle's high.",
+        "Continuation: the next level (R2 / Cam R3 / R3) or 1:2, whichever is nearer beyond the risk. Failure: the nearest of the CPR lines / PDL / 1:2.",
+        "26 May 2026: 10:35 closed 24,085 over R1 24,083; 10:40 closed 24,073 back under the box → SELL 24,070, SL 24,091 (the 10:35 high), target 1:2 24,028.")),
+    (lambda r: r.startswith('the first trade was stopped by the'), 'Reversal after a stop → virgin CPR', _how(
+        "A second trade on a volatile day (by 13:00): the bar that stopped the first trade is a strong candle the other way, and a virgin CPR lies ahead of it "
+        "within 3× the risk. The virgin-CPR late rejection, when it applies, comes first.",
+        "BUY over that candle's high (SELL under its low).",
+        "The candle's other end: under its low for the BUY, over its high for the SELL.",
+        "The nearest virgin CPR ahead — its near edge.",
+        "20 Jan 2025: the 09:20-candle SELL was stopped by the 09:55 strong green → BUY 23,237, SL 23,204, target 17 Jan's virgin CPR 23,318 (+81).")),
+    (lambda r: 'cross candle' in r, 'Inside CPR → cross candle', _how(
+        "09:15 closes inside the daily CPR on a BIG candle (over 0.25% of price) — its far end is no stop. "
+        "Any later close out of the CPR is the break; the next candle that comes back to that CPR line is the cross candle.",
+        "Over the cross candle's high (BUY) / under its low (SELL). A close back inside the CPR voids the break and waits for a new one.",
+        "Under the cross candle's low (BUY) / over its high (SELL).",
+        "The next PDH/R1 (PDL/S1); 1:2 when that level is nearer than the risk.",
+        "7 Apr 2026: 10:00 closed 22,914 over TC 22,902; 10:05 cross candle 22,929-22,894 → BUY 22,930, SL 22,892, target PDH 22,998.")),
+    (lambda r: '09:15 closed inside the CPR' in r, 'Inside CPR → breakout candle', _how(
+        "09:15 closes inside the daily CPR on a normal-sized candle. On a WIDE-CPR day the break needs room: if the next box "
+        "(PDH/R1 above, PDL/S1 below) is closer to the entry than the risk, price is boxed in and the day is skipped.",
+        "The first STRONG candle (body ≥ 60%) closing out of the CPR: over its high (BUY) / under its low (SELL).",
+        "The 09:15 candle's other end (its low for a BUY, its high for a SELL).",
+        "The nearer of PDH/R1 (PDL/S1); 1:2 if too near, 1:1 if further than 1.5× the risk.",
+        "17 Feb 2026: 09:40 closed above TC → BUY 25,647, SL 25,630, target PDH 25,697.")),
+    (lambda r: 'retested it' in r, 'Big 09:15 to the box → retest', _how(
+        "A big red 09:15 candle (over 0.25%) opens above the PDL/S1 box and closes AT it, and 09:20 is not a small red close under the box — no sell. "
+        "Price must first LOSE the box (a close under it) and then close back clearly over it.",
+        "The retest: a small green candle (≤ half the 09:15 range) that dips to the box top and closes above it on its high → BUY over its high, by 14:00. Mirror at PDH/R1 → SELL.",
+        "Under the retest candle's low (over its high for the SELL).",
+        "The CPR's near line (BC for a BUY, TC for a SELL); 1:2 if the CPR is nearer than the risk.",
+        "3 Jun 2026: lost PDL 23,229 by 10:00, reclaimed 12:35, 13:10 retest → BUY 23,300, SL 23,274, target BC 23,393 (+90).")),
+    (lambda r: r.startswith('gap-') and 'retest to Cam' in r, 'Gap day → Cam R3 · S3 retest', _how(
+        "Gap-up (gap-down) day whose zone reversal candle is BIG (over 0.25%) and Camarilla R3 (S3) sits inside the R1/PDH (S1/PDL) box. "
+        "The reversal is not entered over its high — that close over the box is the breakout.",
+        "The retest, by 14:00: a candle whose low comes to Cam R3 and that closes back over the box's top (R1) → BUY over its high. "
+        "Mirror on a gap-down with Cam S3 → SELL under the retest candle.",
+        "Under Cam R3 (over Cam S3). A close back under the box before the retest voids the trade.",
+        "1:2.",
+        "10 Mar 2026: 10:15 reversed on a 64-pt candle; 12:45 dipped to 24,143 by Cam R3 24,133 and closed 24,185 over R1 → BUY 24,186, SL 24,131, target 24,296 (+110).")),
+    (lambda r: r.startswith('09:15 strong green candle opened') or r.startswith('09:15 strong red candle opened'), '09:15 box rejection', _how(
+        "The 09:15 candle itself is strong (body ≥ 60%) and not oversized (≤ 0.3% of price), opens in or at the PDL/S1 box, touches it (PDL, S1 or the Cam S3 inside it) and closes "
+        "back over the box. Mirror: a strong red 09:15 off the PDH/R1 box. It stands even when the CPRs and the box form one zone — it trades the zone's own edges.",
+        "BUY over the 09:15 high (SELL under its low for the mirror).",
+        "Under the 09:15 low (over its high).",
+        "Cam R3 when it sits in or at the CPR — the zone's top — else the CPR's far line (TC); 1:2 if that is nearer than the risk. Mirror: Cam S3 / BC.",
+        "18 Jun 2025: 09:15 O 24,788 in PDL/S1 24,784-24,814, low 24,777 on S1, closed 24,830 over the box → BUY 24,839, SL 24,775, target Cam R3 24,900 (+61).")),
+    (lambda r: 'too big to enter' in r, 'Big 09:15 break → 09:20 entry', _how(
+        "A big 09:15 candle (over 0.25%) that opens over PDL/S1 and closes under both, straddles the box (opens inside, trades both sides, closes inside), or runs from above down to the box. Too big to enter off its own low.",
+        "The 09:20 candle decides: a small red candle (≤ half the 09:15 range) closing under the box → SELL under its low. Mirror: a big green break over PDH/R1, small green 09:20 → BUY over it.",
+        "Over the 09:20 candle's high (under its low for the BUY).",
+        "1:2, or a virgin CPR standing in between when that is nearer.",
+        "31 Aug 2026: 09:15 O 24,118 over S1, C 24,065 (90 pts); 09:20 small 24,085-24,058 → SELL 24,056, SL 24,087, target 23,998 (+58). Also 19 Aug (straddle).")),
+    (lambda r: 'waited for 09:20' in r, '09:15 long-wick break → 09:20 confirm', _how(
+        "09:15 opens inside the PDL/S1 box and closes under it, but is not strong: a lower wick of half its range or more says the level was bought once already.",
+        "Wait for 09:20: a small red candle holding inside that wick (under the 09:15 close, over its low) confirms → SELL under its low. Mirror over PDH/R1 → BUY.",
+        "Over the 09:15 high (under the 09:15 low for the BUY).",
+        "1:2.",
+        "7 Sep 2026: 09:15 O 23,883 C 23,859 L 23,819; 09:20 red 23,861-23,838 → SELL 23,837, SL 23,892, target 23,750.")),
+    (lambda r: 'virgin CPR' in r and 'rejected from it' in r, 'Virgin CPR late rejection', _how(
+        "Narrow CPR only. Yesterday's CPR was never touched yesterday (virgin) and sits on today's PDH/R1 box, with price above today's CPR. Allowed until 13:00, and as a second trade after a stopped-out first.",
+        "A strong red candle that pokes into the virgin CPR / PDH/R1 stack and closes back under PDH/R1 → SELL under its low. Mirror under PDL/S1 → BUY.",
+        "Over the rejection candle's high.",
+        "The CPR's far line (BC); if the bar reaching it closes strongly through the CPR, the target moves on to PDL.",
+        "1 Sep 2026: 31 Aug's CPR 24,133-24,161 on PDH 24,129 / R1 24,142; 11:30 rejected → SELL 24,122, SL 24,145; CPR broke → PDL 23,994 (+128).")),
+    (lambda r: 'inside PDH/R1' in r or 'inside PDL/S1' in r, '09:15 out of the PDH/R1 · PDL/S1 box', _how(
+        "Narrow CPR, open above both CPRs, and the 09:15 candle opens INSIDE the PDH/R1 box and closes above it. Mirror under PDL/S1.",
+        "Whichever comes first by 11:00: a bar breaking the 09:15 high → BUY over it — unless the 09:15 candle is big (over 0.25%) or the "
+        "breaking candle is (over 0.15%): two big candles are a spike to fade, not a trend to join, so the day waits (until 13:00) for the "
+        "reversal; or, once a close has fallen back under the box, the first red candle that climbs back to the box and closes under it → SELL under its low.",
+        "BUY: under the 09:15 low. SELL: over the rejection candle's high.",
+        "BUY: the next level or 1:2. SELL: the CPR (TC), and PDL instead if the bar reaching the CPR closes strongly through it.",
+        "24 Aug 2026: 09:15 O 24,285 in 24,284-24,288, C 24,303; 09:30 closed under; 09:40 red to 24,286 → SELL 24,273, SL 24,288, CPR broke → PDL 24,207 (+66).")),
+    (lambda r: r.startswith('gap-'), 'Gap day', _how(
+        "The open sits past both R1 and PDH (or both S1 and PDL) by 0.25% or more — the CPR is out of reach.",
+        "Wait for price to come back to the R1/PDH (S1/PDL) zone: a strong close back through it is the reversal (BUY on a gap-down), a close beyond it the breakdown (SELL). "
+        "While the zone is unreached, a BASE — two or more small candles, at least two against the fill — followed by the first strong candle in the fill's direction: over its high AND the 09:15 high (under both lows).",
+        "Past the zone for the zone trades; under the strong candle's low (over its high) for the base trade.",
+        "The next level for the zone trades; the zone's near edge (the gap fill) for the base trade, 1:2 if too near.",
+        "11 Sep 2026: gap-down 23,270; seven small candles 09:20-09:50; 09:55 strong green → BUY 23,279, SL 23,243, target PDL 23,380.")),
+    (lambda r: 'trend day expected' in r, 'Narrow CPR trend day', _how(
+        "Narrow CPR (under 0.13%) with the open clear of both CPRs — a trend day is expected — and the 09:15 candle rejects the other side (wick ≥ half its range, close at the far end).",
+        "The first strong candle in the trend's direction by 11:00: over its high (under its low). While PDH/R1 (PDL/S1) still lies ahead it is the wall — the candle must close through it; a candle turned back from the wall is instead a fade → SELL under its low.",
+        "0.025% beyond the breakout candle; for the fade, over the high so far.",
+        "1:2; for the fade, the first CPR line.",
+        "10 Feb 2026: 09:30 bull candle → BUY 25,945, SL 25,903, target 26,029. 11 Feb: 09:20 rejected from R1 → SELL 25,974, SL 26,011, target 25,933.")),
+    (lambda r: 'strong red candle touched PDL/S1' in r or 'strong green candle touched PDH/R1' in r,
+     '09:15 strong break (narrow CPR)', _how(
+        "Narrow CPR and the 09:15 candle itself is a strong break (body ≥ 60%): it touches PDL/S1 and closes below it. Mirror: a strong green 09:15 through PDH/R1.",
+        "SELL under the 09:15 low — or under a level lying just beneath it. BUY over the 09:15 high for the mirror.",
+        "Over the 09:15 high (under its low for the BUY).",
+        "1:2.",
+        "12 Feb 2026: SELL 25,844 under S2, SL 25,909; squared off at 15:15.")),
+    (lambda r: ('above the weekly CPR, under the daily one' in r
+                or 'below the weekly CPR, above the daily one' in r), 'Between the CPRs', _how(
+        "09:15 closes between the two CPRs — above the weekly one and under the daily one, or the reverse — and they are not merged. The daily CPR is the lid.",
+        "Only a close through the daily CPR counts: BUY over that candle's high (SELL under its low on a close below it). Nothing else is taken.",
+        "Under the daily CPR (over it for the SELL).",
+        "The next level; 1:2 if too near, 1:1 if further than 1.5× the risk.",
+        "4 Feb 2026: never closed above 25,815-25,991 → no trade.")),
+    (lambda r: 'interlink into one zone' in r and 'closed over the zone' in r or 'closed under the zone' in r, 'One zone → break out of it', _how(
+        "The daily CPR, the weekly CPR and a box (PDH/R1 or PDL/S1) interlink into one continuous band and the 09:15 candle closes inside it. "
+        "Every line is part of the same zone, so nothing inside it is traded.",
+        "The first candle by 14:00 that closes beyond the zone: over its top → BUY over that candle's high; under its bottom → SELL under its low.",
+        "Under the breakout candle's low (over its high for the SELL).",
+        "The next level beyond the zone (R2 / R3, or S2 / S3), or 1:2 when that is nearer than the risk.",
+        "6 Mar 2025: CPR 22,231-22,302, weekly 22,212-22,386, PDH/R1 22,395-22,466 — one zone; the 09:20 PDH rejection inside it refused; "
+        "13:05 closed 22,477 over R1 → BUY 22,479, SL 22,456.")),
+    (lambda r: r.startswith('weekly CPR') and 'merged with PD' in r, 'Weekly CPR on the box → PDH/PDL rejection', _how(
+        "The weekly CPR lies over the PDH/R1 box (or under the PDL/S1 box), so the two make one big zone, and the 09:15 candle opens inside it.",
+        "A strong red candle that reaches PDH and closes through it — a big candle counts here — → SELL under its low. "
+        "Mirror: a strong green candle off PDL inside the lower zone → BUY over its high.",
+        "Over the candle's own high (under its low for the BUY).",
+        "The nearest of the CPR lines / PDL (PDH) / 1:2 that lies at least 0.6× the risk away.",
+        "13 Jan 2026: weekly CPR 25,788-25,998 on PDH 25,813 / R1 25,911, open 25,897; 09:25 strong red 25,837 → 25,763 through PDH → "
+        "SELL 25,759, SL 25,839, target the CPR BC 25,643.")),
+    (lambda r: r.startswith('interlinked CPRs'), 'Interlinked CPRs → small rejection', _how(
+        "The daily and weekly CPRs overlap into one band. A big candle into the band is not entered; the rejection candle must be SMALL "
+        "(at most 0.15% of price) and may come as late as 13:00.",
+        "Open above the band: a small green candle that reaches the daily CPR (within 0.05% of TC) and closes back over the whole band → "
+        "BUY over its high. Mirror below the band: a small red candle up to BC closing under both → SELL under its low.",
+        "Under the candle's low — or under the session VWAP when it runs just beneath the low (within 0.1%), the line the candle leans on.",
+        "The next level; 1:2 when that level is nearer than the risk.",
+        "6 Apr 2026: CPRs 22,482-22,636 and 22,562-22,663; 09:30's 88-pt rejection skipped; 11:50 small candle low 22,645, closed 22,668 → "
+        "BUY 22,677, SL 22,636 (VWAP), target PDH 22,782.")),
+    (lambda r: 'tested the CPR' in r and ('closed green on it' in r or 'closed red on it' in r), 'CPR retest after a failed box break', _how(
+        "The 09:15 candle opens on one side of a narrow CPR and closes on the other, so its own low/high is no entry. Price then breaks the "
+        "PDH/R1 box (PDL/S1 below) and the break FAILS — it comes back through the box.",
+        "The first test of the CPR from the far side: a green candle that dips to the CPR and closes on it → BUY over that candle "
+        "(mirror: a red candle up to the CPR closing on it → SELL under it).",
+        "Under the CPR (BC) for the BUY; over the CPR (TC) for the SELL.",
+        "The day's high (low) made by the failed break — the level price has already shown it can reach.",
+        "17 Sep 2026: 09:15 opened under the CPR 23,200-23,212 and closed 23,256; 10:05 closed over PDH/R1, broke back down; 11:05 tested "
+        "the CPR (low 23,214), 11:10 closed green on it → BUY 23,224, SL 23,195, target the day high 23,325 (+101).")),
+    (lambda r: 'rejected from the CPR' in r, 'Rejection from the CPR', _how(
+        "Open below the CPR (the daily and weekly CPRs read as one band when they overlap or nearly touch). Mirror above the CPR. "
+        "Off on a far-box day: a narrow CPR with both boxes 0.4% of price (and 5× its height) away is too thin to fade — such days trade the boxes only.",
+        "A strong red candle by 11:00 that pokes up into the CPR and closes back below it → SELL a buffer (0.05%) under its low. "
+        "A BIG rejection candle (over 0.15%) is not entered off: wait for a small candle back into the CPR that does not close above it → SELL under that. "
+        "Above the CPR: BUY the rejection from it.",
+        "A buffer over the first pivot above the candle's high (the candle's high when it already cleared the pivots); for the small retest candle, over its own high.",
+        "The next support/resistance; 1:2 if nearer than the risk, 1:1 if further than 1.5× the risk. For the retest entry, the nearer of S1 / PDL. A stop over 100 pts is halved.",
+        "16 Mar 2026: 09:55 candle up to 23,233 into the CPR 23,201-23,302, closed 23,168 → SELL 23,153, SL 23,208, target 23,043 (+110). "
+        "1 Sep 2026: 09:15's 55-pt rejection skipped; 09:30 small candle to 24,077 → SELL 24,057, SL 24,078, target S1 24,006. "
+        "When the daily and weekly CPRs interlink, the small-rejection rule applies instead.")),
+    (lambda r: 'rejected from' in r, 'Rejection from PDH/R1 · PDL/S1', _how(
+        "Open below the CPR. A candle by 11:00 that dips to PDL or S1 (its low at or through the level) and closes back above it — strong, "
+        "or closing on its high after the dip — and no bigger than 0.15% of price: a big candle off the level is not entered. Mirror above the CPR at PDH/R1.",
+        "BUY 1 pt over the rejection candle's high (SELL 1 pt under its low for the mirror).",
+        "0.02% under the lowest level the candle rejected (over the highest for the SELL).",
+        "The CPR, however far; 1:2 when the CPR is nearer than the risk.",
+        "16 Feb 2026: 09:35 dipped under PDL and S1 and closed on its high → BUY over it, target the CPR.")),
+)
+_OTHER_HOW = _how("A trade written by hand or by an earlier wording of the rule, whose reason no current setup matches.",
+                  "As written in the row's reason on the grid (the Days traded list below carries every such trade).",
+                  "As written in the row's reason — the stop the trade was placed with is on the grid.",
+                  "As written in the row's reason — the target the trade was placed with is on the grid.",
+                  "Open the row on the CPR Logic grid for the full reason, entry, stop and target.")
+
+
+def strategy_of(reason: Optional[str]) -> str:
+    r = reason or ''
+    for test, name, _how in _STRATEGIES:
+        if test(r):
+            return name
+    return 'Other'
+
+
+def strategy_how(name: str) -> Dict[str, str]:
+    """The setup in words (setup / entry / stop / target / example), for the Strategy list."""
+    return next((how for _t, n, how in _STRATEGIES if n == name), _OTHER_HOW)
+
+
 def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Per-column agreement (once per session) and the two P&L tallies
-    (once per trade)."""
+    """Per-column agreement (once per session), the two P&L tallies (once
+    per trade), and the strategy table: how often each setup was used
+    and how it did."""
     agree: Dict[str, Dict[str, int]] = {k: {'match': 0, 'total': 0} for k in _MATCH_KEYS}
     manual_pnl = chart_pnl = 0.0
     wins = trades = chart_wins = chart_trades = 0
+    strategies: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         for k, v in r['match'].items():
             if v is None:
@@ -605,6 +828,25 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             agree[k]['match'] += bool(v)
         for t in r['trades']:
             tm, tc = t['manual'], t['chart']
+            st = strategies.setdefault(strategy_of(tm.get('reason')), {
+                'trades': 0, 'wins': 0, 'losses': 0, 'flat': 0, 'pnl': 0.0, 'last': None, 'targets': 0, 'stops': 0, 'eod': 0})
+            st['trades'] += 1
+            st['last'] = max(st['last'] or '', r['date'])
+            pnl = tm.get('pnl')
+            if pnl is None or pnl == 0:
+                st['flat'] += 1
+            elif pnl > 0:
+                st['wins'] += 1
+            else:
+                st['losses'] += 1
+            st['pnl'] += pnl or 0.0
+            res = tm.get('result')
+            if res == 'Target':
+                st['targets'] += 1
+            elif res == 'SL':
+                st['stops'] += 1
+            elif res == 'EOD':
+                st['eod'] += 1
             if tm.get('pnl') is not None:
                 trades += 1
                 manual_pnl += tm['pnl']
@@ -623,6 +865,11 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                       for k, v in agree.items()},
         'manual': {'trades': trades, 'wins': wins, 'pnl': _r(manual_pnl)},
         'chart': {'trades': chart_trades, 'wins': chart_wins, 'pnl': _r(chart_pnl)},
+        'strategies': sorted(
+            [dict(v, name=k, how=strategy_how(k), pnl=_r(v['pnl']),
+                  win_pct=_r(100 * v['wins'] / (v['wins'] + v['losses']), 0) if v['wins'] + v['losses'] else None)
+             for k, v in strategies.items()],
+            key=lambda v: (-v['trades'], v['name'])),
     }
 
 
@@ -653,6 +900,7 @@ def _intraday_by_session(raw: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
             'time': stamp.strftime('%H:%M'),
             'open': float(c['open']), 'high': float(c['high']),
             'low': float(c['low']), 'close': float(c['close']),
+            'volume': float(c.get('volume') or 0),          # for the session VWAP the trade rule's stops can sit under
         })
     for bars in by.values():
         bars.sort(key=lambda b: b['time'])
@@ -732,7 +980,9 @@ def last_complete_session(now: Optional[datetime] = None) -> date:
 def rule_note(why: str, sim: Optional[Dict[str, Any]], second: bool = False) -> str:
     """The column-O note for a rule trade: the reason and the chart replay."""
     from trading_app.service.cpr_trade_rule import RULE_TAG
-    tag = f"{RULE_TAG} (2nd, after the first trade's {sim and sim.get('after') or 'SL'})" if second else RULE_TAG
+    after = sim and sim.get('after') or 'SL'
+    tag = (f"{RULE_TAG} (2nd, after the first entry was refused)" if second and after == 'refused'
+           else f"{RULE_TAG} (2nd, after the first trade's {after})" if second else RULE_TAG)
     if not sim:
         return f"{tag}: {why}"
     return (f"{tag}: {why}; chart replay {sim['result']}"
@@ -781,6 +1031,50 @@ def chart_row(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> Optional[Dict[st
     """The first of `chart_rows` — the session's row, or its first trade."""
     rows = chart_rows(r, bars)
     return rows[0] if rows else None
+
+
+def backfill(symbol: str, since: date) -> Dict[str, Any]:
+    """Prepend every complete session from `since` up to the day before the
+    sheet's first date, read from the chart the way `extend` reads the
+    sessions after its last — the same analysis columns and the same
+    rule-written trades. Returns what was added; nothing is written when
+    there is nothing to add."""
+    doc = load_manual(symbol)
+    rows = doc.get('rows') or []
+    if not rows:
+        raise NoManualData(f'The {symbol.upper()} sheet is empty — nothing to backfill from')
+    first_have = min(datetime.strptime(r['date'], '%Y-%m-%d').date() for r in rows)
+    last = first_have - timedelta(days=1)
+    if since > last:
+        return {'success': True, 'symbol': symbol.upper(), 'added': [], 'first': first_have.isoformat()}
+
+    daily, intraday = fetch_bars(symbol, since, last)
+    sessions = sorted(ds for ds in intraday if since <= date.fromisoformat(ds) <= last)
+    added, skipped = [], []
+    if sessions:
+        res = analyse([{'date': ds} for ds in sessions], daily, intraday)
+        for r in res['rows']:
+            rows_for = chart_rows(r, intraday.get(r['date']) or [])
+            if rows_for:
+                added.extend(rows_for)
+            else:
+                skipped.append({'date': r['date'], 'error': r.get('error')})
+    if added:
+        doc['rows'] = added + rows
+        doc['backfilled_from'] = since.isoformat()
+        doc['extended_at'] = datetime.now(IST).strftime('%Y-%m-%d %H:%M')
+        path = manual_path(symbol)
+        tmp = path + '.tmp'
+        with open(tmp, 'w') as fh:
+            json.dump(doc, fh, indent=2)
+        os.replace(tmp, path)
+    logger.info(f"[CPR backtest] {symbol.upper()}: backfilled {since} -> {last}, "
+                f"{len(added)} rows added, {len(skipped)} skipped")
+    return {'success': True, 'symbol': symbol.upper(), 'first': first_have.isoformat(), 'since': since.isoformat(),
+            'added': list(dict.fromkeys(r['date'] for r in added)), 'skipped': skipped,
+            'trades': [{'date': r['date'], 'trade': r['trade'], 'entry': r['entry'],
+                        'target': r['target'], 'sl': r['sl'], 'result': r['result'], 'pnl': r['pnl']}
+                       for r in added if r['trade']]}
 
 
 def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
