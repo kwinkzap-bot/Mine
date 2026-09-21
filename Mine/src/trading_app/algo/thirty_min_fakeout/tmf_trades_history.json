@@ -1,21 +1,21 @@
 [
   {
-    "symbol": "CUMMINSIND",
-    "direction": "SELL",
-    "qty": 98,
-    "entry_price": 5086.5,
-    "exit_price": 5103.969387755102,
-    "sl_price": 5101.5,
-    "target_price": 5001.5,
-    "pnl": -1712.0,
+    "symbol": "KFINTECH",
+    "direction": "BUY",
+    "qty": 551,
+    "entry_price": 905.95,
+    "exit_price": 903.2927404718693,
+    "sl_price": 903.4,
+    "target_price": 915.0,
+    "pnl": -1464.15,
     "reason": "SL Hit",
-    "entry_time": "2026-09-18T13:37:27.199093",
-    "exit_time": "2026-09-18T14:26:30.998478",
+    "entry_time": "2026-09-21T10:54:18.650485",
+    "exit_time": "2026-09-21T11:08:04.966643",
     "broker_idx": 1,
-    "entry_order_id": "2100859230835105793",
-    "sl_order_id": "2100859231854321664",
-    "target_order_id": "2100859232466690048",
+    "entry_order_id": "2101905338168434688",
+    "sl_order_id": "2101905339074404352",
+    "target_order_id": "2101905339699355648",
     "mode": "live",
-    "date": "2026-09-18"
+    "date": "2026-09-21"
   }
 ]

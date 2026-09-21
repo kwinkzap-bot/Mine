@@ -6,6 +6,10 @@ broker is touched, and — the ones that matter most — that a filled entry is
 covered by a stop for exactly what filled, and that touching the target
 cancels that stop before anything is sold.
 
+Every call places two legs per broker — T1 and T3 — so broker 1 here gets
+two entries, two stops and two rows. ``slot``/``leg`` default to the T1 leg;
+the T3 tests name theirs.
+
 No create_app(), no Flask at all: take_call and tick are called directly, the
 way the listener thread and the engine thread call them.
 """
@@ -199,12 +203,13 @@ def call(call_id):
     return TgCallStore.get(call_id)
 
 
-def slot(call_id, instance=1):
-    return call(call_id)['brokers'][str(instance)]
+def slot(call_id, instance=1, tg_leg='T1'):
+    return call(call_id)['brokers'][engine.slot_key(instance, tg_leg)]
 
 
-def leg(rows_, call_id, name, instance=1):
+def leg(rows_, call_id, name, instance=1, tg_leg='T1'):
     return next((o for o in rows_ if o.get('signal_id') == call_id and o.get('leg') == name
+                 and (o.get('tg_leg') or 'T1') == tg_leg
                  and any(l.get('instance') == instance for l in (o.get('broker_order_ids') or []))),
                 None)
 
@@ -216,11 +221,12 @@ def tick(ltp=None):
 
 
 def taken(broker, rows_):
-    """A call armed and filled at broker 1: the state every LIVE test starts from."""
+    """A call armed and both legs filled at broker 1: the state every LIVE
+    test starts from."""
     cid = take()['call_id']
     broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
     tick()
-    assert slot(cid)['stage'] == 'LIVE'
+    assert slot(cid)['stage'] == 'LIVE' and slot(cid, tg_leg='T3')['stage'] == 'LIVE'
     return cid
 
 
@@ -231,17 +237,24 @@ def test_the_entry_is_a_stop_limit_at_every_tg_slot_and_nowhere_else(broker, row
     assert result['success'], result
 
     stops = broker.of('stop')
-    assert [s['instance'] for s in stops] == [1]         # not the OP-only slot 2
-    assert stops[0] == {'instance': 1, 'trigger': 81.0, 'limit': 81.85, 'lots': 2,
-                        'action': 'BUY'}
+    assert [s['instance'] for s in stops] == [1, 1]      # T1 + T3; not the OP-only slot 2
+    assert stops[0] == stops[1] == {'instance': 1, 'trigger': 81.0, 'limit': 81.85, 'lots': 2,
+                                    'action': 'BUY'}
 
-    entry = leg(rows, result['call_id'], 'ENTRY')
+    cid = result['call_id']
+    entry = leg(rows, cid, 'ENTRY')
     assert entry['order_type'] == 'SL'
     assert entry['trigger_price'] == 81.0 and entry['price'] == 81.85
     assert entry['strategy'] == 'op' and entry['source'] == 'telegram'
     assert entry['quantity'] == 2 * LOT
-    assert slot(result['call_id'])['stage'] == 'PENDING_ENTRY'
-    assert call(result['call_id'])['phase'] == 'ENTRY_PENDING'
+    far = leg(rows, cid, 'ENTRY', tg_leg='T3')
+    assert far and far['id'] != entry['id'] and far['quantity'] == 2 * LOT
+    assert set(call(cid)['brokers']) == {'1', '1:T3'}
+    assert slot(cid)['stage'] == slot(cid, tg_leg='T3')['stage'] == 'PENDING_ENTRY'
+    assert slot(cid)['leg'] == 'T1' and slot(cid, tg_leg='T3')['leg'] == 'T3'
+    assert call(cid)['target'] == 95.0 and call(cid)['target_far'] == 110.0
+    assert call(cid)['far_label'] == 'T3'
+    assert call(cid)['phase'] == 'ENTRY_PENDING'
 
 
 def test_the_limit_rounds_up_to_the_tick():
@@ -253,7 +266,7 @@ def test_the_limit_rounds_up_to_the_tick():
 def test_a_mis_flagged_dhan_slot_and_an_unsized_slot_are_skipped_with_one_alert_each(
         broker, rows, env, alerts):
     take()
-    assert [s['instance'] for s in broker.of('stop')] == [1]
+    assert [s['instance'] for s in broker.of('stop')] == [1, 1]
     cats = [(a['category'], a['title']) for a in alerts]
     assert ('tg_call_order_failed', 'Telegram calls: Three cannot hold a stop') in cats
     assert ('tg_call_order_failed', 'Telegram calls: Four has no size') in cats
@@ -317,8 +330,121 @@ def test_every_broker_refusing_fails_the_call_loudly(broker, rows, env, alerts):
 def test_a_leg_over_the_freeze_limit_is_split(broker, rows, env):
     env['BROKER_1_TG_LOTS'] = '30'
     result = take()
-    assert [s['lots'] for s in broker.of('stop')] == [27, 3]
+    assert [s['lots'] for s in broker.of('stop')] == [27, 3, 27, 3]      # each leg on its own
     assert leg(rows, result['call_id'], 'ENTRY')['quantity'] == 30 * LOT
+    assert leg(rows, result['call_id'], 'ENTRY', tg_leg='T3')['quantity'] == 30 * LOT
+
+
+# ── the second leg: T3 ───────────────────────────────────────────────────
+
+def test_both_legs_are_the_accounts_size(broker, rows, env):
+    """One BROKER_N_TG_LOTS, two legs of it — 2 lots at T1 and 2 more at T3."""
+    cid = take()['call_id']
+    assert [(s['lots'], s['action']) for s in broker.of('stop')] == [(2, 'BUY'), (2, 'BUY')]
+    assert slot(cid)['lots'] == slot(cid, tg_leg='T3')['lots'] == 2
+    assert engine.tg_targets(USER)[0] == {'instance': 1, 'type': 'zerodha', 'name': 'One', 'lots': 2}
+
+
+def test_a_call_with_one_target_places_only_the_t1_leg(broker, rows, env):
+    cid = take(targets=[95.0])['call_id']
+    assert set(call(cid)['brokers']) == {'1'}
+    assert call(cid)['target_far'] is None and call(cid)['far_label'] is None
+
+
+def test_a_call_with_two_targets_rides_the_far_leg_to_t2(broker, rows, env):
+    cid = take(targets=[95.0, 101.0])['call_id']
+    assert set(call(cid)['brokers']) == {'1', '1:T3'}
+    assert call(cid)['target_far'] == 101.0 and call(cid)['far_label'] == 'T2'
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
+    tick()
+    tick(ltp=101.0)
+    assert slot(cid)['exit_reason'] == 'T1 hit'
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T2 hit'
+
+
+def test_far_target():
+    assert engine.far_target([95, 101, 110]) == ('T3', 110.0)
+    assert engine.far_target([95, 101]) == ('T2', 101.0)
+    assert engine.far_target([95]) == (None, None)
+    assert engine.far_target([]) == (None, None)
+
+
+def test_the_t3_leg_rides_through_t1_and_exits_at_t3(broker, rows, env):
+    cid = taken(broker, rows)
+    tick(ltp=95.0)                                     # T1 out, T3 still in
+    assert slot(cid)['stage'] == 'FLAT' and slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    before = len(broker.calls)
+    tick(ltp=109.95)
+    assert broker.kinds()[before:] == ['sweep']         # below T3: nothing
+    tick(ltp=110.0)
+    kinds = broker.kinds()[before:]
+    assert kinds.index('cancel') < kinds.index('flatten')
+    far = slot(cid, tg_leg='T3')
+    assert far['stage'] == 'FLAT' and far['exit_reason'] == 'T3 hit'
+    assert broker.of('cancel')[-1]['ids'] == [
+        leg(rows, cid, 'SL', tg_leg='T3')['broker_order_ids'][0]['order_id']]
+    assert call(cid)['phase'] == 'DONE'
+
+
+def test_the_t3_legs_stop_firing_leaves_the_t1_leg_riding(broker, rows, env):
+    cid = taken(broker, rows)
+    leg(rows, cid, 'SL', tg_leg='T3')['status'] = 'EXECUTED'
+    tick(ltp=80.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'SL hit'
+    assert slot(cid)['stage'] == 'LIVE' and leg(rows, cid, 'SL')['status'] == 'OPEN'
+
+
+def test_each_leg_is_booked_on_its_own_row_from_its_own_sells(broker, rows, env):
+    """Both legs sell the same contract at the same account. The T1 leg's
+    market exit and the T3 leg's stop fill must not land on each other's
+    row."""
+    cid = taken(broker, rows)                          # 2 + 2 lots in at 81.5
+    tick(ltp=95.0)                                     # T1 leg exits at market
+    exit_leg(rows, cid).update({'status': 'EXECUTED', 'entry_price': 95.3})
+    leg(rows, cid, 'SL', tg_leg='T3').update({'status': 'EXECUTED', 'entry_price': 64.8,
+                                              'quantity': 2 * LOT})
+    tick(ltp=64.5)                                     # T3 leg stopped out
+    rows_ = sorted(engine.history(), key=lambda r: r['leg'])
+    assert [r['leg'] for r in rows_] == ['T1', 'T3']
+    t1, t3 = rows_
+    assert t1['exit_reason'] == 'T1 hit' and t1['exit_price'] == 95.3 and t1['target'] == 95.0
+    assert t1['sold_qty'] == 2 * LOT and t1['complete'] is True
+    assert t3['exit_reason'] == 'SL hit' and t3['exit_price'] == 64.8 and t3['target'] == 110.0
+    assert t3['sold_qty'] == 2 * LOT and t3['complete'] is True
+    assert t3['pnl_per_lot'] == round((64.8 - 81.5) * LOT, 2)
+    assert TgCallStore.get_unbooked() == []
+
+
+def test_editing_the_targets_moves_the_t3_level_too(broker, rows, env):
+    cid = taken(broker, rows)
+    r = edited(cid, targets=[95.0, 101.0, 105.0])
+    assert 'T3 110.0 → 105.0' in r['changes']
+    assert call(cid)['target_far'] == 105.0
+    tick(ltp=105.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T3 hit'
+
+
+def test_a_stop_moved_by_hand_on_the_t3_leg_is_that_legs_level_only(broker, rows, env):
+    cid = taken(broker, rows)
+    far_sl = leg(rows, cid, 'SL', tg_leg='T3')
+    far_sl.update({'price': 72.0, 'trigger_price': 72.0})
+    r = engine.note_manual_edit(far_sl, 72.0)
+    assert r['slots'] == ['1:T3']
+    assert slot(cid, tg_leg='T3')['stop_level'] == 72.0
+    assert slot(cid).get('stop_level') is None
+    assert engine.slot_stop(call(cid), slot(cid)) == 65.0
+    assert engine.slot_stop(call(cid), slot(cid, tg_leg='T3')) == 72.0
+    before = len(broker.calls)
+    tick(ltp=80.0)
+    assert 'modify' not in broker.kinds()[before:]     # neither leg's stop is moved
+
+
+def test_eod_flattens_both_legs(broker, rows, env, monkeypatch):
+    cid = taken(broker, rows)
+    monkeypatch.setattr(engine, '_now_mins', lambda: 15 * 60 + 15)
+    tick(ltp=80.0)
+    assert slot(cid)['exit_reason'] == slot(cid, tg_leg='T3')['exit_reason'] == 'EOD square-off'
+    assert call(cid)['phase'] == 'DONE'
 
 
 # ── the fill and the stop ────────────────────────────────────────────────
@@ -329,13 +455,16 @@ def test_a_fill_is_covered_by_one_stop_for_exactly_what_filled(broker, rows, env
     tick()
 
     stops = broker.of('stop')
-    assert len(stops) == 2                                   # entry, then the SL
-    assert stops[1] == {'instance': 1, 'trigger': 65.0, 'limit': None, 'lots': 2,
-                        'action': 'SELL'}
+    assert len(stops) == 4                                   # two entries, then a SL each
+    assert stops[2] == stops[3] == {'instance': 1, 'trigger': 65.0, 'limit': None, 'lots': 2,
+                                    'action': 'SELL'}
     sl = leg(rows, cid, 'SL')
-    assert sl['order_type'] == 'SL-M' and sl['source'] == 'telegram'
+    assert sl['order_type'] == 'SL-M' and sl['source'] == 'telegram' and sl['tg_leg'] == 'T1'
+    far_sl = leg(rows, cid, 'SL', tg_leg='T3')
+    assert far_sl and far_sl['id'] != sl['id'] and far_sl['quantity'] == 2 * LOT
     s = slot(cid)
     assert s['stage'] == 'LIVE' and s['open_qty'] == 2 * LOT and s['entry_fill'] == 81.5
+    assert s['legs'] == {'SL': sl['id']} and slot(cid, tg_leg='T3')['legs'] == {'SL': far_sl['id']}
     assert leg(rows, cid, 'ENTRY')['status'] == 'EXECUTED'
     assert any(a['category'] == 'tg_call_fill' for a in alerts)
 
@@ -368,7 +497,9 @@ def test_a_refused_stop_is_retried_next_tick_and_alerted_once(broker, rows, env,
     broker.stop_ok = False
     tick()
     assert slot(cid)['stage'] == 'LIVE' and slot(cid)['legs'] == {}
-    assert sum(1 for a in alerts if 'NO STOP' in a['title']) == 1
+    assert sum(1 for a in alerts if 'NO STOP' in a['title']) == 2      # one per leg, once
+    tick()
+    assert sum(1 for a in alerts if 'NO STOP' in a['title']) == 2
 
     broker.stop_ok = True
     tick(ltp=80.0)
@@ -384,8 +515,14 @@ def test_the_stop_firing_closes_the_slot(broker, rows, env, alerts):
     leg(rows, cid, 'SL')['status'] = 'EXECUTED'
     tick(ltp=64.0)
     assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'SL hit'
-    assert call(cid)['phase'] == 'DONE'
     assert alerts[-1]['category'] == 'tg_call_exit'
+    # The T3 leg's own stop is still resting; the call is not over.
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    assert call(cid)['phase'] == 'ENTRY_PENDING'
+    leg(rows, cid, 'SL', tg_leg='T3')['status'] = 'EXECUTED'
+    tick(ltp=64.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'SL hit'
+    assert call(cid)['phase'] == 'DONE'
 
 
 def test_touching_the_target_cancels_the_stop_before_selling(broker, rows, env):
@@ -395,6 +532,13 @@ def test_touching_the_target_cancels_the_stop_before_selling(broker, rows, env):
     kinds = broker.kinds()[before:]
     assert kinds.index('cancel') < kinds.index('flatten')
     assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'T1 hit'
+    # Only the T1 leg's own records went to the exit: its entry and its
+    # stop. The T3 leg, its stop and its target are untouched.
+    assert broker.of('flatten')[-1]['ids'] == sorted(
+        [leg(rows, cid, 'ENTRY')['id'], leg(rows, cid, 'SL')['id']], key=lambda i: int(i[4:]))
+    assert broker.of('cancel')[-1]['ids'] == [leg(rows, cid, 'SL')['broker_order_ids'][0]['order_id']]
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    assert leg(rows, cid, 'SL', tg_leg='T3')['status'] == 'OPEN'
 
 
 def test_below_the_target_nothing_happens(broker, rows, env):
@@ -445,9 +589,10 @@ def test_exit_all_stands_every_call_down(broker, rows, env):
 def test_deleting_the_message_cancels_a_resting_entry(broker, rows, env, alerts):
     cid = take()['call_id']
     r = engine.retract_call(USER, cid, reason='message deleted')
-    assert r == {'success': True, 'call_id': cid, 'cancelled': 1, 'flattened': 0}
+    assert r == {'success': True, 'call_id': cid, 'cancelled': 2, 'flattened': 0}
     assert 'cancel' in broker.kinds() and 'flatten' not in broker.kinds()
     assert leg(rows, cid, 'ENTRY')['status'] == 'CANCELLED'
+    assert leg(rows, cid, 'ENTRY', tg_leg='T3')['status'] == 'CANCELLED'
     assert slot(cid)['stage'] == 'NO_FILL' and slot(cid)['exit_reason'] == 'message deleted'
     assert call(cid)['phase'] == 'CANCELLED'
     assert any(a['title'].startswith('Telegram call withdrawn') for a in alerts)
@@ -458,14 +603,17 @@ def test_deleting_the_message_squares_off_a_held_position_and_books_it(broker, r
     cid = taken(broker, rows)
     before = len(broker.calls)
     r = engine.retract_call(USER, cid)
-    assert r['flattened'] == 1
-    assert broker.kinds()[before:].count('flatten') == 1
+    assert r['flattened'] == 2
+    assert broker.kinds()[before:].count('flatten') == 2
     assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'message deleted'
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'message deleted'
     assert call(cid)['phase'] == 'CANCELLED'
     exit_leg(rows, cid).update({'status': 'EXECUTED', 'entry_price': 83.0})
+    exit_leg(rows, cid, tg_leg='T3').update({'status': 'EXECUTED', 'entry_price': 83.5})
     tick(ltp=83.0)
-    (row,) = engine.history()
-    assert row['exit_reason'] == 'message deleted' and row['pnl_per_lot'] == round(1.5 * LOT, 2)
+    t1, t3 = sorted(engine.history(), key=lambda r: r['leg'])
+    assert t1['exit_reason'] == 'message deleted' and t1['pnl_per_lot'] == round(1.5 * LOT, 2)
+    assert t3['leg'] == 'T3' and t3['pnl_per_lot'] == round(2.0 * LOT, 2)
 
 
 def test_a_deleted_message_for_a_finished_call_does_nothing(broker, rows, env):
@@ -588,9 +736,9 @@ def test_an_edit_that_is_no_longer_a_call_leaves_the_trade_alone(broker, rows, e
 
 # ── the P&L ledger ───────────────────────────────────────────────────────
 
-def exit_leg(rows_, cid, instance=1):
-    return leg(rows_, cid, None, instance) or next(
-        (o for o in rows_ if o.get('signal_id') == cid and o.get('leg', '').startswith('EXIT')), None)
+def exit_leg(rows_, cid, instance=1, tg_leg='T1'):
+    return next((o for o in rows_ if o.get('signal_id') == cid and o.get('leg', '').startswith('EXIT')
+                 and (o.get('tg_leg') or 'T1') == tg_leg), None)
 
 
 def test_a_target_exit_is_booked_per_lot_once_the_market_fill_is_known(broker, rows, env, monkeypatch):
@@ -659,11 +807,14 @@ def test_an_exit_fill_that_never_comes_is_booked_on_a_timer_and_flagged(broker, 
 
 def test_the_engine_keeps_running_until_the_last_slot_is_booked(broker, rows, env):
     cid = taken(broker, rows)
-    tick(ltp=95.0)
+    tick(ltp=110.0)                                   # through T1 and T3: both legs out
     assert call(cid)['phase'] == 'DONE'
     assert TgCallStore.get_active() == [] and TgCallStore.get_unbooked() != []
-    exit_leg(rows, cid).update({'status': 'EXECUTED', 'entry_price': 95.0})
-    tick(ltp=95.0)
+    exit_leg(rows, cid).update({'status': 'EXECUTED', 'entry_price': 110.0})
+    tick(ltp=110.0)
+    assert TgCallStore.get_unbooked() != []           # the T3 leg's fill is still unread
+    exit_leg(rows, cid, tg_leg='T3').update({'status': 'EXECUTED', 'entry_price': 110.2})
+    tick(ltp=110.0)
     assert TgCallStore.get_unbooked() == []
 
 
@@ -712,7 +863,8 @@ def test_every_tg_account_is_entered_at_once(broker, rows, env, monkeypatch):
         return orig(**k)
     monkeypatch.setattr(api, 'dispatch_stop_to_brokers', slow_stop)
     r = take()
-    assert sorted(x['instance'] for x in r['summary']) == [1, 2]
+    assert sorted((x['instance'], x['leg']) for x in r['summary']) == [
+        (1, 'T1'), (1, 'T3'), (2, 'T1'), (2, 'T3')]
     assert all(x['success'] for x in r['summary'])
     assert names and all(n.startswith('TgCallEntry') for n in names)   # placed from the pool
 
@@ -760,8 +912,9 @@ def test_a_stop_moved_by_hand_is_this_accounts_level_and_never_moved_back(broker
     # What the strip's price box does: the broker modify, then the record.
     sl.update({'price': 72.0, 'trigger_price': 72.0})
     r = engine.note_manual_edit(sl, 72.0)
-    assert r == {'call_id': cid, 'stop_level': 72.0, 'instances': [1]}
+    assert r == {'call_id': cid, 'stop_level': 72.0, 'instances': [1], 'slots': ['1']}
     assert slot(cid)['stop_level'] == 72.0 and slot(cid)['stop_source'] == 'manual'
+    assert slot(cid, tg_leg='T3').get('stop_level') is None     # the other leg's stop is its own
     assert call(cid)['stop'] == 65.0                   # the plan is untouched
 
     before = len(broker.calls)

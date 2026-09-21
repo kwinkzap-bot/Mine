@@ -124,7 +124,9 @@ def lot_chunks(lots: int) -> list:
 # ── the legs ──────────────────────────────────────────────────────────────
 
 def _place_stop_leg(signal, instance, lots, trigger, username, session_data,
-                    source='orderplacement'):
+                    source='orderplacement', extra=None):
+    """One SL-M at one broker. ``extra`` is merged into the stored record —
+    the Telegram engine tags which of its two legs the stop covers."""
     from trading_app.app.routes.api import dispatch_stop_to_brokers
     from trading_app.app.routes.order_placement_api import OP_STRATEGY
     from trading_app.app.utils.mine_order_store import MineOrderStore
@@ -169,6 +171,7 @@ def _place_stop_leg(signal, instance, lots, trigger, username, session_data,
         'status': 'OPEN', 'username': username, 'source': source,
         'signal_id': signal['id'], 'leg': 'SL',
         'broker_order_ids': results,
+        **(extra or {}),
     })
     return record['id']
 

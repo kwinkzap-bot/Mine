@@ -492,7 +492,7 @@
 
     const STAGE_TEXT = {
         PENDING_ENTRY: 'waiting for the trigger',
-        LIVE: 'in — stop working, T1 watched',
+        LIVE: 'in — stop working, target watched',
         FLAT: 'out',
         NO_FILL: 'never triggered',
         DEAD: 'refused',
@@ -501,8 +501,13 @@
     function callCard(c) {
         const slots = Object.values(c.brokers || {});
         const live = slots.filter(b => !['FLAT', 'NO_FILL', 'DEAD'].includes(b.stage));
+        // Two legs per broker — T1 and T3 — each its own entry, stop and
+        // watched level; the row says which one it is.
+        const legName = b => (b.leg === 'T3' ? (c.far_label || 'T3') : (b.leg || 'T1'));
+        const legTarget = b => (b.leg === 'T3' ? (c.target_far ?? c.target) : c.target);
         const rows = slots.map(b => {
             const stage = (b.stage === 'FLAT' && b.exit_reason) ? `out · ${b.exit_reason}`
+                : b.stage === 'LIVE' ? `in — stop working, ${legName(b)} ₹${money(legTarget(b))} watched`
                 : STAGE_TEXT[b.stage] || String(b.stage || '').toLowerCase();
             const fill = b.entry_fill ? ` · in at ₹${money(b.entry_fill)}` : '';
             const held = b.open_qty ? ` · ${esc(b.open_qty)} held` : '';
@@ -513,7 +518,8 @@
                 ? ` · <b class="${b.pnl >= 0 ? 'op-buy' : 'op-sell'}">${esc(DataGrid.inr(b.pnl))}</b>`
                   + ` (${esc(DataGrid.inr(b.pnl_per_lot))}/lot)` : '';
             return `<div class="op-sig-broker op-sig-${esc(String(b.stage || '').toLowerCase())}">`
-                 + `<span class="op-sig-bname">${esc(b.name || `Broker ${b.instance}`)}</span>`
+                 + `<span class="op-sig-bname">${esc(b.name || `Broker ${b.instance}`)}`
+                 + ` <span class="op-sig-leg">${esc(legName(b))}</span></span>`
                  + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${stop}${pnl}</span></div>`;
         }).join('');
 
@@ -523,7 +529,9 @@
             + `<span class="op-sig-contract"><span class="op-sig-src">TG</span> `
             + `${esc(c.action)} ${esc(c.symbol)} ${esc(c.strike)}${esc(c.option_type)}</span>`
             + `<span class="op-sig-ladder">trigger ₹${money(c.entry)} · limit ₹${money(c.limit)} · `
-            + `SL ₹${money(c.stop)} · T1 ₹${money(c.target)} (watched)</span>`
+            + `SL ₹${money(c.stop)} · T1 ₹${money(c.target)}`
+            + (c.target_far != null ? ` · ${esc(c.far_label || 'T3')} ₹${money(c.target_far)}` : '')
+            + ` (watched)</span>`
             + `<span class="op-sig-phase">${esc(String(c.phase).toLowerCase())}</span>`
             + `</header>${rows}`
             + (live.length ? '' : '<p class="op-sig-note">Nothing left working.</p>')
@@ -678,6 +686,7 @@
                 { key: 'symbol', label: 'Contract', sortable: true, strong: true,
                   format: (v, r) => `${r.symbol} ${r.strike}${r.option_type}` },
                 { key: 'name', label: 'Broker', sortable: true },
+                { key: 'leg', label: 'Leg', sortable: true, format: v => v || 'T1' },
                 { key: 'lots', label: 'Lots', align: 'right', sortable: true },
                 { key: 'entry_price', label: 'Entry', align: 'right', format: v => v == null ? '—' : money(v) },
                 { key: 'exit_price', label: 'Exit', align: 'right', format: v => v == null ? '—' : money(v) },
@@ -693,7 +702,7 @@
                   tone: (v, r) => r.complete === false ? 'warn' : '' },
             ],
             foot: [
-                { label: 'Total', colspan: 5 },
+                { label: 'Total', colspan: 6 },
                 { label: esc(t.lots), align: 'right' },
                 { label: '', colspan: 3 },
                 { label: DataGrid.inr(t.pnl_per_lot), align: 'right', tone: DataGrid.sign(t.pnl_per_lot) },

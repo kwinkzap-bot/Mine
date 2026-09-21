@@ -1,29 +1,38 @@
 """The Telegram-call state machine: a call arrives, a trade is run to its end.
 
 The listener (``tg_calls_listener``) hands in a parsed tip; everything from
-there to flat happens here, per broker:
+there to flat happens here, per broker, **twice** — one leg rides to target 1
+and a second, separate leg rides to the call's last target (T3):
 
     stop-limit BUY rests  →  it fills  →  SL-M SELL for the filled qty rests,
-    target 1 is watched  →  the stop fires, or T1 is touched and the position
-    is sold at market  →  flat.
+    the leg's target is watched  →  the stop fires, or the target is touched
+    and the leg is sold at market  →  flat.
+
+Each leg is its own slot on the call (``brokers["1"]`` is broker 1's T1
+leg, ``brokers["1:T3"]`` its T3 leg): its own entry order, its own stop, its
+own exit and its own row in the ledger. Both legs are ``BROKER_N_TG_LOTS``
+— the T1 leg exactly as before, and the T3 leg the same size again. A call
+listing a single target places only the T1 leg.
 
 Three things about the shape:
 
-**The stop covers the whole position.** A call trades one size and one
-target, so the stop simply covers all of it — an exchange-side exit for the
-full position, needing nothing from the app once it is resting.
+**Each stop covers the whole of its leg.** A leg trades one size and one
+target, so its stop simply covers all of it — an exchange-side exit for
+that leg, needing nothing from the app once it is resting. Two legs at one
+broker are two stops for the two quantities, never one stop for the sum.
 
-**Target 1 rests nowhere.** Resting a LIMIT sell for the full quantity next to
-a full-quantity stop would be twice the held quantity working on the sell
-side: the broker margins the second one as a fresh short, and a fast spike
-can fill both. So T1 is only a level this loop watches; when the premium
-touches it the stop is cancelled and the lot is sold at market. That needs
-the app alive, which the LaunchAgent sees to. The stop does not.
+**Targets rest nowhere.** Resting a LIMIT sell for a leg's quantity next to
+its stop would be twice the held quantity working on the sell side: the
+broker margins the second one as a fresh short, and a fast spike can fill
+both. So a target is only a level this loop watches; when the premium
+touches it the leg's stop is cancelled and the leg is sold at market — the
+other leg, its stop and its target are untouched. That needs the app alive,
+which the LaunchAgent sees to. The stops do not.
 
 **A call that cannot rest is skipped, not chased.** The entry is a stop BUY,
 which must sit above the market. If the premium has already run past the
 tip's price by the time the message lands, nothing is placed and an alert
-says why. Targets 2 and 3 are read and ignored.
+says why. Target 2 is read and ignored.
 
 Every leg is an ordinary ``MineOrderStore`` record with ``strategy='op'`` and
 ``source='telegram'``, so the Order Placement strip's price box, ✕,
@@ -139,7 +148,8 @@ def _alert(username, category, title, summary, data=None, once_key=None) -> None
 def tg_targets(username) -> list:
     """The brokers a call would reach: typed, active, and opted in with
     ``BROKER_N_TG_ACTIVE``. ``lots`` is ``BROKER_N_TG_LOTS`` or None — there is
-    no fallback to the OP sizes, which size a different kind of order."""
+    no fallback to the OP sizes, which size a different kind of order. It is
+    the size of each of the two legs, not their sum."""
     from trading_app.app.routes.api import is_broker_active
     out = []
     for i in range(1, 21):
@@ -153,6 +163,46 @@ def tg_targets(username) -> list:
                     'name': _uvar(username, f'BROKER_{i}_NAME', f'Broker {i}'),
                     'lots': lots if lots and lots > 0 else None})
     return out
+
+
+# ── the two legs ──────────────────────────────────────────────────────────
+
+LEG_T1 = 'T1'
+LEG_T3 = 'T3'
+
+
+def far_target(targets) -> tuple:
+    """``(label, level)`` of the leg that rides past T1: the last target the
+    call lists — T3 on the channel's usual three, T2 if it lists two — or
+    ``(None, None)`` when the call has one target and there is nothing
+    further to ride to."""
+    levels = [float(t) for t in (targets or [])]
+    if len(levels) < 2:
+        return None, None
+    return f'T{len(levels)}', levels[-1]
+
+
+def slot_key(instance, leg=LEG_T1) -> str:
+    """Where a leg lives in ``call['brokers']``: the T1 leg under the bare
+    instance (the key every call before the T3 leg existed used), the T3
+    leg under ``"<instance>:T3"``."""
+    return str(instance) if leg == LEG_T1 else f'{instance}:{leg}'
+
+
+def _key(slot) -> str:
+    return slot_key(slot['instance'], slot.get('leg') or LEG_T1)
+
+
+def slot_target(call, slot) -> float:
+    """The level this leg is watched against: the call's T1, or its far
+    target for the T3 leg. Read from the call, so a channel edit moves it."""
+    if (slot.get('leg') or LEG_T1) == LEG_T3:
+        return float(call.get('target_far') or call['target'])
+    return float(call['target'])
+
+
+def _leg_label(call, slot) -> str:
+    return (call.get('far_label') or LEG_T3) if (slot.get('leg') or LEG_T1) == LEG_T3 else LEG_T1
 
 
 def entry_limit(trigger: float, pct: float) -> float:
@@ -328,6 +378,7 @@ def take_call(username, plan, meta=None) -> dict:
 
     entry, stop = float(plan['entry']), float(plan['stop'])
     target = float(plan['targets'][0])
+    far_label, target_far = far_target(plan['targets'])
     limit = entry_limit(entry, limit_pct(username))
 
     lot_size = resolve_standard_lot(symbol)
@@ -355,12 +406,19 @@ def take_call(username, plan, meta=None) -> dict:
         return skipped('no broker has BROKER_N_TG_ACTIVE=true with BROKER_N_TG_LOTS set',
                        once_key='no-brokers')
 
+    # One entry order per leg per broker, both the account's size: the T1
+    # leg at every eligible account, and the T3 leg at each again when the
+    # call has somewhere further to ride to.
+    legs = [(t, LEG_T1, t['lots']) for t in eligible]
+    if target_far is not None:
+        legs += [(t, LEG_T3, t['lots']) for t in eligible]
+
     session_data = _session(username)
     call = TgCallStore.create({
         'username': username,
         'symbol': symbol, 'strike': strike, 'option_type': option_type,
         'action': 'BUY', 'entry': entry, 'stop': stop, 'targets': [float(t) for t in plan['targets']],
-        'target': target, 'limit': limit,
+        'target': target, 'target_far': target_far, 'far_label': far_label, 'limit': limit,
         'expiry': str(plan.get('expiry') or '') or None,
         'lot_size': lot_size, 'ltp_at_call': ltp,
         'phase': 'ARMED',
@@ -370,9 +428,11 @@ def take_call(username, plan, meta=None) -> dict:
     })
     call_id = call['id']
 
-    def place_at(t):
-        """This account's entry, chunked by the freeze limit. Never raises."""
-        instance, lots = t['instance'], t['lots']
+    def place_at(leg):
+        """One leg's entry at one account, chunked by the freeze limit.
+        Never raises."""
+        t, leg_name, lots = leg
+        instance = t['instance']
         results = []
         for chunk in lot_chunks(lots):
             try:
@@ -383,7 +443,7 @@ def take_call(username, plan, meta=None) -> dict:
                     standard_lot=lot_size,
                     gate=lambda i, _b, _want=instance: i == _want,
                     lots_for=lambda _i, _n=chunk: _n,
-                    log_tag=f'TgCall {call_id} entry', limit_price=limit,
+                    log_tag=f'TgCall {call_id} {leg_name} entry', limit_price=limit,
                 )
             except Exception as e:
                 logger.error(f"[TgCall] {call_id} entry at broker {instance} failed: {e}",
@@ -392,19 +452,19 @@ def take_call(username, plan, meta=None) -> dict:
                                 'success': False, 'error': str(e)})
         return results
 
-    # Every account at once, not one after another: each placement is a
-    # broker round-trip, and the second account should not enter a second
-    # later than the first because of it.
-    if len(eligible) > 1:
+    # Every leg at once, not one after another: each placement is a broker
+    # round-trip, and the second account (or the T3 leg) should not enter a
+    # second later than the first because of it.
+    if len(legs) > 1:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(eligible), thread_name_prefix='TgCallEntry') as pool:
-            placed = list(pool.map(place_at, eligible))
+        with ThreadPoolExecutor(max_workers=len(legs), thread_name_prefix='TgCallEntry') as pool:
+            placed = list(pool.map(place_at, legs))
     else:
-        placed = [place_at(t) for t in eligible]
+        placed = [place_at(leg) for leg in legs]
 
     summary = []
-    for t, results in zip(eligible, placed):
-        instance, lots = t['instance'], t['lots']
+    for (t, leg_name, lots), results in zip(legs, placed):
+        instance = t['instance']
         ok = [r for r in results if r.get('success')]
         error = next((r.get('error') for r in results if not r.get('success')), None)
 
@@ -420,19 +480,20 @@ def take_call(username, plan, meta=None) -> dict:
             'status': 'OPEN' if ok else 'REJECTED',
             'username': username,
             'source': 'telegram',
-            'signal_id': call_id, 'leg': 'ENTRY',
+            'signal_id': call_id, 'leg': 'ENTRY', 'tg_leg': leg_name,
             'broker_order_ids': results,
         })
 
-        TgCallStore.update_broker(call_id, instance, {
-            'instance': instance, 'broker': t['type'], 'name': t['name'],
+        TgCallStore.update_broker(call_id, slot_key(instance, leg_name), {
+            'instance': instance, 'leg': leg_name,
+            'broker': t['type'], 'name': t['name'],
             'lots': lots,
             'stage': STAGE_PENDING_ENTRY if ok else STAGE_DEAD,
             'entry_record_id': record['id'],
             'legs': {}, 'error': None if ok else error,
         })
         summary.append({'broker': t['type'], 'instance': instance, 'name': t['name'],
-                        'lots': lots, 'success': bool(ok), 'error': error,
+                        'leg': leg_name, 'lots': lots, 'success': bool(ok), 'error': error,
                         'order_id': record['id']})
 
     accepted = [r for r in summary if r['success']]
@@ -444,13 +505,14 @@ def take_call(username, plan, meta=None) -> dict:
         return {'success': False, 'error': reason, 'call_id': call_id, 'summary': summary}
 
     TgCallStore.update(call_id, {'phase': 'ENTRY_PENDING'})
-    brokers = ', '.join(f"{r['name']} x{r['lots']}" for r in accepted)
+    brokers = ', '.join(f"{r['name']} {r['leg']} x{r['lots']}" for r in accepted)
+    far = f' · {far_label} {target_far}' if target_far is not None else ''
     _alert(username, 'tg_call_taken', f'Telegram call taken — {label}',
-           f'SL-L BUY trigger {entry} limit {limit} · SL {stop} · T1 {target} · {brokers}',
+           f'SL-L BUY trigger {entry} limit {limit} · SL {stop} · T1 {target}{far} · {brokers}',
            {'call_id': call_id, 'plan': plan, 'limit': limit, 'summary': summary})
     logger.info(f"[TgCall] {call_id} armed {label} trigger={entry} limit={limit} sl={stop} "
-                f"t1={target} → {len(accepted)}/{len(summary)} brokers in "
-                f"{_time.time() - t_start:.2f}s from receipt")
+                f"t1={target} {far_label or 'far'}={target_far} → {len(accepted)}/{len(summary)} "
+                f"legs in {_time.time() - t_start:.2f}s from receipt")
     ensure_running(username, source='call')
     return {'success': True, 'call_id': call_id, 'summary': summary}
 
@@ -482,24 +544,24 @@ def _settle_entry(call, slot, username, session_data, books) -> None:
         # rest, so the stop covers exactly what is held.
         first = slot.get('first_partial_at')
         if not first:
-            TgCallStore.update_broker(call_id, instance, {'first_partial_at': _time.time()})
+            TgCallStore.update_broker(call_id, _key(slot), {'first_partial_at': _time.time()})
             return
         if (_time.time() - first) < _PARTIAL_SETTLE_SECS:
             return
-        logger.warning(f"[TgCall] {call_id} broker {instance}: entry stuck part-filled at "
+        logger.warning(f"[TgCall] {call_id} {_key(slot)}: entry stuck part-filled at "
                        f"{filled_qty} — cancelling the remainder")
         _cancel_leg(entry, username, session_data)
 
     if filled_qty <= 0:
-        TgCallStore.update_broker(call_id, instance, {'stage': STAGE_NO_FILL,
-                                                      'exit_reason': f'entry {status.lower()}'})
-        logger.info(f"[TgCall] {call_id} broker {instance}: entry {status.lower()} with nothing filled")
+        TgCallStore.update_broker(call_id, _key(slot), {'stage': STAGE_NO_FILL,
+                                                        'exit_reason': f'entry {status.lower()}'})
+        logger.info(f"[TgCall] {call_id} {_key(slot)}: entry {status.lower()} with nothing filled")
         return
 
     lot_size = int(call.get('lot_size') or 0) or 1
     filled_lots = filled_qty // lot_size
     if filled_lots <= 0:
-        TgCallStore.update_broker(call_id, instance, {'stage': STAGE_NO_FILL})
+        TgCallStore.update_broker(call_id, _key(slot), {'stage': STAGE_NO_FILL})
         return
 
     entry_fill = float(avg_price or entry.get('entry_price') or call['entry'])
@@ -507,8 +569,10 @@ def _settle_entry(call, slot, username, session_data, books) -> None:
                                               'quantity': filled_qty})
     _alert(username, 'tg_call_fill',
            f"Telegram call filled — {call['symbol']} {call['strike']} {call['option_type']}",
-           f"{slot.get('name')}: {filled_lots} lot(s) at {entry_fill} · placing SL-M {call['stop']}",
-           {'call_id': call_id, 'instance': instance, 'qty': filled_qty, 'price': entry_fill})
+           f"{slot.get('name')} {_leg_label(call, slot)}: {filled_lots} lot(s) at {entry_fill} "
+           f"· placing SL-M {slot_stop(call, slot)}",
+           {'call_id': call_id, 'instance': instance, 'leg': slot.get('leg') or LEG_T1,
+            'qty': filled_qty, 'price': entry_fill})
     _arm_stop(call, slot, filled_lots, filled_qty, entry_fill, username, session_data)
 
 
@@ -516,9 +580,10 @@ def _arm_stop(call, slot, filled_lots, filled_qty, entry_fill, username, session
     """The SL-M for everything that filled. Stage LIVE either way: a refused
     stop is retried every tick, and the price guard covers the gap."""
     call_id, instance = call['id'], slot['instance']
-    sl_id = _place_stop_leg(call, instance, filled_lots, float(call['stop']),
-                            username, session_data, source='telegram')
-    TgCallStore.update_broker(call_id, instance, {
+    sl_id = _place_stop_leg(call, instance, filled_lots, slot_stop(call, slot),
+                            username, session_data, source='telegram',
+                            extra={'tg_leg': slot.get('leg') or LEG_T1})
+    TgCallStore.update_broker(call_id, _key(slot), {
         'stage': STAGE_LIVE, 'open_qty': filled_qty, 'open_lots': filled_lots,
         'entry_qty': filled_qty, 'entry_lots': filled_lots,
         'entry_fill': entry_fill, 'filled_at': _time.time(),
@@ -527,8 +592,10 @@ def _arm_stop(call, slot, filled_lots, filled_qty, entry_fill, username, session
     if not sl_id:
         _alert(username, 'tg_call_order_failed',
                f"Telegram call — NO STOP RESTING: {call['symbol']} {call['strike']} {call['option_type']}",
-               f"{slot.get('name')}: the SL-M at {call['stop']} was refused; retrying every tick",
-               {'call_id': call_id, 'instance': instance}, once_key=f'nostop:{call_id}:{instance}')
+               f"{slot.get('name')} {_leg_label(call, slot)}: the SL-M at {slot_stop(call, slot)} "
+               f"was refused; retrying every tick",
+               {'call_id': call_id, 'instance': instance, 'leg': slot.get('leg') or LEG_T1},
+               once_key=f'nostop:{call_id}:{_key(slot)}')
 
 
 # ── managing the position ─────────────────────────────────────────────────
@@ -545,11 +612,14 @@ def _flatten(call, slot, username, session_data, reason) -> None:
     def mine():
         return [o for o in MineOrderStore.get_today_orders() if o.get('id') in ids]
 
+    # Only this leg's own records are handed in, so the net position it
+    # sells is this leg's quantity: the other leg at the same account, its
+    # stop and its target are untouched.
     try:
         result = exit_selected_records(username, session_data, mine,
-                                       log_tag=f'TgCall {call_id} {reason}')
+                                       log_tag=f'TgCall {call_id} {_key(slot)} {reason}')
     except Exception as e:
-        logger.error(f"[TgCall] {call_id} broker {instance}: flatten failed: {e}", exc_info=True)
+        logger.error(f"[TgCall] {call_id} {_key(slot)}: flatten failed: {e}", exc_info=True)
         return
 
     # The market exit gets a record of its own, so the status sweep reads
@@ -567,7 +637,7 @@ def _flatten(call, slot, username, session_data, reason) -> None:
             'instrument': 'BFO' if call['symbol'] == 'SENSEX' else 'NFO',
             'price': None, 'quantity': int(ex.get('quantity') or 0),
             'status': 'OPEN', 'username': username, 'source': 'telegram',
-            'signal_id': call_id, 'leg': 'EXIT',
+            'signal_id': call_id, 'leg': 'EXIT', 'tg_leg': slot.get('leg') or LEG_T1,
             'broker_order_ids': [{'broker': ex.get('broker'), 'instance': instance,
                                   'order_id': oid, 'success': True,
                                   'quantity': int(ex.get('quantity') or 0)}
@@ -575,15 +645,16 @@ def _flatten(call, slot, username, session_data, reason) -> None:
         })
         legs[f"EXIT{len([k for k in legs if k.startswith('EXIT')]) + 1}"] = rec['id']
 
-    TgCallStore.update_broker(call_id, instance, {'stage': STAGE_FLAT, 'exit_reason': reason,
-                                                  'open_qty': 0, 'legs': legs,
-                                                  'booked': False, 'flat_at': _time.time()})
+    TgCallStore.update_broker(call_id, _key(slot), {'stage': STAGE_FLAT, 'exit_reason': reason,
+                                                    'open_qty': 0, 'legs': legs,
+                                                    'booked': False, 'flat_at': _time.time()})
     _alert(username, 'tg_call_exit',
            f"Telegram call closed — {call['symbol']} {call['strike']} {call['option_type']}",
-           f"{slot.get('name')}: {reason} · {result.get('cancelled_orders')} cancelled, "
-           f"{result.get('exited_positions')} squared off",
-           {'call_id': call_id, 'instance': instance, 'reason': reason})
-    logger.info(f"[TgCall] {call_id} broker {instance}: FLAT ({reason})")
+           f"{slot.get('name')} {_leg_label(call, slot)}: {reason} · "
+           f"{result.get('cancelled_orders')} cancelled, {result.get('exited_positions')} squared off",
+           {'call_id': call_id, 'instance': instance, 'leg': slot.get('leg') or LEG_T1,
+            'reason': reason})
+    logger.info(f"[TgCall] {call_id} {_key(slot)}: FLAT ({reason})")
 
 
 def _check_live(call, slot, ltp, username, session_data) -> None:
@@ -604,11 +675,12 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
         _flatten(call, slot, username, session_data, 'nothing held')
         return
 
-    if reached('BUY', ltp, float(call['target'])):
-        logger.info(f"[TgCall] {call_id} broker {instance}: target {call['target']} touched "
+    target = slot_target(call, slot)
+    if reached('BUY', ltp, target):
+        logger.info(f"[TgCall] {call_id} {_key(slot)}: target {target} touched "
                     f"at {ltp} — cancelling the stop and exiting")
         _cancel_leg(sl, username, session_data)
-        _flatten(call, slot, username, session_data, 'T1 hit')
+        _flatten(call, slot, username, session_data, f'{_leg_label(call, slot)} hit')
         return
 
     if not _is_resting(sl) and not (sl and sl.get('status') == 'CANCELLED'):
@@ -617,9 +689,10 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
         # and the price guard below still covers the position.
         lots = int(slot.get('open_lots') or 0) or max(open_qty // (int(call.get('lot_size') or 1) or 1), 1)
         placed = _place_stop_leg(call, instance, lots, slot_stop(call, slot),
-                                 username, session_data, source='telegram')
+                                 username, session_data, source='telegram',
+                                 extra={'tg_leg': slot.get('leg') or LEG_T1})
         if placed:
-            TgCallStore.update_broker(call_id, instance, {'legs': {**legs, 'SL': placed}})
+            TgCallStore.update_broker(call_id, _key(slot), {'legs': {**legs, 'SL': placed}})
             sl = _record(placed)
 
     # A resting stop that is not at this account's level — the channel edited
@@ -631,7 +704,7 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
     want = slot_stop(call, slot)
     if _is_resting(sl) and abs(float(sl.get('trigger_price') or 0) - want) >= 0.05:
         if ltp is not None and reached(exit_side('BUY'), ltp, want):
-            logger.error(f"[TgCall] {call_id} broker {instance}: premium {ltp} is through the "
+            logger.error(f"[TgCall] {call_id} {_key(slot)}: premium {ltp} is through the "
                          f"edited stop {want} while the old one rests at {sl.get('trigger_price')} "
                          f"— exiting at market")
             _cancel_leg(sl, username, session_data)
@@ -643,10 +716,10 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
                                      trigger_price=want)
         if r.get('success'):
             MineOrderStore.update_order(sl['id'], {'price': want, 'trigger_price': want})
-            logger.info(f"[TgCall] {call_id} broker {instance}: stop moved to {want}")
+            logger.info(f"[TgCall] {call_id} {_key(slot)}: stop moved to {want}")
 
     if ltp is not None and reached(exit_side('BUY'), ltp, want) and not _is_resting(sl):
-        logger.error(f"[TgCall] {call_id} broker {instance}: premium {ltp} is through the "
+        logger.error(f"[TgCall] {call_id} {_key(slot)}: premium {ltp} is through the "
                      f"{want} stop with nothing resting — exiting at market")
         _flatten(call, slot, username, session_data, 'stop breached, no order resting')
 
@@ -658,7 +731,7 @@ def _handle_eod(call, username, session_data) -> None:
             continue
         if stage == STAGE_PENDING_ENTRY:
             _cancel_leg(_record(slot.get('entry_record_id')), username, session_data)
-            TgCallStore.update_broker(call['id'], slot['instance'],
+            TgCallStore.update_broker(call['id'], _key(slot),
                                       {'stage': STAGE_NO_FILL, 'exit_reason': 'EOD, never triggered'})
             continue
         _flatten(call, slot, username, session_data, 'EOD square-off')
@@ -675,7 +748,7 @@ def stop_all_calls(username, session_data, reason='exit-all') -> int:
     for call in TgCallStore.get_active():
         for slot in (call.get('brokers') or {}).values():
             if slot.get('stage') not in BROKER_DONE_STAGES:
-                TgCallStore.update_broker(call['id'], slot['instance'],
+                TgCallStore.update_broker(call['id'], _key(slot),
                                           {'stage': STAGE_FLAT, 'exit_reason': reason, 'open_qty': 0})
         TgCallStore.update(call['id'], {'phase': 'CANCELLED', 'cancel_reason': reason,
                                         'finished_at': int(_time.time() * 1000)})
@@ -702,11 +775,12 @@ def note_manual_edit(order, new_price, new_limit=None) -> dict:
     the tick manages the position on the number the user chose instead of
     moving the order back to the plan's.
 
-    * SL leg   → that account's ``stop_level``. Per account, deliberately:
-                 a stop moved by hand on one account says nothing about the
-                 other. A later edit of the channel message overrides it.
-    * ENTRY leg → the call's entry and limit (still resting, so it is one
-                 order per account anyway; the plan follows it).
+    * SL leg   → that leg's ``stop_level``. Per leg, deliberately: a stop
+                 moved by hand on one leg (or one account) says nothing about
+                 the other. A later edit of the channel message overrides it.
+    * ENTRY leg → the call's entry and limit (the plan follows it; the other
+                 entry orders of the call are not moved — the strip moved
+                 one order, and that is the one that moved).
     """
     call_id = str(order.get('signal_id') or '')
     if not call_id.startswith('tg-'):
@@ -718,11 +792,21 @@ def note_manual_edit(order, new_price, new_limit=None) -> dict:
     instances = {int(l.get('instance') or 0) for l in (order.get('broker_order_ids') or [])}
 
     if leg == 'SL':
-        for i in instances:
-            TgCallStore.update_broker(call_id, i, {'stop_level': float(new_price),
-                                                   'stop_source': 'manual'})
-        logger.info(f"[TgCall] {call_id} broker(s) {sorted(instances)}: stop set by hand to {new_price}")
-        return {'call_id': call_id, 'stop_level': float(new_price), 'instances': sorted(instances)}
+        # The slot whose stop this record is. Two legs at one account each
+        # have a stop of their own, so the record, not the instance, says
+        # which level moved.
+        owners = [sl for sl in (call.get('brokers') or {}).values()
+                  if (sl.get('legs') or {}).get('SL') == order.get('id')]
+        if not owners:
+            owners = [sl for sl in (call.get('brokers') or {}).values()
+                      if int(sl.get('instance') or 0) in instances]
+        for sl in owners:
+            TgCallStore.update_broker(call_id, _key(sl), {'stop_level': float(new_price),
+                                                          'stop_source': 'manual'})
+        keys = sorted(_key(sl) for sl in owners)
+        logger.info(f"[TgCall] {call_id} {keys}: stop set by hand to {new_price}")
+        return {'call_id': call_id, 'stop_level': float(new_price), 'instances': sorted(instances),
+                'slots': keys}
 
     if leg == 'ENTRY':
         updates = {'entry': float(new_price)}
@@ -758,7 +842,7 @@ def retract_call(username, call_id, reason='message deleted') -> dict:
             continue
         if stage == STAGE_PENDING_ENTRY:
             _cancel_leg(_record(slot.get('entry_record_id')), username, session_data)
-            TgCallStore.update_broker(call_id, slot['instance'],
+            TgCallStore.update_broker(call_id, _key(slot),
                                       {'stage': STAGE_NO_FILL, 'exit_reason': reason})
             cancelled += 1
             continue
@@ -815,6 +899,7 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
     try:
         entry, stop = float(plan['entry']), float(plan['stop'])
         target = float((plan.get('targets') or [None])[0])
+        far_label, target_far = far_target(plan.get('targets'))
     except (TypeError, ValueError):
         return {'success': False, 'error': 'the edited call has no usable numbers'}
     if not (stop < entry < target):
@@ -893,19 +978,29 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
         TgCallStore.update(call_id, {'stop': stop})
         for slot in slots:
             if slot.get('stop_level'):
-                TgCallStore.update_broker(call_id, slot['instance'],
+                TgCallStore.update_broker(call_id, _key(slot),
                                           {'stop_level': None, 'stop_source': 'channel'})
         if not live and pending:
             changes.append(f'stop {old_stop} → {stop} (for when the entry fills)')
         elif live and not moved_any and not any('stop modify' in p for p in problems):
             changes.append(f'stop {old_stop} → {stop}')
 
-    # ── target ────────────────────────────────────────────────────────
+    # ── targets ───────────────────────────────────────────────────────
+    # Both watched levels move; neither is at a broker. A far target edited
+    # away (the call now lists one target) leaves a T3 leg already placed
+    # watching the level it had — a leg is not un-placed by an edit.
     old_target = float(call.get('target') or 0)
-    if target != old_target:
-        TgCallStore.update(call_id, {'target': target,
-                                     'targets': [float(t) for t in plan.get('targets') or [target]]})
-        changes.append(f'T1 {old_target} → {target}')
+    old_far = call.get('target_far')
+    if target != old_target or (target_far is not None and target_far != old_far):
+        updates = {'target': target,
+                   'targets': [float(t) for t in plan.get('targets') or [target]]}
+        if target_far is not None:
+            updates.update({'target_far': target_far, 'far_label': far_label})
+        TgCallStore.update(call_id, updates)
+        if target != old_target:
+            changes.append(f'T1 {old_target} → {target}')
+        if target_far is not None and target_far != old_far:
+            changes.append(f'{far_label} {old_far} → {target_far}')
 
     TgCallStore.update(call_id, {'edited_at': int(_time.time() * 1000),
                                  'source_text': (plan.get('source_text') or (meta or {}).get('text') or '')[:2000]})
@@ -920,15 +1015,17 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
 
 # ── booking the P&L ───────────────────────────────────────────────────────
 
-def _sell_fills(call_id, instance) -> list:
+def _sell_fills(call_id, slot) -> list:
     """``(qty, price)`` of every executed sell leg this slot placed — the
-    SL-M, the market exits, or both when a stop filled during a T1 exit."""
+    SL-M, the market exits, or both when a stop filled during a target exit.
+    The slot's own legs only: the other leg at the same account sells the
+    same contract, and its fills are its own row."""
+    own = {v for v in (slot.get('legs') or {}).values() if v}
     out = []
     for o in signal_records(call_id):
         if o.get('status') != 'EXECUTED' or str(o.get('action') or '').upper() != 'SELL':
             continue
-        if not any(int(l.get('instance') or 0) == int(instance)
-                   for l in (o.get('broker_order_ids') or [])):
+        if o.get('id') not in own:
             continue
         qty = int(o.get('quantity') or 0)
         price = o.get('entry_price') or o.get('price')
@@ -946,7 +1043,7 @@ def _book_slot(call, slot, username) -> dict:
     lots = int(slot.get('entry_lots') or (entry_qty // lot_size) or 0)
     entry_price = float(slot.get('entry_fill') or call['entry'])
 
-    fills = _sell_fills(call['id'], instance)
+    fills = _sell_fills(call['id'], slot)
     sold_qty = sum(q for q, _ in fills)
     exit_price = (sum(q * p for q, p in fills) / sold_qty) if sold_qty else None
     complete = bool(entry_qty) and sold_qty >= entry_qty
@@ -961,9 +1058,10 @@ def _book_slot(call, slot, username) -> dict:
         'symbol': call['symbol'], 'strike': call['strike'], 'option_type': call['option_type'],
         'expiry': call.get('expiry'),
         'instance': instance, 'broker': slot.get('broker'), 'name': slot.get('name'),
+        'leg': _leg_label(call, slot),
         'lots': lots, 'lot_size': lot_size, 'qty': entry_qty, 'sold_qty': sold_qty,
         'trigger': call['entry'], 'limit': call.get('limit'), 'sl': call['stop'],
-        'target': call.get('target'),
+        'target': slot_target(call, slot),
         'entry_price': entry_price, 'exit_price': round(exit_price, 2) if exit_price else None,
         'points': round(points, 2) if points is not None else None,
         'pnl_per_lot': pnl_per_lot, 'pnl': pnl,
@@ -972,17 +1070,19 @@ def _book_slot(call, slot, username) -> dict:
         'flat_at': int((slot.get('flat_at') or 0) * 1000) or None,
         'complete': complete,
     })
-    TgCallStore.update_broker(call['id'], instance, {'booked': True, 'trade_id': row['id'],
-                                                     'pnl': pnl, 'pnl_per_lot': pnl_per_lot})
-    logger.info(f"[TgCall] {call['id']} broker {instance}: booked {lots} lot(s) "
+    TgCallStore.update_broker(call['id'], _key(slot), {'booked': True, 'trade_id': row['id'],
+                                                       'pnl': pnl, 'pnl_per_lot': pnl_per_lot})
+    logger.info(f"[TgCall] {call['id']} {_key(slot)}: booked {lots} lot(s) "
                 f"{entry_price} → {exit_price} = {pnl_per_lot}/lot, {pnl} total"
                 + ('' if complete else ' (INCOMPLETE — exit fill not fully known)'))
     if not complete:
         _alert(username, 'tg_call_order_failed',
                f"Telegram call booked without a full exit fill — {call['symbol']} {call['strike']} {call['option_type']}",
-               f"{slot.get('name')}: sold {sold_qty} of {entry_qty} known. Check the account.",
-               {'call_id': call['id'], 'instance': instance, 'trade_id': row['id']},
-               once_key=f"incomplete:{call['id']}:{instance}")
+               f"{slot.get('name')} {_leg_label(call, slot)}: sold {sold_qty} of {entry_qty} known. "
+               f"Check the account.",
+               {'call_id': call['id'], 'instance': instance, 'leg': slot.get('leg') or LEG_T1,
+                'trade_id': row['id']},
+               once_key=f"incomplete:{call['id']}:{_key(slot)}")
     return row
 
 
@@ -995,14 +1095,14 @@ def _book_pending(username) -> int:
             try:
                 lot_size = int(call.get('lot_size') or 0) or 1
                 entry_qty = int(slot.get('entry_qty') or 0)
-                sold = sum(q for q, _ in _sell_fills(call['id'], slot['instance']))
+                sold = sum(q for q, _ in _sell_fills(call['id'], slot))
                 waited = _time.time() - float(slot.get('flat_at') or 0)
                 if entry_qty and sold < entry_qty and waited < _BOOK_SETTLE_SECS:
                     continue                 # the exit is still filling
                 _book_slot(call, slot, username)
                 booked += 1
             except Exception as e:
-                logger.error(f"[TgCall] booking {call.get('id')} broker {slot.get('instance')} "
+                logger.error(f"[TgCall] booking {call.get('id')} {_key(slot)} "
                              f"failed: {e}", exc_info=True)
     return booked
 
@@ -1049,10 +1149,14 @@ def tick(username, session_data=None) -> None:
                     # Blind: the stop still rests at the exchange, but the
                     # target is watched here and cannot be seen. Say so
                     # loudly, once, so the position is managed by hand.
+                    watched = ' / '.join(f"{lbl} {lvl}" for lbl, lvl in
+                                         (('T1', call.get('target')),
+                                          (call.get('far_label'), call.get('target_far')))
+                                         if lvl is not None)
                     _alert(username, 'tg_call_order_failed',
                            f"Telegram call — NO QUOTE: {call['symbol']} {call['strike']} {call['option_type']}",
-                           f"Cannot read the premium, so target {call.get('target')} is NOT being "
-                           f"watched. The stop at {call['stop']} still rests. Manage this one by hand.",
+                           f"Cannot read the premium, so {watched} is NOT being watched. The "
+                           f"stop at {call['stop']} still rests. Manage this one by hand.",
                            {'call_id': call['id']}, once_key=f"noquote:{call['id']}")
 
             for slot in slots:
@@ -1120,4 +1224,5 @@ def stop() -> None:
 __all__ = ['take_call', 'validate_call', 'tg_targets', 'entry_limit', 'tick',
            'ensure_running', 'is_running', 'stop', 'stop_all_calls', 'call_records',
            'remember_session', 'is_active', 'history', 'retract_call', 'amend_call', 'prewarm',
-           'note_manual_edit', 'slot_stop']
+           'note_manual_edit', 'slot_stop', 'slot_target', 'slot_key', 'far_target',
+           'LEG_T1', 'LEG_T3']

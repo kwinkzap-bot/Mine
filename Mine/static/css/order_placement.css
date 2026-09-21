@@ -872,6 +872,17 @@
   font-weight: 500;
 }
 
+/* Which of a broker's two legs the row is: T1 or T3. */
+.op-sig-leg {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  opacity: .8;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
 .op-sig-stage {
   opacity: .75;
   font-variant-numeric: tabular-nums;
