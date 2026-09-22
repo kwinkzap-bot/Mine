@@ -71,11 +71,33 @@
                                             title="Volume bar color on a down candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
                                             title="Volume bar color when Vol Direction Color is off">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig"
-                                            title="Bar holding a single Time &amp; Sales print at or above the size in the box (painted solid)">
-                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp"
+                                    </span>
+                                </label>
+                                <!-- Big prints, three tiers. A bar holding a single Time & Sales print at
+                                     or above a tier's size paints that tier's colour, solid; the biggest
+                                     tier the print reaches wins. The boxes and swatches are the page-wide
+                                     set (oipBigPrintTiers in oi_indicators.js): the smallest size is what
+                                     the server tags from (`big_qty`), the middle one is what the bell
+                                     follows (`alert_qty`). -->
+                                <label class="oip-ind-item oip-ind-sub-item oip-ind-bigprint"
+                                    title="Single-print size tiers, in contracts: a bar holding a print at or above a size paints that tier's colour, solid. The biggest tier reached wins; the smallest size is what the server tags from.">
+                                    <span>Big print ≥</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig1"
+                                            title="Tier 1 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="0"
+                                            value="5000" min="1" step="100"
+                                            title="Tier 1 size (default 5000) — the smallest tier is the size the server tags bars from">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig2"
+                                            title="Tier 2 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="1"
                                             value="8000" min="1" step="100"
-                                            title="Print size, in contracts, that paints a bar the solid color (default 8000)">
+                                            title="Tier 2 size (default 8000) — the bell and Telegram alert follow this tier">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig3"
+                                            title="Tier 3 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="2"
+                                            value="10000" min="1" step="100"
+                                            title="Tier 3 size (default 10000)">
                                     </span>
                                 </label>
                                 <!-- Hangs from its own band at the top of this pane and reuses the

@@ -15,11 +15,14 @@
 
    Two charts on the SAME timeframe are matched bar-for-bar via bar spacing plus
    scroll position: the convention the rest of this page already uses, and it
-   keeps the right-edge gap that setVisibleRange would flatten. The two TF
-   dropdowns are deliberately independent though, and on different timeframes a
-   bar is a different width in TIME — matching bar spacing there would leave the
-   two showing different windows, so those fall back to matching the visible
-   time range.
+   keeps the right-edge gap that setVisibleRange would flatten. On Replay the
+   Round Strike block follows this page's TF (it has no dropdown of its own
+   here), and pads its axis with the index chart's bar times so the two right
+   edges are the same bar (oipRSPadToIndexAxis). The different-TF branch is
+   kept for the moment between a TF change and the block's reload: a bar is a
+   different width in TIME there, so matching bar spacing would leave the two
+   showing different windows, and those fall back to matching the visible time
+   range.
 
    Re-entrancy: applyOptions and scrollToPosition fire the target's own range
    callback synchronously, which would bounce straight back here. The flag makes
@@ -916,13 +919,23 @@ function oipDrawOIBars() {
 // caches what it painted, and a later colour change repaints from that cache —
 // so a cache holding the whole window would silently un-clip the replay.
 // Skipped for a hidden overlay; toggling it back on refreshes at that point.
+// A hidden overlay is EMPTIED, not left alone. It used to keep whatever it was
+// last given — the full window from the initial load — and although invisible,
+// its bars still sat on the time scale: Lightweight Charts lays the axis out
+// from every series' points, hidden or not. So during a replay the index
+// chart's axis ran on past the playhead to the end of the loaded window, and
+// after a pan-left backfill it had a HOLE — the playhead's candles, then
+// straight on to the stale overlay's first bar a fortnight later. The Round
+// Strike chart below pairs with this one bar-for-bar, so that hole put the two
+// charts weeks apart. Toggling an overlay on rebuilds it at the playhead (the
+// checkbox handlers), so nothing is lost by clearing it here.
 function oipRefreshVolumeBars(index) {
     if (!oipVolumeSeries && !oipBnfVolumeSeries) return;
     const candles = oipVisibleCandles(index);
-    if (oipElems.showVolume?.checked)
-        oipSetVolumeBars(oipVolumeSeries, oipOIData?.future_volume, candles);
-    if (oipElems.showBnfVolume?.checked)
-        oipSetVolumeBars(oipBnfVolumeSeries, oipOIData?.banknifty_volume, candles, 'banknifty');
+    oipSetVolumeBars(oipVolumeSeries,
+        oipElems.showVolume?.checked ? oipOIData?.future_volume : [], candles);
+    oipSetVolumeBars(oipBnfVolumeSeries,
+        oipElems.showBnfVolume?.checked ? oipOIData?.banknifty_volume : [], candles, 'banknifty');
 }
 
 // max_pain_history is sampled from oi_history (its own ~snapshot clock, capped
@@ -1278,8 +1291,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     // SHOW FULL DATA INITIALLY (Normal Chart Mode). The Mine CPR set was put
     // on by the oipRefreshLocalView(lastIdx) inside oipSetupReplaySlider.
     if (oipOISeries) oipOISeries.setData(oipFullCandles);
-    oipSetVolumeBars(oipVolumeSeries, data.future_volume, oipFullCandles);
-    oipSetVolumeBars(oipBnfVolumeSeries, data.banknifty_volume, oipFullCandles, 'banknifty');
+    // Through the same gate as every replay step, so a switched-off overlay
+    // stays empty rather than parking the whole window on the time scale.
+    oipRefreshVolumeBars(oipFullCandles.length - 1);
     if (oipMaxPainSeries) oipMaxPainSeries.setData(oipMaxPainPoints());
 
     // 9:18 ATM CE OI — fetched for the REPLAYED date, not today. Always fetched
@@ -1421,6 +1435,37 @@ function oipSyncOptionChart(timeSec) {
     window.oipRSApplyReplayCutoff?.(oipReplaySyncOptionChart ? (timeSec ?? null) : null);
 }
 
+// Stamps the index chart's zoom and scroll onto the Round Strike chart. The
+// range subscriptions only pair the two on a user drag (they are gated on
+// _oipActiveChartId), so a re-frame the page does on its own — the fitContent
+// that starts a replay, a jump on the slider — moved the index chart and left
+// the option chart at its old zoom, the playhead bar in two different places on
+// screen. Runs at the end of every replay refresh, while the suppress flag is
+// still up so the option chart's own callback does not bounce it back; on a
+// shared bar grid it is the same barSpacing + scrollPosition a drag would set,
+// so a user who has just panned the option chart sees no jump.
+//
+// The two price axes are held to one width first. Each axis sizes itself to
+// its labels — "23376.60" on the index chart is a dozen pixels wider than
+// "168.30" on the option chart — and the plots are anchored at their RIGHT
+// edge, so a wider axis on one chart shifts its whole plot left by that much:
+// the same bar, at the same scroll and zoom, sat 12px apart on screen. (The
+// `width: 62` in the chart options was meant to fix this and is not an option
+// LC 5 knows; minimumWidth is.) Widths only ever grow here, so the axes settle
+// after the first label wider than the last.
+function oipFollowIndexTimeScale() {
+    const rs = (typeof oipRSChart !== 'undefined') ? oipRSChart?.chart : null;
+    if (!rs || !oipOIChart || !oipOIChartReady || typeof window._oipSyncTimeScale !== 'function') return;
+    try {
+        const a = oipOIChart.priceScale('right'), b = rs.priceScale('right');
+        const w = Math.max(a.width(), b.width(), a.options().minimumWidth || 0, b.options().minimumWidth || 0);
+        if (w && a.options().minimumWidth !== w) a.applyOptions({ minimumWidth: w });
+        if (w && b.options().minimumWidth !== w) b.applyOptions({ minimumWidth: w });
+    } catch (e) {}
+    window._oipSyncTimeScale(oipOIChart, rs,
+                             (typeof oipRSInterval !== 'undefined') && oipRSInterval === oipInterval);
+}
+
 function oipRefreshLocalView(view, resetZoom, index) {
     if (!oipFullCandles || index < 0) return;
 
@@ -1549,7 +1594,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
     const _idxSnap = index;
     requestAnimationFrame(() => {
         if (!oipFullCandles || _idxSnap >= oipFullCandles.length) {
-            requestAnimationFrame(() => { window._oipSuppressRangeSync = false; });
+            requestAnimationFrame(() => { oipFollowIndexTimeScale(); window._oipSuppressRangeSync = false; });
             return;
         }
         const _vis  = oipVisibleCandles(_idxSnap);
@@ -1568,7 +1613,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
         // that oipDraw2ndCandle30sBox and oipDraw2nd5mCandleBox schedule for CE/PE
         // series creation. RAF callbacks run FIFO; the inner RAFs were queued first,
         // so they execute before this reset fires.
-        requestAnimationFrame(() => { window._oipSuppressRangeSync = false; });
+        requestAnimationFrame(() => { oipFollowIndexTimeScale(); window._oipSuppressRangeSync = false; });
     });
 
     if (resetZoom && oipOIChartReady) {
@@ -1604,10 +1649,23 @@ function oipRefreshLocalView(view, resetZoom, index) {
    moment they arrive. Ask for the index only.
 
    include_30s=false for the same reason: the 30-second sub-candles exist for the
-   option panes. */
+   option panes.
+
+   big_qty is the print size beside the Nifty Vol Fut swatches (oipBigPrintQty in
+   oi_indicators.js). /api/oi-profile/candles tags future_volume only when it is
+   sent, so this is what turns the index chart's big-print bars on; a new figure
+   is a new request, which the 'oip-big-print-qty-changed' listener below makes. */
 function oipCandleLegParams() {
-    return '&opt=false&include_30s=false';
+    const big = typeof oipBigPrintQty === 'function' ? `&big_qty=${oipBigPrintQty()}` : '';
+    return `&opt=false&include_30s=false${big}`;
 }
+
+// The box is wired page-wide in oi_indicators.js, which only knows to poke the
+// Round Strike block; the index chart's tags live on the bars the server sent,
+// so it has to be fetched again too.
+window.addEventListener('oip-big-print-qty-changed', () => {
+    if (typeof oipLoadCandles === 'function') oipLoadCandles();
+});
 
 /* ── Pan-left history backfill ────────────────────────────────────────────────
    The page loads ONE window (oipReplayWindowDays() sessions behind the replay
@@ -2149,6 +2207,9 @@ document.addEventListener('DOMContentLoaded', () => {
         oipApplyReplayDate();
         oipEnsureRangeForAnchor();
         oipResetReplay();
+        // One timeframe for both charts: the Round Strike block has no TF
+        // dropdown of its own on this page and follows this one.
+        window.oipRSOnIntervalChanged?.(oipInterval);
     });
     oipElems.days?.addEventListener('change', () => oipResetReplay());
     oipElems.targetDistance?.addEventListener('change', () => {

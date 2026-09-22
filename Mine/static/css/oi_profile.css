@@ -1729,9 +1729,12 @@ body.ocean-theme .oip-tooltip {
     outline: none;
     border-color: var(--oip-accent);
 }
-/* The big-print size box beside the volume swatches: five digits plus the
-   spinner need more room than the reversal Count/Range boxes above. */
-.oip-big-print-qty-inp { width: 56px; }
+/* The big-print tier boxes under the volume swatches: three of them share the
+   row, so the spinner goes (it clipped "10000" to four digits) and the width
+   is just the five digits the biggest default needs. */
+.oip-big-print-qty-inp { width: 50px; -moz-appearance: textfield; appearance: textfield; }
+.oip-big-print-qty-inp::-webkit-inner-spin-button,
+.oip-big-print-qty-inp::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 /* ── OI Bar popup modal ────────────────────────────────────── */
 .oip-modal-overlay {

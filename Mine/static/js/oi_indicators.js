@@ -126,11 +126,18 @@ const _OIP_LINE_DEFAULTS = {
     // (see the flag below) — a neutral grey, so a flat histogram reads as
     // size only and never as a direction the candles don't agree with.
     volFlat: { color: '#8a8f98' },
-    // A bar that holds a single Time & Sales print at or above the size in
-    // the popup's box (oipBigPrintQty, 8,000 contracts unless changed) —
-    // Round Strike's future volume only. Painted solid, whatever the candle
-    // did, so the print is impossible to miss in a 20%-tall band.
-    volBig: { color: '#2563eb' },
+    // A bar that holds a single Time & Sales print — Nifty Vol Fut only —
+    // paints solid, whatever the candle did, so the print is impossible to
+    // miss in a 20%-tall band. THREE tiers by print size (oipBigPrintTiers:
+    // 5,000 / 8,000 / 10,000 contracts unless changed), each with its own
+    // colour; the biggest tier the print reaches wins. Amber → blue →
+    // fuchsia, so the ramp reads as "bigger" at a glance and none of the
+    // three is the green/red the direction split uses. Tier 2 is the old
+    // single "blue bar" threshold, so a colour picked for that (`volBig`)
+    // carries over as tier 2's.
+    volBig1: { color: '#f59e0b' },
+    volBig2: { color: () => oipLineColors?.volBig ?? '#2563eb' },
+    volBig3: { color: '#a21caf' },
     // Banknifty's overlay defaults to the PE chart's candle colours (violet up,
     // dark down), which also keeps it clear of the green/red pair above — the
     // two histograms share a price scale and overlap. PE's down colour is
@@ -222,7 +229,7 @@ const _OIP_VOL_COLOR_KEYS = {
     nifty:     ['volUp', 'volDn', 'volFlat'],
     banknifty: ['bnfVolUp', 'bnfVolDn', 'bnfVolFlat'],
 };
-const _OIP_VOL_COLOR_KEY_SET = new Set([...Object.values(_OIP_VOL_COLOR_KEYS).flat(), 'volBig']);
+const _OIP_VOL_COLOR_KEY_SET = new Set([...Object.values(_OIP_VOL_COLOR_KEYS).flat(), 'volBig1', 'volBig2', 'volBig3']);
 // The overlay's up/down/flat hues, WITHOUT an alpha suffix — the painter
 // appends that, since it is per-bar once intensity shading is on.
 function oipVolumeBarColors(kind) {
@@ -252,29 +259,64 @@ function _oipLoadVolDirColor() {
 _oipLoadVolDirColor();
 function oipVolDirColorOn() { return _oipVolDirColor; }
 
-/* Big print size — the single Time & Sales print, in contracts, that paints a
-   Round Strike volume bar the volBig colour. The server does the tagging (see
-   RS_BIG_PRINT_QTY in routes/api.py); this is the figure the block sends it as
-   `big_qty`. ONE page-wide number, mirrored as a box beside the volBig swatch
-   in every Indicator popup whose chart can show the bar, on the same "one
-   control, every chart" rule as the swatches. Loaded straight from
+/* Big print tiers — the single Time & Sales print sizes, in contracts, that
+   paint a Nifty Vol Fut bar solid in a tier's colour (volBig1/2/3 above). The
+   server does the tagging (see RS_BIG_PRINT_QTY in routes/api.py) against ONE
+   threshold — the SMALLEST tier, sent as `big_qty` — and returns each tagged
+   bar's largest print (`big_qty` on the bar), so the client sorts a bar into
+   its tier without a second request: a change to the smallest size is a new
+   question for the server, a change to the other two is a repaint.
+
+   ONE page-wide set of three, mirrored as a row of boxes under the Nifty Vol
+   Fut swatches in every Indicator popup whose chart can show the bar, on the
+   same "one control, every chart" rule as the swatches. Loaded straight from
    localStorage for the same reason as Vol Direction Color above: the block's
-   first request goes out before the popup is initialised. */
-const _OIP_BIG_PRINT_QTY_STORAGE_KEY = 'oip-big-print-qty';
-const _OIP_BIG_PRINT_QTY_DEFAULT = 8000;
-let _oipBigPrintQty = _OIP_BIG_PRINT_QTY_DEFAULT;
-function _oipLoadBigPrintQty() {
-    try { _oipBigPrintQty = _oipParseBigPrintQty(localStorage.getItem(_OIP_BIG_PRINT_QTY_STORAGE_KEY)); }
-    catch (e) { _oipBigPrintQty = _OIP_BIG_PRINT_QTY_DEFAULT; }
-}
-// Whole contracts, at least one; anything else falls back to the default so a
-// cleared box can never send the server a threshold that tags every bar.
-function _oipParseBigPrintQty(raw) {
+   first request goes out before the popup is initialised.
+
+   Tier 2 (8,000) is what the single box used to hold, and is still the figure
+   the bell and Telegram alert follow (sent as `alert_qty` by the live Round
+   Strike block, see big_print_alerts.py) — the bars gained two more colours,
+   the alert did not gain a lower threshold. */
+const _OIP_BIG_PRINT_TIERS_STORAGE_KEY = 'oip-big-print-tiers';
+const _OIP_BIG_PRINT_TIER_DEFAULTS = [5000, 8000, 10000];
+const _OIP_BIG_PRINT_TIER_COLOR_KEYS = ['volBig1', 'volBig2', 'volBig3'];
+const _OIP_BIG_PRINT_ALERT_TIER = 1;      // index into the tiers: the 8,000 one
+let _oipBigPrintTiers = [..._OIP_BIG_PRINT_TIER_DEFAULTS];
+// Whole contracts, at least one; anything else falls back to that tier's
+// default so a cleared box can never send the server a threshold that tags
+// every bar.
+function _oipParseBigPrintQty(raw, tier = 1) {
     const n = Math.floor(Number(raw));
-    return Number.isFinite(n) && n >= 1 ? n : _OIP_BIG_PRINT_QTY_DEFAULT;
+    return Number.isFinite(n) && n >= 1 ? n : _OIP_BIG_PRINT_TIER_DEFAULTS[tier];
 }
-_oipLoadBigPrintQty();
-function oipBigPrintQty() { return _oipBigPrintQty; }
+function _oipLoadBigPrintTiers() {
+    _oipBigPrintTiers = [..._OIP_BIG_PRINT_TIER_DEFAULTS];
+    try {
+        const saved = JSON.parse(localStorage.getItem(_OIP_BIG_PRINT_TIERS_STORAGE_KEY) || 'null');
+        if (Array.isArray(saved)) saved.slice(0, 3).forEach((v, i) => { _oipBigPrintTiers[i] = _oipParseBigPrintQty(v, i); });
+    } catch (e) {}
+}
+_oipLoadBigPrintTiers();
+function _oipSaveBigPrintTiers() {
+    try { localStorage.setItem(_OIP_BIG_PRINT_TIERS_STORAGE_KEY, JSON.stringify(_oipBigPrintTiers)); } catch (e) {}
+}
+function oipBigPrintTiers() { return [..._oipBigPrintTiers]; }
+// The threshold the server tags from — the smallest tier, whichever box it is
+// in. Every request that carries `big_qty` reads this.
+function oipBigPrintQty() { return Math.min(..._oipBigPrintTiers); }
+// The size the bell follows (tier 2 by default) — see the block comment above.
+function oipBigPrintAlertQty() { return _oipBigPrintTiers[_OIP_BIG_PRINT_ALERT_TIER]; }
+// The colour for a tagged bar whose largest print was `qty`: the tier with the
+// biggest size the print still reaches. A tag with no size on it (an older
+// server) is a tier-1 bar — the server only tags from the smallest size.
+function oipBigPrintColor(qty) {
+    const q = Number(qty);
+    let best = -1, bestMin = -Infinity;
+    _oipBigPrintTiers.forEach((min, i) => {
+        if (Number.isFinite(q) && q >= min && min > bestMin) { best = i; bestMin = min; }
+    });
+    return oipGetLineColor(_OIP_BIG_PRINT_TIER_COLOR_KEYS[best < 0 ? 0 : best]);
+}
 
 /* Volume-weighted shading — opt-in per call site via oipSetVolumeBars'
    `intensity`, on for the Round Strike block. Squeezed into a 20%-tall band,
@@ -388,7 +430,6 @@ const _oipInvertedVolSeries = new WeakSet();
 
 function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
     const { up, down, flat } = oipVolumeBarColors(kind);
-    const big = oipGetLineColor('volBig');
     const byDirection = oipVolDirColorOn();
     const alphas = intensity ? _oipVolIntensityAlphas(bars) : null;
     const sign = _oipInvertedVolSeries.has(series) ? -1 : 1;
@@ -396,9 +437,10 @@ function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
         series.setData(bars.map((b, i) => ({
             time: b.time,
             value: sign * b.value,
-            // A big-print bar is blue and solid: neither the direction split
-            // nor the intensity fade applies, so it reads at a glance.
-            color: b.big ? big : (byDirection ? (b.up ? up : down) : flat) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
+            // A big-print bar is its tier's colour, solid: neither the
+            // direction split nor the intensity fade applies, so it reads at
+            // a glance — see oipBigPrintColor for which tier.
+            color: b.big ? oipBigPrintColor(b.bigQty) : (byDirection ? (b.up ? up : down) : flat) + (alphas ? alphas[i] : _OIP_VOL_BAR_ALPHA),
         })));
     } catch (e) {}
 }
@@ -415,9 +457,10 @@ function _oipPaintVolumeBars(series, kind, bars, intensity = false) {
 function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty', intensity = false) {
     if (!series) return;
     // `big` is the server's tag for a bar holding a Time & Sales print at or
-    // above its threshold (see _rs_tag_big_prints in routes/api.py); only the
-    // live Round Strike future_volume carries it.
-    const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time), { vol: Number(v.volume || 0), big: !!v.big }]));
+    // above its threshold, `big_qty` that bar's largest such print (see
+    // _rs_tag_big_prints in routes/api.py) — what sorts it into a colour tier.
+    const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time),
+        { vol: Number(v.volume || 0), big: !!v.big, bigQty: Number(v.big_qty) }]));
     const bars = [];
     if (futVolMap.size) {
         (refCandles || []).forEach(c => {
@@ -425,7 +468,7 @@ function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty', inte
             const t = Number(c.time);
             if (!futVolMap.has(t)) return;
             const v = futVolMap.get(t);
-            bars.push({ time: t, value: v.vol, up: Number(c.close) >= Number(c.open), big: v.big });
+            bars.push({ time: t, value: v.vol, up: Number(c.close) >= Number(c.open), big: v.big, bigQty: v.bigQty });
         });
     }
     _oipVolBarCache.set(series, { kind, bars, intensity });
@@ -558,27 +601,37 @@ function _oipWireVolDirColorCheckbox(cb) {
     });
 }
 
-// Wires an ALREADY-IN-THE-DOM <input type="number" class="oip-big-print-qty-inp">.
-// Same one-setting-many-copies shape as the checkbox above. A change is a new
-// question for the server, not a repaint — the tag lives on the bars it sends
-// — so the Round Strike block is asked to fetch again straight away (its live
-// poll would pick the figure up within a second anyway; the historical block
-// on Replay would not, having nothing to poll for). `change`, not `input`:
-// half-typed figures must not each fire a request.
+// Wires an ALREADY-IN-THE-DOM <input type="number" class="oip-big-print-qty-inp"
+// data-tier="0|1|2">. Same one-setting-many-copies shape as the checkbox above.
+// A change to the SMALLEST tier is a new question for the server, not a
+// repaint — the tag lives on the bars it sends — so the Round Strike block is
+// asked to fetch again straight away (its live poll would pick the figure up
+// within a second anyway; the historical block on Replay would not, having
+// nothing to poll for), and any other chart carrying the tag refetches on the
+// 'oip-big-print-qty-changed' event. A change to either other tier only moves
+// bars between colours, so those repaint from the cached bars. `change`, not
+// `input`: half-typed figures must not each fire a request.
 function _oipWireBigPrintQtyInput(inp) {
     if (inp.dataset.wired) return;
     inp.dataset.wired = '1';
-    inp.value = oipBigPrintQty();
+    const tier = Math.min(2, Math.max(0, Number(inp.dataset.tier) || 0));
+    inp.value = _oipBigPrintTiers[tier];
     inp.addEventListener('click', e => e.stopPropagation());
     inp.addEventListener('keydown', e => e.stopPropagation());
     inp.addEventListener('change', e => {
         e.stopPropagation();
-        _oipBigPrintQty = _oipParseBigPrintQty(inp.value);
-        inp.value = _oipBigPrintQty;
-        try { localStorage.setItem(_OIP_BIG_PRINT_QTY_STORAGE_KEY, String(_oipBigPrintQty)); } catch (err) {}
+        const minBefore = oipBigPrintQty();
+        _oipBigPrintTiers[tier] = _oipParseBigPrintQty(inp.value, tier);
+        inp.value = _oipBigPrintTiers[tier];
+        _oipSaveBigPrintTiers();
         document.querySelectorAll('.oip-big-print-qty-inp')
-            .forEach(other => { if (other !== inp) other.value = _oipBigPrintQty; });
-        if (typeof oipRSScheduleLoop === 'function') oipRSScheduleLoop(0);
+            .forEach(other => { if (other !== inp && Number(other.dataset.tier) === tier) other.value = _oipBigPrintTiers[tier]; });
+        if (oipBigPrintQty() !== minBefore) {
+            if (typeof oipRSScheduleLoop === 'function') oipRSScheduleLoop(0);
+            window.dispatchEvent(new CustomEvent('oip-big-print-qty-changed', { detail: oipBigPrintQty() }));
+        } else {
+            oipRepaintAllVolumeBars();
+        }
     });
 }
 

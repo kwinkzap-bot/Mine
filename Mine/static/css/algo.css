@@ -1698,6 +1698,49 @@ body.ocean-theme .sm-gl-overlay {
     vertical-align: middle;
 }
 
+/* ── Broker "📋 Holdings" pill and its merged-by-symbol popup ─────── */
+.sm-holdings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 9px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 12px;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-accent-dim);
+    color: var(--ag-text-2);
+    white-space: nowrap;
+    transition: border-color .15s, background .15s, transform .12s;
+    flex-shrink: 0;
+}
+.sm-holdings-btn:hover {
+    border-color: var(--ag-accent);
+    color: var(--ag-accent);
+    transform: translateY(-1px);
+}
+.sm-broker-holdings-modal { max-width: 1080px; }
+.sm-bh-grid-wrap { padding: 12px 16px 16px; }
+.sm-bh-grid-wrap .sm-signal-loading { padding: 24px 0; text-align: center; }
+/* one chip per config holding the stock: "NIFTY 500 ×12" */
+.sm-bh-grp {
+    display: inline-block;
+    margin: 1px 4px 1px 0;
+    padding: 1px 7px;
+    font-size: 0.7rem;
+    border-radius: 10px;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-border-sub, #f8fafc);
+    color: var(--ag-text-2);
+    white-space: nowrap;
+}
+.sm-bh-grp b { color: var(--ag-text); font-weight: 700; }
+/* the chips wrap inside a capped column so the money columns stay on screen */
+.sm-bh-grid td:nth-child(2) { max-width: 230px; white-space: normal; line-height: 1.5; }
+
 .sm-value-chart-modal { max-width: 820px; }
 .sm-value-chart-wrap {
     position: relative;

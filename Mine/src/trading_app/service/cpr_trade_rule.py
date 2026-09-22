@@ -33,6 +33,19 @@ through the Trend page's reasons: trade the REJECTION, not the break.
                entry, so 1:2").
     Open ABOVE the CPR — the mirror: BUY the rejection from the CPR,
                SELL the rejection from PDH / R1.
+    BOX REJECTION TOO BIG — the retracement, and the day's FALLBACK: a
+               narrow CPR with a small box, and only when no other setup
+               fired. The 09:15 candle reaches PDH/R1 and closes back
+               under it but is bigger than SIGNAL_MAX_PCT, so it is not
+               entered under: price has to come back and TOUCH the box
+               again, and the first small candle that then makes a LOWER
+               high and closes under the box in its lower half is the
+               entry — SELL under its low, SL over its high, target the
+               opposite box's far edge (22 Sep 2026: the 55-pt 09:15 into
+               R1 23,482 closed 23,446 under PDH 23,467; 10:05 touched
+               PDH again; 10:15 made a lower high and closed 23,459 under
+               it -> SELL 23,452, SL 23,468, target PDL 23,315). Mirror
+               off the PDL/S1 box.
     WEEKLY CPR ON THE PDH/R1 BOX — the weekly CPR lies over the PDH/R1 box
                (or under the PDL/S1 box) so the two make one big zone, and
                the 09:15 candle opens inside it. A strong red candle that
@@ -348,6 +361,7 @@ BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own c
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
 MAX_RISK = 100.0         # a stop further than this from the entry is halved (28 Jan 2026: 154 pts -> 77)
 VWAP_STOP_PCT = 0.1      # a VWAP within this % under the rejection candle's low is where its stop goes (6 Apr 2026)
+VWAP_GAP_PCT = 0.02      # ... and one nearer than this to the setup candle's extreme is not in the trigger's way at all (~5 pts)
 FAR_BOX_PCT = 0.4        # a narrow CPR with both boxes at least this % of price away (and FAR_BOX_RATIO x its height) ...
 FAR_BOX_RATIO = 5        # ... is too thin to trade against: entries come from the boxes only (14 Jan 2026)
 RULE_TAG = 'Trade by rule'
@@ -1646,10 +1660,73 @@ def _next_or_rr(entry, sl, is_buy, levels):
     return y, (n if n.startswith('1:') else f'{n} {y:,.0f}')
 
 
+def box_retracement(chart, bars):
+    """The day's FALLBACK, on a narrow-CPR / small-box day when nothing else
+    fired: the 09:15 candle reaches PDH/R1 (PDL/S1) and closes back under
+    it (over it) but is bigger than SIGNAL_MAX_PCT — too big to enter off.
+    The trade is the RETRACEMENT: price comes back and touches the box
+    again, and the first small candle that then makes a LOWER high (higher
+    low) and closes under the box in its lower half (over it, upper half)
+    is the entry — SELL under its low, SL over its high, target the
+    opposite box's far edge (22 Sep 2026: the 55-pt 09:15 into R1 23,482
+    closed 23,446 under PDH 23,467; 10:05 touched PDH again; 10:15 made a
+    lower high and closed 23,459 under it -> SELL 23,452, SL 23,468, target
+    PDL 23,315). (trade, why, index) or None."""
+    if chart.get('cpr_type') != 'Narrow' or chart.get('boxes') != 'Small':
+        return None                       # only the tight days: a wide box swallows the stop
+    lv = chart['levels']
+    px = bars[0]['close']
+    small = px * SIGNAL_MAX_PCT / 100
+    hi_box = (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
+    lo_box = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1']))
+    c1 = bars[0]
+    if c1['high'] - c1['low'] <= small:
+        return None
+    if c1['high'] >= hi_box[0] and c1['close'] < hi_box[0]:
+        side = 'sell'
+    elif c1['low'] <= lo_box[1] and c1['close'] > lo_box[1]:
+        side = 'buy'
+    else:
+        return None
+
+    touched, touch_hi, touch_lo = False, 0.0, float('inf')
+    for i, b in enumerate(bars[1:], start=1):
+        if b['time'] > SETUP_UNTIL:
+            break
+        rng = b['high'] - b['low']
+        if rng <= 0:
+            continue
+        if side == 'sell':
+            if b['high'] >= hi_box[0]:
+                touched, touch_hi = True, max(touch_hi, b['high'])
+            if (touched and rng <= small and b['high'] < touch_hi and b['close'] < hi_box[0]
+                    and (b['high'] - b['close']) / rng >= 0.5):
+                entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
+                why = (f"narrow CPR, small box; 09:15 candle rejected from PDH/R1 {hi_box[0]:,.0f}-{hi_box[1]:,.0f} "
+                       f"(high {c1['high']:,.0f}, closed {c1['close']:,.0f} under it) on a {c1['high'] - c1['low']:.0f}-pt candle — "
+                       f"too big to enter under; waited for the retracement: price came back to the box and {b['time']} made a lower high "
+                       f"({b['high']:,.0f}) and closed under it at {b['close']:,.0f} -> SELL under it; SL over its high; "
+                       f"target the lower box (PDL/S1 {lo_box[0]:,.0f})")
+                return {'trade': 'SELL', 'entry': float(entry), 'target': float(round(lo_box[0])), 'sl': float(sl)}, why, i
+        else:
+            if b['low'] <= lo_box[1]:
+                touched, touch_lo = True, min(touch_lo, b['low'])
+            if (touched and rng <= small and b['low'] > touch_lo and b['close'] > lo_box[1]
+                    and (b['close'] - b['low']) / rng >= 0.5):
+                entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
+                why = (f"narrow CPR, small box; 09:15 candle rejected from PDL/S1 {lo_box[0]:,.0f}-{lo_box[1]:,.0f} "
+                       f"(low {c1['low']:,.0f}, closed {c1['close']:,.0f} over it) on a {c1['high'] - c1['low']:.0f}-pt candle — "
+                       f"too big to enter over; waited for the retracement: price came back to the box and {b['time']} made a higher low "
+                       f"({b['low']:,.0f}) and closed over it at {b['close']:,.0f} -> BUY over it; SL under its low; "
+                       f"target the upper box (PDH/R1 {hi_box[1]:,.0f})")
+                return {'trade': 'BUY', 'entry': float(entry), 'target': float(round(hi_box[1])), 'sl': float(sl)}, why, i
+    return None
+
+
 def vwap_in_the_way(trade, why, bars, i):
-    """The session VWAP between the setup candle and the entry — the
-    candle sits on one side of it and the stop order on the other, so the
-    trigger itself has to cross the VWAP — refuses the entry (20 May 2026:
+    """The session VWAP clearly between the setup candle and the entry —
+    the candle sits on one side of it and the stop order on the other, so
+    the trigger itself has to cross the VWAP — refuses the entry (20 May 2026:
     the 10:00 reversal candle's low 23,496 over the VWAP 23,487, the SELL
     at 23,484 under it). A VWAP the candle already straddles, or one
     clearly past the entry, is left alone. Returns (trade, why) or
@@ -1659,10 +1736,16 @@ def vwap_in_the_way(trade, why, bars, i):
         return trade, why
     b = bars[i]
     entry = trade['entry']
+    # A VWAP within the entry's own buffer under the candle (the stop order
+    # sits 1 pt beyond its extreme) is not an obstacle — price breaking the
+    # extreme breaks it at the same tick. It has to stand clear of the
+    # candle by VWAP_GAP_PCT to count (22 Sep 2026: VWAP 0.5 pts under the
+    # 10:15 low, no obstacle; 20 May 2026: 9 pts under, one).
+    gap = entry * VWAP_GAP_PCT / 100
     if trade['trade'] == 'SELL':
-        blocked = entry - 3 <= vw <= b['low']
+        blocked = entry - 3 <= vw <= b['low'] - gap
     else:
-        blocked = b['high'] <= vw <= entry + 3
+        blocked = b['high'] + gap <= vw <= entry + 3
     if blocked:
         return None, (f"{why}; the session VWAP {vw:,.0f} sits between the {b['time']} candle and the {entry:,.0f} entry — "
                       f"the trigger would have to cross it — no trade")
@@ -1720,6 +1803,11 @@ def propose_all(chart, bars):
         late = virgin_cpr_rejection(chart, bars)
         if late:
             p, why, i = late
+    if not p:
+        # Nothing else fired: the big box rejection's retracement is the day's trade.
+        back = box_retracement(chart, bars)
+        if back:
+            p, why, i = back
     if p:
         p, why = zone_in_the_way(p, why, chart, bars)
     zone = one_zone(chart, bars)

@@ -1,21 +1,21 @@
 [
   {
-    "symbol": "PETRONET",
+    "symbol": "COALINDIA",
     "direction": "SELL",
     "mode": "paper",
-    "qty": 1900,
-    "lot_size": 1900,
-    "entry_price": 281.15,
-    "exit_price": 287.65,
-    "spot_entry_price": 280.95,
-    "spot_exit_price": 288.4,
-    "sl_price": 288.4,
-    "target_price": 247.24,
-    "pnl": -12350.0,
+    "qty": 1350,
+    "lot_size": 1350,
+    "entry_price": 419.45,
+    "exit_price": 427.05,
+    "spot_entry_price": 418.4,
+    "spot_exit_price": 427.05,
+    "sl_price": 427.0,
+    "target_price": 407.94,
+    "pnl": -10260.0,
     "reason": "SL",
     "signal_date": "2026-09-15",
-    "entry_time": "2026-09-16T09:31:28.333357",
-    "exit_time": "2026-09-18T14:53:50.080212",
-    "date": "2026-09-18"
+    "entry_time": "2026-09-16T09:32:39.019120",
+    "exit_time": "2026-09-22T10:54:25.426661",
+    "date": "2026-09-22"
   }
 ]

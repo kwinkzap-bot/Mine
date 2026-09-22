@@ -1159,6 +1159,7 @@ function _smLiveRenderConfigs(configs) {
         const g = groups.get(key);
         g.configs.push(c);
         _smGroupOfConfig[c.id] = g.gid;   // remember which group each config feeds
+        _smConfigMeta[c.id]    = c;       // the broker holdings popup names groups by index
     });
 
     // Broker groups first (alphabetical), the "None" group always last.
@@ -1178,7 +1179,9 @@ function _smLiveRenderConfigs(configs) {
         <span class="sm-broker-group-name">${g.label}</span>
         ${typeStr}
         ${g.isNone ? '' : `<button class="sm-graph-btn" data-scope="broker" data-key="${g.instance}"
-                data-label="${g.label}" title="Invested vs Current — ${g.label}, day by day">📈</button>`}
+                data-label="${g.label}" title="Invested vs Current — ${g.label}, day by day">📈</button>
+        <button class="sm-holdings-btn" data-gid="${g.gid}" data-label="${g.label}"
+                title="Every stock held at ${g.label} across all its configs — the same stock in two configs is one row">📋 Holdings</button>`}
         <span class="sm-broker-group-pnl" id="sm-grp-pnl-${g.gid}"></span>
         <span class="sm-broker-group-count">${cntLbl(g.configs.length)}</span>
     </div>
@@ -1240,6 +1243,11 @@ function _smLiveRenderConfigs(configs) {
             e.stopPropagation();
             _smOpenValueChart(btn.dataset.scope, btn.dataset.key, btn.dataset.label);
         }));
+    container.querySelectorAll('.sm-holdings-btn').forEach(btn =>
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            _smOpenBrokerHoldings(btn.dataset.gid, btn.dataset.label);
+        }));
 
     // Fresh cards render enabled — re-apply whatever the header lock says.
     _smApplyCardActionsLock();
@@ -1291,6 +1299,8 @@ function _smToggleCardActions() {
 }
 // config id → broker-group id (gid), rebuilt on every render
 const _smGroupOfConfig = {};
+// id → config object as last rendered (index, top_n, …)
+const _smConfigMeta = {};
 
 // Aggregate per-config invested + P&L into each broker group's header chip, and
 // roll the groups up into the two section headers (Brokers / None — track only).
@@ -2067,6 +2077,160 @@ function _smShowSipHistory(id) {
 // so the graph only starts on the day the sheet did. Nothing is derived from
 // the cards on screen: a config's history outlives the config.
 let _smValueChart = null;
+
+// ── Broker holdings popup: every config at one broker, merged by symbol ───────
+// A broker account holds one position per stock however many configs bought
+// it, so the popup shows the account the way the broker does: one row per
+// symbol with the qty, invested and current value summed across the configs,
+// the entry price re-derived as the qty-weighted average, and a Groups column
+// naming which config(s) hold it and how many each. Reads the same
+// /signal/<id> responses the cards prefetch, so it costs no new request when
+// the cache is warm.
+function _smMergeHoldings(perConfig) {
+    const bySym = new Map();
+    perConfig.forEach(({ label, holdings }) => {
+        (holdings || []).forEach(h => {
+            const qty = Number(h.qty || 0);
+            if (!bySym.has(h.symbol)) {
+                bySym.set(h.symbol, {
+                    symbol: h.symbol, qty: 0, buy_value: 0, current_value: 0,
+                    prev_value: 0, today_abs: 0, pnl_abs: 0,
+                    current_price: h.current_price, entry_date: h.entry_date || null,
+                    groups: [],
+                });
+            }
+            const m = bySym.get(h.symbol);
+            m.qty           += qty;
+            m.buy_value     += Number(h.buy_value     || 0);
+            m.current_value += Number(h.current_value || 0);
+            m.prev_value    += Number(h.prev_close ?? h.current_price ?? 0) * qty;
+            m.today_abs     += Number(h.today_abs || 0);
+            m.pnl_abs       += Number(h.pnl_abs   || 0);
+            if (h.current_price != null) m.current_price = h.current_price;
+            if (h.entry_date && (!m.entry_date || h.entry_date < m.entry_date)) m.entry_date = h.entry_date;
+            m.groups.push({ label, qty });
+        });
+    });
+    return Array.from(bySym.values()).map(m => ({
+        ...m,
+        entry_price: m.qty ? m.buy_value / m.qty : 0,
+        pnl_pct:     m.buy_value  ? m.pnl_abs   / m.buy_value  * 100 : 0,
+        today_pct:   m.prev_value ? m.today_abs / m.prev_value * 100 : 0,
+        group_count: m.groups.length,
+    }));
+}
+
+function _smOpenBrokerHoldings(gid, label) {
+    const existing = document.getElementById('sm-broker-holdings-modal');
+    if (existing) existing.remove();
+
+    const ids = Object.keys(_smGroupOfConfig).filter(id => _smGroupOfConfig[id] === gid);
+
+    const modal = document.createElement('div');
+    modal.id = 'sm-broker-holdings-modal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box sm-broker-holdings-modal">
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">${DataGrid.escape(label || 'Broker')} — Live Holdings</span>
+            <span class="sm-modal-subtitle" id="sm-bh-subtitle">${ids.length} config${ids.length === 1 ? '' : 's'} · same stock across configs shown as one row</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('sm-broker-holdings-modal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+    <div class="sm-modal-stats" id="sm-bh-stats" style="display:none"></div>
+    <div class="sm-modal-table-wrap sm-bh-grid-wrap">
+        <div class="sm-signal-loading">Fetching live prices…</div>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    // Paused configs are prefetched too (they feed the group totals), so this
+    // is normally a cache hit; a cold one fetches now.
+    ids.forEach(id => _smPrefetch(id));
+    Promise.all(ids.map(id => (_smCache[id]?.signal || Promise.resolve(null)).then(d => ({ id, d }))))
+        .then(results => {
+            if (!document.getElementById('sm-broker-holdings-modal')) return;   // closed meanwhile
+            const failed = results.filter(r => !r.d || !r.d.success).map(r => _smConfigMeta[r.id]?.index || r.id);
+            const rows = _smMergeHoldings(results
+                .filter(r => r.d && r.d.success)
+                .map(r => ({ label: _smConfigMeta[r.id]?.index || r.id, holdings: r.d.live_holdings || [] })));
+            _smRenderBrokerHoldings(rows, failed);
+        });
+}
+
+function _smRenderBrokerHoldings(rows, failed) {
+    const wrap  = document.querySelector('#sm-broker-holdings-modal .sm-bh-grid-wrap');
+    const stats = document.getElementById('sm-bh-stats');
+    const sub   = document.getElementById('sm-bh-subtitle');
+    if (!wrap) return;
+
+    const esc     = DataGrid.escape;
+    const inr0    = v => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const signed0 = v => (Number(v || 0) >= 0 ? '+₹' : '-₹') +
+                         Math.abs(Number(v || 0)).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const pct1    = v => (Number(v || 0) >= 0 ? '+' : '') + Number(v || 0).toFixed(1) + '%';
+    const pnlCell = (abs, pct) => `${esc(signed0(abs))} <span class="sm-cell-pct">(${esc(pct1(pct))})</span>`;
+
+    const inv   = rows.reduce((s, r) => s + r.buy_value, 0);
+    const cur   = rows.reduce((s, r) => s + r.current_value, 0);
+    const today = rows.reduce((s, r) => s + r.today_abs, 0);
+    const prev  = rows.reduce((s, r) => s + r.prev_value, 0);
+    const tot   = cur - inv;
+    const shared = rows.filter(r => r.group_count > 1).length;
+
+    if (sub) sub.textContent =
+        `${rows.length} stock${rows.length === 1 ? '' : 's'}` +
+        (shared ? ` · ${shared} held in more than one config` : '') +
+        (failed.length ? ` · ⚠ ${failed.join(', ')} failed to load` : '');
+
+    if (stats) {
+        const cls = v => v >= 0 ? 'sm-mstat-green' : 'sm-mstat-red';
+        stats.style.display = '';
+        stats.innerHTML = `
+        <div class="sm-mstat" title="Cost basis of the holdings — the sum of the cards' Deployed, not the configured capital"><span class="sm-mstat-lbl">Deployed</span><span class="sm-mstat-val">${inr0(inv)}</span></div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat"><span class="sm-mstat-lbl">Current</span><span class="sm-mstat-val">${inr0(cur)}</span></div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat"><span class="sm-mstat-lbl">Today</span>
+            <span class="sm-mstat-val ${cls(today)}">${signed0(today)} <span class="sm-cell-pct">(${pct1(prev ? today / prev * 100 : 0)})</span></span></div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat"><span class="sm-mstat-lbl">Total</span>
+            <span class="sm-mstat-val ${cls(tot)}">${signed0(tot)} <span class="sm-cell-pct">(${pct1(inv ? tot / inv * 100 : 0)})</span></span></div>`;
+    }
+
+    wrap.innerHTML = '<div class="sm-holdings-grid sm-bh-grid"></div>';
+    DataGrid.mountSortable(wrap.firstElementChild, {
+        rows,
+        empty: 'No live holdings at this broker',
+        defaultSort: { key: 'current_value', dir: 'desc' },
+        columns: [
+            { key: 'symbol', label: 'Symbol', strong: true, sortable: true },
+            { key: 'group_count', label: 'Groups', sortable: true,
+              render: (_, r) => r.groups.map(g =>
+                  `<span class="sm-bh-grp" title="${esc(g.qty)} at ${esc(g.label)}">${esc(g.label)} <b>×${esc(g.qty)}</b></span>`).join('') },
+            { key: 'qty', label: 'Qty', align: 'right', sortable: true },
+            { key: 'entry_date', label: 'First Entry', sortable: true, cellClass: 'sm-td-date',
+              format: v => v || '—' },
+            { key: 'entry_price', label: 'Avg Entry ₹', align: 'right', sortable: true, format: DataGrid.rupees },
+            { key: 'current_price', label: 'Curr ₹', align: 'right', sortable: true, format: DataGrid.rupees },
+            { key: 'buy_value', label: 'Invested', align: 'right', sortable: true, format: inr0 },
+            { key: 'current_value', label: 'Curr Value', align: 'right', sortable: true, format: inr0 },
+            { key: 'today_abs', label: 'Today', align: 'right', sortable: true, thClass: 'sm-th-today',
+              cellClass: (_, r) => 'sm-td-today ' + (r.today_abs >= 0 ? 'dg-pos' : 'dg-neg'),
+              render: (_, r) => pnlCell(r.today_abs, r.today_pct) },
+            { key: 'pnl_abs', label: 'Total', align: 'right', sortable: true,
+              cellClass: (_, r) => r.pnl_abs >= 0 ? 'dg-pos' : 'dg-neg',
+              render: (_, r) => pnlCell(r.pnl_abs, r.pnl_pct) },
+        ],
+    });
+}
 
 function _smOpenValueChart(scope, key, label) {
     const existing = document.getElementById('sm-value-chart-modal');

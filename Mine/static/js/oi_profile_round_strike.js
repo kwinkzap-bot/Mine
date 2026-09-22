@@ -559,7 +559,7 @@ function oipRSSyncOiChgPane() {
     // hardcoded 575px CSS instead of oipRSBaseChartHeight(). Harmless while
     // those two numbers happened to be equal; wrong the moment they differ.
     oipRSApplyOiChgChartHeight();
-    oipRSUpdateOiChangeSeries(oipRSLastCeData, oipRSLastPeData);
+    oipRSUpdateOiChangeSeries(oipRSTrimToCutoff(oipRSLastCeData), oipRSTrimToCutoff(oipRSLastPeData));
 }
 
 // Pushes each leg's bars into its series. Safe to call on every render — a
@@ -1220,11 +1220,27 @@ function oipRSSymbol() {
     return oipSymbol;
 }
 
-// The as-of date: where the user is standing. Owned by the Replay page's own
-// toolbar rather than this block, so a single date drives both the index chart
-// above and the option legs here. Absent on the OI Profile page, which stays live.
-function oipRSAsOfDate() {
+// The date in the Replay toolbar. Owned by the page rather than this block, so
+// a single date drives both the index chart above and the option legs here.
+// Absent on the OI Profile page, which stays live.
+function oipRSToolbarDate() {
     return document.getElementById('oipReplayDate')?.value || '';
+}
+
+// The trading day the replay playhead is standing on, or '' when the option
+// chart is not cut (the OI Profile page, the "Sync option chart" switch off,
+// or a replay that has been reset).
+function oipRSReplayDay() {
+    return oipRSReplayCutoff == null ? '' : _oipRSDayKey(oipRSReplayCutoff);
+}
+
+// The as-of date: where the user is standing. While the replay slider walks
+// the index chart back through the window this is the REPLAYED bar's day, not
+// the toolbar's — standing on 08 Sep with the toolbar on 18 Sep, the expiry a
+// trader held was 09 Sep, so that is the contract the block has to show. With
+// no cut it is the toolbar date, as before.
+function oipRSAsOfDate() {
+    return oipRSReplayDay() || oipRSToolbarDate();
 }
 
 // True on Replay, where this block is historical-only: it shows a settled
@@ -1248,7 +1264,17 @@ function oipRSApiUrl(withStrikes = true) {
         if (ce && pe) url += `&ce_strike=${ce}&pe_strike=${pe}`;
     }
     const expiry = oipRSSelectedExpiry();
-    const asOf = oipRSAsOfDate();
+    // The window's END. The bootstrap call (no strikes) ends on the as-of day —
+    // its job is that day's session open, which the round-strike pair is
+    // derived from. The candle call ends on the TOOLBAR date so its URL, and
+    // so its cache, holds still while the replay slider walks day by day
+    // through one contract; the cut is applied client-side (oipRSTrimToCutoff).
+    // Either end is capped at the expiry: the backend refuses a date past it,
+    // and a contract that settled before the toolbar date — the front expiry of
+    // an earlier replay day, or one picked by hand — has no bars past its own
+    // last session anyway.
+    let asOf = withStrikes ? oipRSToolbarDate() : oipRSAsOfDate();
+    if (expiry && asOf && expiry < asOf) asOf = expiry;
     if (expiry) url += `&expiry=${expiry}`;
     if (asOf) url += `&date=${asOf}`;
     // The print size that tags a volume bar blue — the box beside the Nifty
@@ -1257,6 +1283,11 @@ function oipRSApiUrl(withStrikes = true) {
     // historical block it also changes the URL, which is what gets the browser
     // cache out of the way of the refetch.
     if (typeof oipBigPrintQty === 'function') url += `&big_qty=${oipBigPrintQty()}`;
+    // The size the bell follows — the middle tier, not the tagging one — so
+    // the alert did not drop to 5,000 when the bars gained their lower tier
+    // (see big_print_alerts.py). Live only: a replayed window says nothing
+    // about today, and on the historical block it would only churn the URL.
+    if (!oipRSIsHistorical() && typeof oipBigPrintAlertQty === 'function') url += `&alert_qty=${oipBigPrintAlertQty()}`;
     // Tell the server which volume overlays are actually switched on. Each one
     // it can skip is five fewer rate-limited Breeze chunks at 1-minute bars,
     // and Banknifty Vol Fut is off by default — it was being fetched and
@@ -1282,14 +1313,26 @@ function oipRSApiUrl(withStrikes = true) {
 // Returns true once an expiry is selected. The caller waits on that before its
 // first fetch: with no "Live" option there is nothing sensible to request until
 // the list has arrived.
+//
+// Also the replay's path to the expiry (oipRSFollowReplayDay): the list is
+// asked for the day the playhead stands on, and the FRONT expiry of that day is
+// what gets selected.
 async function oipRSPopulateExpiries() {
     const sel = document.getElementById('oipRSExpiryDropdown');
     if (!sel) return false;
+    const asOf = oipRSAsOfDate();
+    // Recorded before the request goes out, so a second caller asking for the
+    // same day while this one is in flight sees it covered and stands down.
+    oipRSExpiriesAsOf = asOf;
     try {
         const res = await fetch(`/api/oi-profile/expiries?symbol=${oipRSSymbol()}`
-            + `&date=${oipRSAsOfDate()}`);
+            + `&date=${asOf}`);
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'request failed');
+        // The playhead moved on (or the toolbar date did) while this was in
+        // flight: a newer request owns the dropdown now. Writing this answer
+        // would select a day's front expiry the user is no longer standing on.
+        if (oipRSAsOfDate() !== asOf) return false;
         sel.innerHTML = '';
         (data.expiries || []).forEach(iso => {
             const opt = document.createElement('option');
@@ -1306,10 +1349,11 @@ async function oipRSPopulateExpiries() {
         // contract that was current then is the one being asked about. Standing
         // on 04 Sep that is 08 Sep.
         sel.value = data.selected || sel.options[0].value;
-        sel.title = 'Expiry open on the chosen date — the front one is picked';
+        sel.title = 'Expiry open on the replayed day — the front one is picked';
         return true;
     } catch (e) {
         console.warn('[RoundStrike] expiry list failed:', e);
+        if (oipRSExpiriesAsOf === asOf) oipRSExpiriesAsOf = null;   // let the next pass retry
         // Say so in the control itself. An empty dropdown with no explanation
         // reads as a broken page; this reads as a missing ICICI session, which
         // is what it usually is.
@@ -1400,19 +1444,54 @@ function oipRSTrimToCutoff(rows) {
 }
 
 // Called by oi_replay.js on every replay step. Redraws from the parked candles
-// rather than refetching — the data is already here, only the cut moves.
+// rather than refetching — the data is already here, only the cut moves. A
+// cut that lands on a different trading day also re-asks which expiry was the
+// front one that day (oipRSFollowReplayDay).
 window.oipRSApplyReplayCutoff = function (timeSec) {
     const next = (timeSec == null || !Number.isFinite(timeSec)) ? null : timeSec;
     if (next === oipRSReplayCutoff) return;
+    const dayBefore = oipRSReplayDay();
     oipRSReplayCutoff = next;
-    if (!oipRSChart || !oipRSLastCeData) return;
-    window._oipDataRefreshing = true;
-    oipRSChart.update(
-        oipRSMark5mCloseBorders(oipRSTrimToCutoff(oipRSLastCeData)),
-        oipRSMark5mCloseBorders(oipRSTrimToCutoff(oipRSLastPeData)),
-        false);
-    requestAnimationFrame(() => { window._oipDataRefreshing = false; });
+    if (oipRSReplayDay() !== dayBefore) oipRSScheduleFollowReplayDay();
+    oipRSDrawParked(false);
 };
+
+// ── Replay day → expiry ──────────────────────────────────────────────────────
+// The expiry follows the DATA, not just the toolbar: as the playhead walks the
+// index chart back through its window, each day is shown against the contract
+// that was the front expiry THAT day. Standing on 08 Sep inside a window that
+// ends 18 Sep, the block is on the 09 Sep expiry; step past 09 Sep and it moves
+// to 16 Sep. The list is re-asked once per day crossed (server-cached per
+// day), and the contract — strike ladder, session open, round-strike pair —
+// is reloaded only when the selected expiry actually changed, so walking
+// through one contract's week costs no refetch at all.
+//
+// The as-of date the expiry list was last requested for. Set when the request
+// goes out (oipRSPopulateExpiries), so the deferred follow-up below is a no-op
+// after a toolbar date/symbol change that already went through
+// onContractChange, and a second request for a day already in flight is never
+// started.
+let oipRSExpiriesAsOf = null;
+let oipRSFollowTimer = null;
+
+// Deferred one tick: a replay reset clears the cut and then reloads for the
+// new toolbar date on the same call stack, and the explicit reload has to win.
+function oipRSScheduleFollowReplayDay() {
+    if (oipRSFollowTimer) return;
+    oipRSFollowTimer = setTimeout(() => {
+        oipRSFollowTimer = null;
+        oipRSFollowReplayDay().catch(e => console.warn('[RoundStrike] replay day follow failed:', e));
+    }, 0);
+}
+
+async function oipRSFollowReplayDay() {
+    if (!oipRSIsHistorical()) return;
+    const asOf = oipRSAsOfDate();
+    if (!asOf || asOf === oipRSExpiriesAsOf) return;
+    const before = oipRSSelectedExpiry();
+    if (!await oipRSPopulateExpiries()) return;        // failed, or superseded by a newer day
+    if (oipRSSelectedExpiry() !== before) await oipRSLoadContract();
+}
 
 // Set by the callers that need the NEXT render to re-fit the chart (initial
 // load, strike change). The render itself is driven by this block's own poll
@@ -1472,10 +1551,113 @@ function oipRSOn5mCloseChange() {
     oipRS5mCloseRedrawPending = true;
     requestAnimationFrame(() => {
         oipRS5mCloseRedrawPending = false;
-        window._oipDataRefreshing = true;
-        oipRSChart.update(oipRSMark5mCloseBorders(oipRSLastCeData), oipRSMark5mCloseBorders(oipRSLastPeData), false);
-        requestAnimationFrame(() => { window._oipDataRefreshing = false; });
+        oipRSDrawParked(false);
     });
+}
+
+// Replay: gives this chart the SAME time axis as the index chart above it.
+//
+// The two are paired bar-for-bar — one bar spacing, one scroll position off the
+// right edge (_oipSyncTimeScale). That reads the right edge of each chart's
+// WHOLE time scale, and during a replay the index chart's axis runs on to the
+// end of the session (its CPR / level series are laid over the full day) while
+// the candles here stopped at the cut. A scroll position matched off two
+// different right edges put the two charts a session apart on screen: the
+// index chart on the 21st, this one on the 18th, its last candle nowhere near
+// the playhead.
+//
+// So every index-chart bar time this chart does not carry — any minute the
+// option leg has no bar for, and every bar of the index window this contract's
+// own 10-day window does not reach — goes in as a whitespace bar. The chart
+// wrapper strips whitespace from the candle series (LC's candlestick renderer
+// will not take it) and keeps it on its invisible alignment series, which is
+// exactly the axis-only role it was built for. Same bar grid only: on a
+// different TF the two axes are different objects and the sync falls back to
+// matching visible time, which needs no padding.
+//
+// Only index bars UP TO the cut are used. The index chart's own axis stops at
+// the playhead during a replay (its candles are sliced there and its hidden
+// overlays are emptied — oipRefreshVolumeBars), so padding past it would give
+// this chart the longer axis and put the two right edges on different bars —
+// which is the very thing the padding exists to prevent.
+function oipRSPadToIndexAxis(rows) {
+    if (!window.oipReplayMode || typeof oipFullCandles === 'undefined' || !Array.isArray(oipFullCandles)
+        || typeof oipInterval === 'undefined' || oipInterval !== oipRSInterval) return rows;
+    const have = new Set((rows || []).map(r => Number(r.time)));
+    const pad = [];
+    oipFullCandles.forEach(c => {
+        const t = Number(c?.time);
+        if (!Number.isFinite(t) || have.has(t)) return;
+        if (oipRSReplayCutoff != null && t > oipRSReplayCutoff) return;
+        pad.push({ time: t });
+    });
+    if (!pad.length) return rows;
+    return [...(rows || []), ...pad].sort((a, b) => Number(a.time) - Number(b.time));
+}
+
+// Draws the chart from the parked arrays: candles, both volume overlays, VWAP,
+// Chg in OI and every step level. The ONE place the replay cut is applied —
+// every input is trimmed to oipRSReplayCutoff first, so nothing on the chart
+// (not a volume bar, not a level, not a ΔOI bar) shows ahead of the candle the
+// playhead stands on. The cut used to trim the candles only, which left every
+// indicator drawn out to the end of the session the candles had not reached.
+//
+// Called by the render for a fresh response, by the replay slider for a moved
+// cut, and by the indicator popup for a re-tag — none of them refetch.
+function oipRSDrawParked(resetZoom) {
+    if (!oipRSChart || !oipRSLastCeData) return;
+    const ceData = oipRSTrimToCutoff(oipRSLastCeData);
+    const peData = oipRSTrimToCutoff(oipRSLastPeData);
+
+    // Suppress the cross-chart sync listener (see oipRSInitCharts) while these
+    // setData calls are in flight — same guard oi_profile.js uses for OI/Opt
+    // Prem, so a data refresh can't be mistaken for a user-driven pan/zoom.
+    window._oipDataRefreshing = true;
+    oipRSChart.update(oipRSPadToIndexAxis(oipRSMark5mCloseBorders(ceData)),
+                      oipRSPadToIndexAxis(oipRSMark5mCloseBorders(peData)), resetZoom);
+
+    // Both overlays shade by size (the `intensity` flag): a bar well above the
+    // recent median paints near solid, a quiet one fades back. The two bands
+    // are only 20% of the pane tall and each autoscales on its own, so height
+    // alone made a heavy bar hard to spot — and impossible to compare across
+    // the two bands. Opt-in per call, so the main OI Profile charts keep their
+    // flat 50% alpha. The bars are matched to ceData by time key, which is
+    // what cuts them with the candles.
+    oipSetVolumeBars(oipRSVolumeSeries, oipRSLastFutVol, ceData, 'nifty', true);
+    // Banknifty deliberately uses the NIFTY colour pair here. Everywhere else the
+    // two histograms share one scale and overlap, so Banknifty needs its own
+    // colours to stay distinguishable; on this chart it hangs from its own top
+    // band (bnfOnTop), so the same up/down pair reads consistently across both
+    // bands instead of introducing a second colour language. The Banknifty
+    // swatches are omitted from this block's Indicator popup for that reason.
+    oipSetVolumeBars(oipRSBnfVolumeSeries, oipRSLastBnfVol, ceData, 'nifty', true);
+
+    if (typeof oipCalculateVWAP === 'function') {
+        if (oipRSVwapCESeries) oipRSVwapCESeries.setData(oipCalculateVWAP(ceData));
+        if (oipRSVwapPESeries) oipRSVwapPESeries.setData(oipCalculateVWAP(peData));
+    }
+
+    // Chg in OI reads the `oi` field on these same candles, so it rides the
+    // anti-flicker parking in oipRSRenderChart for free — a rate-limited leg
+    // keeps its last good histogram rather than blanking for a tick.
+    oipRSUpdateOiChangeSeries(ceData, peData);
+
+    // Step series. Each leg's five levels come from its own candles; the
+    // Deciders blend the two, so they're built once here from both. On the
+    // replayed day the Open / 5m levels are what the bars so far give — the
+    // opening range is partial until 09:20 has been replayed, as it was live.
+    const legLevels = { Ce: oipRSComputeLegSeries(ceData), Pe: oipRSComputeLegSeries(peData) };
+    OIP_RS_LEG_KEYS.forEach(key => {
+        const spec = OIP_RS_LEG_SPECS[key];
+        if (oipRSLegSeries[key]) oipRSLegSeries[key].setData(legLevels[spec.side][spec.field]);
+    });
+
+    const deciders = oipRSComputeDeciderSeries(ceData, peData);
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        if (oipRSDeciderSeries[key]) oipRSDeciderSeries[key].setData(deciders[key]);
+    });
+
+    requestAnimationFrame(() => { window._oipDataRefreshing = false; });
 }
 
 // Renders this block's chart from its own /api/oi-profile/round-strike
@@ -1530,15 +1712,6 @@ function oipRSRenderChart(data) {
     oipRSLastCeData = ceData;
     oipRSLastPeData = peData;
 
-    // Suppress the cross-chart sync listener (see oipRSInitCharts) while this
-    // setData call is in flight — same guard oi_profile.js uses for OI/Opt Prem,
-    // so a data refresh can't be mistaken for a user-driven pan/zoom.
-    window._oipDataRefreshing = true;
-    // Trimmed on the way to the chart, not in the parked arrays: oipRSLastCeData
-    // stays whole so moving the replay slider back forward has data to show.
-    if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(oipRSTrimToCutoff(ceData)),
-                                      oipRSMark5mCloseBorders(oipRSTrimToCutoff(peData)), resetZoom);
-
     // Same anti-flicker rule as the candles above: an empty array means the
     // future leg failed this tick, not that volume went to nothing. Hold the
     // last good bars — but only while the timeframe is unchanged, since bars
@@ -1555,54 +1728,21 @@ function oipRSRenderChart(data) {
     oipRSLastBnfVol = bnfVol;
     oipRSLastVolInterval = oipRSInterval;
 
-    // Both overlays shade by size (the `intensity` flag): a bar well above the
-    // recent median paints near solid, a quiet one fades back. The two bands
-    // are only 20% of the pane tall and each autoscales on its own, so height
-    // alone made a heavy bar hard to spot — and impossible to compare across
-    // the two bands. Opt-in per call, so the main OI Profile charts keep their
-    // flat 50% alpha.
-    oipSetVolumeBars(oipRSVolumeSeries, futVol, ceData, 'nifty', true);
-    // Banknifty deliberately uses the NIFTY colour pair here. Everywhere else the
-    // two histograms share one scale and overlap, so Banknifty needs its own
-    // colours to stay distinguishable; on this chart it hangs from its own top
-    // band (bnfOnTop), so the same up/down pair reads consistently across both
-    // bands instead of introducing a second colour language. The Banknifty
-    // swatches are omitted from this block's Indicator popup for that reason.
-    oipSetVolumeBars(oipRSBnfVolumeSeries, bnfVol, ceData, 'nifty', true);
+    // Everything on the chart is drawn from the parked arrays, trimmed to the
+    // replay cut on the way — the parked copies stay whole so moving the
+    // slider forward again has data to show.
+    oipRSDrawParked(resetZoom);
+
     const volLegendEl = document.getElementById('oipRSVolLegendItem');
     if (volLegendEl) volLegendEl.classList.toggle('hidden', !data.future_symbol);
     const volSymbolEl = document.getElementById('oipRSLegendVolSymbol');
     if (volSymbolEl) volSymbolEl.textContent = data.future_symbol || '--';
 
-    if (typeof oipCalculateVWAP === 'function') {
-        if (oipRSVwapCESeries) oipRSVwapCESeries.setData(oipCalculateVWAP(ceData));
-        if (oipRSVwapPESeries) oipRSVwapPESeries.setData(oipCalculateVWAP(peData));
-    }
-
-    // Chg in OI reads the `oi` field on these same candles, so it rides the
-    // anti-flicker parking above for free — a rate-limited leg keeps its last
-    // good histogram rather than blanking for a tick.
-    oipRSUpdateOiChangeSeries(ceData, peData);
     oipRSSetOiChgTitles(ceStrike, peStrike);
-
-    // Step series. Each leg's five levels come from its own candles; the
-    // Deciders blend the two, so they're built once here from both.
-    const legLevels = { Ce: oipRSComputeLegSeries(ceData), Pe: oipRSComputeLegSeries(peData) };
-    OIP_RS_LEG_KEYS.forEach(key => {
-        const spec = OIP_RS_LEG_SPECS[key];
-        if (oipRSLegSeries[key]) oipRSLegSeries[key].setData(legLevels[spec.side][spec.field]);
-    });
-
-    const deciders = oipRSComputeDeciderSeries(ceData, peData);
-    OIP_RS_DECIDER_KEYS.forEach(key => {
-        if (oipRSDeciderSeries[key]) oipRSDeciderSeries[key].setData(deciders[key]);
-    });
 
     const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
     setText('oipRSLegendCombinedCE', `${ceStrike} CE`);
     setText('oipRSLegendCombinedPE', `${peStrike} PE`);
-
-    requestAnimationFrame(() => { window._oipDataRefreshing = false; });
 
     // Rays are restored once real data exists, so they extend to it correctly.
     if (!oipRSFirstRenderDone) {
@@ -1702,7 +1842,11 @@ function oipRSScheduleLoop(delay) {
     if (oipRSPollTimer) clearTimeout(oipRSPollTimer);
     if (oipRSIsHistorical() && delay > 0) return;
     oipRSPollTimer = setTimeout(() => {
-        if (document.hidden) { oipRSScheduleLoop(OIP_RS_POLL_MS_HIDDEN); return; }
+        // A hidden LIVE page backs off to the slow cadence. The historical
+        // block has one fetch per change and no cadence to back off to — the
+        // delayed retry would be dropped by the guard above, and a page opened
+        // in a background tab used to come to the front with no candles at all.
+        if (document.hidden && !oipRSIsHistorical()) { oipRSScheduleLoop(OIP_RS_POLL_MS_HIDDEN); return; }
         oipRSPollTick();
     }, delay);
 }
@@ -2052,15 +2196,30 @@ async function oipRSInit() {
     oipRSRestoreLineStyleState(); // before first load — CE/PE ref-line color/width/style pickers
     oipRSUpdateCheckboxSpanColors();
 
-    // This block's own TF — read before the chart is built (its ray tool and the
-    // 5m reference-line window both key off the interval) and independent of the
-    // Opt Prem TF dropdown that drives every other chart on the page.
+    // This block's TF — read before the chart is built (its ray tool and the
+    // 5m reference-line window both key off the interval).
+    //
+    // On the OI Profile page it is the block's own dropdown, independent of the
+    // Opt Prem TF that drives every other chart there. On Replay there is no
+    // such dropdown: the block sits under the index chart and is meant to read
+    // as the same moment, and the two charts are paired bar-for-bar (bar
+    // spacing + scroll position, see _oipSyncTimeScale), which only lines up
+    // on one bar grid. So the Replay toolbar's TF is the one timeframe for
+    // both, and oi_replay.js calls oipRSOnIntervalChanged when it moves.
     const tfSel = document.getElementById('oipRSInterval');
     if (tfSel?.value) oipRSInterval = tfSel.value;
     tfSel?.addEventListener('change', e => {
         oipRSInterval = e.target.value;
         oipRSRequestReload();   // re-fit and re-request at the new bar width
     });
+    if (oipRSIsHistorical() && typeof oipInterval !== 'undefined' && oipInterval) {
+        oipRSInterval = oipInterval;
+        window.oipRSOnIntervalChanged = (tf) => {
+            if (!tf || tf === oipRSInterval) return;
+            oipRSInterval = tf;
+            oipRSRequestReload();
+        };
+    }
 
     oipRSInitCharts();
 

@@ -686,6 +686,15 @@ _STRATEGIES = (
         "Under the 09:15 low (over its high).",
         "Cam R3 when it sits in or at the CPR — the zone's top — else the CPR's far line (TC); 1:2 if that is nearer than the risk. Mirror: Cam S3 / BC.",
         "18 Jun 2025: 09:15 O 24,788 in PDL/S1 24,784-24,814, low 24,777 on S1, closed 24,830 over the box → BUY 24,839, SL 24,775, target Cam R3 24,900 (+61).")),
+    (lambda r: 'waited for the retracement' in r, 'Big box rejection → the retracement', _how(
+        "A narrow-CPR, small-box day where no other setup fired: the 09:15 candle reaches PDH/R1 (PDL/S1 below) and closes back under it "
+        "(over it), but is bigger than 0.15% of price — too big to enter off its own extreme.",
+        "Price must come back and TOUCH the box again; the first small candle that then makes a LOWER high (higher low) and closes under the box "
+        "(over it) with its close in the lower half of its range (upper half) is the entry: SELL under its low (BUY over its high).",
+        "Over that candle's high (under its low).",
+        "The opposite box's far edge — PDL/S1 below, PDH/R1 above.",
+        "22 Sep 2026: the 55-pt 09:15 into R1 23,482 closed 23,446 under PDH 23,467; 10:05 touched PDH again; 10:15 made a lower high and closed "
+        "23,459 under it → SELL 23,452, SL 23,468, target PDL 23,315 (+137).")),
     (lambda r: 'too big to enter' in r, 'Big 09:15 break → 09:20 entry', _how(
         "A big 09:15 candle (over 0.25%) that opens over PDL/S1 and closes under both, straddles the box (opens inside, trades both sides, closes inside), or runs from above down to the box. Too big to enter off its own low.",
         "The 09:20 candle decides: a small red candle (≤ half the 09:15 range) closing under the box → SELL under its low. Mirror: a big green break over PDH/R1, small green 09:20 → BUY over it.",

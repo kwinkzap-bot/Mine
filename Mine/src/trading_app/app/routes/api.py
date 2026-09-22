@@ -9924,6 +9924,14 @@ def oi_profile_candles() -> EndpointResponse:
         pe_strike = request.args.get('pe_strike', type=int)
         start_date_str = request.args.get('start_date')
         end_date_str   = request.args.get('end_date')
+        # Big-print tagging of future_volume, as on /round-strike (see
+        # RS_BIG_PRINT_QTY). OPT-IN here, unlike there: only a caller that sends
+        # `big_qty` gets the tag, so the OI Profile page — whose main-chart popup
+        # has no volBig swatch — keeps its bars exactly as they were, while the
+        # Replay index chart, which sends the box's figure, paints big prints
+        # like its Round Strike block.
+        big_qty_raw = request.args.get('big_qty', type=int)
+        big_qty = max(1, big_qty_raw) if big_qty_raw else None
         # Independent, always-on secondary chart (fixed EXPIRY — e.g. monthly —
         # but the STRIKE tracks whatever the user currently has selected via
         # custom_strike/ce_strike/pe_strike). fixed_ce_strike/fixed_pe_strike
@@ -10265,6 +10273,22 @@ def oi_profile_candles() -> EndpointResponse:
             future_vol_raw = future_future_vol.result()
             future_vol_candles = format_candles(future_vol_raw, ist_offset, interval)
             future_volume = [{'time': c['time'], 'volume': c['volume']} for c in future_vol_candles]
+        # Tag the bars a >= big_qty print landed in. The prints are looked up on
+        # the SAME contract the volume leg above was fetched for — today's front
+        # future, whatever window is asked for — so a tag always describes the
+        # bar it sits on. A replayed window before the last monthly expiry was
+        # archived under that month's contract and so carries no tags, which is
+        # the same (correct) gap the Round Strike block has. Today's prints come
+        # off the in-memory tape only when the window reaches today; an earlier
+        # window reads the archive alone and opens no socket.
+        if big_qty and future_volume:
+            try:
+                _tape_symbol = _rs_tape_symbol(symbol, future_fut_symbol, _is_fyers_provider)
+                _prints = _rs_big_prints(_tape_symbol, to_date.date() >= now.date(),
+                                         from_date.date(), to_date.date(), big_qty)
+                future_volume = _rs_tag_big_prints(future_volume, _prints, interval, ist_offset)
+            except Exception as exc:
+                logger.debug(f'[OI-Profile] big-print tagging skipped for {symbol}: {exc}')
 
         # Same shape/time grid as future_volume above — see the BANKNIFTY block
         # in the fetch section. Identical list when BANKNIFTY is the selected
@@ -11334,10 +11358,12 @@ def _rs_session_open(candles: list) -> float:
 
 
 # A single Time & Sales print at or above this many contracts marks the volume
-# bar it landed in — the bar paints blue on the Round Strike chart, whatever the
-# candle's direction. This is the DEFAULT: the Indicators popup carries a box
-# for the figure and sends it as `big_qty`, so the server tags the bars against
-# whatever the user typed and the client only reads the tag.
+# bar it landed in — the bar paints solid on the Round Strike chart, whatever
+# the candle's direction. This is the DEFAULT: the Indicators popup carries
+# three size tiers (5,000 / 8,000 / 10,000, each with a colour) and sends the
+# SMALLEST as `big_qty`, so the server tags the bars against whatever the user
+# typed; the tag carries the bar's largest print and the client sorts it into
+# a tier from that. The bell follows `alert_qty` (the middle tier).
 RS_BIG_PRINT_QTY = 8000
 
 _RS_BAR_SECONDS = {
@@ -11635,7 +11661,8 @@ def oi_profile_expiries() -> EndpointResponse:
 def oi_profile_round_strike() -> EndpointResponse:
     """Every piece of data the OI Profile page's Round Strike block renders.
 
-    Query params: symbol, interval, days, ce_strike, pe_strike, step, expiry, big_qty.
+    Query params: symbol, interval, days, ce_strike, pe_strike, step, expiry, big_qty,
+    alert_qty.
     ce_strike/pe_strike may be omitted on the very first call — the block needs
     this endpoint's `session_open` and `strikes` to work out which pair to ask
     for, and the option legs come back empty until it does.
@@ -11656,6 +11683,11 @@ def oi_profile_round_strike() -> EndpointResponse:
         # The Time & Sales print size that paints a volume bar blue — the box
         # next to the Nifty Vol Fut swatches. Absent or junk means the default.
         big_qty   = max(1, request.args.get('big_qty', RS_BIG_PRINT_QTY, type=int) or RS_BIG_PRINT_QTY)
+        # The bell's threshold, when the client separates it from the tagging
+        # one: the popup now has three colour tiers and tags from the smallest,
+        # while the alert stays on the middle tier (see big_print_alerts.py).
+        # Absent on an older client, the bell follows big_qty as before.
+        alert_qty = max(1, request.args.get('alert_qty', type=int) or big_qty)
         # Replay's expiry + date pickers. Both absent on every live call, which
         # keeps the whole block below on its original path.
         #
@@ -12107,7 +12139,7 @@ def oi_profile_round_strike() -> EndpointResponse:
             # Live chart only: the alert threshold follows the box (see
             # big_print_alerts); a replayed window says nothing about today.
             if not _historical:
-                _big_print_alerts.note_chart_threshold(big_qty)
+                _big_print_alerts.note_chart_threshold(alert_qty)
         banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
 
         oi_data      = (_rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}) if _want_header else {}

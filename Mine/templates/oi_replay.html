@@ -100,6 +100,10 @@
                                     title="Live CE/PE open interest by strike, drawn on the right edge — a snapshot of NOW, not of the replayed bar">
                                     <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
                                 </label>
+                                <!-- Same rows as the Round Strike popup below: the swatches and
+                                     the big-print tier boxes are the page-wide ones (oi_indicators.js),
+                                     and /api/oi-profile/candles tags the bars when the page sends
+                                     `big_qty`, so the index chart paints big prints like the block. -->
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowVolume" checked><span>Nifty Vol Fut</span>
                                     <span class="oip-line-props">
@@ -109,6 +113,33 @@
                                             title="Volume bar color on a down candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
                                             title="Volume bar color when Vol Direction Color is off">
+                                    </span>
+                                </label>
+                                <!-- Big prints, three tiers. A bar holding a single Time & Sales print at
+                                     or above a tier's size paints that tier's colour, solid; the biggest
+                                     tier the print reaches wins. The boxes and swatches are the page-wide
+                                     set (oipBigPrintTiers in oi_indicators.js): the smallest size is what
+                                     the server tags from (`big_qty`), the middle one is what the bell
+                                     follows (`alert_qty`). -->
+                                <label class="oip-ind-item oip-ind-sub-item oip-ind-bigprint"
+                                    title="Single-print size tiers, in contracts: a bar holding a print at or above a size paints that tier's colour, solid. The biggest tier reached wins; the smallest size is what the server tags from.">
+                                    <span>Big print ≥</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig1"
+                                            title="Tier 1 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="0"
+                                            value="5000" min="1" step="100"
+                                            title="Tier 1 size (default 5000) — the smallest tier is the size the server tags bars from">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig2"
+                                            title="Tier 2 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="1"
+                                            value="8000" min="1" step="100"
+                                            title="Tier 2 size (default 8000) — the bell and Telegram alert follow this tier">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig3"
+                                            title="Tier 3 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="2"
+                                            value="10000" min="1" step="100"
+                                            title="Tier 3 size (default 10000)">
                                     </span>
                                 </label>
                                 <label class="oip-ind-item"
@@ -318,10 +349,14 @@
                          /api/oi-profile/past-expiries and the candles off ICICI/Breeze
                          — the only provider that serves a contract the instrument
                          masters have already dropped. -->
+                    <!-- While the replay slider is cutting this chart ("Sync option chart"
+                         on) the front expiry is the one for the REPLAYED bar's day, and
+                         it moves as the playhead crosses an expiry — see
+                         oipRSFollowReplayDay in oi_profile_round_strike.js. -->
                     <div class="oip-prem-group">
                         <span class="oip-label">Expiry</span>
                         <select id="oipRSExpiryDropdown" class="oip-select oip-select--xs"
-                            title="Expiry open on the chosen date — the front one is picked"></select>
+                            title="Expiry open on the replayed day — the front one is picked"></select>
                     </div>
 
                     <div class="oip-prem-sep"></div>
@@ -362,11 +397,33 @@
                                             title="Volume bar color on a down candle">
                                         <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
                                             title="Volume bar color when Vol Direction Color is off">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig"
-                                            title="Bar holding a single Time &amp; Sales print at or above the size in the box (painted solid)">
-                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp"
+                                    </span>
+                                </label>
+                                <!-- Big prints, three tiers. A bar holding a single Time & Sales print at
+                                     or above a tier's size paints that tier's colour, solid; the biggest
+                                     tier the print reaches wins. The boxes and swatches are the page-wide
+                                     set (oipBigPrintTiers in oi_indicators.js): the smallest size is what
+                                     the server tags from (`big_qty`), the middle one is what the bell
+                                     follows (`alert_qty`). -->
+                                <label class="oip-ind-item oip-ind-sub-item oip-ind-bigprint"
+                                    title="Single-print size tiers, in contracts: a bar holding a print at or above a size paints that tier's colour, solid. The biggest tier reached wins; the smallest size is what the server tags from.">
+                                    <span>Big print ≥</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig1"
+                                            title="Tier 1 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="0"
+                                            value="5000" min="1" step="100"
+                                            title="Tier 1 size (default 5000) — the smallest tier is the size the server tags bars from">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig2"
+                                            title="Tier 2 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="1"
                                             value="8000" min="1" step="100"
-                                            title="Print size, in contracts, that paints a bar the solid color (default 8000)">
+                                            title="Tier 2 size (default 8000) — the bell and Telegram alert follow this tier">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volBig3"
+                                            title="Tier 3 colour — a print at or above the size beside it">
+                                        <input type="number" class="oip-ind-mini-inp oip-big-print-qty-inp" data-tier="2"
+                                            value="10000" min="1" step="100"
+                                            title="Tier 3 size (default 10000)">
                                     </span>
                                 </label>
                                 <!-- Hangs from its own band at the top of this pane and reuses the
@@ -592,27 +649,11 @@
                         </div>
                     </div>
 
-                    <!-- TF for THIS block only (symbol is fixed to NIFTY). Every
-                         other chart on the page follows the separate TF dropdown in
-                         the Opt Prem header, so the two can sit on different
-                         timeframes — this one is the live 1-second view. -->
-                    <div class="oip-prem-group">
-                        <span class="oip-label">TF</span>
-                        <select id="oipRSInterval" class="oip-select oip-select--xs"
-                            title="Round Strike timeframe (this block only)">
-                            <option value="30second">30s</option>
-                            <option value="minute" selected>1m</option>
-                            <option value="2minute">2m</option>
-                            <option value="3minute">3m</option>
-                            <option value="5minute">5m</option>
-                            <option value="15minute">15m</option>
-                            <option value="30minute">30m</option>
-                            <option value="60minute">1h</option>
-                            <option value="day">1D</option>
-                            <option value="week">1W</option>
-                            <option value="month">1M</option>
-                        </select>
-                    </div>
+                    <!-- No TF dropdown here: on Replay this block runs on the
+                         Replay toolbar's TF, so the two stacked charts share one bar
+                         grid and pair bar-for-bar (oipRSOnIntervalChanged in
+                         oi_profile_round_strike.js). The OI Profile page keeps its
+                         own #oipRSInterval. -->
 
                     <div class="oip-prem-sep"></div>
 

@@ -1112,3 +1112,43 @@ def test_a_big_0915_that_ran_into_the_cprs_is_not_the_upper_box_break():
     chart['weekly'] = {'pp': 22612.32, 'bc': 22561.92, 'tc': 22662.71}
     p, why, _ = propose(chart, _session(c1, c2))
     assert not (p and p['trade'] == 'SELL' and 'PDH/R1' in why and 'too big to enter under' in why)
+
+
+# ── 22 Sep 2026: a big 09:15 rejection from the box, entered on the retracement ──
+
+PREV_22 = (23466.8, 23314.8, 23414.3)          # 21 Sep: CPR 23,391-23,406, box PDH 23,467 / R1 23,482
+BARS_22 = [
+    {'time': '09:15', 'open': 23454.05, 'high': 23489.0, 'low': 23434.05, 'close': 23446.5},   # 55 pts into R1, closed under PDH
+    {'time': '09:45', 'open': 23456.25, 'high': 23464.55, 'low': 23452.7, 'close': 23455.45},  # red, but the box was never retouched
+    {'time': '10:05', 'open': 23461.05, 'high': 23469.9, 'low': 23453.0, 'close': 23467.05},   # the retouch (closed over PDH)
+    {'time': '10:10', 'open': 23466.9, 'high': 23470.6, 'low': 23457.6, 'close': 23465.2},     # under PDH but mid-range
+    {'time': '10:15', 'open': 23465.1, 'high': 23465.95, 'low': 23453.15, 'close': 23458.5},   # lower high, closed in its lower half
+    {'time': '10:20', 'open': 23458.8, 'high': 23460.35, 'low': 23435.75, 'close': 23444.1},   # fills
+]
+
+
+def _chart_22():
+    chart = _chart(BARS_22[0], PREV_22, (23600.0, 23280.0, 23350.0))
+    chart['weekly'] = {'pp': 23351.78, 'bc': 23349.09, 'tc': 23354.47}
+    chart['cpr_type'], chart['boxes'] = 'Narrow', 'Small'
+    return chart
+
+
+def test_22_sep_2026_sells_the_retracement_after_a_big_box_rejection():
+    from trading_app.service.cpr_trade_rule import box_retracement
+    p, why, i = box_retracement(_chart_22(), BARS_22 + _session()[-25:])
+    assert p == {'trade': 'SELL', 'entry': 23452.0, 'target': 23315.0, 'sl': 23468.0} and BARS_22[i]['time'] == '10:15'
+    assert 'too big to enter under' in why and 'made a lower high' in why and 'target the lower box' in why
+
+
+def test_the_retracement_needs_the_box_retouched_and_a_lower_high():
+    from trading_app.service.cpr_trade_rule import box_retracement
+    assert box_retracement(_chart_22(), [BARS_22[0], BARS_22[1]] + _session()[-25:]) is None    # never came back to the box
+    higher = dict(BARS_22[4], high=23472.0)                                                     # higher high than the retouch
+    assert box_retracement(_chart_22(), BARS_22[:4] + [higher] + _session()[-25:]) is None
+
+
+def test_the_retracement_is_only_a_narrow_cpr_small_box_day():
+    from trading_app.service.cpr_trade_rule import box_retracement
+    chart = _chart_22(); chart['cpr_type'] = 'Wide'
+    assert box_retracement(chart, BARS_22 + _session()[-25:]) is None
