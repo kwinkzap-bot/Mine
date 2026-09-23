@@ -499,12 +499,15 @@
     };
 
     function callCard(c) {
-        const slots = Object.values(c.brokers || {});
+        const slots = Object.entries(c.brokers || {}).map(([key, b]) => ({ ...b, key }));
         const live = slots.filter(b => !['FLAT', 'NO_FILL', 'DEAD'].includes(b.stage));
         // Two legs per broker — T1 and T3 — each its own entry, stop and
         // watched level; the row says which one it is.
         const legName = b => (b.leg === 'T3' ? (c.far_label || 'T3') : (b.leg || 'T1'));
-        const legTarget = b => (b.leg === 'T3' ? (c.target_far ?? c.target) : c.target);
+        // Mirrors the engine's slot_target: a level set by hand on this leg
+        // wins over the call's own.
+        const legTarget = b => b.target_level
+            || (b.leg === 'T3' ? (c.target_far ?? c.target) : c.target);
         const rows = slots.map(b => {
             const stage = (b.stage === 'FLAT' && b.exit_reason) ? `out · ${b.exit_reason}`
                 : b.stage === 'LIVE' ? `in — stop working, ${legName(b)} ₹${money(legTarget(b))} watched`
@@ -517,10 +520,22 @@
             const pnl = b.booked && b.pnl != null
                 ? ` · <b class="${b.pnl >= 0 ? 'op-buy' : 'op-sell'}">${esc(DataGrid.inr(b.pnl))}</b>`
                   + ` (${esc(DataGrid.inr(b.pnl_per_lot))}/lot)` : '';
+            // The target rests nowhere, so it has no row on the strip and
+            // no order to modify — this box is the only way to move it.
+            const legDone = ['FLAT', 'NO_FILL', 'DEAD'].includes(b.stage);
+            const tgt = legDone ? '' :
+                `<span class="op-sig-tgt" data-slot="${esc(b.key)}">`
+                + `<label>${esc(legName(b))}</label>`
+                + `<input class="op-sig-tgt-in" type="number" step="0.05" min="0"`
+                + ` value="${esc(legTarget(b))}" aria-label="Target for ${esc(legName(b))}">`
+                + `<button class="op-sig-tgt-save" type="button" title="Move this leg's target">Set</button>`
+                + (b.target_source === 'manual' ? `<em title="Set by hand; a channel edit clears it">manual</em>` : '')
+                + `</span>`;
             return `<div class="op-sig-broker op-sig-${esc(String(b.stage || '').toLowerCase())}">`
                  + `<span class="op-sig-bname">${esc(b.name || `Broker ${b.instance}`)}`
                  + ` <span class="op-sig-leg">${esc(legName(b))}</span></span>`
-                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${stop}${pnl}</span></div>`;
+                 + `<span class="op-sig-stage">${esc(stage)}${fill}${held}${stop}${pnl}</span>`
+                 + tgt + `</div>`;
         }).join('');
 
         const done = ['DONE', 'CANCELLED', 'FAILED', 'SKIPPED'].includes(c.phase);
@@ -565,7 +580,8 @@
         const [tgText, tgClass] = tgBadge(tg);
         // Same redraw guard as the book: a card rebuilt under a press eats it.
         const sig = JSON.stringify([tg.engine_running, tgText, calls.map(c =>
-            [c.id, c.phase, Object.values(c.brokers || {}).map(b => [b.stage, b.open_qty, b.booked])])]);
+            [c.id, c.phase, c.target, c.target_far, Object.values(c.brokers || {}).map(
+                b => [b.stage, b.open_qty, b.booked, b.target_level, b.stop_level])])]);
         if (sig === state.signalSig) return;
         state.signalSig = sig;
 
@@ -580,6 +596,37 @@
         $('opTg').title = l.last_error ? l.last_error
             : l.channel_title ? `Listening to ${l.channel_title}` : 'Telegram calls';
         $('opSignals').innerHTML = calls.map(callCard).join('');
+    }
+
+    // Moving one leg's watched target. The stop is an order and goes
+    // through the strip's price box; the target is only a level the engine
+    // watches, so this writes it straight onto the leg.
+    async function saveTarget(box) {
+        const card = box.closest('.op-sig');
+        const input = box.querySelector('.op-sig-tgt-in');
+        const btn = box.querySelector('.op-sig-tgt-save');
+        const value = Number(input.value);
+        if (!card || !value) return;
+        btn.disabled = true;
+        try {
+            const res = await fetch(`${API}/tg-calls/${encodeURIComponent(card.dataset.id)}/target`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+                body: JSON.stringify({ slot: box.dataset.slot, target: value }),
+            });
+            const r = await res.json();
+            if (r.success) {
+                toast(`Target ${money(r.was)} → ${money(r.target)}`, 'success');
+                state.signalSig = null;
+                loadSignals();
+            } else {
+                toast(r.error || 'Could not move the target', 'error');
+            }
+        } catch (e) {
+            toast(`Target error: ${e.message}`, 'error');
+        } finally {
+            btn.disabled = false;
+        }
     }
 
     // ── the auto-trader's P&L ledger ─────────────────────────────────
@@ -1033,6 +1080,15 @@
             e.preventDefault();
             e.target.blur();
             submitRow(e.target.closest('.op-po'), false);
+        });
+        $('opSignals').addEventListener('click', (e) => {
+            const box = e.target.closest('.op-sig-tgt');
+            if (box && e.target.closest('.op-sig-tgt-save')) saveTarget(box);
+        });
+        $('opSignals').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || !e.target.classList.contains('op-sig-tgt-in')) return;
+            e.preventDefault();
+            saveTarget(e.target.closest('.op-sig-tgt'));
         });
         $('opCancelAll').addEventListener('click', (e) => cancelAll(e.currentTarget));
         $('opExitAll').addEventListener('click', (e) => exitAll(e.currentTarget));

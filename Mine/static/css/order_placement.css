@@ -872,6 +872,44 @@
   font-weight: 500;
 }
 
+/* Moving one leg's watched target. The stop is an order and is edited on
+   the strip; the target rests nowhere, so it is edited here. */
+.op-sig-tgt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.op-sig-tgt label { opacity: .7; }
+
+.op-sig-tgt-in {
+  width: 68px;
+  padding: 1px 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 3px;
+  background: var(--input-bg, transparent);
+  color: inherit;
+}
+
+.op-sig-tgt-save {
+  padding: 1px 6px;
+  font-size: 10px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.op-sig-tgt-save:hover:not(:disabled) { border-color: var(--color-info, #3b82f6); }
+.op-sig-tgt-save:disabled { opacity: .5; cursor: default; }
+.op-sig-tgt em { font-style: normal; font-size: 9px; opacity: .7; }
+
 /* Which of a broker's two legs the row is: T1 or T3. */
 .op-sig-leg {
   font-size: 9px;

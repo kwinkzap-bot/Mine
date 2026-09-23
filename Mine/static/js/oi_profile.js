@@ -14,8 +14,8 @@ let oipVolumeSeries = null, oipBnfVolumeSeries = null;
 // below, visibility driven by the Opt Indicator popup's single "Nifty Vol Fut"
 // checkbox (see oipSyncOptVolumeVisibility). The Bnf* twins are the Banknifty
 // overlay — same charts, same price scales, own checkbox and colour pair.
-let oipIntrinsicVolumeSeries = null, oipCEVolumeSeries = null, oipPEVolumeSeries = null, oipFixedVolumeSeries = null;
-let oipIntrinsicBnfVolumeSeries = null, oipCEBnfVolumeSeries = null, oipPEBnfVolumeSeries = null, oipFixedBnfVolumeSeries = null;
+let oipIntrinsicVolumeSeries = null, oipCEVolumeSeries = null, oipPEVolumeSeries = null;
+let oipIntrinsicBnfVolumeSeries = null, oipCEBnfVolumeSeries = null, oipPEBnfVolumeSeries = null;
 let oipOIRayTool = null;
 let oipIntrinsicChart = null;
 let oipIntrinsicSeries = null;
@@ -44,17 +44,6 @@ let oipPECvwapSeries = null, oipPEPvwapSeries = null;
 let oipAvg3VwapSeries = null;
 let oipAvg3VwapIntSeries = null, oipAvg3VwapIntPeSeries = null;
 let oipCEAvg3VwapSeries = null, oipPEAvg3VwapSeries = null;
-// Fixed strike / monthly expiry combined chart — strike is user-selectable
-// via the dropdown+Update button in that chart's header and persists across
-// refreshes in localStorage (defaults to 24000 the first time).
-const OIP_FIXED_STRIKE_KEY = 'oipFixedStrike_v1';
-let oipFixedStrike = parseInt(localStorage.getItem(OIP_FIXED_STRIKE_KEY), 10) || 24000;
-let oipFixedChart = null, oipFixedCeSeries = null, oipFixedPeSeries = null;
-// Previous-day reference lines on the fixed chart: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2
-// "Fixed Chart Lines" — CE Avg / PE Avg / CE & PE Avg — apply ONLY to the
-// Fixed 24000 strike / monthly expiry combined chart above, not to the CE
-// Only / PE Only / weekly Combined charts.
-let oipFixedCeHL2Series = null, oipFixedPeHL2Series = null, oipFixedCloseAvgSeries = null;
 // EMA/CPR/RSI series state declared in oi_indicators.js
 let oipCEChart = null;
 let oipPEChart = null;
@@ -195,7 +184,6 @@ const oipElems = {
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null,
     slPrice: null, slCEBtn: null, slPEBtn: null,
-    fixedStrikeDropdown: null, fixedStrikeUpdateBtn: null,
     refreshAllBtn: null
 };
 
@@ -263,8 +251,6 @@ function oipInitElems() {
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
     oipElems.fetchRange = document.getElementById('oipFetchRange');
-    oipElems.fixedStrikeDropdown = document.getElementById('oipFixedStrikeDropdown');
-    oipElems.fixedStrikeUpdateBtn = document.getElementById('oipFixedStrikeUpdateBtn');
     oipElems.refreshAllBtn = document.getElementById('oipRefreshAllBtn');
 
     // IVP & Alerts
@@ -273,39 +259,6 @@ function oipInitElems() {
 
     // Initial population for custom strikes (will be refined on first load)
     oipUpdateCustomStrikeOptions(50, 25000);
-    oipUpdateFixedStrikeOptions();
-}
-
-// Populates the Fixed-strike chart's strike dropdown and selects the
-// persisted choice (oipFixedStrike, restored from localStorage). Prefers the
-// real option-chain strikes (oipAllStrikes, fetched by oipLoadOI) rounded to
-// the nearest 100 — matching this chart's round-strike convention — falling
-// back to a generated round-100 range around the current selection until
-// that chain arrives.
-function oipUpdateFixedStrikeOptions() {
-    const el = oipElems.fixedStrikeDropdown;
-    if (!el) return;
-
-    let strikes = (oipAllStrikes || [])
-        .map(s => parseFloat(s.strike))
-        .filter(s => s > 0 && s % 100 === 0);
-
-    if (strikes.length === 0) {
-        for (let i = -20; i <= 20; i++) {
-            const s = oipFixedStrike + i * 100;
-            if (s > 0) strikes.push(s);
-        }
-    }
-    strikes.push(oipFixedStrike);
-    strikes = [...new Set(strikes)].sort((a, b) => a - b);
-
-    el.innerHTML = strikes.map(s => `<option value="${s}">${s}</option>`).join('');
-    el.value = String(oipFixedStrike);
-}
-
-function oipUpdateFixedStrikeTitle() {
-    const el = document.getElementById('oipFixedStrikeTitle');
-    if (el) el.textContent = `Fixed ${oipFixedStrike} Monthly`;
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
@@ -349,28 +302,16 @@ function oipSyncMainVolumeVisibility() {
 }
 
 // Future-volume histograms on the Opt Prem charts (Combined/Intrinsic, CE Only,
-// PE Only, Fixed 24000 Monthly) — all four driven by ONE checkbox in the Opt
-// Indicator popup, same "single checkbox, multiple charts" pattern as VWAP above.
-// Nifty and Banknifty are separate overlays with a checkbox each.
+// PE Only) — all three driven by ONE checkbox in the Opt Indicator popup, same
+// "single checkbox, multiple charts" pattern as VWAP above. Nifty and Banknifty
+// are separate overlays with a checkbox each.
 function oipSyncOptVolumeVisibility() {
     const optVolume = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
-    [oipIntrinsicVolumeSeries, oipCEVolumeSeries, oipPEVolumeSeries, oipFixedVolumeSeries]
+    [oipIntrinsicVolumeSeries, oipCEVolumeSeries, oipPEVolumeSeries]
         .forEach(s => { try { s?.applyOptions({ visible: optVolume }); } catch (e) {} });
     const optBnfVolume = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
-    [oipIntrinsicBnfVolumeSeries, oipCEBnfVolumeSeries, oipPEBnfVolumeSeries, oipFixedBnfVolumeSeries]
+    [oipIntrinsicBnfVolumeSeries, oipCEBnfVolumeSeries, oipPEBnfVolumeSeries]
         .forEach(s => { try { s?.applyOptions({ visible: optBnfVolume }); } catch (e) {} });
-}
-
-// Fixed 24000-strike chart's own reference lines — each has its own checkbox
-// in the Opt Indicator popup's "Fixed Chart Lines" section (no group master).
-// Applies ONLY to the Fixed 24000/monthly chart, not CE Only/PE Only/Combined.
-function oipSyncFixedChartVisibility() {
-    const ce   = document.getElementById('oipShowFixedCeAvg')?.checked ?? true;
-    const pe   = document.getElementById('oipShowFixedPeAvg')?.checked ?? true;
-    const cepe = document.getElementById('oipShowFixedCePeAvg')?.checked ?? true;
-    try { oipFixedCeHL2Series?.applyOptions({ visible: ce }); } catch (e) {}
-    try { oipFixedPeHL2Series?.applyOptions({ visible: pe }); } catch (e) {}
-    try { oipFixedCloseAvgSeries?.applyOptions({ visible: cepe }); } catch (e) {}
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -382,7 +323,6 @@ document.addEventListener('DOMContentLoaded', () => {
     oipSyncVwapVisibility();
     oipSyncMainVolumeVisibility();
     oipSyncOptVolumeVisibility();
-    oipSyncFixedChartVisibility();
     oipUpdateOptEmaVisibility();
     oipApplyAllLineStyles();
 
@@ -405,9 +345,41 @@ document.addEventListener('DOMContentLoaded', () => {
             document.body.style.overflow = 'hidden';
             if (frame && !frame.src) frame.src = frame.dataset.src;
         };
+        // Two of these popups exist now (this one and Strike Logic below) and
+        // could in principle both be open at once — only drop the body scroll
+        // lock once NEITHER is still showing, so closing one doesn't let the
+        // page scroll behind the other.
         const close = () => {
             modal.classList.add('hidden');
-            document.body.style.overflow = '';
+            if (!document.querySelector('.oip-modal-overlay:not(.hidden)')) document.body.style.overflow = '';
+        };
+
+        btn.addEventListener('click', open);
+        closeBtn?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+        });
+    })();
+
+    // Strike Logic popup — static explanation of how each Opt Prem strike
+    // mode picks its CE/PE strike (see the modal's own content for the actual
+    // rule). Same open/close chrome as the OI Bar modal above, minus the iframe.
+    (() => {
+        const btn = document.getElementById('oipStrikeLogicBtn');
+        const modal = document.getElementById('oipStrikeLogicModal');
+        const closeBtn = document.getElementById('oipStrikeLogicModalClose');
+        if (!btn || !modal) return;
+
+        document.body.appendChild(modal);
+
+        const open = () => {
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+        };
+        const close = () => {
+            modal.classList.add('hidden');
+            if (!document.querySelector('.oip-modal-overlay:not(.hidden)')) document.body.style.overflow = '';
         };
 
         btn.addEventListener('click', open);
@@ -599,18 +571,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     oipElems.peStrikeDropdown?.addEventListener('change', () => {
         if (oipElems.strikeMode?.value === 'ce_pe') oipLoadCandles(true, true);
-    });
-
-    // Fixed-strike chart's own strike dropdown — only applied when the
-    // Update button is clicked (not on every dropdown change), then
-    // persisted so a page refresh defaults back to this strike.
-    oipElems.fixedStrikeUpdateBtn?.addEventListener('click', () => {
-        const val = parseInt(oipElems.fixedStrikeDropdown?.value, 10);
-        if (!val) return;
-        oipFixedStrike = val;
-        try { localStorage.setItem(OIP_FIXED_STRIKE_KEY, String(val)); } catch (e) {}
-        oipUpdateFixedStrikeTitle();
-        oipLoadCandles(true, false);
     });
 
     // The page's single data trigger — see oipRefreshAll. Everything except
@@ -1143,7 +1103,6 @@ async function oipLoadOI() {
         let resolvedStrike = 0;
         if (oipAllStrikes.length > 0) {
             resolvedStrike = oipUpdateCustomStrikeOptions(oipAllStrikes, oipCurrentPrice);
-            oipUpdateFixedStrikeOptions();
         }
 
         // Auto-initialize custom strike to ATM if Custom is checked on first load
@@ -1161,44 +1120,9 @@ async function oipLoadOI() {
     } catch (e) { console.warn('[OIP] OI Load Err:', e); }
 }
 
-// Fixed strike / monthly expiry combined chart — strike is user-selected via
-// the header dropdown+Update button (oipFixedStrike, persisted in
-// localStorage), independent of the ATM-relative strike selection above
-// (only the weekly CE-only/PE-only/Combined charts track the user's strike
-// selection there). Its own 3 reference lines (CE/PE/CE&PE Avg) are computed
-// from this fixed-strike monthly data; the SAME-LABELED lines on the weekly
-// charts are a separate computation from each weekly chart's own premium —
-// see the "Fixed Chart Lines" block in oipRefreshLocalView.
-function oipUpdateFixedChart(data) {
-    if (!oipFixedChart) return;
-    const ceRaw = (data.fixed_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
-    const peRaw = (data.fixed_pe_candles || []).map(c => ({ ...c, type: 'PE' }));
-    try {
-        oipFixedChart.update(ceRaw, peRaw, false);
-        const ceAvgData   = oipCalculatePrevDayHL2(ceRaw);
-        const peAvgData   = oipCalculatePrevDayHL2(peRaw);
-        const cePeAvgData = oipCalculatePrevDayCloseAvg(ceRaw, peRaw);
-        if (oipFixedCeHL2Series) oipFixedCeHL2Series.setData(ceAvgData);
-        if (oipFixedPeHL2Series) oipFixedPeHL2Series.setData(peAvgData);
-        if (oipFixedCloseAvgSeries) oipFixedCloseAvgSeries.setData(cePeAvgData);
-        oipSetVolumeBars(oipFixedVolumeSeries, data.fixed_future_volume, ceRaw);
-        oipSetVolumeBars(oipFixedBnfVolumeSeries, data.fixed_banknifty_volume, ceRaw, 'banknifty');
-    } catch (e) { console.warn('[OIP] Fixed chart update err:', e); }
-
-    const ceLbl = document.getElementById('oipLegendFixedCE');
-    const peLbl = document.getElementById('oipLegendFixedPE');
-    if (ceLbl) ceLbl.textContent = data.fixed_ce_symbol ? `${data.fixed_ce_symbol} (Monthly)` : `${oipFixedStrike} CE (Monthly)`;
-    if (peLbl) peLbl.textContent = data.fixed_pe_symbol ? `${data.fixed_pe_symbol} (Monthly)` : `${oipFixedStrike} PE (Monthly)`;
-    const fixedVolEl = document.getElementById('oipFixedVolLegendItem');
-    if (fixedVolEl) fixedVolEl.classList.toggle('hidden', !data.future_symbol);
-    const fixedVolSymEl = document.getElementById('oipFixedVolSymbol');
-    if (fixedVolSymEl) fixedVolSymEl.textContent = data.future_symbol || '--';
-    oipUpdateFixedStrikeTitle();
-}
-
 // Fetches and paints every chart on this page bar Round Strike: the OI Profile
-// index chart, the Opt Prem CE/PE/Combined charts, the intrinsic levels and the
-// Fixed Monthly chart, all off one /api/oi-profile/candles response.
+// index chart, the Opt Prem CE/PE/Combined charts and the intrinsic levels,
+// all off one /api/oi-profile/candles response.
 //
 // It used to take paintIndex/includeFixed flags so the old 2-second poll could
 // fetch the option legs while leaving the index and monthly charts frozen.
@@ -1251,18 +1175,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
         if (!forceFetch && oipOIData && !needsOptionData) { oipRefreshLocalView(view, resetZoom); return; }
 
-        // Fixed strike / monthly expiry — requested alongside the main
-        // (ATM-relative) data, independent of the page's strike-mode controls.
-        // Only the weekly (nearest-expiry) charts above track the user's strike
-        // selection; this chart's strike (oipFixedStrike) is set separately via
-        // its own header dropdown + Update button.
-        // fixed_interval is hardcoded to 5minute — the Fixed 24000 Monthly
-        // chart always shows 5-minute candles regardless of the main TF
-        // dropdown (oipInterval).
-        const fixedParams = `&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly&fixed_interval=5minute`;
         // Only a Refresh All sets this — see oipRefreshAll.
         const forceParam = oipForceNextFetch ? '&force=true' : '';
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1272,7 +1187,6 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         if (data.fetch_error) showNotification(`Data fetch error: ${data.fetch_error}`, 'error');
 
         oipOIData = Object.assign(oipOIData || {}, data);
-        oipUpdateFixedChart(data);
         const indexCandles = data.candles || [];
         let validCandles = [];
 

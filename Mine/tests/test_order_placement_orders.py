@@ -908,8 +908,11 @@ def test_exit_all_stands_the_engine_down_as_well_as_cancelling(client, env, stor
                         lambda *a, **k: {'success': True, 'cancelled_orders': 2,
                                          'exited_positions': 1, 'summary': [],
                                          'errors': []})
-    def stop_all(user, session, reason=''):
+    def stop_all(user, session, reason='', exit_result=None):
         called['reason'] = reason
+        # The engine needs the exit's own result: which accounts it could
+        # not square off, and what it sold at the ones it could.
+        called['exit_result'] = exit_result
         return 3
 
     monkeypatch.setattr(
@@ -919,6 +922,7 @@ def test_exit_all_stands_the_engine_down_as_well_as_cancelling(client, env, stor
     assert res.status_code == 200
     assert res.get_json()['tg_calls_stopped'] == 3
     assert called['reason'] == 'Exit all'
+    assert called['exit_result']['cancelled_orders'] == 2
 
 
 # ── the dispatcher's new seams ───────────────────────────────────────────

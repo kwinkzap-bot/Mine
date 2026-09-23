@@ -15,16 +15,70 @@ Broker Configuration Format (BROKER_{N}_{FIELD}):
     ...
 """
 import os
+import threading
+import time
 from typing import Optional, Dict, Tuple
 from dotenv import load_dotenv
 from trading_app.app.utils.logger import logger
 
 
+def _parse_env_text(text: str) -> Dict[str, str]:
+    """The .env body as a dict, inline comments stripped."""
+    env_vars = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if '=' in line:
+            key, value = line.split('=', 1)
+            raw_val = value.strip()
+            if ' #' in raw_val:
+                raw_val = raw_val.split(' #')[0].rstrip()
+            env_vars[key.strip()] = raw_val
+    return env_vars
+
+
+def _read_env_file(env_file: str):
+    """Parse the file, or return None rather than hand back a torn read.
+
+    The env file is rewritten in place by every broker login and by the
+    toggles on the Algo tabs. A reader that catches it mid-write parses a
+    *prefix* — and a prefix is indistinguishable from a complete file, so it
+    used to land in the cache as the truth and silently turn later flags
+    off. That is what skipped four Telegram calls with "no broker has
+    BROKER_N_TG_ACTIVE=true" on 2026-09-21/22: the prefix reached
+    BROKER_1_TYPE but stopped before BROKER_1_TG_ACTIVE, and the lie sat in
+    the cache until an unrelated save cleared it.
+
+    So the size is taken before and after, and the read is only trusted when
+    it accounts for the whole file. A writer caught in the act is waited out;
+    three failures return None, and the caller must not cache that.
+    """
+    for attempt in (1, 2, 3):
+        try:
+            size_before = os.path.getsize(env_file)
+            with open(env_file, 'rb') as f:
+                raw = f.read()
+            size_after = os.path.getsize(env_file)
+            if len(raw) == size_before == size_after:
+                return _parse_env_text(raw.decode('utf-8', 'replace'))
+            logger.warning(f"[UserEnv] {os.path.basename(env_file)} changed under the read "
+                           f"({size_before} → {len(raw)} → {size_after}) — retry {attempt}")
+        except OSError as e:
+            logger.warning(f"[UserEnv] read of {env_file} failed: {e} — retry {attempt}")
+        time.sleep(0.05)
+    logger.error(f"[UserEnv] could not read {env_file} cleanly — NOT caching a partial file")
+    return None
+
+
 class UserEnvManager:
     """Manages user-specific environment variables."""
     
-    # Cache for loaded user envs to avoid repeated file reads
+    # Cache for loaded user envs to avoid repeated file reads. Written from
+    # request threads and from every algo/listener thread, so it is only ever
+    # replaced wholesale under this lock — never mutated in place.
     _user_env_cache: Dict[str, Dict[str, str]] = {}
+    _cache_lock = threading.RLock()
     
     # Mapping from legacy variable names to (broker_type, field_name)
     # This allows backward compatibility while using new format
@@ -57,6 +111,29 @@ class UserEnvManager:
         'ICICI_SESSION_TOKEN': ('icici', 'SESSION_TOKEN'),
     }
     
+    @staticmethod
+    def _atomic_write_lines(env_file: str, lines) -> None:
+        """Replace the env file in one step (temp file, fsync, os.replace).
+
+        The file holds the broker credentials and every per-account flag, and
+        it is read without a lock by the algo and listener threads. Truncating
+        it in place gives those readers a prefix; replacing it means a reader
+        sees either the old file or the new one.
+        """
+        tmp = f'{env_file}.{os.getpid()}.tmp'
+        try:
+            with open(tmp, 'w') as f:
+                f.writelines(lines)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, env_file)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+
     @staticmethod
     def get_user_env_file(username: str) -> str:
         """Get the path to user-specific .env file.
@@ -102,23 +179,8 @@ class UserEnvManager:
             load_dotenv(env_file, override=True)
             logger.info(f"✓ Loaded environment from {username}.env")
             
-            # Clear cache for this user
-            UserEnvManager._user_env_cache[username] = {}
-            
             # Parse file to get all vars
-            env_vars = {}
-            with open(env_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        # Strip inline comments (e.g. KEY=VALUE # comment -> VALUE)
-                        raw_val = value.strip()
-                        if ' #' in raw_val:
-                            raw_val = raw_val.split(' #')[0].rstrip()
-                        env_vars[key.strip()] = raw_val
+            env_vars = _read_env_file(env_file) or {}
             
             # Cache all vars
             UserEnvManager._user_env_cache[username] = env_vars
@@ -214,10 +276,8 @@ class UserEnvManager:
                 return default
             
             # Check cache first
-            if username not in UserEnvManager._user_env_cache:
-                UserEnvManager._user_env_cache[username] = {}
-            
-            cached = UserEnvManager._user_env_cache[username]
+            with UserEnvManager._cache_lock:
+                cached = UserEnvManager._user_env_cache.get(username) or {}
             
             # If cache has data (check for non-empty dict), check for the variable
             if cached:  # Non-empty dict
@@ -242,23 +302,17 @@ class UserEnvManager:
             if not os.path.exists(env_file):
                 return default
             
-            # Parse .env file
-            env_vars = {}
-            with open(env_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        # Strip inline comments (e.g. KEY=VALUE # comment -> VALUE)
-                        raw_val = value.strip()
-                        if ' #' in raw_val:
-                            raw_val = raw_val.split(' #')[0].rstrip()
-                        env_vars[key.strip()] = raw_val
+            # Parse .env file. A read the writer was in the middle of is a
+            # prefix, not an answer: it is never cached, because a cached
+            # prefix reads as "that flag is not set" for the life of the
+            # process.
+            env_vars = _read_env_file(env_file)
+            if env_vars is None:
+                return default
             
             # Cache all vars for this user
-            UserEnvManager._user_env_cache[username] = env_vars
+            with UserEnvManager._cache_lock:
+                UserEnvManager._user_env_cache[username] = env_vars
             
             # Direct lookup first
             if var_name in env_vars:
@@ -381,13 +435,13 @@ class UserEnvManager:
             if not found:
                 updated_lines.append(f'{actual_var_name}={value}\n')
             
-            # Write back
-            with open(env_file, 'w') as f:
-                f.writelines(updated_lines)
+            # Write back, atomically: a reader that catches a truncated
+            # env file caches the prefix and silently loses every flag
+            # below the cut (see _read_env_file).
+            UserEnvManager._atomic_write_lines(env_file, updated_lines)
             
             # Invalidate cache
-            if username in UserEnvManager._user_env_cache:
-                del UserEnvManager._user_env_cache[username]
+            UserEnvManager.clear_cache(username)
             
             logger.info(f"✓ Saved {actual_var_name} to {username}.env")
             return True
@@ -443,14 +497,12 @@ class UserEnvManager:
                     updated_lines.append(f'{var_name}={value}\n')
                     logger.info(f"save_user_vars: Added new var {var_name}")
             
-            # Write back
-            with open(env_file, 'w') as f:
-                f.writelines(updated_lines)
+            # Write back, atomically — see save_user_var.
+            UserEnvManager._atomic_write_lines(env_file, updated_lines)
             logger.info(f"save_user_vars: Wrote {len(updated_lines)} lines to {env_file}")
             
             # Invalidate cache
-            if username in UserEnvManager._user_env_cache:
-                del UserEnvManager._user_env_cache[username]
+            UserEnvManager.clear_cache(username)
             
             logger.info(f"✓ Saved {len(vars_dict)} variables to {username}.env")
             return True
@@ -476,29 +528,19 @@ class UserEnvManager:
                 return {}
             
             # Check cache first
-            if username in UserEnvManager._user_env_cache:
-                if UserEnvManager._user_env_cache[username]:
-                    return UserEnvManager._user_env_cache[username]
-            else:
-                UserEnvManager._user_env_cache[username] = {}
+            with UserEnvManager._cache_lock:
+                cached = UserEnvManager._user_env_cache.get(username)
+            if cached:
+                return cached
             
-            # Parse .env file
-            env_vars = {}
-            with open(env_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        # Strip inline comments (e.g. KEY=VALUE # comment -> VALUE)
-                        raw_val = value.strip()
-                        if ' #' in raw_val:
-                            raw_val = raw_val.split(' #')[0].rstrip()
-                        env_vars[key.strip()] = raw_val
+            # Parse .env file — never caching a torn read (see _read_env_file)
+            env_vars = _read_env_file(env_file)
+            if env_vars is None:
+                return {}
             
             # Cache it
-            UserEnvManager._user_env_cache[username] = env_vars
+            with UserEnvManager._cache_lock:
+                UserEnvManager._user_env_cache[username] = env_vars
             return env_vars
             
         except Exception as e:
@@ -512,10 +554,10 @@ class UserEnvManager:
         Args:
             username: Specific user to clear, or None to clear all
         """
-        if username:
-            if username in UserEnvManager._user_env_cache:
-                del UserEnvManager._user_env_cache[username]
-                logger.info(f"Cleared cache for {username}")
-        else:
-            UserEnvManager._user_env_cache.clear()
-            logger.info("Cleared all cache")
+        with UserEnvManager._cache_lock:
+            if username:
+                if UserEnvManager._user_env_cache.pop(username, None) is not None:
+                    logger.info(f"Cleared cache for {username}")
+            else:
+                UserEnvManager._user_env_cache.clear()
+                logger.info("Cleared all cache")

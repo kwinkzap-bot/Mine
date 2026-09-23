@@ -782,7 +782,7 @@ def exit_all():
         # over a position that has just been squared off. Its legs are 'op'
         # records too, so the exit above already flattened them.
         result['tg_calls_stopped'] = stop_all_calls(_user(), dict(session),
-                                                    reason='Exit all')
+                                                    reason='Exit all', exit_result=result)
         # Always 200: a partial exit is a real outcome, and the page reads the
         # per-broker summary either way rather than a status code.
         return jsonify(result)
@@ -822,6 +822,29 @@ def tg_calls_status():
                         'calls': calls})
     except Exception as e:
         return _fail(e, 'tg_calls_status')
+
+
+@order_placement_bp.route('/tg-calls/<call_id>/target', methods=['PUT'])
+@require_user_auth
+def tg_call_set_target(call_id: str):
+    """Move one leg's watched target by hand.
+
+    The stop is a real order, so the strip's price box moves it with a broker
+    modify. A target rests nowhere — it is a level the engine watches — so it
+    has no row on the strip and no order to modify; this is the way to move
+    it. Body: ``{"slot": "1" | "1:T3", "target": 120.5}``.
+    """
+    from trading_app.app.order_placement.tg_call_engine import note_manual_target
+
+    try:
+        data = request.get_json(silent=True) or {}
+        slot = data.get('slot') or data.get('instance')
+        if slot in (None, ''):
+            return jsonify({'success': False, 'error': 'Which leg? Pass "slot".'}), 400
+        result = note_manual_target(_user(), call_id, slot, data.get('target'))
+        return jsonify(result), (200 if result.get('success') else 400)
+    except Exception as e:
+        return _fail(e, 'tg_call_set_target')
 
 
 @order_placement_bp.route('/tg-calls/history', methods=['GET'])

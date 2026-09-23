@@ -582,6 +582,191 @@ def test_exit_all_stands_every_call_down(broker, rows, env):
     assert engine.stop_all_calls(USER, {}) == 1
     assert call(cid)['phase'] == 'CANCELLED'
     assert TgCallStore.get_active() == []
+    assert slot(cid)['exit_reason'] == 'exit-all'
+
+
+def test_a_call_is_not_skipped_on_a_stale_read_of_the_env(broker, rows, env, monkeypatch,
+                                                           alerts):
+    """2026-09-21/22: four live calls were skipped with "no broker has
+    BROKER_N_TG_ACTIVE=true" because a broker login had rewritten the env
+    file while a reader was parsing it, and the prefix sat in the cache. The
+    file is the truth, so a call that finds no broker asks it again before
+    giving up."""
+    cleared = []
+
+    def clear_cache(username=None):
+        cleared.append(username)
+        env.update({'BROKER_1_TG_ACTIVE': 'true', 'BROKER_1_TG_LOTS': '2'})
+
+    monkeypatch.setattr('trading_app.app.utils.user_env.UserEnvManager.clear_cache',
+                        staticmethod(clear_cache))
+    # What the poisoned cache said: the flags below the cut are simply gone.
+    env.pop('BROKER_1_TG_ACTIVE'); env.pop('BROKER_1_TG_LOTS')
+
+    result = take()
+    assert result['success'], result
+    assert cleared == [USER]
+    assert [s['instance'] for s in broker.of('stop')] == [1, 1]
+
+
+def test_a_call_with_genuinely_no_broker_is_still_skipped(broker, rows, env, monkeypatch, alerts):
+    """The re-read is a second opinion, not a way to trade anyway."""
+    monkeypatch.setattr('trading_app.app.utils.user_env.UserEnvManager.clear_cache',
+                        staticmethod(lambda username=None: None))
+    env['BROKER_1_TG_ACTIVE'] = 'false'
+    result = take()
+    assert result['skipped'] and 'no broker has' in result['error']
+    assert broker.calls == []
+
+
+# ── moving a target by hand ──────────────────────────────────────────────
+# The stop is an order, so the strip's price box moves it. A target rests
+# nowhere, so this is the only way to move one.
+
+def test_a_hand_set_target_is_what_the_leg_is_watched_against(broker, rows, env):
+    cid = taken(broker, rows)
+    r = engine.note_manual_target(USER, cid, '1', 90.0)
+    assert r['success'] and r['was'] == 95.0 and r['target'] == 90.0
+    assert slot(cid)['target_level'] == 90.0 and slot(cid)['target_source'] == 'manual'
+    assert call(cid)['target'] == 95.0                  # the call's plan is untouched
+    assert slot(cid, tg_leg='T3').get('target_level') is None
+
+    tick(ltp=90.0)                                      # the new level fires
+    assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'T1 hit'
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'    # the other leg is untouched
+
+
+def test_the_t3_legs_target_moves_on_its_own(broker, rows, env):
+    cid = taken(broker, rows)
+    assert engine.note_manual_target(USER, cid, '1:T3', 105.0)['success']
+    assert engine.slot_target(call(cid), slot(cid, tg_leg='T3')) == 105.0
+    assert engine.slot_target(call(cid), slot(cid)) == 95.0
+    tick(ltp=105.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T3 hit'
+
+
+def test_a_target_the_market_is_already_through_is_refused(broker, rows, env):
+    cid = taken(broker, rows)
+    op.option_ltp = lambda *a, **k: 92.0
+    r = engine.note_manual_target(USER, cid, '1', 91.0)
+    assert not r['success'] and 'already at 92.0' in r['error']
+    assert slot(cid).get('target_level') is None       # nothing written
+
+
+@pytest.mark.parametrize('level, hint', [
+    (0, 'above zero'),
+    (-5, 'above zero'),
+    (60.0, 'not above the entry'),
+    (81.0, 'not above the entry'),
+    ('abc', 'must be a number'),
+])
+def test_a_target_that_is_not_a_target_is_refused(broker, rows, env, level, hint):
+    cid = taken(broker, rows)
+    r = engine.note_manual_target(USER, cid, '1', level)
+    assert not r['success'] and hint in r['error'], r
+
+
+def test_a_target_below_a_trailed_stop_is_refused(broker, rows, env):
+    """Once the stop is trailed above the entry, it is the stop — not the
+    entry — that a target has to clear."""
+    cid = taken(broker, rows)
+    engine.note_manual_edit(sl_row(rows, cid), 88.0)     # trailed into profit
+    r = engine.note_manual_target(USER, cid, '1', 86.0)
+    assert not r['success'] and 'at or below the stop 88.0' in r['error']
+    assert engine.note_manual_target(USER, cid, '1', 92.0)['success']
+
+
+def test_a_target_cannot_be_moved_on_a_leg_that_is_out(broker, rows, env):
+    cid = taken(broker, rows)
+    tick(ltp=95.0)                                      # the T1 leg is out
+    r = engine.note_manual_target(USER, cid, '1', 120.0)
+    assert not r['success'] and 'already out' in r['error']
+    assert engine.note_manual_target(USER, 'tg-nope', '1', 120.0)['error'] == 'No such call'
+    assert not engine.note_manual_target(USER, cid, '9', 120.0)['success']
+
+
+def test_a_channel_target_edit_clears_a_hand_set_one(broker, rows, env):
+    cid = taken(broker, rows)
+    engine.note_manual_target(USER, cid, '1', 90.0)
+    r = edited(cid, targets=[97.0, 101.0, 110.0])
+    assert slot(cid)['target_level'] is None and slot(cid)['target_source'] == 'channel'
+    assert engine.slot_target(call(cid), slot(cid)) == 97.0
+    assert any('hand-set target cleared' in c for c in r['changes'])
+
+
+def test_a_hand_set_target_survives_an_unrelated_edit(broker, rows, env):
+    cid = taken(broker, rows)
+    engine.note_manual_target(USER, cid, '1', 90.0)
+    edited(cid, stop=70.0)                              # the stop moved, not the targets
+    assert slot(cid)['target_level'] == 90.0
+
+
+# ── Exit all ─────────────────────────────────────────────────────────────
+
+def _exit_result(instance=1, qty=2 * LOT, errors=None):
+    """What route_scoped_exit hands back: what it sold, and what it could not."""
+    return {'success': not errors, 'cancelled_orders': 2, 'exited_positions': 1,
+            'summary': [{'broker': 'zerodha', 'instance': instance,
+                         'cancelled_orders': 2, 'exited_positions': 1,
+                         'errors': errors or []}],
+            'errors': errors or [],
+            'exits': [{'broker': 'zerodha', 'instance': instance, 'symbol': 'NIFTY',
+                       'strike': 23150, 'option_type': 'CE', 'side': 'SELL',
+                       'quantity': qty, 'order_ids': ['x-exit']}]}
+
+
+def test_exit_all_books_each_leg_on_what_the_page_actually_sold(broker, rows, env):
+    """The page sells the net of both legs in one order. Without a record of
+    it the fill can never be read back and both legs book at None."""
+    cid = taken(broker, rows)                           # 2 + 2 lots in at 81.5
+    assert engine.stop_all_calls(USER, {}, reason='Exit all',
+                                 exit_result=_exit_result(qty=4 * LOT)) == 1
+    t1 = exit_leg(rows, cid)
+    t3 = exit_leg(rows, cid, tg_leg='T3')
+    assert t1 and t3 and t1['id'] != t3['id']
+    assert t1['quantity'] == t3['quantity'] == 2 * LOT  # the net split across the legs
+    assert t1['leg'] == 'EXIT' and t1['source'] == 'telegram'
+
+    for r in (t1, t3):
+        r.update({'status': 'EXECUTED', 'entry_price': 88.0})
+    tick(ltp=88.0)
+    booked = engine.history()
+    assert len(booked) == 2
+    assert all(r['complete'] is True and r['exit_price'] == 88.0 for r in booked)
+    assert all(r['pnl_per_lot'] == round(6.5 * LOT, 2) for r in booked)
+    assert TgCallStore.get_unbooked() == []
+
+
+def test_a_leg_the_broker_would_not_square_off_stays_live_and_managed(broker, rows, env, alerts):
+    """2026-09-21: an account was short of margin, its exit failed, and the
+    leg was marked FLAT anyway — a real position with its stop cancelled and
+    nothing watching it."""
+    cid = taken(broker, rows)
+    stopped = engine.stop_all_calls(USER, {}, reason='Exit all',
+                                    exit_result=_exit_result(errors=['margin shortfall']))
+    assert stopped == 0                                 # the call is not finished
+    assert slot(cid)['stage'] == 'LIVE' and slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    assert call(cid)['phase'] == 'ENTRY_PENDING'
+    assert any('still held' in a['title'] for a in alerts)
+
+    # The page cancelled the stops on its way out; the tick puts them back
+    # and keeps watching the target.
+    for tg_leg in ('T1', 'T3'):
+        leg(rows, cid, 'SL', tg_leg=tg_leg)['status'] = 'CANCELLED'
+        slot_ = slot(cid, tg_leg=tg_leg)
+        TgCallStore.update_broker(cid, engine.slot_key(1, tg_leg), {'legs': {}})
+    tick(ltp=80.0)
+    assert broker.of('stop')[-1]['trigger'] == 65.0
+    tick(ltp=95.0)
+    assert slot(cid)['exit_reason'] == 'T1 hit'
+
+
+def test_exit_all_with_a_clean_result_stands_every_call_down(broker, rows, env):
+    cid = taken(broker, rows)
+    assert engine.stop_all_calls(USER, {}, reason='Exit all',
+                                 exit_result=_exit_result(qty=4 * LOT)) == 1
+    assert call(cid)['phase'] == 'CANCELLED'
+    assert TgCallStore.get_active() == []
 
 
 # ── the message was deleted ──────────────────────────────────────────────

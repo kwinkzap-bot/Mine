@@ -82,7 +82,7 @@ PYTHONPATH=src ../.venv/bin/python -m pytest -q
 `trading_app` is not pip-installed; the rootdir `conftest.py` puts `src/` on
 the path.
 
-`tests/route_inventory.txt` is the golden URL surface — 213 rules with their
+`tests/route_inventory.txt` is the golden URL surface — 231 rules with their
 endpoints, methods and `strict_slashes`. **If a refactor commit's `git diff`
 touches it, the public API moved.** Regenerate only deliberately, with
 `python tests/regenerate_route_inventory.py`, in its own commit.
@@ -157,14 +157,18 @@ every record carries `tg_leg`. Four things are load-bearing:
   re-takes; after a fill the position is kept on the new SL/T1 and alerted. A
   chat line edited *into* a call fires nothing. Follow-ups wait up to 20 s for
   a call whose entry is still being placed.
-* **A stop moved by hand on the strip is that leg's level.** The price
-  box's PUT calls `note_manual_edit`, which finds the slot owning that SL
-  record and writes `stop_level` on it; `slot_stop()` (hand-set level, else
-  the call's `stop`) is what the tick re-places, retries and breach-guards
-  against — it never moves the order back to the channel's number. The
-  other leg's stop is untouched. A later channel edit clears the override.
-  Editing a resting ENTRY row moves the call's entry/limit the same way
-  (the sibling entry order is not moved).
+* **A stop moved by hand on the strip is that leg's level, and so is a
+  target moved on the card.** The price box's PUT calls `note_manual_edit`,
+  which finds the slot owning that SL record and writes `stop_level` on it;
+  `slot_stop()` (hand-set level, else the call's `stop`) is what the tick
+  re-places, retries and breach-guards against — it never moves the order
+  back to the channel's number. A target is not an order, so it has no strip
+  row: the card's own box PUTs `/tg-calls/<id>/target` →
+  `note_manual_target` → `target_level` on that leg, which `slot_target()`
+  prefers (refused if it is below the stop/entry or already through the
+  market). Both are per leg — the other leg is untouched — and a later
+  channel edit clears both overrides. Editing a resting ENTRY row moves the
+  call's entry/limit the same way (the sibling entry order is not moved).
 * **A call the market has run past is skipped, not chased.** A stop BUY
   must sit above the LTP; if it does not, nothing is placed and a
   `tg_call_skipped` alert says why. Same for SELL calls, non-index
@@ -180,6 +184,16 @@ every record carries `tg_leg`. Four things are load-bearing:
 * **With `TG_CALLS_ACTIVE=false` the listener still runs** and raises
   `tg_call_skipped` for every call it would have taken — that is the dry run
   that proves the parse path on real messages before the first order.
+
+**Exit all** (`stop_all_calls`) is handed `route_scoped_exit`'s own result,
+and reads two things from it. A leg the broker **refused** to square off
+(margin, on 2026-09-21) stays `LIVE` and keeps being managed — the page
+cancelled its stop on the way out and the tick puts it back — because a
+refusal means the position is still held; it alerts `tg_call_order_failed`
+and the call is not stood down. For the legs that did exit, the market
+orders the page sent are written back as `leg='EXIT'` records (split across
+the legs, oldest first), so the sweep reads the fill and the ledger books a
+real price instead of `None`.
 
 Every leg is a `MineOrderStore` record with `strategy='op'`,
 `source='telegram'`, `signal_id='tg-…'`, `leg` in `ENTRY|SL|EXIT`, so the
@@ -200,6 +214,36 @@ until every flat slot is booked (`TgCallStore.get_unbooked`). The 📒 Auto P&L
 button on /orderplacement reads `GET /api/order-placement/tg-calls/history`.
 Tests: `tests/test_tg_call_engine.py`, `test_tg_calls_listener.py`,
 `test_tg_call_store.py`.
+
+## The env file is read by threads and rewritten whole
+
+`env/<user>.env` holds the broker credentials and every per-account flag.
+Every broker login and the Algo tabs' toggles rewrite it in full, while the
+algo threads, the Telegram listener and every request read it through
+`UserEnvManager`'s process-wide cache.
+
+Until 2026-09-23 the write truncated in place and the read was an ordinary
+`open()`, so a reader that arrived mid-write parsed a **prefix** and cached
+it as the whole file — every flag below the cut then read as unset for the
+life of the process, until an unrelated save happened to clear the cache.
+That silently skipped four live Telegram calls with "no broker has
+`BROKER_N_TG_ACTIVE=true`" on 2026-09-21 (12:08, 13:06) and 09-22 (09:18,
+09:21): the prefix reached `BROKER_1_TYPE` but stopped before
+`BROKER_1_TG_ACTIVE`. Now:
+
+* `_atomic_write_lines` replaces the file (temp, fsync, `os.replace`), so a
+  reader sees either the old file or the new one, never half of one;
+* `_read_env_file` takes the size before and after and only trusts a read
+  that accounts for the whole file — three failures return `None` and the
+  caller **caches nothing** rather than caching a prefix;
+* the cache is only ever replaced wholesale under `_cache_lock`;
+* `take_call` treats "no eligible broker" as suspect: it clears the cache,
+  re-reads the file and only then skips the call.
+
+The cache is still only invalidated by a save, so a **hand edit** of
+`env/Mine.env` needs a restart to be picked up reliably.
+
+Tests: `tests/test_user_env_reads.py`.
 
 ## CPR Logic page — option legs
 

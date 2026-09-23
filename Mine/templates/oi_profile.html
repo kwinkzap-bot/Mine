@@ -517,6 +517,12 @@
             </div>
             <div id="oipRSCombinedChart"></div>
         </div>
+        <!-- Drag handle — pulls the Round Strike chart taller or shorter. Height
+             goes through oipRSSetUserChartHeight (oi_profile_round_strike.js)
+             because that chart adds an optional ΔOI pane on top of whatever base
+             the user picks; the wired-up listener lives in oi_profile_init.js. -->
+        <div class="oip-resize-grip" data-resize-target="oipRSCombinedChartWrap"
+             title="Drag to resize the Round Strike chart · double-click to reset"></div>
     </div>
 
         <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
@@ -695,73 +701,27 @@
                                         <input type="checkbox" id="oipShowEma50Opt" checked><span
                                             style="color:#ef4444">EMA 50</span>
                                     </label>
-                                    <div class="oip-ind-section-title">Fixed Chart Lines</div>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowFixedCeAvg" checked><span
-                                            style="color:#16a34a">CE Avg</span>
-                                        <span class="oip-line-props">
-                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCeAvg"
-                                                title="Line color">
-                                            <select class="oip-line-width-sel" data-width-key="fixedCeAvg"
-                                                title="Line width">
-                                                <option value="1">1px</option>
-                                                <option value="2">2px</option>
-                                                <option value="3">3px</option>
-                                                <option value="4">4px</option>
-                                            </select>
-                                            <select class="oip-line-style-sel" data-style-key="fixedCeAvg"
-                                                title="Line style">
-                                                <option value="0">Solid</option>
-                                                <option value="1">Dotted</option>
-                                                <option value="2">Dashed</option>
-                                            </select>
-                                        </span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowFixedPeAvg" checked><span
-                                            style="color:#7c3aed">PE Avg</span>
-                                        <span class="oip-line-props">
-                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedPeAvg"
-                                                title="Line color">
-                                            <select class="oip-line-width-sel" data-width-key="fixedPeAvg"
-                                                title="Line width">
-                                                <option value="1">1px</option>
-                                                <option value="2">2px</option>
-                                                <option value="3">3px</option>
-                                                <option value="4">4px</option>
-                                            </select>
-                                            <select class="oip-line-style-sel" data-style-key="fixedPeAvg"
-                                                title="Line style">
-                                                <option value="0">Solid</option>
-                                                <option value="1">Dotted</option>
-                                                <option value="2">Dashed</option>
-                                            </select>
-                                        </span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowFixedCePeAvg" checked><span
-                                            style="color:#000000">CE & PE Avg</span>
-                                        <span class="oip-line-props">
-                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCePeAvg"
-                                                title="Line color">
-                                            <select class="oip-line-width-sel" data-width-key="fixedCePeAvg"
-                                                title="Line width">
-                                                <option value="1">1px</option>
-                                                <option value="2">2px</option>
-                                                <option value="3">3px</option>
-                                                <option value="4">4px</option>
-                                            </select>
-                                            <select class="oip-line-style-sel" data-style-key="fixedCePeAvg"
-                                                title="Line style">
-                                                <option value="0">Solid</option>
-                                                <option value="1">Dotted</option>
-                                                <option value="2">Dashed</option>
-                                            </select>
-                                        </span>
-                                    </label>
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- Strike-selection logic — explains how each Opt Prem mode
+                         (Prem. Str. / Custom / CE & PE) picks its CE/PE strike.
+                         Static text in the modal near the bottom of the page,
+                         written from the actual selection code (oipApplyStrikeMode
+                         here and oi_profile_premium_strikes in app/routes/api.py). -->
+                    <div class="oip-prem-group">
+                        <button id="oipStrikeLogicBtn" class="oip-btn" type="button"
+                            title="How each strike mode picks its CE/PE strike">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="9" />
+                                <line x1="12" y1="11" x2="12" y2="16.5" />
+                                <circle cx="12" cy="7.5" r="0.5" fill="currentColor" stroke="none" />
+                            </svg>
+                            Strike Logic
+                        </button>
                     </div>
 
                     <div class="oip-prem-sep"></div>
@@ -827,50 +787,8 @@
 
                     <div class="oip-prem-sep"></div>
 
-                    <!-- Order controls -->
-                    <div class="oip-prem-group">
-                        <select id="oipOrderMode" class="oip-select oip-select--xs" title="Order Mode">
-                            <option value="broker" selected>Broker</option>
-                            <option value="mine">Mine</option>
-                        </select>
-                        <!-- MKT / LMT / STOP is explicit rather than inferred from whether
-                             the price box is filled. STOP is the order that waits for the
-                             premium to RISE to the price (a BUY limit above the market is
-                             marketable and fills instantly, so a limit cannot express it). -->
-                        <select id="oipOrderType" class="oip-select oip-select--xs" title="Order Type">
-                            <option value="MARKET" selected>MKT</option>
-                            <option value="LIMIT">LMT</option>
-                            <option value="STOP">STOP</option>
-                        </select>
-                        <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Price ₹"
-                            step="0.05" title="Limit / trigger price">
-                        <div class="oip-order-side-group oip-order-side-group--ce">
-                            <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
-                                CE</button>
-                            <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S
-                                CE</button>
-                            <button id="oipSLCE" class="oip-order-btn sl-btn" disabled title="Place SL order for CE">SL
-                                CE</button>
-                        </div>
-                        <div class="oip-order-side-group oip-order-side-group--pe">
-                            <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B
-                                PE</button>
-                            <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S
-                                PE</button>
-                            <button id="oipSLPE" class="oip-order-btn sl-btn" disabled title="Place SL order for PE">SL
-                                PE</button>
-                        </div>
-                        <div class="oip-prem-sep"></div>
-                        <button id="oipExitAll" class="oip-order-btn exit-all"
-                            title="Cancel this screen's resting orders and square off the positions it placed">EXIT</button>
-                    </div>
-
                 </div>
             </div>
-
-            <!-- Same strip as the Round Strike block above — one row of its own,
-                 below the toolbar rather than inside it. -->
-            <div class="oip-open-orders is-empty"></div>
         </div>
 
         <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
@@ -882,24 +800,35 @@
             </div>
             <div id="oipIntrinsicChart"></div>
         </div>
+        <!-- Drag handle — pulls the Combined chart above taller or shorter. -->
+        <div class="oip-resize-grip" data-resize-target="oipIntrinsicChartWrap"
+             title="Drag to resize the Combined chart · double-click to reset"></div>
 
         <div class="oip-charts-row">
             <!-- CE Individual Chart -->
-            <div class="oip-chart-wrap" id="oipCEChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span><span
-                            id="oipLegendCEOnly">--</span></div>
+            <div class="oip-chart-col">
+                <div class="oip-chart-wrap" id="oipCEChartWrap">
+                    <div class="oip-chart-legend">
+                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span><span
+                                id="oipLegendCEOnly">--</span></div>
+                    </div>
+                    <div id="oipCEChart"></div>
                 </div>
-                <div id="oipCEChart"></div>
+                <div class="oip-resize-grip" data-resize-target="oipCEChartWrap"
+                     title="Drag to resize the CE chart · double-click to reset"></div>
             </div>
 
             <!-- PE Individual Chart -->
-            <div class="oip-chart-wrap" id="oipPEChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span><span
-                            id="oipLegendPEOnly">--</span></div>
+            <div class="oip-chart-col">
+                <div class="oip-chart-wrap" id="oipPEChartWrap">
+                    <div class="oip-chart-legend">
+                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span><span
+                                id="oipLegendPEOnly">--</span></div>
+                    </div>
+                    <div id="oipPEChart"></div>
                 </div>
-                <div id="oipPEChart"></div>
+                <div class="oip-resize-grip" data-resize-target="oipPEChartWrap"
+                     title="Drag to resize the PE chart · double-click to reset"></div>
             </div>
         </div>
 
@@ -1136,6 +1065,44 @@
             <canvas id="oipOICanvas"></canvas>
             <div id="oipTooltip" class="oip-tooltip hidden"></div>
         </div>
+        <!-- Drag handle — pulls the OI Profile chart taller or shorter. -->
+        <div class="oip-resize-grip" data-resize-target="oipChartWrap"
+             title="Drag to resize the OI Profile chart · double-click to reset"></div>
+    </div>
+
+    <!-- Strike Logic popup modal — explains how each Opt Prem strike mode
+         (Prem. Str. / Custom / CE & PE) picks its CE/PE strike. Static text,
+         reuses the OI Bar modal's chrome in its smaller --info variant since
+         this is prose, not an iframe. Written from the actual selection code:
+         oipApplyStrikeMode (oi_profile.js) and oi_profile_premium_strikes
+         (app/routes/api.py) — keep this in step if either changes. -->
+    <div id="oipStrikeLogicModal" class="oip-modal-overlay hidden">
+        <div class="oip-modal-box oip-modal-box--info">
+            <div class="oip-modal-hdr">
+                <span class="oip-modal-title">Strike Selection Logic</span>
+                <button id="oipStrikeLogicModalClose" class="oip-modal-close" type="button" title="Close">&times;</button>
+            </div>
+            <div class="oip-modal-body oip-modal-body--text">
+                <h4>Prem. Str. (default)</h4>
+                <p>Automatic, computed on the server from the <strong>previous day's</strong> closes only — today's live prices never take part in picking the strike.</p>
+                <p>1. <strong>ATM</strong> = the index's previous-day close, rounded to the strike step (50 on NIFTY).</p>
+                <p>2. <strong>Base ("small-diff") strike</strong> = the strike within ATM &plusmn; 4 steps whose CE and PE previous-day closes sit closest together.</p>
+                <p>3. <strong>Common premium</strong> = the average of that base strike's CE and PE previous-day close.</p>
+                <p>4. <strong>Offset</strong> = the common premium rounded to the nearest step (never less than one step).</p>
+                <p>5. <strong>CE strike</strong> = base &minus; offset, <strong>PE strike</strong> = base + offset — symmetric around the base, for a total range of 2&times;offset.</p>
+                <div class="oip-strike-example">
+                    Example &mdash; NIFTY close 24614: ATM 24600 &rarr; base 24500 (CE 153 / PE 143) &rarr; common premium 148 &rarr; offset 150 &rarr;
+                    <strong>CE 24350 / PE 24650</strong> (300-point range).
+                </div>
+                <p>The toolbar's <strong>extra</strong> dropdown (0&ndash;5) widens the offset by N &times; 50 per leg, split evenly across both legs, on top of the automatic offset above.</p>
+
+                <h4>Custom</h4>
+                <p>Manual. One shared strike from the dropdown is used as <strong>both</strong> the CE and PE leg — a straddle at a single strike. Nothing is computed; the strike is whatever you pick.</p>
+
+                <h4>CE &amp; PE</h4>
+                <p>Manual. Independent CE and PE dropdowns — pick any CE strike and any PE strike; the two are not required to be symmetric or otherwise related.</p>
+            </div>
+        </div>
     </div>
 
     <!-- OI Bar popup modal -->
@@ -1149,44 +1116,6 @@
                 <iframe id="oipOIBarFrame" class="oip-modal-iframe" data-src="/open-interest?embed=1"
                     title="Open Interest"></iframe>
             </div>
-        </div>
-    </div>
-
-    <!-- Fixed 24000 strike / monthly expiry combined chart — independent of the
-         ATM-relative (Opt Prem) and open-round (Round Strike) strike selection
-         used by the blocks above; moved to the bottom of the page. -->
-    <div class="oip-container" style="margin-top: 10px;">
-        <div class="oip-header oip-header--compact">
-            <div class="oip-hdr-top">
-                <div class="oip-title oip-title--sm">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="4" width="18" height="18" rx="2" />
-                        <path d="M3 10h18" />
-                        <path d="M8 2v4" />
-                        <path d="M16 2v4" />
-                    </svg>
-                    <span id="oipFixedStrikeTitle">Fixed 24000 Monthly</span>
-                </div>
-                <div class="oip-prem-group">
-                    <select id="oipFixedStrikeDropdown" class="oip-select oip-select--xs"
-                        title="Fixed monthly strike"></select>
-                    <!-- Strike change only — data for this chart arrives with
-                         everything else on the page's single Refresh All button. -->
-                    <button id="oipFixedStrikeUpdateBtn" class="oip-btn" type="button"
-                        title="Apply and save this strike as the default">Update</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="oip-chart-wrap" id="oipFixed24000ChartWrap">
-            <div class="oip-chart-legend">
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
-                        id="oipLegendFixedCE">24000 CE (Monthly)</span></div>
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
-                        id="oipLegendFixedPE">24000 PE (Monthly)</span></div>
-            </div>
-            <div id="oipFixed24000Chart"></div>
         </div>
     </div>
 

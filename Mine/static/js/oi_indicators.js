@@ -46,7 +46,6 @@ const _OIP_IND_IDS = [
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
     'oipShow5mClose', 'oipShowOpt5mClose',
     'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt', 'oipShowVolumeOpt', 'oipShowBnfVolumeOpt',
-    'oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg',
     'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'
 ];
 
@@ -119,7 +118,6 @@ const _OIP_LINE_DEFAULTS = {
     box30s: { color: '#FFC800', width: 1, opacity: 0.09 }, box5m: { color: '#2dd2ff', width: 1, opacity: 0.09 },
     box1m: { color: '#FF6B6B', width: 1, opacity: 0.09 },
     mondayBox: { color: '#34ed0b', width: 1 },
-    fixedCeAvg: { color: '#16a34a', width: 1 }, fixedPeAvg: { color: '#7c3aed', width: 1 }, fixedCePeAvg: { color: '#000000', width: 1 },
     fiveMClose: { color: '#fbbf24', width: 1 }, fiveMCloseOpt: { color: '#fbbf24', width: 1 },
     volUp: { color: '#1b9981' }, volDn: { color: '#f23645' },
     // The single colour every bar falls back to with Vol Direction Color off
@@ -786,9 +784,6 @@ function _oipLineStyleSeriesMap() {
         ema50:    [oipEma50Series, oipCEEma50Series, oipPEEma50Series],
         ema100:   [oipEma100Series],
         ema200:   [oipEma200Series],
-        fixedCeAvg:   [_oipOpt(() => oipFixedCeHL2Series)],
-        fixedPeAvg:   [_oipOpt(() => oipFixedPeHL2Series)],
-        fixedCePeAvg: [_oipOpt(() => oipFixedCloseAvgSeries)],
     };
 }
 
@@ -2073,12 +2068,6 @@ function oipApplyOptionZOrder() {
          _oipOpt(() => oipPvwapIntSeries), _oipOpt(() => oipPvwapIntPeSeries)],
         []
     );
-    _oipLayerPane(
-        [_oipOpt(() => oipFixedCeSeries), _oipOpt(() => oipFixedPeSeries)],
-        [_oipOpt(() => oipFixedCeHL2Series), _oipOpt(() => oipFixedPeHL2Series),
-         _oipOpt(() => oipFixedCloseAvgSeries)],
-        []
-    );
 }
 
 /* ── Indicators popup ─────────────────────────────────────── */
@@ -2203,13 +2192,6 @@ function oipInitIndicatorsPopup(storageKey) {
     ['oipShowVolumeOpt', 'oipShowBnfVolumeOpt'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             if (typeof oipSyncOptVolumeVisibility === 'function') oipSyncOptVolumeVisibility();
-        });
-    });
-
-    // Fixed 24000-strike chart's own reference lines — each has its own checkbox.
-    ['oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg'].forEach(id => {
-        document.getElementById(id)?.addEventListener('change', () => {
-            if (typeof oipSyncFixedChartVisibility === 'function') oipSyncFixedChartVisibility();
         });
     });
 

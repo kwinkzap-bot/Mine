@@ -351,17 +351,23 @@ const OIP_RS_DEFAULT_CHART_HEIGHT =
         ? OIP_RS_REPLAY_CHART_HEIGHT
         : OIP_RS_PROFILE_CHART_HEIGHT;
 
-// Replay lets the user drag this block taller or shorter (the grip under it,
-// see oipReplayInitResizers in oi_replay.js). What they drag is the WHOLE
-// wrapper, so the saved figure is the total and the base is that minus the
-// ΔOI pane if one is showing — otherwise toggling the pane on would grow the
-// block past where they put it. Null means "use the default". OI Profile
-// has no grip and never reads this.
-const OIP_RS_USER_CHART_H_KEY = 'oipReplay_rsChartH_v1';
+// Both pages now let the user drag this block taller or shorter (the grip
+// under it — oipReplayInitResizers in oi_replay.js on Replay, oipProfileInitResizers
+// in oi_profile_init.js on OI Profile). What they drag is the WHOLE wrapper, so
+// the saved figure is the total and the base is that minus the ΔOI pane if one
+// is showing — otherwise toggling the pane on would grow the block past where
+// they put it. Null means "use the default".
+//
+// Keyed per page (not one shared key) so dragging this block on OI Profile
+// never overwrites the height Replay remembers for its own, differently-sized
+// default of this same chart, and vice versa.
+const OIP_RS_USER_CHART_H_KEY = (typeof window !== 'undefined' && window.oipReplayMode)
+    ? 'oipReplay_rsChartH_v1'
+    : 'oipProfile_rsChartH_v1';
 let oipRSUserChartHeight = null;
 try {
     const v = parseInt(localStorage.getItem(OIP_RS_USER_CHART_H_KEY), 10);
-    if (window.oipReplayMode && Number.isFinite(v)) oipRSUserChartHeight = v;
+    if (Number.isFinite(v)) oipRSUserChartHeight = v;
 } catch (e) {}
 
 function oipRSBaseChartHeight() {
@@ -939,7 +945,7 @@ function oipRSInitCharts() {
     // syncs LOGICAL ranges — bar indices — which only means the same thing when
     // every chart is on the same bar grid. This block has its own TF dropdown
     // now, so a pan here would scroll the others to the wrong place whenever the
-    // two timeframes differ. Same reason Fixed 24000 Monthly stays out of it.
+    // two timeframes differ.
     //
     // It does join the crosshair-sync web below: that one matches on TIME, so it
     // works across mismatched bar grids.
@@ -964,9 +970,6 @@ function oipRSInitCharts() {
             if (oipIntrinsicChart?.chart && oipIntrinsicSeries) window._oipSyncCrosshair(oipRSChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
             if (oipCEChart?.chart && oipCESeries) window._oipSyncCrosshair(oipRSChart.chart, oipCEChart.chart, param, oipCESeries);
             if (oipPEChart?.chart && oipPESeries) window._oipSyncCrosshair(oipRSChart.chart, oipPEChart.chart, param, oipPESeries);
-            // typeof-guarded: Fixed 24000 Monthly is an OI Profile chart, and this
-            // file is loaded on Replay too, where oi_profile.js (where it lives) is not.
-            if (typeof oipFixedChart !== 'undefined' && oipFixedChart?.chart && oipFixedCeSeries) window._oipSyncCrosshair(oipRSChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
         });
     }
 

@@ -1,8 +1,8 @@
-// Disarms the horizontal-ray tool on all 4 Opt Prem charts (Intrinsic/Combined,
-// CE Only, PE Only, Fixed 24000) and resets the toolbar button — called after a
-// ray is drawn on any one of them, since arming is shared across all four.
+// Disarms the horizontal-ray tool on all 3 Opt Prem charts (Intrinsic/Combined,
+// CE Only, PE Only) and resets the toolbar button — called after a ray is
+// drawn on any one of them, since arming is shared across all three.
 function oipRayDisarmAll() {
-    [oipIntrinsicChart, oipCEChart, oipPEChart, oipFixedChart].forEach(c => {
+    [oipIntrinsicChart, oipCEChart, oipPEChart].forEach(c => {
         if (c && c.setRayMode) c.setRayMode(false);
     });
     document.getElementById('oipRayToolBtn')?.classList.remove('oip-btn--armed');
@@ -120,41 +120,6 @@ window.oipInitSecondaryCharts = function() {
         [oipPEVolumeSeries, oipPEBnfVolumeSeries] = oipAddVolumeSeriesPair(
             oipPEChart.chart, 'oipPEVolume', showOptVolumePE, showOptBnfVolumePE);
 
-        // Fixed 24000 strike / monthly expiry combined chart — independent of
-        // the ATM-relative strike selection above; not part of the shared
-        // zoom/crosshair sync web (different strike+expiry, own time axis).
-        oipFixedChart = TradingViewChart.create({
-            containerId: 'oipFixed24000Chart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 575 },
-            onRayDrawn: oipRayDisarmAll,
-            reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
-        });
-        oipFixedCeSeries = oipFixedChart.ceSeries || oipFixedChart.series;
-        oipFixedPeSeries = oipFixedChart.peSeries;
-
-        const showOptVolumeFixed = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
-        const showOptBnfVolumeFixed = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
-        [oipFixedVolumeSeries, oipFixedBnfVolumeSeries] = oipAddVolumeSeriesPair(
-            oipFixedChart.chart, 'oipFixedVolume', showOptVolumeFixed, showOptBnfVolumeFixed);
-
-        // Previous-day reference lines: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2 —
-        // all flat lines using the PRIOR trading day's values, drawn across the current session.
-        // title + lastValueVisible label each line with its name and current value.
-        // Flat, so pixel-snapped (TradingViewChart.addCrispLine) — the name
-        // sits in a tag at the pane edge, the value on the axis.
-        oipFixedCeHL2Series = TradingViewChart.addCrispLine(oipFixedChart.chart, {
-            color: '#16a34a', lineWidth: 1, title: 'CE Avg',
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipFixedPeHL2Series = TradingViewChart.addCrispLine(oipFixedChart.chart, {
-            color: '#7c3aed', lineWidth: 1, title: 'PE Avg',
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipFixedCloseAvgSeries = TradingViewChart.addCrispLine(oipFixedChart.chart, {
-            color: '#000000', lineWidth: 1, title: 'CE & PE Avg',
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-
         // CE Only / PE Only EMA visibility is controlled independently by the
         // Opt Indicator popup's own EMA checkboxes (see oipUpdateOptEmaVisibility
         // in oi_indicators.js) — NOT the main popup's EMA9/20/50, which only
@@ -194,7 +159,6 @@ window.oipInitSecondaryCharts = function() {
             document.getElementById('oipIntrinsicChart')?.addEventListener(e, () => setActive('intrinsic'), {passive: true});
             document.getElementById('oipCEChart')?.addEventListener(e, () => setActive('ce'), {passive: true});
             document.getElementById('oipPEChart')?.addEventListener(e, () => setActive('pe'), {passive: true});
-            document.getElementById('oipFixed24000Chart')?.addEventListener(e, () => setActive('fixed'), {passive: true});
         });
 
         // Sync zoom level (barSpacing) and scroll position across charts.
@@ -248,13 +212,12 @@ window.oipInitSecondaryCharts = function() {
             // any pair of these. CE Only/PE Only ("5-group", rightOffset=5) need
             // ± _OIP_OPTION_RIGHT_ADJ crossing groups.
             //
-            // Two charts are deliberately NOT in this pan/zoom web, for the same
+            // Round Strike is deliberately NOT in this pan/zoom web, for the same
             // reason: it syncs LOGICAL ranges (bar indices), which only line up
-            // when every chart shares a bar grid. Fixed 24000 Monthly is always
-            // fixed_interval (5-minute), and Round Strike has its own TF dropdown
-            // (oipRSInterval) independent of the oipInterval these four follow.
-            // Both still join the crosshair-sync web below, which matches on TIME
-            // and so works across mismatched bar grids.
+            // when every chart shares a bar grid, and Round Strike has its own TF
+            // dropdown (oipRSInterval) independent of the oipInterval these four
+            // follow. It still joins the crosshair-sync web below, which matches
+            // on TIME and so works across mismatched bar grids.
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || window._oipActiveChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipOIChart, [
@@ -294,9 +257,16 @@ window.oipInitSecondaryCharts = function() {
 
         // --- Finalize Synchronization (All charts ready) ---
         // Add ResizeObservers for all secondary charts
+        //
+        // Also syncs height, not just width: these 3 wraps used to be a fixed
+        // 575px (.oip-chart-wrap's CSS default) so their height never actually
+        // changed and syncing it was pointless. The resize grips added below
+        // (oipProfileInitResizers) set an inline height on the wrap directly,
+        // and without this the wrap would grow/shrink while the chart canvas
+        // inside it stayed pinned at 575.
         const syncSize = (chart, wrap) => {
-            if (!chart || !wrap || !wrap.clientWidth) return;
-            chart.applyOptions({ width: wrap.clientWidth });
+            if (!chart || !wrap || !wrap.clientWidth || !wrap.clientHeight) return;
+            chart.applyOptions({ width: wrap.clientWidth, height: wrap.clientHeight });
         };
 
         if (oipIntrinsicChart?.chart) {
@@ -311,28 +281,22 @@ window.oipInitSecondaryCharts = function() {
             const wrap = document.getElementById('oipPEChartWrap');
             if (wrap) new ResizeObserver(() => syncSize(oipPEChart.chart, wrap)).observe(wrap);
         }
-        if (oipFixedChart?.chart) {
-            const wrap = document.getElementById('oipFixed24000ChartWrap');
-            if (wrap) new ResizeObserver(() => syncSize(oipFixedChart.chart, wrap)).observe(wrap);
-        }
         // Exposed so Round Strike's own crosshair listener (registered later,
         // from oi_profile_round_strike.js once oipRSChart exists) can reuse
         // the exact same routine — see oipRSInitCharts() in that file.
         window._oipSyncCrosshair = syncCrosshair;
 
-        // oipFixedCeSeries (Fixed 24000 Monthly) and oipRSCESeries (Round
-        // Strike) are used as each chart's "anchor" series for crosshair
-        // price lookup — same role oipIntrinsicSeries plays for Intrinsic.
-        // oipRSChart is declared in oi_profile_round_strike.js (loaded after
-        // this file) but these callbacks only run on real mouse movement,
-        // well after that script has assigned it.
+        // oipRSCESeries (Round Strike) is used as that chart's "anchor" series
+        // for crosshair price lookup — same role oipIntrinsicSeries plays for
+        // Intrinsic. oipRSChart is declared in oi_profile_round_strike.js
+        // (loaded after this file) but these callbacks only run on real mouse
+        // movement, well after that script has assigned it.
         if (oipOIChart) {
             oipOIChart.subscribeCrosshairMove(param => {
                 if (window._oipActiveChartId !== 'index') return;
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipOIChart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipOIChart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipOIChart, oipPEChart.chart, param, oipPESeries);
-                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipOIChart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipOIChart, oipRSChart.chart, param, oipRSCESeries);
             });
         }
@@ -342,7 +306,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipIntrinsicChart.chart, oipOIChart, param, oipOISeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipIntrinsicChart.chart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipIntrinsicChart.chart, oipPEChart.chart, param, oipPESeries);
-                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipIntrinsicChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipIntrinsicChart.chart, oipRSChart.chart, param, oipRSCESeries);
             });
         }
@@ -352,7 +315,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipCEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipCEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipCEChart.chart, oipPEChart.chart, param, oipPESeries);
-                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipCEChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipCEChart.chart, oipRSChart.chart, param, oipRSCESeries);
             });
         }
@@ -362,23 +324,12 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipPEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipPEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipPEChart.chart, oipCEChart.chart, param, oipCESeries);
-                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipPEChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipPEChart.chart, oipRSChart.chart, param, oipRSCESeries);
-            });
-        }
-        if (oipFixedChart?.chart) {
-            oipFixedChart.chart.subscribeCrosshairMove(param => {
-                if (window._oipActiveChartId !== 'fixed') return;
-                if (oipOIChart && oipOISeries) syncCrosshair(oipFixedChart.chart, oipOIChart, param, oipOISeries);
-                if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipFixedChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
-                if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipFixedChart.chart, oipCEChart.chart, param, oipCESeries);
-                if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipFixedChart.chart, oipPEChart.chart, param, oipPESeries);
-                if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipFixedChart.chart, oipRSChart.chart, param, oipRSCESeries);
             });
         }
 
         // --- Horizontal Ray drawing tool toolbar wiring ---
-        // Arming is shared across all 4 Opt Prem charts: click "Ray" once to
+        // Arming is shared across all 3 Opt Prem charts: click "Ray" once to
         // arm the tool AND open the style popup below the button, then click
         // whichever chart you want the ray on — it auto-disarms and closes
         // the popup after the first ray is drawn (see oipRayDisarmAll, called
@@ -386,7 +337,7 @@ window.oipInitSecondaryCharts = function() {
         // the NEXT ray; changing them while armed re-applies live so the
         // in-progress ray reflects the new choice, without touching rays
         // already drawn.
-        const oipRayChartList = [oipIntrinsicChart, oipCEChart, oipPEChart, oipFixedChart].filter(c => c && c.setRayMode);
+        const oipRayChartList = [oipIntrinsicChart, oipCEChart, oipPEChart].filter(c => c && c.setRayMode);
         const oipRayBtn = document.getElementById('oipRayToolBtn');
         const oipRayClearBtn = document.getElementById('oipRayClearBtn');
         const oipRayPopup = document.getElementById('oipRayOptionsPopup');
@@ -426,4 +377,117 @@ window.oipInitSecondaryCharts = function() {
             });
         }
     }
+
+    // Every chart box on this page gets a drag-to-resize grip — restore any
+    // saved heights, then wire the grips up. Placed last so it runs after the
+    // ResizeObservers above are already watching each wrap (setting an inline
+    // height here is what those observers are waiting to react to).
+    oipProfileRestoreChartHeights();
+    oipProfileInitResizers();
 };
+
+// ── Resizable chart boxes (/oi-profile only) ────────────────────────────────
+// Same drag-a-grip-to-resize-height mechanic as Replay's own
+// (oipReplayInitResizers in oi_replay.js), reimplemented here rather than
+// shared: Replay carries its own oi_replay.js instead of this page's
+// oi_profile.js/oi_profile_init.js (the two declare the same top-level `let`s
+// and cannot coexist — see the header comment in oi_profile_shared.js), so
+// there is no single init function both pages could call into, and giving
+// each grip its OWN localStorage key here (oipProfile_chartH_v1_<wrapId>,
+// distinct from Replay's oipReplay_chartH_v1) keeps a drag on this page from
+// ever touching what Replay remembers, or vice versa.
+//
+// The Round Strike chart (#oipRSCombinedChartWrap) is the one exception: its
+// height already goes through oipRSSetUserChartHeight (oi_profile_round_strike.js)
+// because that chart adds an optional ΔOI pane on top of whatever base height
+// is picked, and that function now keys its own storage per page the same way.
+const OIP_PROFILE_RESIZE_MIN = 180;
+const OIP_PROFILE_RESIZE_MAX = 1400;
+const OIP_PROFILE_CHART_H_PREFIX = 'oipProfile_chartH_v1_';
+
+function oipProfileClampHeight(px) {
+    return Math.max(OIP_PROFILE_RESIZE_MIN, Math.min(OIP_PROFILE_RESIZE_MAX, Math.round(px)));
+}
+
+// The Round Strike wrap persists/re-sizes through its own module; every other
+// wrap here just gets an inline height plus a plain ResizeObserver (already
+// attached above, or — for the OI Profile chart — in oi_profile.js) to pick
+// it up. A generic resize event nudges anything that only reacts on window
+// resize rather than a wrap-level ResizeObserver.
+function oipProfileResizeTarget(id) {
+    if (id === 'oipRSCombinedChartWrap') {
+        return {
+            apply: (px) => window.oipRSSetUserChartHeight?.(px),
+            reset: () => window.oipRSSetUserChartHeight?.(null),
+        };
+    }
+    const wrap = document.getElementById(id);
+    const key = OIP_PROFILE_CHART_H_PREFIX + id;
+    return {
+        apply: (px) => {
+            if (wrap) wrap.style.height = `${px}px`;
+            try { localStorage.setItem(key, String(px)); } catch (e) {}
+        },
+        reset: () => {
+            if (wrap) wrap.style.height = '';
+            try { localStorage.removeItem(key); } catch (e) {}
+        },
+    };
+}
+
+// Sets each wrap's saved inline height BEFORE the grips are wired up, so a
+// reload restores the remembered size instead of snapping to it a frame
+// later. The Round Strike wrap is skipped — oi_profile_round_strike.js
+// restores its own height from oipRSUserChartHeight when it builds that
+// chart, later in this same page's init sequence.
+function oipProfileRestoreChartHeights() {
+    document.querySelectorAll('.oip-resize-grip[data-resize-target]').forEach(grip => {
+        const id = grip.dataset.resizeTarget;
+        if (id === 'oipRSCombinedChartWrap') return;
+        const wrap = document.getElementById(id);
+        if (!wrap) return;
+        let px = null;
+        try { px = parseInt(localStorage.getItem(OIP_PROFILE_CHART_H_PREFIX + id), 10); } catch (e) {}
+        if (Number.isFinite(px)) wrap.style.height = `${oipProfileClampHeight(px)}px`;
+    });
+}
+
+function oipProfileInitResizers() {
+    document.querySelectorAll('.oip-resize-grip[data-resize-target]').forEach(grip => {
+        const wrap = document.getElementById(grip.dataset.resizeTarget);
+        if (!wrap) return;
+        const target = oipProfileResizeTarget(wrap.id);
+        let startY = 0, startH = 0, raf = null, pending = null;
+
+        const flush = () => {
+            raf = null;
+            if (pending != null) target.apply(pending);
+            pending = null;
+        };
+
+        grip.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            startY = e.clientY;
+            startH = wrap.getBoundingClientRect().height;
+            grip.classList.add('is-dragging');
+            grip.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        });
+        grip.addEventListener('pointermove', (e) => {
+            if (!grip.classList.contains('is-dragging')) return;
+            pending = oipProfileClampHeight(startH + (e.clientY - startY));
+            // One apply per frame — the chart re-lays out on every height
+            // change, and pointermove fires far more often than it can paint.
+            if (!raf) raf = requestAnimationFrame(flush);
+        });
+        const end = (e) => {
+            if (!grip.classList.contains('is-dragging')) return;
+            grip.classList.remove('is-dragging');
+            try { grip.releasePointerCapture(e.pointerId); } catch (err) {}
+            if (raf) { cancelAnimationFrame(raf); flush(); }
+        };
+        grip.addEventListener('pointerup', end);
+        grip.addEventListener('pointercancel', end);
+        grip.addEventListener('dblclick', () => target.reset());
+    });
+}
