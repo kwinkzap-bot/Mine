@@ -224,6 +224,7 @@ function oipInitElems() {
     oipElems.hdrPeOI = document.getElementById('hdrPeOI');
     oipElems.hdrTrend = document.getElementById('hdrTrend');
     oipElems.hdrAtm = document.getElementById('hdrAtm');
+    oipElems.hdrMaxPain = document.getElementById('hdrMaxPain');
     oipElems.hdrVwapBias = document.getElementById('hdrVwapBias');
     oipElems.hdrAtmCeOiBias = document.getElementById('hdrAtmCeOiBias');
     oipElems.hdrVolCard = document.getElementById('hdrVolCard');
@@ -1437,7 +1438,7 @@ function oipUpdateHeader(data) {
         oipElems.hdrPcrCard.querySelectorAll('.oip-hdr-lbl, .oip-hdr-val')
             .forEach(el => { el.style.color = pcrDark ? '#ffffff' : ''; });
     }
-    if (oipElems.hdrAtm) oipElems.hdrAtm.textContent = mp;
+    if (oipElems.hdrMaxPain) oipElems.hdrMaxPain.textContent = mp;
     if (oipElems.hdrLotSize) oipElems.hdrLotSize.textContent = oipLotSize || '--';
 
     // Update IVP

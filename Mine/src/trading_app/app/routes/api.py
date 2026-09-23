@@ -7951,8 +7951,16 @@ def _accepted_legs(order):
     return out
 
 
-def exit_selected_records(username, session_data, select, log_tag='exit'):
+def exit_selected_records(username, session_data, select, log_tag='exit', max_qty=None):
     """Cancel and flatten exactly the orders ``select()`` names. Nothing else.
+
+    ``max_qty`` caps how much of any one contract is sold at any one broker.
+    It exists for a caller that holds a *share* of the position its records
+    add up to: the Telegram engine buys both of a call's legs in one order,
+    so the entry record says two lots while the leg being exited owns one.
+    Without the cap the first leg out would sell the other leg's lot too and
+    leave its stop resting over nothing — a triggered SL-M with nothing to
+    sell is a fresh short.
 
     Two passes, in this order:
 
@@ -8125,6 +8133,12 @@ def exit_selected_records(username, session_data, select, log_tag='exit'):
                 continue
 
             qty = min(abs(net), abs(held))
+            if max_qty is not None:
+                qty = min(qty, int(max_qty))
+            if qty <= 0:
+                logger.info(f"[{log_tag}] {broker}_{instance} {label}: nothing to sell "
+                            f"(ours {net}, broker {held}, cap {max_qty})")
+                continue
             side = 'SELL' if net > 0 else 'BUY'
             try:
                 ids = _place_exit_leg(kind, client, match, side, qty)

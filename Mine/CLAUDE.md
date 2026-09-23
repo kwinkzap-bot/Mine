@@ -117,7 +117,7 @@ TG_API_ID / TG_API_HASH         # my.telegram.org
 TG_CALLS_CHANNEL_ID=3942647299  # the number after '#-' on web.telegram.org/k
 TG_ENTRY_LIMIT_PCT=1            # entry limit = trigger × (1 + pct/100), up to the tick
 BROKER_N_TG_ACTIVE=true         # per slot, with BROKER_N_ACTIVE; zerodha/fyers ONLY
-BROKER_N_TG_LOTS=1              # per slot, the size of EACH of the two legs; no fallback to any OP size
+BROKER_N_TG_LOTS=1              # per slot, the size of EACH leg — the entry order is twice this
 ```
 
 The one-time login is `PYTHONPATH=src ../.venv/bin/python scripts/tg_login.py`,
@@ -126,22 +126,36 @@ leaves `env/tg_calls.session` — a credential, gitignored, **back it up with
 `Mine.env`**. `telethon` is in `pyproject.toml`; install it in the venv.
 
 A message that `parse_signal` reads as a call (`NIFTY 23150 CE / BUY : 81 /
-SL : 65 / Target : 95,101,110`) becomes, per broker, **two legs** (since
-2026-09-20): each is a **stop-limit BUY** (trigger = BUY price, limit = +1 %)
-→ on fill an **SL-M SELL for that leg's whole filled qty** → **its target
-watched on LTP**; touching it cancels that leg's stop and sells that leg at
-market. Both legs are `BROKER_N_TG_LOTS` (so an account holds twice that
-on a fill). The T1 leg exits at target 1; the T3 leg rides through T1 and
-exits at the call's **last** target (T3, or T2 on a two-target call; a
-one-target call places only the T1 leg). Slots are `brokers["N"]` (T1) and `brokers["N:T3"]`;
-every record carries `tg_leg`. Four things are load-bearing:
+SL : 65 / Target : 95,101,110`) becomes, per broker, **one order that
+becomes two legs** (two legs since 2026-09-20, one order since 2026-09-23):
+a single **stop-limit BUY** for `BROKER_N_TG_LOTS × 2` (trigger = BUY price,
+limit = +1 %) → on fill it is **split into a T1 leg and a T3 leg of
+`BROKER_N_TG_LOTS` each**, and each gets an **SL-M SELL for its own qty**
+and **its own target watched on LTP**; touching it cancels that leg's stop
+and sells that leg alone at market. One line at the broker and one row on
+the strip, not two orders competing for the same strike — only the
+exchange's 27-lot freeze limit splits it further. The T1 leg exits at target
+1; the T3 leg rides through T1 and exits at the call's **last** target (T3,
+or T2 on a two-target call; a one-target call places one leg and one lot's
+worth). Slots are `brokers["N"]` (T1) and `brokers["N:T3"]`, sharing one
+`entry_record_id`; the SL/EXIT records carry `tg_leg`, the shared entry
+carries `T1+T3`. Five things are load-bearing:
 
+* **A leg's exit is capped at what that leg still owns.** The shared entry
+  record's quantity is the *pair's*, so the net it produces is too big by
+  the other leg's holding — and a leg whose stop has already filled still
+  nets positive against it and would be sold a second time, which is a
+  fresh short. So `_flatten` passes `exit_selected_records(max_qty=…)`:
+  `open_qty` (the leg's share of the fill, `leg_share()` — T1 filled first
+  on a part fill) less what `_sell_fills` says the leg has already sold.
+  Nothing may infer a leg's size from the entry record.
 * **Each stop covers the whole of its leg and targets rest nowhere.** A
   resting LIMIT at a target next to a full-size stop is twice the held
   quantity on the sell side — margined as a fresh short and fillable twice.
   So a target needs the app alive (the LaunchAgent sees to that); the stops
-  do not. A T1 exit hands `exit_selected_records` only that leg's records,
-  so it nets and sells that leg's qty — the T3 position and its stop stay.
+  do not. Two legs at one broker are two stops, never one for the sum: one
+  stop for the pair would have to be re-sized the moment either leg exits,
+  and a stop being modified is a stop that is briefly not there.
 * **A new message is the only way in; edits and deletions follow a call
   already taken.** `NewMessage` takes a call; every id is written to
   `tg_calls.json` (`TgCallStore.mark_seen`) before it is acted on, and
@@ -167,8 +181,9 @@ every record carries `tg_leg`. Four things are load-bearing:
   `note_manual_target` → `target_level` on that leg, which `slot_target()`
   prefers (refused if it is below the stop/entry or already through the
   market). Both are per leg — the other leg is untouched — and a later
-  channel edit clears both overrides. Editing a resting ENTRY row moves the
-  call's entry/limit the same way (the sibling entry order is not moved).
+  channel edit clears both overrides. Editing the resting ENTRY row moves
+  the call's entry/limit the same way — and there is one such row per
+  account, covering both legs, so a channel edit modifies it once.
 * **A call the market has run past is skipped, not chased.** A stop BUY
   must sit above the LTP; if it does not, nothing is placed and a
   `tg_call_skipped` alert says why. Same for SELL calls, non-index

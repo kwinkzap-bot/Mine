@@ -7976,8 +7976,26 @@
       "reason": "narrow CPR, small box; 09:15 candle rejected from PDH/R1 23,467-23,482 (high 23,489, closed 23,446 under it) on a 55-pt candle \u2014 too big to enter under; waited for the retracement: price came back to the box and 10:15 made a lower high (23,466) and closed under it at 23,458 -> SELL under it; SL over its high; target the lower box (PDL/S1 23,315)",
       "setup_time": "10:15",
       "note": "Trade by rule: narrow CPR, small box; 09:15 candle rejected from PDH/R1 23,467-23,482 (high 23,489, closed 23,446 under it) on a 55-pt candle \u2014 too big to enter under; waited for the retracement: price came back to the box and 10:15 made a lower high (23,466) and closed under it at 23,458 -> SELL under it; SL over its high; target the lower box (PDL/S1 23,315); chart replay Target 10:20 -> 13:50"
+    },
+    {
+      "date": "2026-09-23",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Medium",
+      "cpr_direction": "Dec",
+      "first_candle": "Strong candle green near R3(cam)",
+      "boxes": "Medium",
+      "trade": "BUY",
+      "entry": 23397.0,
+      "target": 23450.0,
+      "sl": 23364.0,
+      "result": "Target",
+      "pnl": 53.0,
+      "reason": "interlinked CPRs 23,348-23,387; 10:15 small candle (30 pts) rejected from them (low 23,366, closed 23,393 over both) -> BUY over it; SL under its low; target R1 23,450",
+      "setup_time": "10:15",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 38.9 pts (0.167%), 09:15 candle O 23352.15 H 23409.8 L 23351.75 C 23406.35 | Trade by rule: interlinked CPRs 23,348-23,387; 10:15 small candle (30 pts) rejected from them (low 23,366, closed 23,393 over both) -> BUY over it; SL under its low; target R1 23,450; chart replay Target 10:20 -> 12:05"
     }
   ],
-  "extended_at": "2026-09-22 18:14",
+  "extended_at": "2026-09-23 16:38",
   "backfilled_from": "2025-01-01"
 }

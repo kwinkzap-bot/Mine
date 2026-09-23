@@ -1,25 +1,34 @@
 """The Telegram-call state machine: a call arrives, a trade is run to its end.
 
 The listener (``tg_calls_listener``) hands in a parsed tip; everything from
-there to flat happens here, per broker, **twice** — one leg rides to target 1
-and a second, separate leg rides to the call's last target (T3):
+there to flat happens here, per broker:
 
-    stop-limit BUY rests  →  it fills  →  SL-M SELL for the filled qty rests,
-    the leg's target is watched  →  the stop fires, or the target is touched
-    and the leg is sold at market  →  flat.
+    ONE stop-limit BUY for both legs rests  →  it fills  →  the fill is split
+    into a T1 leg and a T3 leg, each with an SL-M SELL of its own and its own
+    watched target  →  each leg's stop fires, or its target is touched and
+    that leg alone is sold at market  →  flat.
 
-Each leg is its own slot on the call (``brokers["1"]`` is broker 1's T1
-leg, ``brokers["1:T3"]`` its T3 leg): its own entry order, its own stop, its
-own exit and its own row in the ledger. Both legs are ``BROKER_N_TG_LOTS``
-— the T1 leg exactly as before, and the T3 leg the same size again. A call
-listing a single target places only the T1 leg.
+**One order in, two legs out.** The entry is a single order for
+``BROKER_N_TG_LOTS × 2`` — one line at the broker and one row on the strip,
+not two orders competing for the same strike. Only once it has filled does
+it become two legs: ``brokers["1"]`` is broker 1's T1 leg and
+``brokers["1:T3"]`` its T3 leg, sharing that one ``entry_record_id`` and
+holding ``BROKER_N_TG_LOTS`` each. A part fill fills the T1 leg first. A
+call listing a single target places one leg and one lot's worth as before.
+
+Because the two legs share an entry record, that record's quantity is the
+pair's, not the leg's — so a leg's exit is capped at what the leg itself
+holds (``exit_selected_records(max_qty=...)``). Without that cap the first
+leg out would sell the other's lots and leave its stop resting over nothing.
 
 Three things about the shape:
 
 **Each stop covers the whole of its leg.** A leg trades one size and one
 target, so its stop simply covers all of it — an exchange-side exit for
 that leg, needing nothing from the app once it is resting. Two legs at one
-broker are two stops for the two quantities, never one stop for the sum.
+broker are two stops for the two quantities, never one stop for the sum:
+one stop for the pair would have to be re-sized the moment either leg
+exits, and a stop being modified is a stop that is briefly not there.
 
 **Targets rest nowhere.** Resting a LIMIT sell for a leg's quantity next to
 its stop would be twice the held quantity working on the sell side: the
@@ -203,6 +212,26 @@ def slot_target(call, slot) -> float:
     if (slot.get('leg') or LEG_T1) == LEG_T3:
         return float(call.get('target_far') or call['target'])
     return float(call['target'])
+
+
+def leg_share(call, slot, filled_lots: int) -> int:
+    """This leg's cut of one entry order that bought for every leg.
+
+    The legs are filled in order — T1 first, then T3 — so a part fill puts
+    the nearer target's leg on the board whole rather than leaving both
+    half-sized. Each takes at most the account's own ``lots``.
+    """
+    want = int(slot.get('lots') or 0)
+    if want <= 0 or filled_lots <= 0:
+        return 0
+    if (slot.get('leg') or LEG_T1) == LEG_T1:
+        return min(filled_lots, want)
+    # Everything the nearer leg did not take, capped at this leg's size.
+    t1 = next((sl for sl in (call.get('brokers') or {}).values()
+               if int(sl.get('instance') or 0) == int(slot['instance'])
+               and (sl.get('leg') or LEG_T1) == LEG_T1), None)
+    taken = int(t1.get('lots') or 0) if t1 else 0
+    return max(min(filled_lots - taken, want), 0)
 
 
 def _leg_label(call, slot) -> str:
@@ -430,12 +459,10 @@ def take_call(username, plan, meta=None) -> dict:
         return skipped('no broker has BROKER_N_TG_ACTIVE=true with BROKER_N_TG_LOTS set',
                        once_key='no-brokers')
 
-    # One entry order per leg per broker, both the account's size: the T1
-    # leg at every eligible account, and the T3 leg at each again when the
-    # call has somewhere further to ride to.
-    legs = [(t, LEG_T1, t['lots']) for t in eligible]
-    if target_far is not None:
-        legs += [(t, LEG_T3, t['lots']) for t in eligible]
+    # The legs this call runs at each account: T1 always, T3 as well when
+    # the call has somewhere further to ride to. Both are the account's own
+    # size, and they are bought in ONE order — the split happens on the fill.
+    leg_names = [LEG_T1] + ([LEG_T3] if target_far is not None else [])
 
     session_data = _session(username)
     call = TgCallStore.create({
@@ -452,13 +479,12 @@ def take_call(username, plan, meta=None) -> dict:
     })
     call_id = call['id']
 
-    def place_at(leg):
-        """One leg's entry at one account, chunked by the freeze limit.
-        Never raises."""
-        t, leg_name, lots = leg
+    def place_at(t):
+        """This account's whole entry — every leg in one order, chunked by
+        the freeze limit. Never raises."""
         instance = t['instance']
         results = []
-        for chunk in lot_chunks(lots):
+        for chunk in lot_chunks(t['lots'] * len(leg_names)):
             try:
                 results += dispatch_stop_to_brokers(
                     symbol=symbol, strike=strike, option_type=option_type,
@@ -467,7 +493,7 @@ def take_call(username, plan, meta=None) -> dict:
                     standard_lot=lot_size,
                     gate=lambda i, _b, _want=instance: i == _want,
                     lots_for=lambda _i, _n=chunk: _n,
-                    log_tag=f'TgCall {call_id} {leg_name} entry', limit_price=limit,
+                    log_tag=f'TgCall {call_id} entry', limit_price=limit,
                 )
             except Exception as e:
                 logger.error(f"[TgCall] {call_id} entry at broker {instance} failed: {e}",
@@ -476,19 +502,19 @@ def take_call(username, plan, meta=None) -> dict:
                                 'success': False, 'error': str(e)})
         return results
 
-    # Every leg at once, not one after another: each placement is a broker
-    # round-trip, and the second account (or the T3 leg) should not enter a
-    # second later than the first because of it.
-    if len(legs) > 1:
+    # Every account at once, not one after another: each placement is a
+    # broker round-trip, and the second account should not enter a second
+    # later than the first because of it.
+    if len(eligible) > 1:
         from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(legs), thread_name_prefix='TgCallEntry') as pool:
-            placed = list(pool.map(place_at, legs))
+        with ThreadPoolExecutor(max_workers=len(eligible), thread_name_prefix='TgCallEntry') as pool:
+            placed = list(pool.map(place_at, eligible))
     else:
-        placed = [place_at(leg) for leg in legs]
+        placed = [place_at(t) for t in eligible]
 
     summary = []
-    for (t, leg_name, lots), results in zip(legs, placed):
-        instance = t['instance']
+    for t, results in zip(eligible, placed):
+        instance, lots = t['instance'], t['lots']
         ok = [r for r in results if r.get('success')]
         error = next((r.get('error') for r in results if not r.get('success')), None)
 
@@ -504,21 +530,25 @@ def take_call(username, plan, meta=None) -> dict:
             'status': 'OPEN' if ok else 'REJECTED',
             'username': username,
             'source': 'telegram',
-            'signal_id': call_id, 'leg': 'ENTRY', 'tg_leg': leg_name,
+            # One order, both legs: the record carries the pair, and each
+            # slot points back at it until the fill splits them.
+            'signal_id': call_id, 'leg': 'ENTRY', 'tg_leg': '+'.join(leg_names),
             'broker_order_ids': results,
         })
 
-        TgCallStore.update_broker(call_id, slot_key(instance, leg_name), {
-            'instance': instance, 'leg': leg_name,
-            'broker': t['type'], 'name': t['name'],
-            'lots': lots,
-            'stage': STAGE_PENDING_ENTRY if ok else STAGE_DEAD,
-            'entry_record_id': record['id'],
-            'legs': {}, 'error': None if ok else error,
-        })
+        for leg_name in leg_names:
+            TgCallStore.update_broker(call_id, slot_key(instance, leg_name), {
+                'instance': instance, 'leg': leg_name,
+                'broker': t['type'], 'name': t['name'],
+                'lots': lots,
+                'stage': STAGE_PENDING_ENTRY if ok else STAGE_DEAD,
+                'entry_record_id': record['id'],
+                'legs': {}, 'error': None if ok else error,
+            })
         summary.append({'broker': t['type'], 'instance': instance, 'name': t['name'],
-                        'leg': leg_name, 'lots': lots, 'success': bool(ok), 'error': error,
-                        'order_id': record['id']})
+                        'legs': list(leg_names), 'lots': lots,
+                        'total_lots': lots * len(leg_names),
+                        'success': bool(ok), 'error': error, 'order_id': record['id']})
 
     accepted = [r for r in summary if r['success']]
     if not accepted:
@@ -529,14 +559,16 @@ def take_call(username, plan, meta=None) -> dict:
         return {'success': False, 'error': reason, 'call_id': call_id, 'summary': summary}
 
     TgCallStore.update(call_id, {'phase': 'ENTRY_PENDING'})
-    brokers = ', '.join(f"{r['name']} {r['leg']} x{r['lots']}" for r in accepted)
+    brokers = ', '.join(f"{r['name']} x{r['total_lots']} ({'+'.join(r['legs'])})"
+                        for r in accepted)
     far = f' · {far_label} {target_far}' if target_far is not None else ''
     _alert(username, 'tg_call_taken', f'Telegram call taken — {label}',
            f'SL-L BUY trigger {entry} limit {limit} · SL {stop} · T1 {target}{far} · {brokers}',
            {'call_id': call_id, 'plan': plan, 'limit': limit, 'summary': summary})
     logger.info(f"[TgCall] {call_id} armed {label} trigger={entry} limit={limit} sl={stop} "
                 f"t1={target} {far_label or 'far'}={target_far} → {len(accepted)}/{len(summary)} "
-                f"legs in {_time.time() - t_start:.2f}s from receipt")
+                f"account(s), {'+'.join(leg_names)} in one order each, in "
+                f"{_time.time() - t_start:.2f}s from receipt")
     ensure_running(username, source='call')
     return {'success': True, 'call_id': call_id, 'summary': summary}
 
@@ -588,16 +620,28 @@ def _settle_entry(call, slot, username, session_data, books) -> None:
         TgCallStore.update_broker(call_id, _key(slot), {'stage': STAGE_NO_FILL})
         return
 
+    # One order bought for both legs, so this leg takes its share of it.
+    my_lots = leg_share(call, slot, filled_lots)
+    if my_lots <= 0:
+        TgCallStore.update_broker(call_id, _key(slot),
+                                  {'stage': STAGE_NO_FILL,
+                                   'exit_reason': f'only {filled_lots} lot(s) filled — '
+                                                  f'none left for this leg'})
+        logger.warning(f"[TgCall] {call_id} {_key(slot)}: {filled_lots} lot(s) filled, all of "
+                       f"them the nearer leg's — this leg is not in the trade")
+        return
+    my_qty = my_lots * lot_size
+
     entry_fill = float(avg_price or entry.get('entry_price') or call['entry'])
     MineOrderStore.update_order(entry['id'], {'status': 'EXECUTED', 'entry_price': entry_fill,
                                               'quantity': filled_qty})
     _alert(username, 'tg_call_fill',
            f"Telegram call filled — {call['symbol']} {call['strike']} {call['option_type']}",
-           f"{slot.get('name')} {_leg_label(call, slot)}: {filled_lots} lot(s) at {entry_fill} "
+           f"{slot.get('name')} {_leg_label(call, slot)}: {my_lots} lot(s) at {entry_fill} "
            f"· placing SL-M {slot_stop(call, slot)}",
            {'call_id': call_id, 'instance': instance, 'leg': slot.get('leg') or LEG_T1,
-            'qty': filled_qty, 'price': entry_fill})
-    _arm_stop(call, slot, filled_lots, filled_qty, entry_fill, username, session_data)
+            'qty': my_qty, 'price': entry_fill})
+    _arm_stop(call, slot, my_lots, my_qty, entry_fill, username, session_data)
 
 
 def _arm_stop(call, slot, filled_lots, filled_qty, entry_fill, username, session_data) -> None:
@@ -636,12 +680,21 @@ def _flatten(call, slot, username, session_data, reason) -> None:
     def mine():
         return [o for o in MineOrderStore.get_today_orders() if o.get('id') in ids]
 
-    # Only this leg's own records are handed in, so the net position it
-    # sells is this leg's quantity: the other leg at the same account, its
-    # stop and its target are untouched.
+    # What this leg still owns, and the only quantity this exit may sell.
+    #
+    # The records handed in cannot answer that on their own: the entry among
+    # them bought for BOTH legs, so its quantity is the pair's and the net
+    # it produces is too big by the other leg's holding. Worse, a leg whose
+    # stop has already filled still nets positive against that shared entry
+    # and would be sold a second time — a fresh short. So the leg's own
+    # arithmetic decides: what it was given at the fill, less what it has
+    # already sold.
+    sold = sum(q for q, _ in _sell_fills(call_id, slot))
+    remaining = max(int(slot.get('open_qty') or 0) - sold, 0)
     try:
         result = exit_selected_records(username, session_data, mine,
-                                       log_tag=f'TgCall {call_id} {_key(slot)} {reason}')
+                                       log_tag=f'TgCall {call_id} {_key(slot)} {reason}',
+                                       max_qty=remaining)
     except Exception as e:
         logger.error(f"[TgCall] {call_id} {_key(slot)}: flatten failed: {e}", exc_info=True)
         return
@@ -1026,15 +1079,21 @@ def retract_call(username, call_id, reason='message deleted') -> dict:
 
     session_data = _session(username)
     cancelled = flattened = 0
+    cancelled_records = set()
     for slot in list((call.get('brokers') or {}).values()):
         stage = slot.get('stage')
         if stage in BROKER_DONE_STAGES:
             continue
         if stage == STAGE_PENDING_ENTRY:
-            _cancel_leg(_record(slot.get('entry_record_id')), username, session_data)
+            # One entry order covers both legs of an account, so it is
+            # cancelled — and counted — once.
+            rec_id = slot.get('entry_record_id')
+            if rec_id not in cancelled_records:
+                _cancel_leg(_record(rec_id), username, session_data)
+                cancelled_records.add(rec_id)
+                cancelled += 1
             TgCallStore.update_broker(call_id, _key(slot),
                                       {'stage': STAGE_NO_FILL, 'exit_reason': reason})
-            cancelled += 1
             continue
         _flatten(call, slot, username, session_data, reason)
         flattened += 1
@@ -1131,7 +1190,13 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
             problems.append(f'entry not moved: {wrong}')
         else:
             limit = entry_limit(entry, limit_pct(username))
+            seen_records = set()
             for slot in pending:
+                # Both legs of an account share one entry order: modify it
+                # once, not once per leg.
+                if slot.get('entry_record_id') in seen_records:
+                    continue
+                seen_records.add(slot.get('entry_record_id'))
                 rec = _record(slot.get('entry_record_id'))
                 if not _is_resting(rec):
                     continue
@@ -1420,6 +1485,6 @@ def stop() -> None:
 __all__ = ['take_call', 'validate_call', 'tg_targets', 'entry_limit', 'tick',
            'ensure_running', 'is_running', 'stop', 'stop_all_calls', 'call_records',
            'remember_session', 'is_active', 'history', 'retract_call', 'amend_call', 'prewarm',
-           'note_manual_edit', 'note_manual_target', 'slot_stop', 'slot_target',
+           'note_manual_edit', 'note_manual_target', 'slot_stop', 'slot_target', 'leg_share',
            'slot_key', 'far_target',
            'LEG_T1', 'LEG_T3']

@@ -1778,6 +1778,7 @@ function oipRSApplyHeader(h) {
     if (h.ce_oi != null) setVal('hdrCeOI', fmtOI(h.ce_oi), 'red');
     if (h.pe_oi != null) setVal('hdrPeOI', fmtOI(h.pe_oi), 'grn');
     if (h.atm != null) setVal('hdrAtm', h.atm);
+    if (h.max_pain != null) setVal('hdrMaxPain', h.max_pain);
     if (h.lot_size) setVal('hdrLotSize', h.lot_size);
     if (h.trend) setVal('hdrTrend', h.trend, h.trend === 'Bullish' ? 'grn' : (h.trend === 'Bearish' ? 'red' : ''));
     if (h.vwap_bias) setVal('hdrVwapBias', h.vwap_bias, h.vwap_bias === 'DOWN' ? 'red' : 'grn');

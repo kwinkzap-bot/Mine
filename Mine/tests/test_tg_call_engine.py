@@ -64,6 +64,9 @@ class Broker:
         self.stop_ok = True
         self.modify_ok = True
         self.entry_fills = {}
+        # What the account actually holds, when a test wants the broker's
+        # own cap to bite. None means "as much as the records say".
+        self.broker_held = None
 
     def log(self, kind, **detail):
         self.calls.append((kind, detail))
@@ -101,15 +104,22 @@ def broker(monkeypatch):
         return ({'success': True, 'summary': []} if b.modify_ok
                 else {'success': False, 'error': 'trigger price should be lower than LTP'})
 
-    def flatten(username, session_data, select, log_tag='exit'):
+    def flatten(username, session_data, select, log_tag='exit', max_qty=None):
         rows = select() or []
-        b.log('flatten', tag=log_tag, ids=[o['id'] for o in rows])
+        b.log('flatten', tag=log_tag, ids=[o['id'] for o in rows], cap=max_qty)
         for o in rows:
             if o.get('status') in MineOrderStore.EDITABLE_STATUSES:
                 o['status'] = 'CANCELLED'
         # Net of what the records say: bought minus sold, like the real one.
         net = sum((1 if o['action'] == 'BUY' else -1) * int(o.get('quantity') or 0)
                   for o in rows if o.get('status') == 'EXECUTED')
+        # The real one also caps at what the broker holds; here the cap is
+        # what the caller asked for, which is the leg's own quantity.
+        net = min(net, b.broker_held if b.broker_held is not None else net)
+        if max_qty is not None:
+            net = min(net, int(max_qty))
+        if net > 0 and b.broker_held is not None:
+            b.broker_held -= net
         exits = [{'broker': 'zerodha', 'instance': 1, 'symbol': 'NIFTY', 'strike': 23150,
                   'option_type': 'CE', 'side': 'SELL', 'quantity': net,
                   'order_ids': [f'x{len(b.calls)}']}] if net > 0 else []
@@ -208,8 +218,11 @@ def slot(call_id, instance=1, tg_leg='T1'):
 
 
 def leg(rows_, call_id, name, instance=1, tg_leg='T1'):
+    """One of a call's order records. The ENTRY is shared — one order buys
+    both legs — so it is matched on the account alone; the SL and EXIT rows
+    belong to one leg each."""
     return next((o for o in rows_ if o.get('signal_id') == call_id and o.get('leg') == name
-                 and (o.get('tg_leg') or 'T1') == tg_leg
+                 and (name == 'ENTRY' or (o.get('tg_leg') or 'T1') == tg_leg)
                  and any(l.get('instance') == instance for l in (o.get('broker_order_ids') or []))),
                 None)
 
@@ -221,12 +234,15 @@ def tick(ltp=None):
 
 
 def taken(broker, rows_):
-    """A call armed and both legs filled at broker 1: the state every LIVE
-    test starts from."""
+    """A call armed and filled at broker 1: one order for 4 lots, split into
+    a 2-lot T1 leg and a 2-lot T3 leg. The state every LIVE test starts
+    from."""
     cid = take()['call_id']
-    broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
+    broker.broker_held = 4 * LOT
     tick()
     assert slot(cid)['stage'] == 'LIVE' and slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    assert slot(cid)['open_qty'] == slot(cid, tg_leg='T3')['open_qty'] == 2 * LOT
     return cid
 
 
@@ -236,20 +252,24 @@ def test_the_entry_is_a_stop_limit_at_every_tg_slot_and_nowhere_else(broker, row
     result = take()
     assert result['success'], result
 
+    # ONE order for both legs — 2 lots each, 4 in one line at the broker.
     stops = broker.of('stop')
-    assert [s['instance'] for s in stops] == [1, 1]      # T1 + T3; not the OP-only slot 2
-    assert stops[0] == stops[1] == {'instance': 1, 'trigger': 81.0, 'limit': 81.85, 'lots': 2,
-                                    'action': 'BUY'}
+    assert len(stops) == 1                               # not the OP-only slot 2 either
+    assert stops[0] == {'instance': 1, 'trigger': 81.0, 'limit': 81.85, 'lots': 4,
+                        'action': 'BUY'}
 
     cid = result['call_id']
     entry = leg(rows, cid, 'ENTRY')
     assert entry['order_type'] == 'SL'
     assert entry['trigger_price'] == 81.0 and entry['price'] == 81.85
     assert entry['strategy'] == 'op' and entry['source'] == 'telegram'
-    assert entry['quantity'] == 2 * LOT
-    far = leg(rows, cid, 'ENTRY', tg_leg='T3')
-    assert far and far['id'] != entry['id'] and far['quantity'] == 2 * LOT
+    assert entry['quantity'] == 4 * LOT
+    assert entry['tg_leg'] == 'T1+T3'
+    assert len([o for o in rows if o.get('leg') == 'ENTRY']) == 1
+    # Both legs point at that one order until the fill splits them.
     assert set(call(cid)['brokers']) == {'1', '1:T3'}
+    assert (slot(cid)['entry_record_id'] == slot(cid, tg_leg='T3')['entry_record_id']
+            == entry['id'])
     assert slot(cid)['stage'] == slot(cid, tg_leg='T3')['stage'] == 'PENDING_ENTRY'
     assert slot(cid)['leg'] == 'T1' and slot(cid, tg_leg='T3')['leg'] == 'T3'
     assert call(cid)['target'] == 95.0 and call(cid)['target_far'] == 110.0
@@ -266,7 +286,7 @@ def test_the_limit_rounds_up_to_the_tick():
 def test_a_mis_flagged_dhan_slot_and_an_unsized_slot_are_skipped_with_one_alert_each(
         broker, rows, env, alerts):
     take()
-    assert [s['instance'] for s in broker.of('stop')] == [1, 1]
+    assert [s['instance'] for s in broker.of('stop')] == [1]
     cats = [(a['category'], a['title']) for a in alerts]
     assert ('tg_call_order_failed', 'Telegram calls: Three cannot hold a stop') in cats
     assert ('tg_call_order_failed', 'Telegram calls: Four has no size') in cats
@@ -330,19 +350,161 @@ def test_every_broker_refusing_fails_the_call_loudly(broker, rows, env, alerts):
 def test_a_leg_over_the_freeze_limit_is_split(broker, rows, env):
     env['BROKER_1_TG_LOTS'] = '30'
     result = take()
-    assert [s['lots'] for s in broker.of('stop')] == [27, 3, 27, 3]      # each leg on its own
-    assert leg(rows, result['call_id'], 'ENTRY')['quantity'] == 30 * LOT
-    assert leg(rows, result['call_id'], 'ENTRY', tg_leg='T3')['quantity'] == 30 * LOT
+    # 30 lots a leg is 60 in one order, and the exchange takes 27 at a time.
+    assert [s['lots'] for s in broker.of('stop')] == [27, 27, 6]
+    assert leg(rows, result['call_id'], 'ENTRY')['quantity'] == 60 * LOT
+
+
+# ── one order in, two legs out ───────────────────────────────────────────
+# The entry is a single order for both legs' lots; it only becomes two legs
+# when it fills. The quantity arithmetic below is the load-bearing part: the
+# legs share one entry record, so nothing may infer a leg's size from it.
+
+def test_the_fill_is_split_into_two_legs_of_the_accounts_size(broker, rows, env):
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
+    tick()
+    t1, t3 = slot(cid), slot(cid, tg_leg='T3')
+    assert t1['open_qty'] == t3['open_qty'] == 2 * LOT
+    assert t1['open_lots'] == t3['open_lots'] == 2
+    assert t1['entry_fill'] == t3['entry_fill'] == 81.5
+    # One entry order, two stops of a leg each.
+    assert [s['lots'] for s in broker.of('stop')] == [4, 2, 2]
+
+
+def test_the_t1_exit_sells_only_its_own_lots(broker, rows, env):
+    """The entry record says four lots because it bought for both legs. The
+    leg that is leaving owns two of them, and two is what may be sold."""
+    cid = taken(broker, rows)
+    tick(ltp=95.0)
+    flat = broker.of('flatten')[-1]
+    assert flat['cap'] == 2 * LOT
+    ex = exit_leg(rows, cid)
+    assert ex['quantity'] == 2 * LOT
+    # The other leg is untouched: still held, still stopped, still watched.
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    assert slot(cid, tg_leg='T3')['open_qty'] == 2 * LOT
+    assert leg(rows, cid, 'SL', tg_leg='T3')['status'] == 'OPEN'
+    assert broker.broker_held == 2 * LOT              # half the position sold
+
+
+def test_a_leg_whose_stop_already_filled_is_not_sold_again(broker, rows, env):
+    """The stop sold this leg's lots. Netting the shared entry against them
+    still shows a position, and acting on it would open a fresh short."""
+    cid = taken(broker, rows)
+    leg(rows, cid, 'SL').update({'status': 'EXECUTED', 'entry_price': 64.6,
+                                 'quantity': 2 * LOT})
+    tick(ltp=64.0)
+    assert slot(cid)['exit_reason'] == 'SL hit'
+    assert broker.of('flatten')[-1]['cap'] == 0
+    assert exit_leg(rows, cid) is None                # nothing else was sold
+    assert broker.broker_held == 4 * LOT              # the fake broker sold nothing here
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+
+
+def test_both_legs_out_sell_the_whole_position_and_no_more(broker, rows, env):
+    cid = taken(broker, rows)
+    tick(ltp=110.0)                                   # through T1 and T3 at once
+    sold = sum(int(e['quantity']) for e in
+               [exit_leg(rows, cid), exit_leg(rows, cid, tg_leg='T3')] if e)
+    assert sold == 4 * LOT
+    assert broker.broker_held == 0
+    assert slot(cid)['stage'] == slot(cid, tg_leg='T3')['stage'] == 'FLAT'
+
+
+def test_a_part_fill_gives_the_nearer_leg_a_whole_lot_first(broker, rows, env, monkeypatch):
+    """Two of the four lots traded. Better one leg properly on the board
+    than two half-sized ones, so T1 takes its full size and T3 gets none."""
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('OPEN', 81.2, 2 * LOT)
+    now = [1000.0]
+    monkeypatch.setattr(engine._time, 'time', lambda: now[0])
+    tick()
+    now[0] += 25
+    tick()
+    assert slot(cid)['stage'] == 'LIVE' and slot(cid)['open_qty'] == 2 * LOT
+    t3 = slot(cid, tg_leg='T3')
+    assert t3['stage'] == 'NO_FILL' and 'none left for this leg' in t3['exit_reason']
+    assert [s['lots'] for s in broker.of('stop') if s['action'] == 'SELL'] == [2]
+
+
+def test_a_part_fill_of_three_lots_splits_two_and_one(broker, rows, env, monkeypatch):
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('OPEN', 81.2, 3 * LOT)
+    now = [1000.0]
+    monkeypatch.setattr(engine._time, 'time', lambda: now[0])
+    tick()
+    now[0] += 25
+    tick()
+    assert slot(cid)['open_qty'] == 2 * LOT
+    assert slot(cid, tg_leg='T3')['open_qty'] == LOT
+    assert engine.leg_share(call(cid), slot(cid), 3) == 2
+    assert engine.leg_share(call(cid), slot(cid, tg_leg='T3'), 3) == 1
+
+
+def test_leg_share():
+    c = {'brokers': {'1': {'instance': 1, 'leg': 'T1', 'lots': 2}}}
+    t1 = c['brokers']['1']
+    t3 = {'instance': 1, 'leg': 'T3', 'lots': 2}
+    assert [engine.leg_share(c, t1, n) for n in (0, 1, 2, 3, 4)] == [0, 1, 2, 2, 2]
+    assert [engine.leg_share(c, t3, n) for n in (0, 1, 2, 3, 4)] == [0, 0, 0, 1, 2]
+
+
+def test_one_entry_order_is_modified_once_by_a_channel_edit(broker, rows, env):
+    cid = take()['call_id']
+    r = edited(cid, entry=84.0)
+    assert r['success'], r
+    assert broker.kinds().count('modify') == 1        # not once per leg
+    assert leg(rows, cid, 'ENTRY')['trigger_price'] == 84.0
+
+
+def test_the_whole_life_of_a_call_sells_exactly_what_it_bought(broker, rows, env):
+    """One 4-lot entry; T1 taken at its target, T3 stopped out later. Every
+    sale is one leg's own, and the four lots leave exactly once."""
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
+    broker.broker_held = 4 * LOT
+    tick()
+
+    tick(ltp=95.0)                                    # T1 out at target
+    assert slot(cid)['exit_reason'] == 'T1 hit'
+    exit_leg(rows, cid).update({'status': 'EXECUTED', 'entry_price': 95.2})
+    assert broker.broker_held == 2 * LOT
+
+    # T3's stop fires at the exchange for its own two lots.
+    leg(rows, cid, 'SL', tg_leg='T3').update({'status': 'EXECUTED', 'entry_price': 64.8,
+                                              'quantity': 2 * LOT})
+    broker.broker_held = 0
+    tick(ltp=64.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'SL hit'
+    assert broker.of('flatten')[-1]['cap'] == 0       # the stop already sold it
+    assert exit_leg(rows, cid, tg_leg='T3') is None
+
+    tick(ltp=64.0)
+    t1, t3 = sorted(engine.history(), key=lambda r: r['leg'])
+    assert t1['lots'] == t3['lots'] == 2
+    assert t1['sold_qty'] == t3['sold_qty'] == 2 * LOT
+    assert t1['complete'] is t3['complete'] is True
+    assert t1['exit_price'] == 95.2 and t3['exit_price'] == 64.8
+    assert call(cid)['phase'] == 'DONE'
+    # Four lots bought, four lots sold, nothing over.
+    assert sum(r['sold_qty'] for r in (t1, t3)) == 4 * LOT
 
 
 # ── the second leg: T3 ───────────────────────────────────────────────────
 
-def test_both_legs_are_the_accounts_size(broker, rows, env):
-    """One BROKER_N_TG_LOTS, two legs of it — 2 lots at T1 and 2 more at T3."""
+def test_both_legs_are_the_accounts_size_bought_in_one_order(broker, rows, env):
+    """One BROKER_N_TG_LOTS, two legs of it — bought as a single 4-lot order
+    and split into 2 + 2 on the fill."""
     cid = take()['call_id']
-    assert [(s['lots'], s['action']) for s in broker.of('stop')] == [(2, 'BUY'), (2, 'BUY')]
+    assert [(s['lots'], s['action']) for s in broker.of('stop')] == [(4, 'BUY')]
     assert slot(cid)['lots'] == slot(cid, tg_leg='T3')['lots'] == 2
     assert engine.tg_targets(USER)[0] == {'instance': 1, 'type': 'zerodha', 'name': 'One', 'lots': 2}
+
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
+    tick()
+    assert slot(cid)['open_qty'] == slot(cid, tg_leg='T3')['open_qty'] == 2 * LOT
+    assert [(s['lots'], s['action']) for s in broker.of('stop')[1:]] == [(2, 'SELL'), (2, 'SELL')]
 
 
 def test_a_call_with_one_target_places_only_the_t1_leg(broker, rows, env):
@@ -355,7 +517,8 @@ def test_a_call_with_two_targets_rides_the_far_leg_to_t2(broker, rows, env):
     cid = take(targets=[95.0, 101.0])['call_id']
     assert set(call(cid)['brokers']) == {'1', '1:T3'}
     assert call(cid)['target_far'] == 101.0 and call(cid)['far_label'] == 'T2'
-    broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
+    broker.broker_held = 4 * LOT
     tick()
     tick(ltp=101.0)
     assert slot(cid)['exit_reason'] == 'T1 hit'
@@ -451,12 +614,12 @@ def test_eod_flattens_both_legs(broker, rows, env, monkeypatch):
 
 def test_a_fill_is_covered_by_one_stop_for_exactly_what_filled(broker, rows, env, alerts):
     cid = take()['call_id']
-    broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
     tick()
 
     stops = broker.of('stop')
-    assert len(stops) == 4                                   # two entries, then a SL each
-    assert stops[2] == stops[3] == {'instance': 1, 'trigger': 65.0, 'limit': None, 'lots': 2,
+    assert len(stops) == 3                                   # one entry, then a SL a leg
+    assert stops[1] == stops[2] == {'instance': 1, 'trigger': 65.0, 'limit': None, 'lots': 2,
                                     'action': 'SELL'}
     sl = leg(rows, cid, 'SL')
     assert sl['order_type'] == 'SL-M' and sl['source'] == 'telegram' and sl['tg_leg'] == 'T1'
@@ -493,7 +656,7 @@ def test_an_entry_that_never_traded_is_no_fill(broker, rows, env):
 
 def test_a_refused_stop_is_retried_next_tick_and_alerted_once(broker, rows, env, alerts):
     cid = take()['call_id']
-    broker.entry_fills[1] = ('EXECUTED', 81.5, 2 * LOT)
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
     broker.stop_ok = False
     tick()
     assert slot(cid)['stage'] == 'LIVE' and slot(cid)['legs'] == {}
@@ -606,7 +769,7 @@ def test_a_call_is_not_skipped_on_a_stale_read_of_the_env(broker, rows, env, mon
     result = take()
     assert result['success'], result
     assert cleared == [USER]
-    assert [s['instance'] for s in broker.of('stop')] == [1, 1]
+    assert [s['instance'] for s in broker.of('stop')] == [1]
 
 
 def test_a_call_with_genuinely_no_broker_is_still_skipped(broker, rows, env, monkeypatch, alerts):
@@ -774,10 +937,11 @@ def test_exit_all_with_a_clean_result_stands_every_call_down(broker, rows, env):
 def test_deleting_the_message_cancels_a_resting_entry(broker, rows, env, alerts):
     cid = take()['call_id']
     r = engine.retract_call(USER, cid, reason='message deleted')
-    assert r == {'success': True, 'call_id': cid, 'cancelled': 2, 'flattened': 0}
-    assert 'cancel' in broker.kinds() and 'flatten' not in broker.kinds()
+    # One entry order covers both legs, so it is cancelled once.
+    assert r == {'success': True, 'call_id': cid, 'cancelled': 1, 'flattened': 0}
+    assert broker.kinds().count('cancel') == 1 and 'flatten' not in broker.kinds()
     assert leg(rows, cid, 'ENTRY')['status'] == 'CANCELLED'
-    assert leg(rows, cid, 'ENTRY', tg_leg='T3')['status'] == 'CANCELLED'
+    assert slot(cid)['stage'] == slot(cid, tg_leg='T3')['stage'] == 'NO_FILL'
     assert slot(cid)['stage'] == 'NO_FILL' and slot(cid)['exit_reason'] == 'message deleted'
     assert call(cid)['phase'] == 'CANCELLED'
     assert any(a['title'].startswith('Telegram call withdrawn') for a in alerts)
@@ -1048,8 +1212,9 @@ def test_every_tg_account_is_entered_at_once(broker, rows, env, monkeypatch):
         return orig(**k)
     monkeypatch.setattr(api, 'dispatch_stop_to_brokers', slow_stop)
     r = take()
-    assert sorted((x['instance'], x['leg']) for x in r['summary']) == [
-        (1, 'T1'), (1, 'T3'), (2, 'T1'), (2, 'T3')]
+    assert sorted(x['instance'] for x in r['summary']) == [1, 2]
+    assert all(x['legs'] == ['T1', 'T3'] and x['total_lots'] == x['lots'] * 2
+               for x in r['summary'])
     assert all(x['success'] for x in r['summary'])
     assert names and all(n.startswith('TgCallEntry') for n in names)   # placed from the pool
 
