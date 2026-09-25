@@ -11,6 +11,11 @@ natively, one request per (symbol, interval, window), through the app-wide
 resample 3-minute and 60-minute bars from smaller ones in 2-day chunks at
 1.5 req/s, and its daily quota is shared with the live algos.
 
+`source=future` charts the current-expiry FUTURE instead of the index or the
+cash stock, for every read on the page — the candles, the daily rows the CPR
+anchors on and the volume histogram, which then costs no extra request
+because the chart's own bars already carry it.
+
 Bars are on the 'Fake IST epoch' grid the rest of the app's charts use:
 IST wall-clock values stored as UTC seconds (`time = epoch + 19800`), with
 Lightweight Charts told `timezone: 'Etc/UTC'` so the axis reads 09:15 for the
@@ -224,7 +229,94 @@ def _fetch_error(adapter: Any) -> Optional[str]:
         return None
 
 
-def candles(symbol: str, interval: str, daily_from: Optional[str] = None) -> Dict[str, Any]:
+SOURCES = ('spot', 'future')
+
+# root -> (spot symbol, expiry timestamp). Same shape and lifetime as
+# _future_cache: the symbol master only changes between sessions.
+_spot_cache: Dict[str, tuple] = {}
+_spot_lock = threading.Lock()
+
+
+def spot_symbol(adapter: Any, root: str) -> str:
+    """The cash symbol for a root, from the symbol master.
+
+    `resolve_symbol` assumes every non-index root is an equity and builds
+    'NSE:<ROOT>-EQ'. That is wrong for the index roots the F&O list carries:
+    NIFTYFPI has futures and options but no '-EQ' row at all, and its cash
+    symbol is 'NSE:NIFTYFPI150-INDEX' — the index's name is not its F&O root.
+    Asking for 'NSE:NIFTYFPI-EQ' returns nothing, which is a blank chart with
+    no error to explain it.
+
+    So: an '-EQ' row wins, then an '-INDEX' row whose body is the root or
+    uniquely starts with it, and only then the old guess. The five roots in
+    INDEX_SYMBOLS never reach here.
+    """
+    root = (root or '').strip().upper()
+    now = _time.time()
+    with _spot_lock:
+        hit = _spot_cache.get(root)
+        if hit and hit[1] > now:
+            return hit[0]
+
+    guess = f'NSE:{root}-EQ'
+    resolved = guess
+    try:
+        rows = adapter.instruments('NSE') or []
+        equities, indices = set(), []
+        for inst in rows:
+            ts = (inst.get('tradingsymbol') or '').strip().upper()
+            if ts == f'{root}-EQ':
+                equities.add(ts)
+            elif ts.endswith('-INDEX'):
+                body = ts[:-len('-INDEX')]
+                if body == root:
+                    indices.insert(0, ts)          # exact: nothing beats it
+                elif body.startswith(root):
+                    indices.append(ts)
+        if equities:
+            resolved = guess
+        elif indices and (indices[0][:-len('-INDEX')] == root or len(indices) == 1):
+            # An exact body, or exactly one root-prefixed index. Two or more
+            # prefix matches is a guess, and a chart on the wrong index is
+            # worse than a chart on nothing.
+            resolved = f'NSE:{indices[0]}'
+    except Exception as e:                          # a master hiccup must not blank the page
+        logger.warning(f"[Multichart] spot lookup for {root} failed: {e}")
+        return guess
+
+    if resolved != guess:
+        logger.info(f"[Multichart] {root} resolved to {resolved} (not an equity)")
+    close = datetime.now().replace(hour=15, minute=30, second=0, microsecond=0).timestamp()
+    with _spot_lock:
+        _spot_cache[root] = (resolved, close if now < close else now + 18 * 3600)
+    return resolved
+
+
+def chart_symbol(adapter: Any, symbol: str, source: str) -> tuple:
+    """(symbol to chart, the source actually used).
+
+    `source='future'` charts the CURRENT-EXPIRY future instead of the index or
+    the cash stock — the contract the orders go to, so the levels a profile or
+    a pivot puts on the screen are the ones being traded rather than the spot
+    ones the basis sits above. A root with no listed future (or a symbol master
+    that will not answer) falls back to spot and says so in the response; the
+    page must not be left with an empty chart because a contract could not be
+    resolved.
+    """
+    if source not in SOURCES:
+        raise BadRequest(f'source must be one of {SOURCES}, got {source!r}')
+    root = symbol.strip().upper()
+    spot = resolve_symbol(symbol)
+    if spot.endswith('-EQ'):
+        spot = spot_symbol(adapter, root)      # an index root is not an equity
+    if source != 'future':
+        return spot, 'spot'
+    fut = future_symbol(adapter, root)
+    return (fut, 'future') if fut else (spot, 'spot')
+
+
+def candles(symbol: str, interval: str, daily_from: Optional[str] = None,
+            source: str = 'spot') -> Dict[str, Any]:
     """History for one pane plus the daily bars its CPR anchors on.
 
     `daily_from` (YYYY-MM-DD) widens the daily rows back to that date: the
@@ -235,9 +327,9 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None) -> Dic
     """
     if interval not in INTERVALS:
         raise BadRequest(f'Unsupported interval: {interval!r}')
-    fy_symbol = resolve_symbol(symbol)
-    lookback, _secs = INTERVALS[interval]
     adapter = provider()
+    fy_symbol, used = chart_symbol(adapter, symbol, source)
+    lookback, _secs = INTERVALS[interval]
 
     today = date.today()
     daily_start = today - timedelta(days=DAILY_LOOKBACK_DAYS)
@@ -262,16 +354,25 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None) -> Dic
         today.isoformat(), 'day', use_cache=True, cache_ttl=300.0,
     ) if interval != 'day' else raw
 
-    fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), start.isoformat(),
-                                            today.isoformat(), interval, HISTORY_CACHE_TTL)
+    # Charting the future already fetched the volume the histogram wants —
+    # asking for the same series again would be a second broker request for
+    # bars we are holding.
+    bars = _to_bars(raw, intraday=interval != 'day')
+    if used == 'future':
+        fut_symbol, fut_volume = fy_symbol, _volume_rows(bars)
+    else:
+        fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), start.isoformat(),
+                                                today.isoformat(), interval, HISTORY_CACHE_TTL)
 
     return {
         'success': True,
         'symbol': symbol.upper(),
         'fy_symbol': fy_symbol,
+        'source': used,
+        'source_requested': source,
         'interval': interval,
         'seconds': INTERVALS[interval][1],
-        'candles': _to_bars(raw, intraday=interval != 'day'),
+        'candles': bars,
         'daily': _daily_rows(daily_raw),
         'future_symbol': fut_symbol,
         'future_volume': fut_volume,
@@ -279,7 +380,7 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None) -> Dic
     }
 
 
-def live(symbol: str) -> Dict[str, Any]:
+def live(symbol: str, source: str = 'spot') -> Dict[str, Any]:
     """Today's 1-minute bars — the page's poll target.
 
     Every pane re-buckets these into its own timeframe client-side (all NSE
@@ -287,19 +388,24 @@ def live(symbol: str) -> Dict[str, Any]:
     what keeps four live charts at two broker requests per tick — the spot
     bars and the future's, for the volume histogram.
     """
-    fy_symbol = resolve_symbol(symbol)
     adapter = provider()
+    fy_symbol, used = chart_symbol(adapter, symbol, source)
     today = date.today().isoformat()
     raw = adapter.historical_data(
         fy_symbol, today, today, 'minute',
         use_cache=True, cache_ttl=LIVE_CACHE_TTL, allow_synthetic=True,
     )
     bars = _to_bars(raw, intraday=True)
-    fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), today, today, 'minute', LIVE_CACHE_TTL)
+    if used == 'future':
+        fut_symbol, fut_volume = fy_symbol, _volume_rows(bars)
+    else:
+        fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), today, today, 'minute', LIVE_CACHE_TTL)
     return {
         'success': True,
         'symbol': symbol.upper(),
         'fy_symbol': fy_symbol,
+        'source': used,
+        'source_requested': source,
         'candles': bars,
         'future_symbol': fut_symbol,
         'future_volume': fut_volume,

@@ -54,6 +54,8 @@
         panes: [],
         marketOpen: null,
         prevClose: null,
+        contract: 'spot',          // what the last load actually charted
+        contractLabel: '',         // 'SEPFUT' — the resolved contract, for the pane title
         loadSeq: 0,
         pollTimer: null,
         pollAbort: null,
@@ -83,7 +85,7 @@
             }));
         } catch (e) { /* storage blocked — the page still works */ }
     }
-    const PAGE_DEFAULTS = { countdown: true, futVolume: true };   // page settings that are not Pine inputs
+    const PAGE_DEFAULTS = { countdown: true, futVolume: true, futChart: false };   // page settings that are not Pine inputs
 
     // A per-browser view preference, kept apart from the chart state above
     // so it never rides along with a symbol/timeframe save. Guarded like the
@@ -111,7 +113,14 @@
         });
     }
     const setting = key => (key in state.settings) ? state.settings[key]
-        : (key in PAGE_DEFAULTS) ? PAGE_DEFAULTS[key] : MineCPR.DEFAULTS[key];
+        : (key in PAGE_DEFAULTS) ? PAGE_DEFAULTS[key]
+        : (key in MineTPO.DEFAULTS) ? MineTPO.DEFAULTS[key] : MineCPR.DEFAULTS[key];
+
+    // Spot or the current-expiry future — the page's data source, sent with
+    // every read so the candles, the daily CPR rows and the TPO profile all
+    // come off the same instrument. A root with no listed contract falls back
+    // to spot server-side and says so in `source`.
+    const dataSource = () => (setting('futChart') ? 'future' : 'spot');
 
     /* ── fetch helpers ───────────────────────────────────────────────────── */
     async function getJSON(url, signal) {
@@ -185,13 +194,14 @@
         const pane = {
             index, node, chart, series, volume, el,
             tf: state.tfs[index], candles: [], daily: [], lines: {}, primitive: null,
+            tpoPrimitive: null, tpoCache: new Map(),   // one entry per finished session
             futVol: new Map(),        // bar time -> future volume, on this pane's grid
             titleEl: node.querySelector('.mc-pane-title'), ohlcEl: node.querySelector('.mc-ohlc'),
-            cprEl: node.querySelector('.mc-pane-cpr'), sel,
+            cprEl: node.querySelector('.mc-pane-cpr'), tpoEl: node.querySelector('.mc-pane-tpo'), sel,
         };
 
         sel.addEventListener('change', () => {
-            pane.tf = sel.value; state.tfs[index] = sel.value; save();
+            pane.tf = sel.value; state.tfs[index] = sel.value; pane.tpoCache.clear(); save();
             chart.timeScale().applyOptions({ timeVisible: pane.tf !== 'day' });
             loadPane(pane, ++pane.seq);
             refreshGateTags();
@@ -212,6 +222,28 @@
     }
 
     const lastBar = pane => pane.candles.length ? pane.candles[pane.candles.length - 1] : null;
+
+    // What the panes are actually charting. `state.contract` is the broker
+    // symbol the last load resolved to, so a futures chart names its contract
+    // rather than quietly showing the index's name over the future's bars.
+    function paneSymbol() {
+        if (state.contract !== 'future') return state.symbol;
+        return `${state.symbol} ${state.contractLabel || 'FUT'}`;
+    }
+
+    // A futures read that the server had to serve from spot (no listed
+    // contract, or the symbol master would not answer) is worth saying out
+    // loud — the levels on screen are not the ones being traded.
+    function setContract(body) {
+        state.contract = body.source || 'spot';
+        // 'NSE:NIFTY25SEPFUT' -> 'SEPFUT'; the root is already in the title.
+        const m = /([A-Z]{3}FUT)$/.exec(body.fy_symbol || '');
+        state.contractLabel = m ? m[1] : 'FUT';
+        if (body.source_requested === 'future' && body.source !== 'future') {
+            banner(`No listed future for ${state.symbol} — charting spot instead.`);
+        }
+        for (const p of state.panes) p.titleEl.textContent = `${paneSymbol()} · ${TF_LABEL[p.tf]}`;
+    }
 
     function fmt(v) {
         if (v == null || !isFinite(v)) return '—';
@@ -244,6 +276,24 @@
         const result = MineCPR.compute(pane.candles, pane.tf, pane.daily, state.settings);
         MineCPR.attach(pane, result);
         pane.cprEl.textContent = setting('cpr') && result.anchor ? (ANCHOR_LABEL[result.anchor] || '') : '';
+        applyTpo(pane);
+    }
+
+    // The TPO profile is its own engine and its own primitive, drawn under the
+    // same candles. Finished sessions are memoised in pane.tpoCache, so a live
+    // tick only rebuilds the developing one.
+    function applyTpo(pane) {
+        const tpo = MineTPO.compute(pane.candles, pane.tf, state.settings, pane.tpoCache);
+        MineTPO.attach(pane, tpo);
+        pane.tpoEl.textContent = tpo.profiles.length
+            ? `TPO ${TF_LABEL[tpoSizeFor(pane)] || ''} · ${setting('tpoVA')}%` : '';
+    }
+
+    // The period a pane actually draws: the chosen size, or the pane's own
+    // timeframe when that is coarser (a 1h pane cannot show 30-minute letters).
+    function tpoSizeFor(pane) {
+        const want = MineTPO.periodSecs(pane.tf, state.settings);
+        return TF_OPTIONS.reduce((best, [v]) => MineCPR.SECONDS[v] === want ? v : best, pane.tf);
     }
 
     // Histogram bars tinted by the spot candle's direction; blank when off.
@@ -274,10 +324,11 @@
     async function loadPane(pane, seq) {
         pane.node.classList.add('loading');
         pane.node.classList.remove('empty');
-        pane.titleEl.textContent = `${state.symbol} · ${TF_LABEL[pane.tf]}`;
+        pane.titleEl.textContent = `${paneSymbol()} · ${TF_LABEL[pane.tf]}`;
         try {
-            const body = await getJSON(`/api/multichart/candles?symbol=${encodeURIComponent(state.symbol)}&interval=${pane.tf}`);
+            const body = await getJSON(`/api/multichart/candles?symbol=${encodeURIComponent(state.symbol)}&interval=${pane.tf}&source=${dataSource()}`);
             if (seq !== pane.seq) return;                 // a newer load superseded this one
+            setContract(body);
             pane.daily = body.daily || [];
             pane.futVol = new Map((body.future_volume || []).map(v => [v.time, v.volume]));
             setCandles(pane, body.candles || [], true);
@@ -365,7 +416,7 @@
         const symbol = state.symbol;
         let next = POLL_MS.error;
         try {
-            const body = await getJSON(`/api/multichart/live?symbol=${encodeURIComponent(symbol)}`, ctrl.signal);
+            const body = await getJSON(`/api/multichart/live?symbol=${encodeURIComponent(symbol)}&source=${dataSource()}`, ctrl.signal);
             if (symbol !== state.symbol) return;          // symbol changed mid-flight; the new one rescheduled
             state.marketOpen = !!body.market_open;
             for (const pane of state.panes) {
@@ -657,6 +708,7 @@
         if (symbol === state.symbol) return;
         state.symbol = symbol;
         state.prevClose = null;
+        for (const p of state.panes) p.tpoCache.clear();   // another instrument, another price grid
         save();
         document.title = `${symbol} · Multichart`;
         renderQuote(null);
@@ -670,18 +722,67 @@
     // 'Chart' section for the two settings that are not Pine inputs.
     const PAGE_SPEC = [
         { title: 'Chart', items: [
+            { key: 'futChart', label: 'Chart the future (current expiry)' },
             { key: 'futVolume', label: 'Future volume (current expiry)', color: UP },
             { key: 'countdown', label: 'Bar-close countdown on price axis' },
         ] },
     ];
 
+    /* ── data source: spot / future ──────────────────────────────────────── */
+    // The one path that flips it, whichever control was used. It is a
+    // different instrument, not a drawing option, so every pane refetches and
+    // every memoised profile goes with it.
+    function setDataSource(useFuture) {
+        if (setting('futChart') === useFuture) return;
+        state.settings.futChart = useFuture;
+        save();
+        syncSourceUI();
+        setDataSourceFromSetting();
+    }
+
+    // Keeps the toolbar switch and the popup's row showing the same thing.
+    // bindSettings has already written state.settings by the time its
+    // onChange runs, so the popup's row only needs the reload half.
+    function setDataSourceFromSetting() {
+        for (const pane of state.panes) pane.tpoCache.clear();
+        state.prevClose = null;
+        banner('');
+        loadAll();
+        schedule(0);
+    }
+
+    function syncSourceUI() {
+        const useFuture = !!setting('futChart');
+        for (const btn of document.querySelectorAll('#mcSrc .mc-src-btn')) {
+            const on = (btn.dataset.src === 'future') === useFuture;
+            btn.classList.toggle('on', on);
+            btn.setAttribute('aria-pressed', String(on));
+        }
+        const cb = document.querySelector('#mcIndPopup input[data-key="futChart"]');
+        if (cb) cb.checked = useFuture;
+    }
+
+    function initSource() {
+        $('mcSrc').addEventListener('click', e => {
+            const btn = e.target.closest('.mc-src-btn');
+            if (btn) setDataSource(btn.dataset.src === 'future');
+        });
+        syncSourceUI();
+    }
+
     function buildIndicatorsPopup() {
         const popup = $('mcIndPopup');
         popup.innerHTML = '<div class="mc-ind-head">Indicators · Mine CPR</div>' +
-            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC));
+            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC, MineTPO.SPEC));
 
         MineCPR.bindSettings(popup, (key, v) => { state.settings[key] = v; save(); },
-            () => { for (const pane of state.panes) { applyIndicators(pane); paintVolume(pane); } });
+            key => {
+                // A TPO input changes the rows themselves, so every memoised
+                // session has to go — the developing one alone is not enough.
+                if (key in MineTPO.DEFAULTS) for (const pane of state.panes) pane.tpoCache.clear();
+                if (key === 'futChart') { syncSourceUI(); setDataSourceFromSetting(); return; }
+                for (const pane of state.panes) { applyIndicators(pane); paintVolume(pane); }
+            });
 
         const btn = $('mcIndBtn');
         btn.addEventListener('click', e => { e.stopPropagation(); popup.hidden = !popup.hidden; btn.classList.toggle('on', !popup.hidden); refreshGateTags(); });
@@ -693,7 +794,8 @@
     }
 
     function refreshGateTags() {
-        MineCPR.refreshGates($('mcIndPopup'), state.panes.map(p => MineCPR.tfInfo(p.tf)));
+        MineCPR.refreshGates($('mcIndPopup'),
+            state.panes.map(p => Object.assign({}, MineCPR.tfInfo(p.tf), MineTPO.tfInfo(p.tf))));
     }
 
     /* ── theme ───────────────────────────────────────────────────────────── */
@@ -719,6 +821,7 @@
         linkCrosshairs();
         initPicker();
         buildIndicatorsPopup();
+        initSource();          // after the popup: it syncs that row's checkbox
         loadAll();
         schedule(0);
         loadSymbols();

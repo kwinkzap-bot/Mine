@@ -260,3 +260,120 @@ def test_symbols_requires_login(client):
     with client.session_transaction() as sess:
         sess.clear()
     assert client.get('/api/multichart/symbols').status_code == 401
+
+
+# ── source=future ─────────────────────────────────────────────────────────
+# The page can chart the current-expiry contract instead of the index or the
+# cash stock, so the levels on screen are the ones being traded rather than
+# the spot ones the basis sits above.
+
+def test_candles_source_future_charts_the_contract(client, fake):
+    fake.future = 'NSE:NIFTY25SEPFUT'
+    fake.rows = [_row(2026, 9, 24, 9, 15)]
+    fake.future_rows = [_row(2026, 9, 24, 9, 15, c=200.5, v=77)]
+    body = client.get('/api/multichart/candles?symbol=NIFTY&interval=minute&source=future').get_json()
+
+    assert body['source'] == 'future'
+    assert body['fy_symbol'] == 'NSE:NIFTY25SEPFUT'
+    assert body['candles'][0]['close'] == 200.5              # the contract's bars, not the index's
+    # The daily rows the CPR anchors on come off the same instrument.
+    assert {c['symbol'] for c in fake.calls} == {'NSE:NIFTY25SEPFUT'}
+
+
+def test_candles_source_future_reuses_its_own_volume(client, fake):
+    """No second request for a series already in hand."""
+    fake.future = 'NSE:NIFTY25SEPFUT'
+    fake.future_rows = [_row(2026, 9, 24, 9, 15, v=77)]
+    body = client.get('/api/multichart/candles?symbol=NIFTY&interval=minute&source=future').get_json()
+
+    assert body['future_symbol'] == 'NSE:NIFTY25SEPFUT'
+    assert body['future_volume'] == [{'time': body['candles'][0]['time'], 'volume': 77}]
+    intraday = [c for c in fake.calls if c['interval'] == 'minute']
+    assert len(intraday) == 1                                 # not one for the chart and one for the volume
+
+
+def test_live_source_future_charts_the_contract(client, fake):
+    fake.future = 'NSE:NIFTY25SEPFUT'
+    fake.future_rows = [_row(2026, 9, 24, 9, 15, c=200.5, v=77)]
+    body = client.get('/api/multichart/live?symbol=NIFTY&source=future').get_json()
+
+    assert body['source'] == 'future' and body['ltp'] == 200.5
+    assert body['future_volume'] == [{'time': body['candles'][0]['time'], 'volume': 77}]
+    assert len(fake.calls) == 1
+
+
+def test_source_future_falls_back_to_spot_when_no_contract(client, fake):
+    """A root with no listed future must not leave the page with a blank chart."""
+    fake.future = None
+    fake.rows = [_row(2026, 9, 24, 9, 15)]
+    body = client.get('/api/multichart/candles?symbol=NIFTY&interval=minute&source=future').get_json()
+
+    assert body['source'] == 'spot' and body['source_requested'] == 'future'
+    assert body['fy_symbol'] == 'NSE:NIFTY50-INDEX'
+    assert len(body['candles']) == 1
+
+
+def test_source_defaults_to_spot_and_rejects_anything_else(client, fake):
+    fake.rows = [_row(2026, 9, 24, 9, 15)]
+    body = client.get('/api/multichart/candles?symbol=NIFTY&interval=minute').get_json()
+    assert body['source'] == 'spot' and body['fy_symbol'] == 'NSE:NIFTY50-INDEX'
+
+    r = client.get('/api/multichart/candles?symbol=NIFTY&interval=minute&source=options')
+    assert r.status_code == 400
+    assert client.get('/api/multichart/live?symbol=NIFTY&source=options').status_code == 400
+
+
+# ── index roots in the F&O list ───────────────────────────────────────────
+# NIFTYFPI has futures and options but no '-EQ' row, and its cash symbol is
+# 'NSE:NIFTYFPI150-INDEX' — the index's name is not its F&O root. Guessing
+# '-EQ' asked for a symbol that does not exist and drew a blank chart.
+
+@pytest.fixture
+def nse_master(fake, monkeypatch):
+    monkeypatch.setattr(svc, '_spot_cache', {})
+    fake.nse = [
+        {'tradingsymbol': 'RELIANCE-EQ'},
+        {'tradingsymbol': 'NIFTY50-INDEX'},
+        {'tradingsymbol': 'NIFTYBANK-INDEX'},
+        {'tradingsymbol': 'NIFTYFPI150-INDEX'},
+    ]
+    fake.instruments = lambda exchange: fake.nse if exchange == 'NSE' else []
+    return fake
+
+
+def test_index_root_resolves_to_its_index_symbol(client, nse_master):
+    nse_master.rows = [_row(2026, 9, 24, 9, 15)]
+    body = client.get('/api/multichart/candles?symbol=NIFTYFPI&interval=minute').get_json()
+    assert body['fy_symbol'] == 'NSE:NIFTYFPI150-INDEX'
+    assert len(body['candles']) == 1
+
+
+def test_a_real_equity_still_resolves_to_eq(client, nse_master):
+    nse_master.rows = [_row(2026, 9, 24, 9, 15)]
+    body = client.get('/api/multichart/candles?symbol=RELIANCE&interval=minute').get_json()
+    assert body['fy_symbol'] == 'NSE:RELIANCE-EQ'
+
+
+def test_ambiguous_root_is_not_guessed(client, nse_master):
+    """Two index rows start with 'NIFTY' — charting the wrong one is worse
+    than the old fallback, which at least fails loudly with no data."""
+    body = client.get('/api/multichart/candles?symbol=NIFTYX&interval=minute').get_json()
+    assert body['fy_symbol'] == 'NSE:NIFTYX-EQ'
+
+
+def test_spot_lookup_survives_a_broken_master(client, fake, monkeypatch):
+    monkeypatch.setattr(svc, '_spot_cache', {})
+    fake.instruments = lambda exchange: (_ for _ in ()).throw(RuntimeError('master down'))
+    fake.rows = [_row(2026, 9, 24, 9, 15)]
+    body = client.get('/api/multichart/candles?symbol=NIFTYFPI&interval=minute').get_json()
+    assert body['fy_symbol'] == 'NSE:NIFTYFPI-EQ'          # the old guess, not a 500
+    assert body['success'] is True
+
+
+def test_index_root_futures_still_resolve(client, nse_master):
+    """The Fut switch worked for NIFTYFPI even while spot did not."""
+    nse_master.future = 'NSE:NIFTYFPI26SEPFUT'
+    nse_master.future_rows = [_row(2026, 9, 24, 9, 15, c=1290.0)]
+    body = client.get('/api/multichart/candles?symbol=NIFTYFPI&interval=minute&source=future').get_json()
+    assert body['source'] == 'future' and body['fy_symbol'] == 'NSE:NIFTYFPI26SEPFUT'
+    assert body['candles'][0]['close'] == 1290.0

@@ -26,6 +26,14 @@
             <div class="mc-suggest" id="mcSuggest" hidden></div>
         </div>
 
+        <!-- Spot or the current-expiry future. A data source, not an
+             indicator, so it sits in the toolbar beside the symbol rather
+             than inside the Indicators popup; the popup's row mirrors it. -->
+        <div class="mc-src" id="mcSrc" role="group" aria-label="Data source">
+            <button type="button" class="mc-src-btn" data-src="spot" title="Chart the index / cash stock">Spot</button>
+            <button type="button" class="mc-src-btn" data-src="future" title="Chart the current-expiry futures contract">Fut</button>
+        </div>
+
         <div class="mc-quote" id="mcQuote">
             <span class="mc-ltp" id="mcLtp">—</span>
             <span class="mc-chg" id="mcChg"></span>
@@ -66,6 +74,7 @@
                 <span class="mc-ohlc"></span>
                 <span class="mc-pane-spacer"></span>
                 <span class="mc-pane-cpr" title="Pivot period CPR is anchored to on this timeframe"></span>
+                <span class="mc-pane-tpo" title="TPO period and value area drawn on this timeframe"></span>
                 <button type="button" class="mc-max" title="Maximise / restore">⛶</button>
             </div>
             <div class="mc-chart"></div>
@@ -76,5 +85,6 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
 <script src="{{ url_for('static', filename='js/multichart.js') }}?v={{ sv('js/multichart.js') }}"></script>
 {% endblock %}
