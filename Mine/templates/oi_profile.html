@@ -680,6 +680,25 @@
                                         <input type="checkbox" id="oipShowPremium" checked><span>Premium
                                             (Entry/Current/Target)</span>
                                     </label>
+                                    <!-- High IV / Low IV — the selected strike's intrinsic value,
+                                         read off the NIFTY spot candle of the SAME bar as the option
+                                         candle under it (same timeframe, same master timeline). CE:
+                                         spot − strike; PE: strike − spot, taking the bar's high for
+                                         "High IV" and its close for "Low IV". A bar where that
+                                         difference is not positive is out of the money and carries no
+                                         intrinsic value at all, so the line simply breaks there rather
+                                         than drawing a floor at zero. -->
+                                    <div class="oip-ind-section-title">Nifty IV (CE Only / PE Only / Combined)</div>
+                                    <label class="oip-ind-item"
+                                        title="Intrinsic value of the selected strike against the NIFTY spot candle's HIGH. CE: high − strike. PE: strike − high. Hidden on bars where the strike is out of the money">
+                                        <input type="checkbox" id="oipShowIvHighOpt"><span
+                                            style="color:#ec4899">High IV</span>
+                                    </label>
+                                    <label class="oip-ind-item"
+                                        title="Intrinsic value of the selected strike against the NIFTY spot candle's CLOSE. CE: close − strike. PE: strike − close. Hidden on bars where the strike is out of the money">
+                                        <input type="checkbox" id="oipShowIvLowOpt"><span
+                                            style="color:#14b8a6">Low IV</span>
+                                    </label>
                                     <div class="oip-ind-section-title">EMA (CE Only / PE Only)</div>
                                     <label class="oip-ind-item">
                                         <input type="checkbox" id="oipShowEma9Opt" checked><span

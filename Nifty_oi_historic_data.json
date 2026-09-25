@@ -19780,5 +19780,33 @@
     "idx_fut_oi": 22439105,
     "fii_fut_oi": -302908,
     "FII_Index_futures": -1903.18
+  },
+  {
+    "date": "2026-09-23",
+    "symbol": "NIFTY",
+    "ce_oi": 173031490,
+    "pe_oi": 175830895,
+    "open": 23352.15,
+    "high": 23466.9,
+    "low": 23349.55,
+    "close": 23446.8,
+    "vwap": 23422.04,
+    "idx_fut_oi": 22225775,
+    "fii_fut_oi": -298613,
+    "FII_Index_futures": 678.98
+  },
+  {
+    "date": "2026-09-24",
+    "symbol": "NIFTY",
+    "ce_oi": 240333035,
+    "pe_oi": 173638645,
+    "open": 23221.8,
+    "high": 23281.95,
+    "low": 23046.15,
+    "close": 23063.1,
+    "vwap": 23168.97,
+    "idx_fut_oi": 23401755,
+    "fii_fut_oi": -309822,
+    "FII_Index_futures": -1786.32
   }
 ]

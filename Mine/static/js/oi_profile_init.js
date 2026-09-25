@@ -136,6 +136,28 @@ window.oipInitSecondaryCharts = function() {
         oipPEEma20Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma20, autoscaleInfoProvider: () => null });
         oipPEEma50Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma50, autoscaleInfoProvider: () => null });
 
+        // High IV / Low IV — the selected strike's intrinsic value against the
+        // NIFTY spot candle of the same bar (oipCalculateStrikeIv). One pair per
+        // option pane; both sides of Combined get their own so a combined view
+        // can show the CE's and the PE's intrinsic at once. Off by default —
+        // visibility is the Opt Indicator popup's two checkboxes, re-synced by
+        // oipUpdateOptIvVisibility once the popup has restored its state.
+        const showIvHigh = document.getElementById('oipShowIvHighOpt')?.checked ?? false;
+        const showIvLow  = document.getElementById('oipShowIvLowOpt')?.checked  ?? false;
+        const ivOpts = (key, visible) => ({
+            color: oipGetLineColor(key), lineWidth: oipGetLineWidth(key), lineStyle: oipGetLineStyle(key),
+            title: '', visible, priceLineVisible: false, lastValueVisible: false,
+            crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
+        });
+        oipCEIvHighSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivHigh', showIvHigh));
+        oipCEIvLowSeries  = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivLow', showIvLow));
+        oipPEIvHighSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivHigh', showIvHigh));
+        oipPEIvLowSeries  = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivLow', showIvLow));
+        oipIvHighIntSeries   = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivHigh', showIvHigh));
+        oipIvLowIntSeries    = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivLow', showIvLow));
+        oipIvHighIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivHigh', showIvHigh));
+        oipIvLowIntPeSeries  = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, ivOpts('ivLow', showIvLow));
+
         // CVWAP (current-session) / PVWAP (previous-session) / 3-AVG_VWAP on the CE Only & PE
         // Only charts — visibility controlled independently by the Opt Indicator popup's
         // own "VWAP" checkbox, not the main popup's CVWAP/PVWAP/3-AVG_VWAP sub-states.

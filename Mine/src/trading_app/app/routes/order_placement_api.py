@@ -18,8 +18,11 @@ cancel buttons on the page itself.
 **Its own orders only.** Every record written here carries ``strategy='op'``,
 and the listing, edit, cancel and exit routes below all filter on it. The
 pending strip on the page is therefore this page's own book: an order placed
-from OI Profile or by an algo is neither listed nor editable from here, and the
-generic ``/api/orders`` grid still shows everything as before.
+from OI Profile or by an algo is neither listed nor editable from here — and
+the reverse holds too, since 2026-09-24: the generic ``/api/orders`` and
+``/api/mine-orders`` routes in ``api.py`` exclude ``strategy='op'`` records,
+so OI Profile's Open Orders strip can neither see nor cancel/re-price what
+this page placed.
 
 **Its own exit.** ``/exit-all`` cancels what this page has resting and squares
 off what its own records add up to holding — the pad's EXIT button. It is the

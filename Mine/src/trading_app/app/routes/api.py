@@ -7075,6 +7075,7 @@ def list_all_orders() -> EndpointResponse:
     """
     try:
         from trading_app.app.utils.mine_order_store import MineOrderStore
+        from trading_app.app.routes.order_placement_api import OP_STRATEGY
         history = request.args.get('history', '0') == '1'
 
         if request.args.get('sync') == '1':
@@ -7086,6 +7087,9 @@ def list_all_orders() -> EndpointResponse:
                 logger.warning(f"[orders/list] status sync skipped: {e}")
 
         orders = MineOrderStore.get_all_orders() if history else MineOrderStore.get_today_orders()
+        # Order Placement is a separate page with its own scoped listing
+        # (/api/order-placement/orders) — its records don't belong on this grid.
+        orders = [o for o in orders if o.get('strategy') != OP_STRATEGY]
         return jsonify({'success': True, 'orders': orders})
     except Exception as e:
         logger.error(f"[orders/list] {e}", exc_info=True)
@@ -7104,10 +7108,16 @@ def delete_order_record(order_id: str) -> EndpointResponse:
     """
     try:
         from trading_app.app.utils.mine_order_store import MineOrderStore
+        from trading_app.app.routes.order_placement_api import OP_STRATEGY
 
         order = MineOrderStore.get_order(order_id)
         if not order:
             return jsonify({'success': False, 'error': 'Order not found'}), 404
+        if order.get('strategy') == OP_STRATEGY:
+            # That page has its own cancel route and files against its own
+            # book — not this screen's order to touch.
+            return jsonify({'success': False,
+                            'error': 'That order was placed from Order Placement — cancel it there'}), 404
 
         broker_result = None
         if order.get('status') in MineOrderStore.EDITABLE_STATUSES and order.get('broker_order_ids'):
@@ -7164,10 +7174,14 @@ def update_order_price(order_id: str) -> EndpointResponse:
             return jsonify({'success': False, 'error': 'Invalid price'}), 400
 
         from trading_app.app.utils.mine_order_store import MineOrderStore
+        from trading_app.app.routes.order_placement_api import OP_STRATEGY
 
         order = MineOrderStore.get_order(order_id)
         if not order:
             return jsonify({'success': False, 'error': 'Order not found'}), 404
+        if order.get('strategy') == OP_STRATEGY:
+            return jsonify({'success': False,
+                            'error': 'That order was placed from Order Placement — edit it there'}), 404
         if order.get('status') not in MineOrderStore.EDITABLE_STATUSES:
             return jsonify({'success': False, 'gone': True, 'status': order.get('status'),
                             'error': f"Order is {order.get('status')} — nothing left to modify"}), 409
@@ -8761,8 +8775,10 @@ def list_mine_orders() -> EndpointResponse:
     """Return today's Mine orders (or all recent if ?history=1)."""
     try:
         from trading_app.app.utils.mine_order_store import MineOrderStore
+        from trading_app.app.routes.order_placement_api import OP_STRATEGY
         history = request.args.get('history', '0') == '1'
         orders = MineOrderStore.get_all_orders() if history else MineOrderStore.get_today_orders()
+        orders = [o for o in orders if o.get('strategy') != OP_STRATEGY]
         return jsonify({'success': True, 'orders': orders})
     except Exception as e:
         logger.error(f"[mine-orders/list] {e}", exc_info=True)

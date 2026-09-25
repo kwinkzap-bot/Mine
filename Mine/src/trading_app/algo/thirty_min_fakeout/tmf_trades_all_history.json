@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "GLENMARK",
+    "direction": "BUY",
+    "qty": 203,
+    "entry_price": 2454.6,
+    "exit_price": 2435.5,
+    "sl_price": 2435.5,
+    "target_price": 2470.0,
+    "pnl": -3877.3,
+    "reason": "SL Hit",
+    "entry_time": "2026-09-24T10:58:00.986510",
+    "exit_time": "2026-09-24T13:28:01.999580",
+    "broker_idx": 0,
+    "entry_order_id": "PAPER",
+    "sl_order_id": null,
+    "target_order_id": null,
+    "mode": "paper",
+    "date": "2026-09-24"
+  },
+  {
     "symbol": "ZYDUSLIFE",
     "direction": "SELL",
     "qty": 427,

@@ -12,6 +12,14 @@ let oipEma9Series = null, oipEma20Series = null, oipEma50Series = null,
     oipEma100Series = null, oipEma200Series = null;
 let oipCEEma9Series = null, oipCEEma20Series = null, oipCEEma50Series = null;
 let oipPEEma9Series = null, oipPEEma20Series = null, oipPEEma50Series = null;
+// High IV / Low IV — the selected strike's intrinsic value against the NIFTY
+// spot candle of the same bar. Two lines per option pane: CE Only, PE Only,
+// and both sides of the Combined pane. Assigned by oipInitSecondaryCharts in
+// oi_profile_init.js; they stay null on Replay, which has no Opt popup.
+let oipCEIvHighSeries = null, oipCEIvLowSeries = null;
+let oipPEIvHighSeries = null, oipPEIvLowSeries = null;
+let oipIvHighIntSeries = null, oipIvLowIntSeries = null;
+let oipIvHighIntPeSeries = null, oipIvLowIntPeSeries = null;
 
 // CPR series
 let oipCprSeriesObj = null;
@@ -46,7 +54,8 @@ const _OIP_IND_IDS = [
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
     'oipShow5mClose', 'oipShowOpt5mClose',
     'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt', 'oipShowVolumeOpt', 'oipShowBnfVolumeOpt',
-    'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'
+    'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt',
+    'oipShowIvHighOpt', 'oipShowIvLowOpt'
 ];
 
 function _oipSaveIndicators(key) {
@@ -115,6 +124,7 @@ const _OIP_LINE_DEFAULTS = {
     ema100: { color: '#3b82f6', width: 1 }, ema200: { color: '#888888', width: 1 },
     maxPain: { color: '#2563eb', width: 2 }, atmCeOi: { color: '#000000', width: 1 }, reversal30m: { color: '#f97316', width: 1 },
     synthDiff: { color: '#000000', width: 2 }, synthPdc: { color: '#22d3ee', width: 2 }, synthCp: { color: '#a78bfa', width: 2 },
+    ivHigh: { color: '#ec4899', width: 1 }, ivLow: { color: '#14b8a6', width: 1 },
     box30s: { color: '#FFC800', width: 1, opacity: 0.09 }, box5m: { color: '#2dd2ff', width: 1, opacity: 0.09 },
     box1m: { color: '#FF6B6B', width: 1, opacity: 0.09 },
     mondayBox: { color: '#34ed0b', width: 1 },
@@ -520,6 +530,8 @@ const _OIP_LINE_STYLE_ITEMS = [
     { key: 'mondayBox',      checkboxId: 'oipShowMondayBox' },
     { key: 'fiveMClose',     checkboxId: 'oipShow5mClose' },
     { key: 'fiveMCloseOpt',  checkboxId: 'oipShowOpt5mClose' },
+    { key: 'ivHigh',         checkboxId: 'oipShowIvHighOpt' },
+    { key: 'ivLow',          checkboxId: 'oipShowIvLowOpt' },
 ];
 // Synthetic value's 3 named lines share ONE checkbox — inject all 3 selects
 // after it instead of the generic one-per-checkbox pattern above.
@@ -784,6 +796,8 @@ function _oipLineStyleSeriesMap() {
         ema50:    [oipEma50Series, oipCEEma50Series, oipPEEma50Series],
         ema100:   [oipEma100Series],
         ema200:   [oipEma200Series],
+        ivHigh:   [oipCEIvHighSeries, oipPEIvHighSeries, oipIvHighIntSeries, oipIvHighIntPeSeries],
+        ivLow:    [oipCEIvLowSeries, oipPEIvLowSeries, oipIvLowIntSeries, oipIvLowIntPeSeries],
     };
 }
 
@@ -993,6 +1007,22 @@ function oipUpdateOptEmaVisibility() {
     });
 }
 
+/* ── High IV / Low IV visibility ──────────────────────────────────────────
+   Same two checkboxes drive all three option panes (CE Only, PE Only and both
+   sides of Combined), so "High IV" means one thing on the page. Deferred past
+   the charts' init RAF for the same reason the EMA sync above is. */
+function oipUpdateOptIvVisibility() {
+    const sHigh = document.getElementById('oipShowIvHighOpt')?.checked ?? false;
+    const sLow  = document.getElementById('oipShowIvLowOpt')?.checked  ?? false;
+
+    requestAnimationFrame(() => {
+        [oipCEIvHighSeries, oipPEIvHighSeries, oipIvHighIntSeries, oipIvHighIntPeSeries]
+            .forEach(s => { try { if (s) s.applyOptions({ visible: sHigh }); } catch(e) {} });
+        [oipCEIvLowSeries, oipPEIvLowSeries, oipIvLowIntSeries, oipIvLowIntPeSeries]
+            .forEach(s => { try { if (s) s.applyOptions({ visible: sLow }); } catch(e) {} });
+    });
+}
+
 /* ── Regular-session filter ───────────────────────────────────────────────────
    NSE runs a pre-open call auction (09:00–09:15) and a closing call auction
    after 15:30. Both print bars, and both are noise on a replay: the pre-open
@@ -1075,6 +1105,47 @@ function oipCalculate3EMAs(data) {
         }
     });
     return { ema9: emas[0], ema20: emas[1], ema50: emas[2] };
+}
+
+/* High IV / Low IV — the strike's intrinsic value, bar by bar.
+ *
+ * The option chart's candles are premium; these two lines are what the NIFTY
+ * spot candle of the SAME bar is worth against the strike loaded under it, so
+ * they read on the same price scale as the premium and show how much of it is
+ * intrinsic. `indexCandles` is the master timeline the option candles are
+ * already aligned to (oipRefreshLocalView), so no resampling is needed — a 5m
+ * option chart reads 5m spot bars.
+ *
+ *   CE:  high = spot.high  − strike     low = spot.close − strike
+ *   PE:  high = strike − spot.high      low = strike − spot.close
+ *
+ * "High" and "Low" name the spot price each line reads, not which of the two
+ * is larger: on a PE the high-based line is the SMALLER of the pair.
+ *
+ * A bar whose difference is not positive is a strike that bar closed out of
+ * the money, and an OTM strike has no intrinsic value to plot — it is left out
+ * of the series entirely (the line breaks) rather than pinned to a zero floor
+ * that would read as a real level.
+ */
+function oipCalculateStrikeIv(indexCandles, strike, type) {
+    const out = { high: [], low: [] };
+    const k = parseFloat(strike);
+    if (!Array.isArray(indexCandles) || !isFinite(k)) return out;
+    const isCe = type === 'CE';
+
+    indexCandles.forEach(c => {
+        if (!c || c.time == null) return;
+        const hi = parseFloat(c.high), cl = parseFloat(c.close);
+        if (isFinite(hi)) {
+            const v = isCe ? hi - k : k - hi;
+            if (v > 0) out.high.push({ time: c.time, value: v });
+        }
+        if (isFinite(cl)) {
+            const v = isCe ? cl - k : k - cl;
+            if (v > 0) out.low.push({ time: c.time, value: v });
+        }
+    });
+    return out;
 }
 
 // Anchored VWAP: the cumulation restarts at the top of each anchor period, so
@@ -2052,18 +2123,21 @@ function oipApplyOptionZOrder() {
     _oipLayerPane(
         [oipCESeries],
         [oipCEEma9Series, oipCEEma20Series, oipCEEma50Series,
+         oipCEIvHighSeries, oipCEIvLowSeries,
          _oipOpt(() => oipCECvwapSeries), _oipOpt(() => oipCEPvwapSeries)],
         [box30.ce, box5m.ce]
     );
     _oipLayerPane(
         [oipPESeries],
         [oipPEEma9Series, oipPEEma20Series, oipPEEma50Series,
+         oipPEIvHighSeries, oipPEIvLowSeries,
          _oipOpt(() => oipPECvwapSeries), _oipOpt(() => oipPEPvwapSeries)],
         [box30.pe, box5m.pe]
     );
     _oipLayerPane(
         [oipIntrinsicSeries, oipIntrinsicPeSeries],
         [oipVwapIntSeries, oipVwapIntPeSeries,
+         oipIvHighIntSeries, oipIvLowIntSeries, oipIvHighIntPeSeries, oipIvLowIntPeSeries,
          _oipOpt(() => oipCvwapIntSeries), _oipOpt(() => oipCvwapIntPeSeries),
          _oipOpt(() => oipPvwapIntSeries), _oipOpt(() => oipPvwapIntPeSeries)],
         []
@@ -2184,6 +2258,9 @@ function oipInitIndicatorsPopup(storageKey) {
         if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles);
     });
     document.getElementById('oipShowVwapOpt')?.addEventListener('change', () => oipSyncVwapVisibility());
+    ['oipShowIvHighOpt', 'oipShowIvLowOpt'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => oipUpdateOptIvVisibility());
+    });
     // 5m Close Border — one instance per chart group, each with its own toggle
     // and colour (main popup drives the OI chart, opt popup the CE/PE/Combined
     // premium charts).

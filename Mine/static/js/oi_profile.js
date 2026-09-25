@@ -325,6 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
     oipSyncMainVolumeVisibility();
     oipSyncOptVolumeVisibility();
     oipUpdateOptEmaVisibility();
+    oipUpdateOptIvVisibility();
     oipApplyAllLineStyles();
 
     // OI Bar popup — lazy-loads the Open Interest page inside an iframe
@@ -1720,6 +1721,26 @@ function oipRedraw5mCloseOpt() {
     });
 }
 
+/**
+ * The strike currently loaded on the CE Only / PE Only chart, as a number.
+ *
+ * Which control owns it depends on the Opt Prem strike mode: CE & PE reads the
+ * two dropdowns, Prem. Str. reads the strikes the backend computed (falling
+ * back to the dropdowns before that fetch lands), and Custom puts the same
+ * strike on both sides. Returns null when nothing is selected yet.
+ */
+function oipSelectedStrike(side) {
+    const isCe = side === 'ce';
+    const dropdown = () => (isCe ? oipElems.ceStrikeDropdown : oipElems.peStrikeDropdown)?.value;
+    const mode = oipElems.strikeMode?.value;
+    let raw;
+    if (mode === 'ce_pe') raw = dropdown();
+    else if (mode === 'atm') raw = (isCe ? oipPremiumStrikeData?.ce_strike : oipPremiumStrikeData?.pe_strike) ?? dropdown();
+    else raw = oipElems.customStrikeDropdown?.value;
+    const n = parseFloat(raw);
+    return isFinite(n) ? n : null;
+}
+
 function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     if (!oipOIData || !oipIntrinsicChart) return;
 
@@ -1771,6 +1792,10 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData([]);
         if (oipAvg3VwapIntPeSeries) oipAvg3VwapIntPeSeries.setData([]);
         if (oipIntrinsicChart.setMarkers) oipIntrinsicChart.setMarkers([], []);
+        // The Index view already IS the spot candles — an intrinsic line against
+        // them would just be the same series shifted by the strike, so clear it.
+        [oipIvHighIntSeries, oipIvLowIntSeries, oipIvHighIntPeSeries, oipIvLowIntPeSeries]
+            .forEach(sr => { if (sr) sr.setData([]); });
     } else {
         let optionData = oipOptionData || [];
         if (window.oipReplayMode && oipFullOptionData) {
@@ -1890,6 +1915,22 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         oipSetVolumeBars(oipIntrinsicVolumeSeries, oipOIData.future_volume, view === 'pe' ? peData : ceData);
         oipSetVolumeBars(oipIntrinsicBnfVolumeSeries, oipOIData.banknifty_volume, view === 'pe' ? peData : ceData, 'banknifty');
 
+        // High IV / Low IV — the strike's intrinsic value off the NIFTY spot bar
+        // sitting under each option bar. masterData is that spot timeline at the
+        // chart's own timeframe, so a 5m option chart reads 5m spot candles.
+        // Whitespace entries carry no OHLC and are filtered out first.
+        const idxBars = masterData.filter(d => d && d.close !== undefined);
+        const ceIv = oipCalculateStrikeIv(idxBars, oipSelectedStrike('ce'), 'CE');
+        const peIv = oipCalculateStrikeIv(idxBars, oipSelectedStrike('pe'), 'PE');
+        // On the Combined pane each side carries its own strike's intrinsic; a
+        // single-leg view blanks the other side, as the VWAP pairs above do.
+        const showCeIv = view === 'combined' || view === 'ce';
+        const showPeIv = view === 'combined' || view === 'pe';
+        if (oipIvHighIntSeries)   oipIvHighIntSeries.setData(showCeIv ? ceIv.high : []);
+        if (oipIvLowIntSeries)    oipIvLowIntSeries.setData(showCeIv ? ceIv.low : []);
+        if (oipIvHighIntPeSeries) oipIvHighIntPeSeries.setData(showPeIv ? peIv.high : []);
+        if (oipIvLowIntPeSeries)  oipIvLowIntPeSeries.setData(showPeIv ? peIv.low : []);
+
         oipIntChartReady = true;
         oipCEChartReady = true;
         oipPEChartReady = true;
@@ -1909,6 +1950,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipCEEma20Series) oipCEEma20Series.setData(ceEmas.ema20);
                 if (oipCEEma50Series) oipCEEma50Series.setData(ceEmas.ema50);
             }
+            if (oipCEIvHighSeries) oipCEIvHighSeries.setData(ceIv.high);
+            if (oipCEIvLowSeries) oipCEIvLowSeries.setData(ceIv.low);
             if (oipCECvwapSeries) oipCECvwapSeries.setData(ceCvwapData);
             if (oipCEPvwapSeries) oipCEPvwapSeries.setData(cePvwapData);
             if (oipCEAvg3VwapSeries) oipCEAvg3VwapSeries.setData(ceAvg3Data);
@@ -1933,6 +1976,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipPEEma20Series) oipPEEma20Series.setData(peEmas.ema20);
                 if (oipPEEma50Series) oipPEEma50Series.setData(peEmas.ema50);
             }
+            if (oipPEIvHighSeries) oipPEIvHighSeries.setData(peIv.high);
+            if (oipPEIvLowSeries) oipPEIvLowSeries.setData(peIv.low);
             if (oipPECvwapSeries) oipPECvwapSeries.setData(peCvwapData);
             if (oipPEPvwapSeries) oipPEPvwapSeries.setData(pePvwapData);
             if (oipPEAvg3VwapSeries) oipPEAvg3VwapSeries.setData(peAvg3Data);

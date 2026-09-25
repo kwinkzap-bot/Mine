@@ -7994,8 +7994,44 @@
       "reason": "interlinked CPRs 23,348-23,387; 10:15 small candle (30 pts) rejected from them (low 23,366, closed 23,393 over both) -> BUY over it; SL under its low; target R1 23,450",
       "setup_time": "10:15",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 38.9 pts (0.167%), 09:15 candle O 23352.15 H 23409.8 L 23351.75 C 23406.35 | Trade by rule: interlinked CPRs 23,348-23,387; 10:15 small candle (30 pts) rejected from them (low 23,366, closed 23,393 over both) -> BUY over it; SL under its low; target R1 23,450; chart replay Target 10:20 -> 12:05"
+    },
+    {
+      "date": "2026-09-24",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "In decision candle(doji) near S3",
+      "boxes": "Small",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": null,
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 25.7 pts (0.11%), 09:15 candle O 23221.8 H 23281.95 L 23205.45 C 23227.0 | Trade by rule: gap-down open 23,222; S1/PDL 23,350-23,375 never reached by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-09-25",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Wide",
+      "cpr_direction": "Dec",
+      "first_candle": "Candle green near Prev Low",
+      "boxes": "Big",
+      "trade": "BUY",
+      "entry": 23097.0,
+      "target": 23163.0,
+      "sl": 23064.0,
+      "result": "SL",
+      "pnl": -33.0,
+      "reason": "09:15 candle opened at 23,035 under PDL/S1 22,979-23,046 and closed above both at 23,074, but a 74-pt candle is too big to enter over \u2014 waited for 09:20; 09:20 small green candle held over PDL/S1 (23,066-23,095) -> BUY over it; SL under its low; target 1:2",
+      "setup_time": "09:20",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 67.3 pts (0.292%), 09:15 candle O 23035.0 H 23104.4 L 23030.0 C 23074.3 | Trade by rule: 09:15 candle opened at 23,035 under PDL/S1 22,979-23,046 and closed above both at 23,074, but a 74-pt candle is too big to enter over \u2014 waited for 09:20; 09:20 small green candle held over PDL/S1 (23,066-23,095) -> BUY over it; SL under its low; target 1:2; chart replay SL 09:25 -> 09:40"
     }
   ],
-  "extended_at": "2026-09-23 16:38",
+  "extended_at": "2026-09-25 16:39",
   "backfilled_from": "2025-01-01"
 }
