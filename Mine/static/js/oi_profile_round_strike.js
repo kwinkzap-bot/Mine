@@ -1026,10 +1026,22 @@ function oipRSInitCharts() {
     // three, while these sit on one row, as the Multichart panes draw theirs.
     // Same setData / applyOptions surface; the name goes in a tag at the pane
     // edge and the value on the axis.
+    // autoscale:true — a ticked level joins the price scale instead of being
+    // left off it. These levels step to the PREVIOUS session's premium, so
+    // after a hard move (23100 CE on 25 Sep '26: PDH 378 against a session
+    // trading 98-296) the line sat outside the candles' range and was drawn
+    // off-screen with only its axis tag to say so. On Replay that was the
+    // normal case, not the exception: that chart's time scale is paired with
+    // the index chart above it, so it is always zoomed into a day or two and
+    // the range it autoscales to is correspondingly narrow.
+    //
+    // Only the visible ones count, and only over the visible time range (see
+    // crispAutoscaleInfo in tradingview-chart.js), so unticking a far-off
+    // level gives the candles their room back.
     const addStepSeries = (style, title, visible) => TradingViewChart.addCrispLine(oipRSChart.chart, {
         color: style.color, lineWidth: style.width, lineStyle: style.lineStyle, title, visible,
         priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
-        autoscaleInfoProvider: () => null
+        autoscale: true
     });
 
     const legStyle = { Ce: oipRSLegStyle('Ce'), Pe: oipRSLegStyle('Pe') };
@@ -1045,6 +1057,20 @@ function oipRSInitCharts() {
         oipRSDeciderSeries[key] = addStepSeries(
             decStyle, OIP_RS_DECIDER_TITLES[key],
             document.getElementById(OIP_RS_DECIDER_CHECKBOX_IDS[key])?.checked ?? true);
+    });
+
+    // …and the candles carry them into the price scale. A crisp line's own
+    // anchor holds no bars, so no price scale ever asks it for a range; both
+    // legs' candles ask the layer for one instead and widen to it, which is
+    // what puts a ticked level on screen rather than just on the axis. Both
+    // legs, not one: they share this pane's single scale, so whichever is
+    // asked first has to give the same answer.
+    [oipRSCESeries, oipRSPESeries].forEach(series => {
+        series?.applyOptions({
+            autoscaleInfoProvider: original => TradingViewChart.mergeAutoscale(
+                original ? original() : null,
+                TradingViewChart.crispLevelsAutoscale(oipRSChart.chart))
+        });
     });
 
     // Volume histograms — the same future volumes used on the main OI Profile

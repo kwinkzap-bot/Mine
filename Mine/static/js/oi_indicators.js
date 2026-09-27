@@ -2154,31 +2154,69 @@ function oipApplyOptionZOrder() {
    silently cut off everything right-aligned in it: the colour swatches, the
    width/style selects, and the ► group expanders.
 
+   The same measurement settles the VERTICAL side, which the CSS could not:
+   max-height there is `calc(100vh - 120px)`, a whole window's worth, while the
+   popup starts wherever its button happens to be. On Replay the Round Strike
+   toolbar sits mid-page, so the box ran past the bottom of the window and the
+   tail of the list — the Decider style, every Reference Line — was off-screen.
+   The inner scrollbar did not help: it scrolls the content inside a box whose
+   own bottom is below the window. So the height is capped at the room actually
+   under the button, and when that room is too thin the popup opens UPWARD from
+   the button instead.
+
    Measured rather than guessed, because which side has room depends on the
-   window width, not on the page. Called on open only — the popup closes on
-   any outside click, so there is nothing to re-place on resize. */
+   window size and where the page is scrolled to, not on the page. Called on
+   open only — the popup closes on any outside click, so there is nothing to
+   re-place on resize. */
+const OIP_IND_POPUP_MIN_H = 220;   // below this, opening downward is not worth it
+
 function oipPlaceIndicatorPopup(popup) {
     if (!popup || popup.classList.contains('hidden')) return;
-    // Clear a previous flip before measuring, or the popup is measured in the
-    // position the LAST window width called for.
+    // Clear a previous placement before measuring, or the popup is measured in
+    // the position the LAST window size called for.
     popup.style.left = '';
     popup.style.right = '';
+    popup.style.top = '';
+    popup.style.bottom = '';
+    popup.style.maxHeight = '';
     const margin = 8;
-    if (popup.getBoundingClientRect().right <= window.innerWidth - margin) return;
 
-    // Flip to right-anchored — the popup now opens leftward from the button.
-    popup.style.left = 'auto';
-    popup.style.right = '0';
+    if (popup.getBoundingClientRect().right > window.innerWidth - margin) {
+        // Flip to right-anchored — the popup now opens leftward from the button.
+        popup.style.left = 'auto';
+        popup.style.right = '0';
 
-    // Narrow window: flipping just moved the overflow to the other edge. Pin it
-    // to the viewport instead, offset from whatever the popup is positioned
-    // against (the button's .oip-prem-group, which is position:relative).
-    const flipped = popup.getBoundingClientRect();
-    if (flipped.left < margin) {
-        const originLeft = popup.offsetParent?.getBoundingClientRect().left ?? 0;
-        popup.style.right = '';
-        popup.style.left = `${margin - originLeft}px`;
+        // Narrow window: flipping just moved the overflow to the other edge. Pin
+        // it to the viewport instead, offset from whatever the popup is
+        // positioned against (the button's .oip-prem-group, position:relative).
+        const flipped = popup.getBoundingClientRect();
+        if (flipped.left < margin) {
+            const originLeft = popup.offsetParent?.getBoundingClientRect().left ?? 0;
+            popup.style.right = '';
+            popup.style.left = `${margin - originLeft}px`;
+        }
     }
+
+    // Vertical. `below` is the room under the popup's own top edge — it already
+    // sits just under the button. `above` is the room over the group the popup
+    // is anchored to, less the same 4px gap the CSS leaves under the button.
+    const rect = popup.getBoundingClientRect();
+    const origin = popup.offsetParent?.getBoundingClientRect();
+    const below = window.innerHeight - rect.top - margin;
+    const above = (origin ? origin.top : rect.top) - 4 - margin;
+    // scrollHeight, not the rect: the rect is already clipped by the CSS cap,
+    // so it cannot say whether the content would have fitted.
+    const wanted = popup.scrollHeight;
+
+    if (wanted <= below) return;                       // fits as it is
+    if (below >= OIP_IND_POPUP_MIN_H || below >= above) {
+        popup.style.maxHeight = `${Math.max(below, 0)}px`;   // scroll inside it
+        return;
+    }
+    // Too thin below and more room above — open upward from the button.
+    popup.style.top = 'auto';
+    popup.style.bottom = 'calc(100% + 4px)';
+    popup.style.maxHeight = `${Math.max(Math.min(above, wanted), 0)}px`;
 }
 function oipInitIndicatorsPopup(storageKey) {
     // Wire showEma200 (was declared in oipElems but never initialized)

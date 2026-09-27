@@ -659,11 +659,33 @@ window.TradingViewChart = (function () {
     // the time scale exactly as the real series did; the primitive hangs off
     // it, and setSeriesOrder on any handle moves the anchor — the whole layer
     // — in the z-stack.
+    // Union of two AutoscaleInfos, either of which may be missing.
+    function mergeAutoscale(a, b) {
+        const ra = a && a.priceRange, rb = b && b.priceRange;
+        if (!ra) return b || null;
+        if (!rb) return a || null;
+        return {
+            priceRange: {
+                minValue: Math.min(ra.minValue, rb.minValue),
+                maxValue: Math.max(ra.maxValue, rb.maxValue)
+            },
+            margins: a.margins || b.margins
+        };
+    }
+
     const _crispLayers = new WeakMap();   // chart -> layer
 
     function crispLayer(chart) {
         let L = _crispLayers.get(chart);
         if (L) return L;
+        // The anchor cannot carry the levels into the PRICE scale, only into
+        // the time scale. It holds whitespace and no values, and a price scale
+        // only asks a series with bars in range for its autoscale info — this
+        // one is never asked, whatever provider it is given. A caller that
+        // needs its levels in the scale reads them back through
+        // TradingViewChart.crispLevelsAutoscale(chart) and merges them into a
+        // series that does have bars; see the Round Strike reference lines in
+        // oi_profile_round_strike.js.
         const anchor = chart.addSeries(LightweightCharts.LineSeries, {
             color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
@@ -672,6 +694,34 @@ window.TradingViewChart = (function () {
               pendingFull: false, pendingTimes: [], flushQueued: false, requestUpdate: null, axisViews: [] };
 
         const lowerBound = (arr, key, x) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (key(arr[m]) < x) lo = m + 1; else hi = m; } return lo; };
+
+        // The price range of every VISIBLE handle that opted into the scale,
+        // over the visible time range only — a step level holds a different
+        // value each session, so the whole window's spread would blow the
+        // scale open on a contract whose premium has decayed across it.
+        // Walked over the cached run list (a handful of entries per handle)
+        // rather than the points, since this is re-asked on every pan frame.
+        function crispAutoscaleInfo() {
+            if (!L || !L.handles.size) return null;
+            let vr = null;
+            try { vr = chart.timeScale().getVisibleRange(); } catch (e) { vr = null; }
+            const from = (vr && typeof vr.from === 'number') ? vr.from : -Infinity;
+            const to = (vr && typeof vr.to === 'number') ? vr.to : Infinity;
+            let min = Infinity, max = -Infinity;
+            for (const h of L.handles) {
+                if (!h._o.visible || !h._o.autoscale || !h._pts.length) continue;
+                for (const r of h._runList()) {
+                    if (r.t2 < from || r.t1 > to) continue;
+                    const a = r.seg ? r.v1 : r.v, b = r.seg ? r.v2 : r.v;
+                    if (a < min) min = a;
+                    if (b < min) min = b;
+                    if (a > max) max = a;
+                    if (b > max) max = b;
+                }
+            }
+            return (isFinite(min) && isFinite(max)) ? { priceRange: { minValue: min, maxValue: max } } : null;
+        }
+        L.autoscaleInfo = crispAutoscaleInfo;
 
         // price -> y. The anchor carries no values, and a series without a
         // first value cannot convert (LWC returns null), so the conversion
@@ -888,7 +938,15 @@ window.TradingViewChart = (function () {
                 L.touch(false, np.time);
             },
             data() { return this._pts; },
-            applyOptions(o) { Object.assign(this._o, o || {}); if (L.requestUpdate) L.requestUpdate(); },
+            applyOptions(o) {
+                Object.assign(this._o, o || {});
+                if (L.requestUpdate) L.requestUpdate();
+                // requestUpdate only repaints the primitive. Hiding or showing
+                // a line that is in the scale changes the scale, so the anchor
+                // is touched too — batched on a microtask, so a popup that
+                // flips several at once still costs one recompute.
+                if (this._o.autoscale && o && 'visible' in o) L.touch(true);
+            },
             options() { return Object.assign({}, this._o); },
             seriesType() { return 'Line'; },
             setSeriesOrder(n) { try { L.anchor.setSeriesOrder(n); } catch (e) {} },
@@ -905,6 +963,16 @@ window.TradingViewChart = (function () {
         };
         L.handles.add(h);
         return h;
+    }
+
+    // The price range of this chart's crisp lines that asked to be in the
+    // scale (`autoscale: true`), over the visible time range, or null when
+    // there are none. The layer's own anchor holds no bars, so no price scale
+    // ever asks it for this — a caller merges the answer into the autoscale of
+    // a series that does have bars, normally the candles.
+    function crispLevelsAutoscale(chart) {
+        const L = _crispLayers.get(chart);
+        return (L && L.autoscaleInfo) ? L.autoscaleInfo() : null;
     }
 
     // chart.removeSeries for real series and crisp handles alike.
@@ -1998,6 +2066,8 @@ window.TradingViewChart = (function () {
          * with TradingViewChart.removeSeries(chart, handle).
          */
         addCrispLine: addCrispLine,
+        crispLevelsAutoscale: crispLevelsAutoscale,
+        mergeAutoscale: mergeAutoscale,
         removeSeries: removeSeries,
 
         /**
