@@ -902,6 +902,11 @@ function oipRSComputeDeciderSeries(ceCandles, peCandles) {
     return _oipRSPrevDayStep(ceCandles, ce.order, dayVal, OIP_RS_DECIDER_KEYS);
 }
 
+// Narrower than the 85 default: with compact ticks the widest label on this
+// chart is a premium like "191.60" or a DeltaOI like "-25L", so the extra
+// width was empty gutter between the plot and the axis.
+const OIP_RS_PRICE_AXIS_WIDTH = 62;
+
 function oipRSInitCharts() {
     if (typeof TradingViewChart === 'undefined') return;
 
@@ -918,10 +923,7 @@ function oipRSInitCharts() {
         // axis. Compact ticks only kick in at a lakh, so the premium axis on the
         // candle pane (~100-200) is untouched.
         compactPriceAxis: true,
-        // Narrower than the 85 default: with compact ticks the widest label on
-        // this chart is a premium like "191.60" or a DeltaOI like "-25L", so the
-        // extra width was empty gutter between the plot and the axis.
-        priceAxisWidth: 62,
+        priceAxisWidth: OIP_RS_PRICE_AXIS_WIDTH,
         onRayDrawn: oipRSRayDisarm,
         onRayRemoved: oipRSRemoveSavedRay
     });

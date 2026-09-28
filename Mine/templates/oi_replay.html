@@ -37,6 +37,19 @@
                             <option value="BANKNIFTY">BANKNIFTY</option>
                             <option value="SENSEX">SENSEX</option>
                         </select>
+                        <!-- Spot or the current-expiry future, the same pair /multichart
+                             carries beside its symbol box. A data source, not an
+                             indicator, so it sits here rather than in the Indicators
+                             popup: the candles change instrument, and every level
+                             computed off them (Mine CPR, EMAs, VWAP, TPO) follows. The
+                             strikes, the OI bars and Max Pain are quoted against the
+                             INDEX and stay there whichever is picked. -->
+                        <div class="oip-src" id="oipChartSrc" role="group" aria-label="Data source" style="margin-left:8px;">
+                            <button type="button" class="oip-src-btn" data-src="spot"
+                                    title="Chart the index">Spot</button>
+                            <button type="button" class="oip-src-btn" data-src="future"
+                                    title="Chart the current-expiry futures contract">Fut</button>
+                        </div>
                         <!-- One as-of date for the whole page: it ends the chart's
                              window and is what the Round Strike block below reads
                              for its expiry list. The start/end pair the candles API
@@ -180,7 +193,9 @@
                                  replay. It replaced this popup's own VWAP / CPR Levels / Multi
                                  CPR / EMA groups, the standalone Prev Day H/L row (PDH / PDL
                                  lines here) and the 2nd 1-min / 2nd 5-min / Monday boxes;
-                                 everything else in this popup is Replay-only and stays. -->
+                                 everything else in this popup is Replay-only and stays.
+                                 The TPO / Market Profile section below it comes from
+                                 MineTPO.SPEC and draws on 5-minute replays only. -->
                             <div id="oipMineCprSections"></div>
 
                             <div class="oip-ind-section">
@@ -743,6 +758,7 @@
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_shared.js') }}?v={{ sv('js/oi_profile_shared.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_round_strike.js') }}?v={{ sv('js/oi_profile_round_strike.js') }}"></script>
 {% endblock %}

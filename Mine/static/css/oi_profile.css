@@ -1332,6 +1332,38 @@ body.ocean-theme .oip-tooltip {
     flex-shrink: 0;
 }
 
+/* Spot / Fut — a two-button segmented switch, one control's worth of room, the
+   same shape /multichart uses (.mc-src there). Exactly one button is `.on`. */
+.oip-src {
+    display: inline-flex;
+    height: var(--oip-ctl-h);
+    border: 1px solid var(--oip-hairline);
+    border-radius: var(--oip-ctl-radius);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.oip-src-btn {
+    padding: 0 8px;
+    border: 0;
+    background: var(--oip-ctl-bg);
+    color: var(--oip-metric-lbl);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.oip-src-btn + .oip-src-btn { border-left: 1px solid var(--oip-hairline); }
+.oip-src-btn:hover { color: var(--oip-text); }
+.oip-src-btn.on { color: #fff; background: var(--oip-accent); }
+
+.oip-src-btn:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--oip-ring);
+}
+
 /* Compact toolbar controls all share the row height — the 20px/22px mix used to
    leave the selects sitting a pixel low against the buttons beside them. */
 .oip-select--xs {

@@ -9949,6 +9949,16 @@ def oi_profile_candles() -> EndpointResponse:
         # discarded on arrival. Eight or so legs of pure waste on the slowest
         # request the page makes.
         opt_legs = request.args.get('opt', 'true').lower() not in ('false', '0')
+        # Spot / Fut, the same choice /multichart's toolbar offers. It swaps the
+        # bars this endpoint returns for the current-expiry FUTURE's — the very
+        # candles already fetched for the volume overlay, so charting the future
+        # costs no extra broker request. Only the returned bars move: the ATM
+        # strike, the OI ladder, the previous-day levels and max pain are all
+        # quoted against the INDEX and keep being derived from it. Anything but
+        # 'future' is spot, which is what every other caller gets by omitting it.
+        source = (request.args.get('source') or 'spot').strip().lower()
+        if source not in ('spot', 'future'):
+            source = 'spot'
         custom_strike = request.args.get('custom_strike', type=int)
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
@@ -10000,8 +10010,11 @@ def oi_profile_candles() -> EndpointResponse:
         # this cache and can be resolving to DIFFERENT brokers — without it the
         # first page to ask parks its broker's candles under a key the other one
         # then hits.
+        # `source` likewise: spot and future are two different instruments under
+        # an otherwise identical key, so leaving it out would serve one page's
+        # index bars to a page that asked for the future's.
         _page_ctx = _oi_profile_page_context()
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s, opt_legs, _page_ctx)
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s, opt_legs, source, _page_ctx)
 
         # The OI Profile page no longer polls this endpoint — every call is now a
         # user action (its single Refresh All button, a symbol/interval/strike
@@ -10299,10 +10312,13 @@ def oi_profile_candles() -> EndpointResponse:
         # index candle timestamps client-side since both trade the same NSE
         # session hours and bucket bars on identical interval boundaries.
         future_volume = []
+        # The same bars with their OHLC intact — what `source=future` charts.
+        future_candles = []
         if future_future_vol is not None:
             future_vol_raw = future_future_vol.result()
             future_vol_candles = format_candles(future_vol_raw, ist_offset, interval)
             future_volume = [{'time': c['time'], 'volume': c['volume']} for c in future_vol_candles]
+            future_candles = future_vol_candles
         # Tag the bars a >= big_qty print landed in. The prints are looked up on
         # the SAME contract the volume leg above was fetched for — today's front
         # future, whatever window is asked for — so a tag always describes the
@@ -10590,11 +10606,30 @@ def oi_profile_candles() -> EndpointResponse:
                 legs = ', '.join(label for label, _ in empty_legs)
                 fetch_error_msg = (f"Broker returned no candles for {legs} — strike/expiry may be "
                                    f"untraded or wrong. Retrying next poll.")
+        # ── Spot / Fut ───────────────────────────────────────────────
+        # The bars that go back as `candles`. Everything above stayed on the
+        # index on purpose (see the `source` param): only the drawn series
+        # moves, and the future's bars are trimmed to the SAME trading days
+        # the index leg was filtered to, or the window would quietly differ
+        # between the two sources. A symbol with no listed future — or a
+        # window that predates the front month's listing — falls back to spot
+        # and says so in `source`, which is the page's cue to tell the user.
+        chart_candles = candles
+        source_used = 'spot'
+        if source == 'future' and future_candles:
+            fut_window = [c for c in future_candles
+                          if not target_dates
+                          or datetime.fromtimestamp(c['time'] - ist_offset).date() in target_dates]
+            if fut_window:
+                chart_candles, source_used = fut_window, 'future'
+
         response_data = {
             'success': True,
             'symbol': symbol,
             'interval': interval,
-            'candles': candles,
+            'source': source_used,
+            'source_requested': source,
+            'candles': chart_candles,
             'future_volume': future_volume,
             'future_symbol': future_fut_symbol,
             'banknifty_volume': banknifty_volume,
@@ -10610,11 +10645,13 @@ def oi_profile_candles() -> EndpointResponse:
             'second_30s_candle_oi': second_30s_oi,
             'second_30s_candle_ce': second_30s_ce,
             'second_30s_candle_pe': second_30s_pe,
-            'count': len(candles),
+            'count': len(chart_candles),
             'intrinsic': intrinsic_data,
             'daily_ohlc': daily_ohlc,
             'max_pain_history': max_pain_history,
             'strikes': strikes_list,
+            # The INDEX close, whichever source is charted: it is what picks the
+            # strike dropdowns, and a future's price is the basis above it.
             'current_price': candles[-1]['close'] if candles else 0,
             'timestamp': datetime.now().isoformat(),
             'optimized': True,

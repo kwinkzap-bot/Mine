@@ -238,6 +238,19 @@ _STORE_HISTORY_DAYS = 4800
 # earlier blocks later signals), so the two would drift apart.
 _LIVE_SIM_START = '2017-01-01'
 
+# How long an armed-but-unfilled setup may keep being watched. The engine holds
+# a pending order with NO expiry (ema_pullback_engine.run) — right for the
+# backtest, whose chain of simulated trades has to stay continuous — but in the
+# live algo that parks a symbol on a level the market left behind years ago,
+# and a `watching` symbol is never re-scanned, so it can never arm a newer
+# setup either. On 2026-09-28 that was 12 of 133 names, ADANIPORTS among them:
+# still watching a Short at 703 off a 2023-06-23 signal candle, spot 1785.
+#
+# 60 days is deliberately generous — entering weeks after the signal is normal
+# here, so this retires zombies rather than imposing a holding period.
+# EMA_CONFLUENCE_MAX_SETUP_AGE_DAYS overrides it; 0 restores hold-forever.
+_MAX_SETUP_AGE_DAYS = 60
+
 # Index symbols resolve to their own instrument token (same map the backtest
 # route uses); every other symbol is an F&O equity, 'NSE:{symbol}-EQ' on the
 # symbol-addressed providers (Fyers, ICICI) or the bare tradingsymbol (Kite).
@@ -377,6 +390,18 @@ def _is_weekend_signal(signal_date: Any) -> bool:
         return datetime.strptime(str(signal_date), '%Y-%m-%d').weekday() >= 5
     except (TypeError, ValueError):
         return False
+
+
+def _setup_age_days(signal_date: Any, as_of: Any) -> Optional[int]:
+    """Calendar days from a stored signal_date to the candle being judged
+    ('YYYY-MM-DD' both). None when either is missing or unparseable, so a
+    corrupt state field reads as "age unknown" and the caller leaves the setup
+    alone rather than retiring one it cannot date."""
+    try:
+        return (datetime.strptime(str(as_of), '%Y-%m-%d')
+                - datetime.strptime(str(signal_date), '%Y-%m-%d')).days
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_iso_date(value: Any) -> Optional[date]:
@@ -653,6 +678,18 @@ class EmaConfluenceAlgo:
 
     def _mode(self) -> str:
         return 'live' if self._uvar('EMA_CONFLUENCE_MODE', 'paper').lower() == 'live' else 'paper'
+
+    def _max_setup_age(self) -> int:
+        """Days an armed setup may go unfilled before it is retired. 0 — or a
+        value that isn't a day count — means no gate, i.e. the engine's own
+        hold-forever behaviour."""
+        raw = self._uvar('EMA_CONFLUENCE_MAX_SETUP_AGE_DAYS')
+        if raw:
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                self.log.warning(f"EMA_CONFLUENCE_MAX_SETUP_AGE_DAYS={raw!r} is not a day count — ignored")
+        return _MAX_SETUP_AGE_DAYS
 
     @staticmethod
     def _mode_of(s: Dict[str, Any]) -> str:
@@ -1300,7 +1337,30 @@ class EmaConfluenceAlgo:
 
         direction    = pending['direction']
         signal_date  = str(pd.Timestamp(pending['signal_time']).date())
+        age          = (_setup_age_days(signal_date, scanned_candle) or 0)
         already_seen = s.get('signal_date') == signal_date
+
+        # Too old to still be a setup. The engine keeps this order armed for
+        # ever by design; the live algo retires it instead, so the symbol goes
+        # back to being scanned for a fresh one (see _MAX_SETUP_AGE_DAYS).
+        max_age = self._max_setup_age()
+        if max_age and age > max_age:
+            trigger = round(float(pending['trigger_level']), 2)
+            # Log once per retired signal candle, not once per daily scan.
+            first_time = s.get('stale_signal_date') != signal_date
+            self._reset_for_next_scan(s)
+            s['phase']             = 'no_setup'
+            s['scanned_candle']    = scanned_candle
+            s['scanned_at']        = datetime.now().isoformat()
+            s['stale_signal_date'] = signal_date
+            if first_time:
+                self.log.info(
+                    f"{symbol}: {direction.upper()} setup from {signal_date} is {age}d old "
+                    f"(limit {max_age}d) and never broke {trigger} — retired, not re-armed; "
+                    f"the symbol is scanned for a new setup from here"
+                )
+            return scanned_candle
+        s.pop('stale_signal_date', None)
 
         s['phase']         = 'watching'
         s['direction']     = direction
@@ -1310,8 +1370,6 @@ class EmaConfluenceAlgo:
         s['signal_date']   = signal_date
         s.pop('missed_signal_date', None)
         if not already_seen:
-            age = (datetime.strptime(scanned_candle, '%Y-%m-%d')
-                   - datetime.strptime(signal_date, '%Y-%m-%d')).days
             self.log.info(f"{symbol}: setup found — {direction.upper()} "
                           f"trigger={s['trigger_level']} sl={s['sl_level']} "
                           f"(signal candle {signal_date}, {age}d old; scanned up to {scanned_candle})")
@@ -1336,6 +1394,7 @@ class EmaConfluenceAlgo:
         to_date = yesterday.isoformat()  # only fully-closed candles — no look-ahead
 
         stocks = state['stocks']
+        max_age = self._max_setup_age()
         scanned = 0
         armed = 0
         no_data: List[str] = []
@@ -1364,6 +1423,20 @@ class EmaConfluenceAlgo:
                             f"trigger that never traded in a real session; review it manually"
                         )
                         continue
+                elif (max_age and s.get('phase') == 'watching'
+                      and (_setup_age_days(s.get('signal_date'), to_date) or 0) > max_age):
+                    # A watching symbol is never re-scanned, so a level the
+                    # market has left behind blocks every future setup on that
+                    # name too. Drop it and fall through to a real scan —
+                    # _scan_one re-arms only what is inside the age limit.
+                    # in_position is deliberately not touched: an open trade is
+                    # never unwound by an age rule.
+                    self.log.info(
+                        f"{symbol}: armed {s.get('direction')} setup from {s.get('signal_date')} is "
+                        f"{_setup_age_days(s.get('signal_date'), to_date)}d old (limit {max_age}d) and "
+                        f"never broke {s.get('trigger_level')} — re-scanning"
+                    )
+                    self._reset_for_next_scan(s)
                 else:
                     continue  # one pending/open setup at a time, same as the backtest
             if only_pending and s.get('phase') != 'pending_scan':

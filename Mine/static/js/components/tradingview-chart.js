@@ -690,8 +690,17 @@ window.TradingViewChart = (function () {
             color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
             crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
         });
+        // The price scale's own label spreading is off from here on, because
+        // this layer does the spreading itself (tagPositions below) and two
+        // aligners cannot agree: the scale would move a value label that the
+        // name tag beside it, drawn in the pane, knows nothing about. Levels
+        // then crowd, and the pair drifts apart — the more the Y axis is
+        // squeezed, the further. Overlapping rather than shuffled labels is
+        // also what TradingView does when levels stack up.
+        try { anchor.priceScale().applyOptions({ alignLabels: false }); } catch (e) {}
         L = { chart, anchor, handles: new Set(), times: new Set(), maxTime: -Infinity, ref: null,
-              pendingFull: false, pendingTimes: [], flushQueued: false, requestUpdate: null, axisViews: [] };
+              pendingFull: false, pendingTimes: [], flushQueued: false, requestUpdate: null, axisViews: [],
+              tags: [], paneH: 0 };
 
         const lowerBound = (arr, key, x) => { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (key(arr[m]) < x) lo = m + 1; else hi = m; } return lo; };
 
@@ -757,6 +766,129 @@ window.TradingViewChart = (function () {
             return null;
         }
 
+        // ── Tag layout ───────────────────────────────────────────────────────
+        // A level wears two boxes that have to agree: its NAME at the pane's
+        // right edge, drawn here, and its VALUE on the price axis, drawn by the
+        // price scale from the axis views below. Both used to be placed at the
+        // level's own y, which holds until the axis runs short of room — the
+        // price scale then spreads its labels apart so they stay readable
+        // (`alignLabels`, on by default) while the name tags stayed where they
+        // were, so the pair drifted, the more the more the Y axis was squeezed.
+        //
+        // So the spreading is done HERE, once, and both boxes read the result.
+        // TAG_GAP is a little over the height of a price-axis label, which
+        // leaves the scale's own aligner nothing to move — it keeps handling
+        // the labels this layer knows nothing about, the candles' last price
+        // among them, and stops fighting these.
+        const TAG_GAP = 19;
+
+        // The last value of any series, crisp handle or not.
+        function lastSeriesValue(s) {
+            let d = [];
+            try { d = s.data(); } catch (e) { return null; }
+            for (let i = d.length - 1; i >= 0; i--) {
+                const p = d[i];
+                if (!p) continue;
+                if (p.close != null) return p.close;
+                if (p.value != null) return p.value;
+            }
+            return null;
+        }
+
+        // Labels on this scale that are NOT this layer's and cannot be moved:
+        // another series' last-value tag, and the price + bar-close rows a
+        // countdown draws in its place. The tags below step around these — two
+        // boxes in one place means the one drawn second buries the other, and
+        // the buried one would be the last price, the number on the axis that
+        // matters most.
+        function foreignLabelYs() {
+            const out = [];
+            let list = [];
+            try { list = anchor.getPane ? anchor.getPane().getSeries() : []; } catch (e) { return out; }
+            for (const s of list) {
+                if (s === anchor || s.__crisp) continue;
+                const o = s.options() || {};
+                if ((o.priceScaleId || 'right') !== scaleId()) continue;
+                const cd = _countdownBySeries.get(s);
+                if (!cd && o.lastValueVisible === false) continue;
+                const v = lastSeriesValue(s);
+                if (v == null) continue;
+                let y = null;
+                try { y = s.priceToCoordinate(v); } catch (e) { y = null; }
+                if (y == null) continue;
+                out.push(y);
+                if (cd) out.push(y + 16);   // the countdown row under the price
+            }
+            return out;
+        }
+
+        // Every tagged level, laid out top to bottom: at least `gap` apart, and
+        // never on top of a fixed label above. One sweep down, then one back up
+        // when the block overran the bottom — monotone both ways, so a crowd
+        // spreads around itself instead of shuffling on the spot.
+        //
+        // `gap` shrinks when the pane cannot hold every label at TAG_GAP: the
+        // tags then sit tighter and touch rather than pile into one row, which
+        // keeps all of them readable and, above all, keeps each name tag on the
+        // row its value is on. Only this layer's own entries come back.
+        function tagPositions() {
+            const mine = [];
+            for (const h of L.handles) {
+                const o = h._o;
+                if (!o.visible || !o.lastValueVisible) continue;
+                const v = lastValueOf(h);
+                if (v == null) continue;
+                const y = yOf(v);
+                if (y == null) continue;
+                mine.push({ h, v, y });
+            }
+            if (!mine.length) return mine;
+            mine.sort((a, b) => a.y - b.y);
+
+            const fixed = foreignLabelYs().sort((a, b) => a - b);
+            const half = TAG_GAP / 2;
+            const top = half;
+            const bottom = L.paneH ? Math.max(L.paneH - half, top) : Infinity;
+            const room = bottom - top;
+            const slots = mine.length + fixed.length;
+            const gap = (isFinite(room) && slots > 1)
+                ? Math.max(10, Math.min(TAG_GAP, room / (slots - 1)))
+                : TAG_GAP;
+
+            // Down past every fixed label this y still collides with. The list
+            // is ascending, so one forward scan also catches the collision a
+            // push has just created with the next one.
+            const clearDown = y => {
+                for (const f of fixed) if (Math.abs(y - f) < gap) y = f + gap;
+                return y;
+            };
+            const clearUp = y => {
+                for (let i = fixed.length - 1; i >= 0; i--) if (Math.abs(y - fixed[i]) < gap) y = fixed[i] - gap;
+                return y;
+            };
+
+            let prev = -Infinity;
+            for (const it of mine) {
+                it.y = prev = clearDown(Math.max(it.y, prev + gap, top));
+            }
+            if (mine[mine.length - 1].y > bottom) {
+                let next = Infinity;
+                for (let i = mine.length - 1; i >= 0; i--) {
+                    mine[i].y = next = Math.max(clearUp(Math.min(mine[i].y, next - gap, bottom)), top);
+                }
+            }
+            return mine;
+        }
+
+        // The layout the current frame is drawing, built in updateAllViews (the
+        // price scale asks for the axis views before the pane is painted) so the
+        // name tag and the value label cannot be laid out from two different
+        // reads of the scale.
+        const tagY = h => {
+            const hit = (L.tags || []).find(t => t.h === h);
+            return hit ? hit.y : null;
+        };
+
         const linesView = {
             zOrder: () => 'normal', update() {},
             renderer: () => ({
@@ -805,14 +937,16 @@ window.TradingViewChart = (function () {
                     target.useBitmapCoordinateSpace(scope => {
                         const ctx = scope.context, hr = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
                         const W = scope.bitmapSize.width;
+                        // Known from here on, so the next layout can keep the
+                        // spread inside the pane.
+                        L.paneH = scope.mediaSize.height;
                         ctx.save();
                         ctx.font = `${Math.round(10 * vpr)}px -apple-system, system-ui, sans-serif`;
                         ctx.textBaseline = 'middle';
                         for (const h of L.handles) {
                             const o = h._o;
                             if (!o.visible || !o.lastValueVisible || !o.title) continue;
-                            const v = lastValueOf(h);
-                            const y = yOf(v);
+                            const y = tagY(h);
                             if (y == null) continue;
                             const tw = ctx.measureText(o.title).width, pad = 4 * hr, bh = Math.round(14 * vpr);
                             const bw = Math.round(tw + 2 * pad), x = W - bw, cy = Math.round(y * vpr);
@@ -830,20 +964,20 @@ window.TradingViewChart = (function () {
             attached(p) { L.requestUpdate = p.requestUpdate; },
             detached() { L.requestUpdate = null; },
             updateAllViews() {
-                const views = [];
-                for (const h of L.handles) {
-                    const o = h._o;
-                    if (!o.visible || !o.lastValueVisible) continue;
-                    const v = lastValueOf(h);
-                    if (v == null) continue;
-                    const text = anchor.priceFormatter().format(v);
-                    views.push({
-                        coordinate: () => { const c = yOf(v); return c == null ? -100 : c; },
+                L.tags = tagPositions();
+                L.axisViews = L.tags.map(t => {
+                    const o = t.h._o;
+                    const text = anchor.priceFormatter().format(t.v);
+                    // The laid-out y, not a fresh yOf(v) — the pane tag is drawn
+                    // at this same number, and the two must not be read from the
+                    // scale at two different moments.
+                    const y = t.y;
+                    return {
+                        coordinate: () => y,
                         text: () => text, textColor: () => contrastText(o.color), backColor: () => o.color,
                         visible: () => true, tickVisible: () => true
-                    });
-                }
-                L.axisViews = views;
+                    };
+                });
             },
             paneViews: () => [linesView, labelsView],
             priceAxisViews: () => L.axisViews,
@@ -997,6 +1131,11 @@ window.TradingViewChart = (function () {
     //       countdown (bool | fn) — the countdown row, on by default;
     //       upColor / downColor — default to the series' candle colours.
     const _countdowns = new Set();
+    // series -> its countdown primitive. A countdown switches the series' own
+    // last-value tag off and draws two labels of its own, so `lastValueVisible`
+    // no longer says whether that series occupies the axis; the crisp layer
+    // asks here instead when it lays its own tags out around them.
+    const _countdownBySeries = new WeakMap();
     let _countdownTimer = null;
 
     function barCloseAt(bar, secs) {
@@ -1064,11 +1203,13 @@ window.TradingViewChart = (function () {
             refresh: () => primitive.refresh(),
             detach() {
                 _countdowns.delete(primitive);
+                try { _countdownBySeries.delete(series); } catch (e) {}
                 try { series.detachPrimitive(primitive); } catch (e) {}
                 if (!_countdowns.size && _countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
             }
         };
         _countdowns.add(primitive);
+        try { _countdownBySeries.set(series, primitive); } catch (e) {}
         if (!_countdownTimer) {
             _countdownTimer = setInterval(() => {
                 if (document.hidden) return;

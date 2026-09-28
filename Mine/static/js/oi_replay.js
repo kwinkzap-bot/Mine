@@ -142,6 +142,24 @@ let oipCEChartReady = false;
 let oipPEChartReady = false;
 let oipCustomStrikeSetOnLoad = false;
 
+/* ── Spot / Fut ───────────────────────────────────────────────────────────────
+   Which instrument the index chart draws: the index itself, or its
+   current-expiry future. Sent with every candle read (oipCandleLegParams), so
+   the first load, the pan-left backfill and the strike-only reload all agree —
+   a window half spot and half future would be a chart of nothing.
+
+   The switch only moves the BARS. The strikes, the OI ladder and Max Pain are
+   quoted against the index and the server keeps deriving them from it; what
+   follows the future is everything computed off the candles client-side (Mine
+   CPR, the EMAs, VWAP, the TPO profile), which is the point of charting it.
+
+   Per browser, like the rest of this page's view state. */
+const OIP_REPLAY_SRC_KEY = 'oipReplayChartSource';
+let oipChartSource = 'spot';
+try {
+    if (localStorage.getItem(OIP_REPLAY_SRC_KEY) === 'future') oipChartSource = 'future';
+} catch (e) { /* private window — the default stands */ }
+
 // DOM Cache
 const oipElems = {
     symbolSelect: null, interval: null,
@@ -765,7 +783,15 @@ let _oipMineLastIdx = -2;                     // playhead index the lines were l
 let _oipMineLastKeys = '';                    // line keys drawn at that index
 
 const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key]
-    : (key in OIP_REPLAY_MINE_DEFAULTS) ? OIP_REPLAY_MINE_DEFAULTS[key] : MineCPR.DEFAULTS[key];
+    : (key in OIP_REPLAY_MINE_DEFAULTS) ? OIP_REPLAY_MINE_DEFAULTS[key]
+    : (typeof MineTPO !== 'undefined' && key in MineTPO.DEFAULTS) ? MineTPO.DEFAULTS[key]
+    : MineCPR.DEFAULTS[key];
+
+// The TPO profile's own memo of finished sessions, keyed by session date.
+// Replay re-computes on every playhead step, so without it each step would
+// rebuild every session on screen; with it only the one the playhead is
+// inside is rebuilt. Cleared whenever the loaded candles change.
+let oipMineTpoCache = new Map();
 const oipMineEffectiveSettings = () => Object.assign({}, OIP_REPLAY_MINE_DEFAULTS, oipMineCprSettings);
 
 function oipInitMineCpr() {
@@ -777,11 +803,18 @@ function oipInitMineCpr() {
     const host = document.getElementById('oipMineCprSections');
     if (host && !host.dataset.built) {
         host.dataset.built = '1';
-        host.innerHTML = MineCPR.renderSettings(oipMineSetting);
+        const spec = (typeof MineTPO !== 'undefined')
+            ? MineCPR.SPEC.concat(MineTPO.SPEC) : MineCPR.SPEC;
+        host.innerHTML = MineCPR.renderSettings(oipMineSetting, spec);
         MineCPR.bindSettings(host, (key, v) => {
             oipMineCprSettings[key] = v;
             try { localStorage.setItem(OIP_MINECPR_STORE_KEY, JSON.stringify(oipMineCprSettings)); } catch (e) {}
-        }, () => oipApplyMineCpr(oipReplayIndex));
+        }, key => {
+            // A TPO input changes the rows themselves, so every memoised
+            // session has to go — the developing one alone is not enough.
+            if (typeof MineTPO !== 'undefined' && key in MineTPO.DEFAULTS) oipMineTpoCache.clear();
+            oipApplyMineCpr(oipReplayIndex);
+        });
     }
     // EMA 200 / Monday box colours follow the theme, as on Multichart.
     window.addEventListener('themechanged', () => oipApplyMineCpr(oipReplayIndex));
@@ -790,8 +823,12 @@ function oipInitMineCpr() {
 // Blank the set (a reload is coming) and forget the incremental position.
 function oipClearMineCpr() {
     _oipMineLastIdx = -2; _oipMineLastKeys = '';
+    oipMineTpoCache = new Map();          // other candles, other sessions
     if (!oipMinePane) return;
     try { MineCPR.attach(oipMinePane, { lines: {}, elements: [] }); } catch (e) {}
+    if (typeof MineTPO !== 'undefined') {
+        try { MineTPO.attach(oipMinePane, { profiles: [] }); } catch (e) {}
+    }
 }
 
 // Compute on the candles up to `index` and put the result on the chart.
@@ -825,10 +862,30 @@ function oipApplyMineCpr(index) {
     }
     _oipMineLastIdx = index; _oipMineLastKeys = keys;
 
+    oipApplyMineTpo(candles);
+
     const host = document.getElementById('oipMineCprSections');
-    if (host) MineCPR.refreshGates(host, [MineCPR.tfInfo(oipInterval)]);
+    if (host) {
+        const info = (typeof MineTPO !== 'undefined')
+            ? Object.assign({}, MineCPR.tfInfo(oipInterval), MineTPO.tfInfo(oipInterval))
+            : MineCPR.tfInfo(oipInterval);
+        MineCPR.refreshGates(host, [info]);
+    }
     if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
     oipLoadMineDaily();
+}
+
+// The TPO profile, on the same candle prefix the CPR set gets, so the
+// developing session's blocks, POC and value area grow with the playhead and
+// nothing past it is drawn. It has no per-bar lines, so there is no
+// incremental path to take: the engine's session cache is what keeps a step
+// cheap. 5-minute replays only — MineTPO.tfInfo gates it, same as Multichart.
+function oipApplyMineTpo(candles) {
+    if (typeof MineTPO === 'undefined' || !oipMinePane) return;
+    try {
+        MineTPO.attach(oipMinePane,
+            MineTPO.compute(candles, oipInterval, oipMineEffectiveSettings(), oipMineTpoCache));
+    } catch (e) { console.warn('[Replay] TPO:', e); }
 }
 
 // Daily bars for the pivots — one request per symbol, re-fetched after the
@@ -1198,6 +1255,10 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         if (typeof showNotification === 'function') showNotification(reason, 'error');
         return;
     }
+    // What the bars actually are — 'future' only if the server found a listed
+    // contract with data in this window. Anything else is spot, said out loud:
+    // the levels on screen would otherwise be read as the future's.
+    oipNoteChartSource(data);
 
     // --- RESET STATE FOR NEW LOAD ---
     oipLastRefreshIndex = -1;
@@ -1654,10 +1715,14 @@ function oipRefreshLocalView(view, resetZoom, index) {
    big_qty is the print size beside the Nifty Vol Fut swatches (oipBigPrintQty in
    oi_indicators.js). /api/oi-profile/candles tags future_volume only when it is
    sent, so this is what turns the index chart's big-print bars on; a new figure
-   is a new request, which the 'oip-big-print-qty-changed' listener below makes. */
+   is a new request, which the 'oip-big-print-qty-changed' listener below makes.
+
+   source is the Spot / Fut switch. It rides here rather than in each URL so
+   every read of this endpoint — first load, backfill, strike-only reload —
+   asks for the same instrument. */
 function oipCandleLegParams() {
     const big = typeof oipBigPrintQty === 'function' ? `&big_qty=${oipBigPrintQty()}` : '';
-    return `&opt=false&include_30s=false${big}`;
+    return `&opt=false&include_30s=false&source=${oipChartSource}${big}`;
 }
 
 // The box is wired page-wide in oi_indicators.js, which only knows to poke the
@@ -2185,6 +2250,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // The page's single symbol control. oipSelectSymbol reloads the index
     // chart and tells the Round Strike block to follow.
     oipElems.symbolSelect?.addEventListener('change', e => oipSelectSymbol(e.target.value));
+    // Spot / Fut — the two buttons beside the symbol. Delegated off the group so
+    // the highlight and the reload go through the one path (oipSetChartSource).
+    document.getElementById('oipChartSrc')?.addEventListener('click', e => {
+        const btn = e.target.closest('.oip-src-btn');
+        if (btn) oipSetChartSource(btn.dataset.src);
+    });
+    oipSyncChartSourceUI();
     oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
     // Both volume overlays only rebuild while visible (see oipRefreshVolumeBars),
     // so switching one on has to fill it in at the current playhead.
@@ -2483,6 +2555,50 @@ async function oipSelectSymbol(s) {
     // reads oipSymbol — so it has to be told the ground moved. Its expiry list
     // is symbol-specific too (NIFTY is weekly, BANKNIFTY monthly).
     window.oipRSOnDateChanged?.();
+}
+
+/* ── Spot / Fut switch ───────────────────────────────────────────────────────
+   One path in, whatever moved: it is a different instrument, so the whole
+   window is refetched and the replay starts again from the first bar rather
+   than keeping a playhead that pointed into the other source's bars.
+
+   The Round Strike block is NOT told: it charts option legs, which have no
+   spot/future of their own, and it is the same strikes either way. */
+function oipSetChartSource(src) {
+    const next = src === 'future' ? 'future' : 'spot';
+    if (next === oipChartSource) return;
+    oipChartSource = next;
+    try { localStorage.setItem(OIP_REPLAY_SRC_KEY, next); } catch (e) { /* not fatal */ }
+    oipSyncChartSourceUI();
+    oipResetReplay();
+}
+
+function oipSyncChartSourceUI() {
+    document.querySelectorAll('#oipChartSrc .oip-src-btn').forEach(btn => {
+        const on = btn.dataset.src === oipChartSource;
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', String(on));
+    });
+}
+
+// The contract goes in the Fut button's tooltip — this page has no chart title
+// to hang it off, and a silent "Fut" says nothing about WHICH month is drawn.
+// A requested future the server could not serve falls the switch back to Spot,
+// so the highlight never claims bars it is not showing.
+function oipNoteChartSource(data) {
+    const fut = document.querySelector('#oipChartSrc .oip-src-btn[data-src="future"]');
+    if (fut) {
+        fut.title = data.future_symbol
+            ? `Chart the current-expiry futures contract — ${data.future_symbol}`
+            : 'Chart the current-expiry futures contract';
+    }
+    if (data.source_requested !== 'future' || data.source === 'future') return;
+    oipChartSource = 'spot';
+    try { localStorage.setItem(OIP_REPLAY_SRC_KEY, 'spot'); } catch (e) { /* not fatal */ }
+    oipSyncChartSourceUI();
+    if (typeof showNotification === 'function') {
+        showNotification(`No future data for ${oipSymbol} in this window — charting spot instead.`, 'warning');
+    }
 }
 
 // ── 2nd candle box shared helpers ─────────────────────────────────────────────
