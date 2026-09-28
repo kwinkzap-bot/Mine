@@ -30,12 +30,22 @@
                              dropdown of its own — two selectors for two charts that
                              are meant to be read together was a way to end up
                              comparing different instruments without noticing.
-                             Limited to the three indices this page replays. -->
+
+                             The three indices are the page's own, written here so
+                             the control is usable before any fetch returns. Every
+                             NSE stock carrying a futures contract is appended below
+                             them at load (oipLoadSymbolOptions, off the same
+                             /api/multichart/symbols list the Multichart picker
+                             uses) — the index group stays on top, the stocks follow
+                             in one labelled group, and a failed fetch simply leaves
+                             the three. -->
                         <span class="oip-label">Sym</span>
                         <select id="oipSymbolSelect" class="oip-select oip-select--xs" title="Symbol (drives both charts)">
-                            <option value="NIFTY" selected>NIFTY</option>
-                            <option value="BANKNIFTY">BANKNIFTY</option>
-                            <option value="SENSEX">SENSEX</option>
+                            <optgroup label="Index" id="oipSymbolIndexGroup">
+                                <option value="NIFTY" selected>NIFTY</option>
+                                <option value="BANKNIFTY">BANKNIFTY</option>
+                                <option value="SENSEX">SENSEX</option>
+                            </optgroup>
                         </select>
                         <!-- Spot or the current-expiry future, the same pair /multichart
                              carries beside its symbol box. A data source, not an

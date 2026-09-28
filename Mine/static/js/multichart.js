@@ -85,7 +85,11 @@
             }));
         } catch (e) { /* storage blocked — the page still works */ }
     }
-    const PAGE_DEFAULTS = { countdown: true, futVolume: true, futChart: false };   // page settings that are not Pine inputs
+    // Page settings that are not Pine inputs. `tpoPane` is which pane the TPO
+    // profile is drawn on ('all', or a pane index as a string) — a Multichart
+    // question, since it is the only page with more than one chart, so it
+    // lives here rather than in the shared MineTPO.SPEC.
+    const PAGE_DEFAULTS = { countdown: true, futVolume: true, futChart: false, tpoPane: 'all' };
 
     // A per-browser view preference, kept apart from the chart state above
     // so it never rides along with a symbol/timeframe save. Guarded like the
@@ -205,6 +209,7 @@
             chart.timeScale().applyOptions({ timeVisible: pane.tf !== 'day' });
             loadPane(pane, ++pane.seq);
             refreshGateTags();
+            refreshTpoPaneLabels();
         });
         node.querySelector('.mc-max').addEventListener('click', () => toggleMax(index));
         node.querySelector('.mc-pane-head').addEventListener('dblclick', e => { if (e.target === pane.titleEl || e.target.classList.contains('mc-pane-head')) toggleMax(index); });
@@ -283,10 +288,21 @@
     // same candles. Finished sessions are memoised in pane.tpoCache, so a live
     // tick only rebuilds the developing one.
     function applyTpo(pane) {
+        if (!tpoWanted(pane)) {                    // another pane owns the profile
+            MineTPO.attach(pane, { profiles: [] });
+            pane.tpoEl.textContent = '';
+            return;
+        }
         const tpo = MineTPO.compute(pane.candles, pane.tf, state.settings, pane.tpoCache);
         MineTPO.attach(pane, tpo);
         pane.tpoEl.textContent = tpo.profiles.length
             ? `TPO ${TF_LABEL[tpoSizeFor(pane)] || ''} · ${setting('tpoVA')}%` : '';
+    }
+
+    // 'all' draws it everywhere; otherwise only the pane whose index was picked.
+    function tpoWanted(pane) {
+        const target = setting('tpoPane');
+        return target === 'all' || String(pane.index) === String(target);
     }
 
     // The period a pane actually draws: the chosen size, or the pane's own
@@ -770,10 +786,31 @@
         syncSourceUI();
     }
 
+    // Built at render time so the options name each pane's current timeframe;
+    // refreshTpoPaneLabels() keeps them honest when one is changed.
+    const tpoPaneOptions = () => [['all', 'All charts']].concat(
+        state.tfs.map((tf, i) => [String(i), `Chart ${i + 1} · ${TF_LABEL[tf]}`]));
+
+    const TPO_PANE_SPEC = () => [
+        { title: 'TPO chart', items: [
+            { key: 'tpoPane', type: 'select', label: 'Draw TPO on', options: tpoPaneOptions() },
+        ] },
+    ];
+
+    function refreshTpoPaneLabels() {
+        const sel = document.querySelector('#mcIndPopup select[data-key="tpoPane"]');
+        if (!sel) return;
+        const opts = tpoPaneOptions();
+        for (const [value, label] of opts) {
+            const o = sel.querySelector(`option[value="${value}"]`);
+            if (o) o.textContent = label;
+        }
+    }
+
     function buildIndicatorsPopup() {
         const popup = $('mcIndPopup');
         popup.innerHTML = '<div class="mc-ind-head">Indicators · Mine CPR</div>' +
-            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC, MineTPO.SPEC));
+            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC, MineTPO.SPEC, TPO_PANE_SPEC()));
 
         MineCPR.bindSettings(popup, (key, v) => { state.settings[key] = v; save(); },
             key => {
@@ -781,6 +818,9 @@
                 // session has to go — the developing one alone is not enough.
                 if (key in MineTPO.DEFAULTS) for (const pane of state.panes) pane.tpoCache.clear();
                 if (key === 'futChart') { syncSourceUI(); setDataSourceFromSetting(); return; }
+                // Switching the target pane means one pane starts drawing and
+                // another stops: both need the pass, so nothing is left behind.
+                if (key === 'tpoPane') { for (const pane of state.panes) applyTpo(pane); return; }
                 for (const pane of state.panes) { applyIndicators(pane); paintVolume(pane); }
             });
 

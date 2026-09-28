@@ -1352,6 +1352,18 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     // SHOW FULL DATA INITIALLY (Normal Chart Mode). The Mine CPR set was put
     // on by the oipRefreshLocalView(lastIdx) inside oipSetupReplaySlider.
     if (oipOISeries) oipOISeries.setData(oipFullCandles);
+    // ...and re-frame the PRICE axis with it. Lightweight Charts turns
+    // autoScale off the moment the price axis is dragged, and never turns it
+    // back on: the axis then keeps the range it was left at for the life of the
+    // page. That is what a within-window zoom should do, but this function is a
+    // new window every time it runs — it clears every series, resets the
+    // playhead and refits the TIME axis below — and after switching to a stock
+    // the chart was still framed on the index it came from, 22 800–23 300 with
+    // the stock's bars nowhere near it. fitContent() does not help: it is the
+    // time scale's, and the two axes are independent. The series' own
+    // customAutoscale (see oipInitCharts) is never consulted while autoScale is
+    // off, so asking for it back here is what makes it run again.
+    try { oipOIChart?.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
     // Through the same gate as every replay step, so a switched-off overlay
     // stays empty rather than parking the whole window on the time scale.
     oipRefreshVolumeBars(oipFullCandles.length - 1);
@@ -2250,6 +2262,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // The page's single symbol control. oipSelectSymbol reloads the index
     // chart and tells the Round Strike block to follow.
     oipElems.symbolSelect?.addEventListener('change', e => oipSelectSymbol(e.target.value));
+    // Fire and forget: the F&O stocks land in the dropdown a moment after the
+    // page does, and nothing below waits on the symbol master for the chart.
+    oipLoadSymbolOptions();
     // Spot / Fut — the two buttons beside the symbol. Delegated off the group so
     // the highlight and the reload go through the one path (oipSetChartSource).
     document.getElementById('oipChartSrc')?.addEventListener('click', e => {
@@ -2544,6 +2559,62 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     }
 
     return parseFloat(oipElems.customStrikeDropdown.value) || atm;
+}
+
+/* ── Symbol list ──────────────────────────────────────────────────────────────
+   The three indices are in the markup (see oi_replay.html) so the control works
+   from the first paint; this appends every NSE stock with a futures contract
+   under them, in its own group, so the index the page opens on stays at the top
+   of the list.
+
+   The list is /api/multichart/symbols — the Multichart picker's, which is the
+   3-day file cache behind the Fyers NFO symbol master (stock_list_store), so it
+   costs nothing per page load and the two pages can never disagree about what
+   is tradable. INDEX entries beyond the page's own three are dropped: this page
+   replays the three it is built for, and an index it cannot draw in a dropdown
+   is a dead entry.
+
+   Everything here is best-effort — a broker that is not logged in, or any other
+   failure, leaves the markup's three indices exactly as they are. */
+async function oipLoadSymbolOptions() {
+    const sel = oipElems.symbolSelect;
+    if (!sel) return;
+    let symbols;
+    try {
+        const res = await fetch('/api/multichart/symbols', { credentials: 'same-origin' });
+        const body = await res.json();
+        symbols = (body && body.symbols) || [];
+    } catch (e) {
+        console.warn('[Replay] Symbol list unavailable — indices only:', e);
+        return;
+    }
+    const stocks = symbols.filter(s => s && s.kind === 'FUT' && s.symbol)
+                          .map(s => String(s.symbol).toUpperCase());
+    if (!stocks.length) return;
+
+    // This group goes first, THEN the set of what is left — the other way round
+    // a re-run sees its own options in `seen`, filters every stock out as a
+    // duplicate and leaves the select with the indices alone.
+    document.getElementById('oipSymbolStockGroup')?.remove();
+    const seen = new Set(Array.from(sel.options, o => o.value.toUpperCase()));
+
+    const group = document.createElement('optgroup');
+    group.id = 'oipSymbolStockGroup';
+    group.label = 'F&O Stocks';
+    for (const sym of stocks) {
+        if (seen.has(sym)) continue;
+        seen.add(sym);
+        const opt = document.createElement('option');
+        opt.value = sym;
+        opt.textContent = sym;
+        group.appendChild(opt);
+    }
+    if (!group.childElementCount) return;
+    sel.appendChild(group);
+
+    // Rebuilding the options can drop the selection on some browsers; the page's
+    // symbol is the truth, not the widget.
+    if (sel.value !== oipSymbol) sel.value = oipSymbol;
 }
 
 async function oipSelectSymbol(s) {

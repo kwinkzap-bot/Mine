@@ -2,8 +2,8 @@
  * mine_tpo.js — Time Price Opportunity (Market Profile) as a chart-agnostic
  * indicator engine, built the same way as mine_cpr.js and drawn beside it.
  *
- * `MineTPO.compute(candles, interval, settings, cache)` is pure: it turns the
- * 5-minute pane's candles into one profile per session — the TPO rows, the
+ * `MineTPO.compute(candles, interval, settings, cache)` is pure: it turns one
+ * pane's intraday candles into one profile per session — the TPO rows, the
  * POC, the value area, the initial balance and the single prints — and
  * `MineTPO.attach(pane, result)` puts them on a Lightweight Charts v5 pane
  * through ONE canvas primitive, so a profile costs the same as the CPR
@@ -139,16 +139,19 @@ window.MineTPO = (function () {
     }
 
     /* ── where a profile can be drawn ────────────────────────────────────── */
-    // The 5-minute pane only. A profile is read off one timeframe, not four:
-    // on 1m the same session's blocks are the same blocks drawn over a wider
-    // stretch of screen, and on 1h a period is a single bar. Keeping it to 5m
-    // means the panes beside it stay clean and the profile always means the
-    // same thing. The TPO SIZE (the period a letter covers) is still a
-    // setting — this is the chart it is drawn on.
-    const TPO_INTERVAL = '5minute';
-
+    // Every intraday timeframe. The profile is built from the session's own
+    // bars, so the chart it is drawn on only decides how finely those bars
+    // resolve the periods — the shape, the POC and the value area come out
+    // the same on 1m as on 1h. A pane coarser than the chosen TPO size is not
+    // refused either: its own timeframe becomes the period (see periodSecs),
+    // which is what the letters would collapse to anyway.
+    //
+    // Daily and up are excluded: one bar per session cannot be cut into
+    // periods at all, so every row would hold exactly one TPO and the whole
+    // profile would read as a single print.
     function tfInfo(interval) {
-        return { secs: secondsOf(interval), showTpo: interval === TPO_INTERVAL };
+        const secs = secondsOf(interval);
+        return { secs, showTpo: secs < 86400 };
     }
     const periodSecs = (interval, settings) =>
         Math.max(secondsOf(interval), secondsOf((settings && settings.tpoSize) || DEFAULTS.tpoSize));
@@ -576,10 +579,14 @@ window.MineTPO = (function () {
     // Rendered by MineCPR.renderSettings, so the rows read and behave exactly
     // like the CPR ones and a page only has to concat this in.
     const SPEC = [
-        { title: 'TPO / Market Profile', gate: 'showTpo', gateLabel: '5m only', items: [
+        { title: 'TPO / Market Profile', gate: 'showTpo', gateLabel: 'intraday', items: [
             { key: 'tpo', label: 'TPO profile', color: '#e0446f' },
             { key: 'tpoSize', type: 'select', label: 'TPO size', options: SIZE_OPTIONS, sub: true },
-            { key: 'tpoSessions', type: 'number', label: 'Sessions back', min: 1, max: 60, sub: true },
+            // No max: as far back as the pane has candles for. renderSettings
+            // omits the attribute, and bindSettings only clamps when there is
+            // one. Cost is bounded anyway — a finished session is built once
+            // and cached, and the draw loop skips any profile off screen.
+            { key: 'tpoSessions', type: 'number', label: 'Sessions back (no limit)', min: 1, sub: true },
             { key: 'tpoVA', type: 'number', label: 'Value area %', min: 5, max: 100, sub: true },
             { key: 'tpoRowStep', type: 'number', label: 'Row size in points (0 = auto)', min: 0, max: 1000, sub: true },
             { key: 'tpoRowsTarget', type: 'number', label: 'Rows per session (when auto)', min: 5, max: 200, sub: true },
