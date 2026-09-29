@@ -22,7 +22,7 @@
 
         <div class="mc-search-wrap">
             <input type="search" id="mcSymbol" class="mc-search" autocomplete="off" spellcheck="false"
-                   placeholder="Symbol… ( / )" value="NIFTY" title="Search an index or F&O stock — applies to all three charts">
+                   placeholder="Symbol… ( / )" value="NIFTY" title="Search an index or F&O stock — applies to every chart">
             <div class="mc-suggest" id="mcSuggest" hidden></div>
         </div>
 
@@ -34,13 +34,25 @@
             <button type="button" class="mc-src-btn" data-src="future" title="Chart the current-expiry futures contract">Fut</button>
         </div>
 
+        <!-- How many charts. Each count has its own default timeframes
+             (1 → 5m, 2 → 1m + 1h, 3 → 1m + 5m + 1h, 4 → + 1D, see
+             TF_PRESETS) and remembers the dropdowns it was last left with.
+             Four charts are laid out 2x2 rather than four across. -->
+        <span class="mc-count-lbl">Charts</span>
+        <div class="mc-src mc-count" id="mcCount" role="group" aria-label="Number of charts">
+            <button type="button" class="mc-src-btn" data-count="1" title="One chart — 5m">1</button>
+            <button type="button" class="mc-src-btn" data-count="2" title="Two charts — 1m and 1h">2</button>
+            <button type="button" class="mc-src-btn" data-count="3" title="Three charts — 1m, 5m and 1h">3</button>
+            <button type="button" class="mc-src-btn" data-count="4" title="Four charts (2x2) — 1m, 5m, 1h and 1D">4</button>
+        </div>
+
         <div class="mc-quote" id="mcQuote">
             <span class="mc-ltp" id="mcLtp">—</span>
             <span class="mc-chg" id="mcChg"></span>
         </div>
 
         <div class="mc-ind-wrap">
-            <button type="button" class="mc-btn" id="mcIndBtn" title="Indicators — the Mine CPR set, applied to all three charts">
+            <button type="button" class="mc-btn" id="mcIndBtn" title="Indicators — the Mine CPR set, applied to every chart">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>
                 Indicators
             </button>
@@ -59,13 +71,15 @@
                 title="Hide the nav bar on this screen">▴</button>
     </div>
 
-    <!-- Three panes in a row (stacked below 900px); a pane's ⛶ swaps the grid
-         for that pane alone. multichart.js drops a drag handle between each
-         pair of panes (width side by side, height when stacked) and a bar
-         under the grid that sets its height — both remembered per browser. -->
+    <!-- One to four panes in a row — four go 2x2, and any count stacks into
+         one column below 900px; a pane's ⛶ swaps the grid for that pane
+         alone. multichart.js drops a drag handle between each pair of panes
+         (width side by side, height when stacked; for the 2x2 one down the
+         middle and one across) and a bar under the grid that sets its
+         height — all of it remembered per browser. -->
     <div class="mc-grid" id="mcGrid"></div>
 
-    <!-- One pane. Cloned three times by multichart.js. -->
+    <!-- One pane. Cloned once per chart by multichart.js. -->
     <template id="mcPaneTpl">
         <div class="mc-pane">
             <div class="mc-pane-head">
@@ -75,6 +89,7 @@
                 <span class="mc-pane-spacer"></span>
                 <span class="mc-pane-cpr" title="Pivot period CPR is anchored to on this timeframe"></span>
                 <span class="mc-pane-tpo" title="TPO period and value area drawn on this timeframe"></span>
+                <span class="mc-pane-of" title="Order flow footprint: row size and where the prints came from"></span>
                 <button type="button" class="mc-max" title="Maximise / restore">⛶</button>
             </div>
             <div class="mc-chart"></div>
@@ -86,5 +101,6 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_orderflow.js') }}?v={{ sv('js/components/mine_orderflow.js') }}"></script>
 <script src="{{ url_for('static', filename='js/multichart.js') }}?v={{ sv('js/multichart.js') }}"></script>
 {% endblock %}

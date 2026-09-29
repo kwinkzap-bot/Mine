@@ -1576,7 +1576,7 @@ body.ocean-theme .oip-tooltip {
        card's right edge on a wide monitor, which read as a broken row rather
        than as deliberate space. */
     max-width: 150px;
-    padding: 3px 6px;
+    padding: 1px 5px;
     /* One floor for every pill so the IVP card's extra gauge row sets the
        height of the strip rather than leaving the other eleven short. */
     min-height: 30px;
@@ -1588,7 +1588,7 @@ body.ocean-theme .oip-tooltip {
 }
 
 .oip-status-row--compact .oip-hdr-val {
-    font-size: 11px;
+    font-size: 9px;
 }
 
 /* ── Indicators Popup ─────────────────────────────────────── */
@@ -2339,4 +2339,29 @@ body.dark-theme .oip-oo-cancel-all,
 
 @media (max-width: 600px) {
     .oip-modal-box--info { width: 100vw; height: 100vh; height: 100dvh; }
+}
+
+/* ── Hide/show the app nav bar ────────────────────────────────────────────────
+   The class lands on <html> (not <body> like /multichart's .mc-bare and Order
+   Placement's .op-bare) so the inline script in this page's <head> can set it
+   before the server-rendered nav has painted — no flash of a nav bar that is
+   about to be taken away.
+
+   Unscoped by width on purpose, unlike those two: they offer this only on a
+   phone, where it is a last resort for height. Here it is a deliberate view
+   preference for a page that is charts at every width, and it is only ever set
+   by pressing the button on this page — the OI Profile page is the only one
+   that carries it, so nothing else can be folded away by accident. */
+html.oip-bare .navigation-bar {
+    display: none;
+}
+
+/* The caret sits in the Round Strike title, deliberately at the opposite end of
+   the header from EXIT. Slightly narrower than a normal icon button so it reads
+   as chrome rather than another control. */
+.oip-chrome {
+    width: 22px;
+    margin-left: 2px;
+    font-size: 10px;
+    line-height: 1;
 }

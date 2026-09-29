@@ -161,6 +161,17 @@ window.MineTPO = (function () {
     // in the pane lines its blocks up on the same price grid.
     const rowOf = (price, step) => Math.floor(price / step);
 
+    // Row index -> price, at the step's own precision. `row * 0.02` in binary
+    // floating point is 7.5200000000000005, and these prices are what the
+    // value area and the single-print bands are expressed in — a penny stock
+    // should not carry sixteen digits of noise into them.
+    const stepDecimals = step => {
+        const str = String(step);
+        const dot = str.indexOf('.');
+        return dot < 0 ? 0 : Math.min(8, str.length - dot - 1);
+    };
+    const priceAt = (rows, step) => +(rows * step).toFixed(stepDecimals(step));
+
     // A "nice" step: 1, 2, 2.5 or 5 times a power of ten, so NIFTY's ~250
     // point session lands on 5-point rows rather than 4.83-point ones.
     function niceStep(raw) {
@@ -271,9 +282,9 @@ window.MineTPO = (function () {
             periodSpan: Math.max(2, Math.ceil(SESSION_SECS / secs)),
             widest: best,
             rows: Array.from(rows.entries()).sort((a, b) => a[0] - b[0]),
-            singles: singles.map(({ lo, hi }) => ({ low: lo * step, high: (hi + 1) * step })),
-            vah: (vahRow + 1) * step, val: valRow * step,
-            pocTop: (poc + 1) * step, pocBottom: poc * step,
+            singles: singles.map(({ lo, hi }) => ({ low: priceAt(lo, step), high: priceAt(hi + 1, step) })),
+            vah: priceAt(vahRow + 1, step), val: priceAt(valRow, step),
+            pocTop: priceAt(poc + 1, step), pocBottom: priceAt(poc, step),
         };
     }
 

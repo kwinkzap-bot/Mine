@@ -785,6 +785,7 @@ let _oipMineLastKeys = '';                    // line keys drawn at that index
 const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key]
     : (key in OIP_REPLAY_MINE_DEFAULTS) ? OIP_REPLAY_MINE_DEFAULTS[key]
     : (typeof MineTPO !== 'undefined' && key in MineTPO.DEFAULTS) ? MineTPO.DEFAULTS[key]
+    : (typeof MineOrderFlow !== 'undefined' && key in MineOrderFlow.DEFAULTS) ? MineOrderFlow.DEFAULTS[key]
     : MineCPR.DEFAULTS[key];
 
 // The TPO profile's own memo of finished sessions, keyed by session date.
@@ -792,19 +793,24 @@ const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[k
 // rebuild every session on screen; with it only the one the playhead is
 // inside is rebuilt. Cleared whenever the loaded candles change.
 let oipMineTpoCache = new Map();
+// The same for Order Flow. Replay reads the ARCHIVE, so a day it scrubs to is
+// fetched once and never changes; the cache is cleared with the candles.
+let oipMineOfCache = new Map();
 const oipMineEffectiveSettings = () => Object.assign({}, OIP_REPLAY_MINE_DEFAULTS, oipMineCprSettings);
 
 function oipInitMineCpr() {
     if (typeof MineCPR === 'undefined' || !oipOIChart || !oipOISeries) return;
     try { oipMineCprSettings = JSON.parse(localStorage.getItem(OIP_MINECPR_STORE_KEY) || '{}') || {}; }
     catch (e) { oipMineCprSettings = {}; }
-    oipMinePane = { chart: oipOIChart, series: oipOISeries, lines: {}, primitive: null };
+    oipMinePane = { chart: oipOIChart, series: oipOISeries, lines: {}, primitive: null,
+                    ofCache: oipMineOfCache };
 
     const host = document.getElementById('oipMineCprSections');
     if (host && !host.dataset.built) {
         host.dataset.built = '1';
-        const spec = (typeof MineTPO !== 'undefined')
+        let spec = (typeof MineTPO !== 'undefined')
             ? MineCPR.SPEC.concat(MineTPO.SPEC) : MineCPR.SPEC;
+        if (typeof MineOrderFlow !== 'undefined') spec = spec.concat(MineOrderFlow.SPEC);
         host.innerHTML = MineCPR.renderSettings(oipMineSetting, spec);
         MineCPR.bindSettings(host, (key, v) => {
             oipMineCprSettings[key] = v;
@@ -813,6 +819,7 @@ function oipInitMineCpr() {
             // A TPO input changes the rows themselves, so every memoised
             // session has to go — the developing one alone is not enough.
             if (typeof MineTPO !== 'undefined' && key in MineTPO.DEFAULTS) oipMineTpoCache.clear();
+            if (typeof MineOrderFlow !== 'undefined' && key in MineOrderFlow.DEFAULTS) oipMineOfCache.clear();
             oipApplyMineCpr(oipReplayIndex);
         });
     }
@@ -824,10 +831,15 @@ function oipInitMineCpr() {
 function oipClearMineCpr() {
     _oipMineLastIdx = -2; _oipMineLastKeys = '';
     oipMineTpoCache = new Map();          // other candles, other sessions
+    oipMineOfCache = new Map();
     if (!oipMinePane) return;
+    oipMinePane.ofCache = oipMineOfCache;
     try { MineCPR.attach(oipMinePane, { lines: {}, elements: [] }); } catch (e) {}
     if (typeof MineTPO !== 'undefined') {
         try { MineTPO.attach(oipMinePane, { profiles: [] }); } catch (e) {}
+    }
+    if (typeof MineOrderFlow !== 'undefined') {
+        try { MineOrderFlow.apply(oipMinePane, [], oipInterval, {}, { on: false }); } catch (e) {}
     }
 }
 
@@ -863,12 +875,18 @@ function oipApplyMineCpr(index) {
     _oipMineLastIdx = index; _oipMineLastKeys = keys;
 
     oipApplyMineTpo(candles);
+    oipApplyMineOrderFlow(candles);
 
     const host = document.getElementById('oipMineCprSections');
     if (host) {
-        const info = (typeof MineTPO !== 'undefined')
+        let info = (typeof MineTPO !== 'undefined')
             ? Object.assign({}, MineCPR.tfInfo(oipInterval), MineTPO.tfInfo(oipInterval))
             : MineCPR.tfInfo(oipInterval);
+        // `ofCells` stays dark: this chart is the index, not the contract the
+        // tape was collected on, so the cells row is offered but cannot light.
+        if (typeof MineOrderFlow !== 'undefined') {
+            info = Object.assign({}, info, MineOrderFlow.tfInfo(oipInterval), { ofCells: false });
+        }
         MineCPR.refreshGates(host, [info]);
     }
     if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
@@ -886,6 +904,31 @@ function oipApplyMineTpo(candles) {
         MineTPO.attach(oipMinePane,
             MineTPO.compute(candles, oipInterval, oipMineEffectiveSettings(), oipMineTpoCache));
     } catch (e) { console.warn('[Replay] TPO:', e); }
+}
+
+// The Order Flow set, on the same candle prefix, so the per-bar figures and
+// the running total grow with the playhead and nothing past it is drawn.
+//
+// Cells are NOT drawn here: the trade tape is collected on the front-month
+// FUTURE and this chart is the spot index, so every price in the tape sits a
+// basis away from these candles. Everything bucketed by TIME does carry over
+// exactly — volume, delta, the intra-bar extremes and the running total — so
+// the bar-stats pane and the per-bar header work unchanged.
+//
+// Replay reads back days, which come out of the tape ARCHIVE. A day nobody
+// watched has no rows and the pane simply stays empty.
+function oipApplyMineOrderFlow(candles) {
+    if (typeof MineOrderFlow === 'undefined' || !oipMinePane) return;
+    try {
+        MineOrderFlow.apply(oipMinePane, candles || [], oipInterval, oipMineEffectiveSettings(),
+                            { root: oipSymbol, cells: false });
+    } catch (e) { console.warn('[Replay] Order flow:', e); }
+}
+
+if (typeof MineOrderFlow !== 'undefined') {
+    MineOrderFlow.Tape.setListener(() => {
+        if (oipMinePane) oipApplyMineCpr(oipReplayIndex);
+    });
 }
 
 // Daily bars for the pivots — one request per symbol, re-fetched after the

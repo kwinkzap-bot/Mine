@@ -8,6 +8,18 @@
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 <script
     src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
+<script>
+    /* The nav-bar toggle's stored state, applied before anything paints — the
+       nav is server-rendered, so setting this from the page script at the end
+       of <body> would show it and then snatch it away on every load.
+       <html> rather than <body>, which does not exist yet up here; the rest of
+       the toggle (the button, the write-back) lives in oi_profile.js. */
+    try {
+        if (localStorage.getItem('oip.hideChrome') === '1') {
+            document.documentElement.classList.add('oip-bare');
+        }
+    } catch (e) { /* blocked storage — the nav simply stays */ }
+</script>
 {% endblock %}
 
 {% block content %}
@@ -32,6 +44,15 @@
                          is never mistaken for a quiet market. Filled by
                          oipRSSetStaleChip. -->
                     <span class="oip-stale-chip hidden" id="oipRSStaleChip" title=""></span>
+                    <!-- Hide/show the app's nav bar — the same per-browser view
+                         preference /multichart and Order Placement carry, except
+                         those only offer it on a phone. This page is charts all
+                         the way down at any width, so the row of menus at the top
+                         is worth reclaiming on a desktop too. The button itself
+                         always stays, or there would be no way back. -->
+                    <button type="button" class="oip-btn oip-btn--icon oip-chrome" id="oipChrome"
+                            aria-pressed="false" aria-label="Hide the nav bar"
+                            title="Hide the nav bar on this screen">&#9652;</button>
                 </div>
 
                 <div class="oip-prem-toolbar">
@@ -517,6 +538,262 @@
              title="Drag to resize the Round Strike chart · double-click to reset"></div>
     </div>
 
+    <div class="oip-container">
+        <!-- Original OI Profile Block -->
+        <div class="oip-header oip-header--compact">
+            <div class="oip-hdr-top">
+
+                <!-- Title -->
+                <div class="oip-title oip-title--sm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </svg>
+                    OI Profile
+                    <!-- Live pill — oi_profile_live.js flips it green while the 2-second
+                         feed is arriving and back to this amber "On Refresh" when it
+                         is not (market closed, a timeframe the feed cannot rebuild,
+                         or an error). -->
+                    <span class="oip-title-badge oip-title-badge--manual"
+                          id="oipLiveBadge">On Refresh</span>
+                </div>
+
+                <!-- Compact single-row controls -->
+                <div class="oip-prem-toolbar">
+
+                    <!-- Spot / Fut — THIS chart's instrument only, the same switch
+                         /oi-profile/replay and /multichart carry. It swaps the bars
+                         drawn here for the current-expiry future's (live, straight
+                         from the broker on every click) and leaves the Opt Prem
+                         block below on its option premiums. The OI ladder, Max Pain
+                         and the strike dropdowns stay quoted against the INDEX —
+                         the server keeps deriving them from it — so in Fut mode
+                         those levels sit a basis away from the bars. -->
+                    <div class="oip-src" id="oipChartSrc" role="group" aria-label="Chart data source">
+                        <button type="button" class="oip-src-btn" data-src="spot"
+                                title="Chart the index (spot)">Spot</button>
+                        <button type="button" class="oip-src-btn" data-src="future"
+                                title="Chart the current-expiry futures contract">Fut</button>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Indicators button + popup -->
+                    <div class="oip-prem-group" style="position:relative;">
+                        <button id="oipIndicatorsBtn" class="oip-btn" type="button" title="Toggle Indicators">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                            </svg>
+                            Indicators
+                        </button>
+
+                        <div id="oipIndicatorsPopup" class="oip-ind-popup hidden">
+                            <div class="oip-ind-popup-header">Indicators</div>
+
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-section-title">Overlays</div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowVolume" checked><span>Nifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volDn"
+                                            title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
+                                    </span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
+                                    <input type="checkbox" id="oipShowBnfVolume"><span>Banknifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
+                                            title="Volume bar color on a down candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolFlat"
+                                            title="Volume bar color when Vol Direction Color is off">
+                                    </span>
+                                </label>
+                                <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
+                                     every Indicator popup. Off, the volume overlays drop the up/down split
+                                     and every bar paints the flat swatch above. -->
+                                <label class="oip-ind-item"
+                                    title="Tint volume bars by the candle's direction. Off: every bar uses the flat color swatch">
+                                    <input type="checkbox" class="oip-vol-dircolor-cb" checked><span>Vol Direction Color</span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
+                                    <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18
+                                        ATM CE OI Lines</span>
+                                </label>
+                            </div>
+
+                            <!-- Mine CPR — the same indicator set as /multichart (CPR, Multi
+                                 CPR, EMAs, VWAP, boxes), rendered from MineCPR.SPEC by
+                                 oipInitMineCpr in oi_profile.js. It replaced this popup's own
+                                 CPR Levels / Multi CPR / VWAP / EMA groups and the 2nd 5-min and
+                                 Monday boxes; everything below is OI-Profile-only and stays. -->
+                            <div id="oipMineCprSections"></div>
+
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-section-title">Lines</div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowMaxPain" checked><span style="color:#2563eb">Max
+                                        Pain</span>
+                                </label>
+                                <div class="oip-ind-reversal-wrap">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow30mReversalLines"><span
+                                            style="color:#f97316">30m Reversal</span>
+                                    </label>
+                                    <div class="oip-ind-reversal-inputs">
+                                        <span class="oip-ind-mini-lbl">Count</span>
+                                        <input type="number" id="oipReversal30mCount" class="oip-ind-mini-inp"
+                                            value="10" min="1" max="30" step="1">
+                                        <span class="oip-ind-mini-lbl">Range</span>
+                                        <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp"
+                                            value="50" min="5" max="500" step="5">
+                                    </div>
+                                </div>
+                                <div class="oip-ind-reversal-wrap">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow1DReversalLines"><span
+                                            style="color:#8b5cf6">1D Reversal</span>
+                                    </label>
+                                    <div class="oip-ind-reversal-inputs">
+                                        <span class="oip-ind-mini-lbl">Count</span>
+                                        <input type="number" id="oipReversal1DCount" class="oip-ind-mini-inp" value="10"
+                                            min="1" max="30" step="1">
+                                        <span class="oip-ind-mini-lbl">Range</span>
+                                        <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="30"
+                                            min="1" max="500" step="1">
+                                    </div>
+                                </div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShow2ndCandle30s" checked><span
+                                        style="color:#FFC800">2nd 30Sec Candle</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Horizontal Ray drawing tool -->
+                    <div class="oip-prem-group" style="position:relative;">
+                        <button id="oipOIRayToolBtn" class="oip-btn" type="button"
+                            title="Draw Horizontal Ray — click the chart to place, right-click a ray to remove it">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none" />
+                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3" />
+                            </svg>
+                            Ray
+                        </button>
+                        <button id="oipOIRayClearBtn" class="oip-btn oip-btn--icon" type="button"
+                            title="Clear all ray lines">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                <path d="M10 11v6" />
+                                <path d="M14 11v6" />
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                            </svg>
+                        </button>
+
+                        <div id="oipOIRayOptionsPopup" class="oip-ind-popup hidden">
+                            <div class="oip-ind-popup-header">Ray Style</div>
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipOIRayColorInp" class="oip-ray-color-inp"
+                                            value="#f33968" title="Ray color">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipOIRayWidthSel" class="oip-ray-width-sel" title="Ray width">
+                                            <option value="1">1px</option>
+                                            <option value="2" selected>2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipOIRayStyleSel" class="oip-ray-style-sel" title="Ray style">
+                                            <option value="0">Solid</option>
+                                            <option value="1" selected>Dotted</option>
+                                            <option value="2">Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-hint">Click the chart to place the ray</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- OI mode toggle -->
+                    <div class="oip-mode-group oip-mode-group--xs">
+                        <label class="oip-radio"><input type="radio" name="oipMode" value="total">
+                            <span>OI</span></label>
+                        <label class="oip-radio"><input type="radio" name="oipMode" value="change">
+                            <span>CHG</span></label>
+                        <label class="oip-radio"><input type="radio" name="oipMode" value="off" checked>
+                            <span>OFF</span></label>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- OI Bar button -->
+                    <button id="oipOIBarBtn" class="oip-btn" type="button" title="Open Interest Bar">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="20" x2="12" y2="10" />
+                            <line x1="18" y1="20" x2="18" y2="4" />
+                            <line x1="6" y1="20" x2="6" y2="16" />
+                        </svg>
+                        OI Bar
+                    </button>
+
+                </div>
+            </div>
+
+            <!-- IV Crush Alert Banner (Hidden by default) -->
+            <div id="ivCrushAlert" class="oip-alert-banner hidden">
+                <div class="oip-alert-content">
+                    <span class="oip-alert-icon">⚠️</span>
+                    <span class="oip-alert-msg">IV CRUSH DETECTED! Premiums dropping rapidly.</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="oip-chart-wrap" id="oipChartWrap">
+
+
+
+            <div id="oipCandleChart"></div>
+            <canvas id="oipOICanvas"></canvas>
+            <div id="oipTooltip" class="oip-tooltip hidden"></div>
+        </div>
+        <!-- Drag handle — pulls the OI Profile chart taller or shorter. -->
+        <div class="oip-resize-grip" data-resize-target="oipChartWrap"
+             title="Drag to resize the OI Profile chart · double-click to reset"></div>
+    </div>
+
         <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
     <div class="oip-container">
 
@@ -845,241 +1122,6 @@
 
     </div>
 
-    <div class="oip-container" style="margin-top: 10px;">
-        <!-- Original OI Profile Block -->
-        <div class="oip-header oip-header--compact">
-            <div class="oip-hdr-top">
-
-                <!-- Title -->
-                <div class="oip-title oip-title--sm">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                    </svg>
-                    OI Profile
-                    <span class="oip-title-badge oip-title-badge--manual">On Refresh</span>
-                </div>
-
-                <!-- Compact single-row controls -->
-                <div class="oip-prem-toolbar">
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Indicators button + popup -->
-                    <div class="oip-prem-group" style="position:relative;">
-                        <button id="oipIndicatorsBtn" class="oip-btn" type="button" title="Toggle Indicators">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                            </svg>
-                            Indicators
-                        </button>
-
-                        <div id="oipIndicatorsPopup" class="oip-ind-popup hidden">
-                            <div class="oip-ind-popup-header">Indicators</div>
-
-                            <div class="oip-ind-section">
-                                <div class="oip-ind-section-title">Overlays</div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowVolume" checked><span>Nifty Vol Fut</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="volUp"
-                                            title="Volume bar color on an up candle">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="volDn"
-                                            title="Volume bar color on a down candle">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="volFlat"
-                                            title="Volume bar color when Vol Direction Color is off">
-                                    </span>
-                                </label>
-                                <label class="oip-ind-item"
-                                    title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
-                                    <input type="checkbox" id="oipShowBnfVolume"><span>Banknifty Vol Fut</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
-                                            title="Volume bar color on an up candle">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
-                                            title="Volume bar color on a down candle">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolFlat"
-                                            title="Volume bar color when Vol Direction Color is off">
-                                    </span>
-                                </label>
-                                <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
-                                     every Indicator popup. Off, the volume overlays drop the up/down split
-                                     and every bar paints the flat swatch above. -->
-                                <label class="oip-ind-item"
-                                    title="Tint volume bars by the candle's direction. Off: every bar uses the flat color swatch">
-                                    <input type="checkbox" class="oip-vol-dircolor-cb" checked><span>Vol Direction Color</span>
-                                </label>
-                                <label class="oip-ind-item"
-                                    title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
-                                    <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18
-                                        ATM CE OI Lines</span>
-                                </label>
-                            </div>
-
-                            <!-- Mine CPR — the same indicator set as /multichart (CPR, Multi
-                                 CPR, EMAs, VWAP, boxes), rendered from MineCPR.SPEC by
-                                 oipInitMineCpr in oi_profile.js. It replaced this popup's own
-                                 CPR Levels / Multi CPR / VWAP / EMA groups and the 2nd 5-min and
-                                 Monday boxes; everything below is OI-Profile-only and stays. -->
-                            <div id="oipMineCprSections"></div>
-
-                            <div class="oip-ind-section">
-                                <div class="oip-ind-section-title">Lines</div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowMaxPain" checked><span style="color:#2563eb">Max
-                                        Pain</span>
-                                </label>
-                                <div class="oip-ind-reversal-wrap">
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShow30mReversalLines"><span
-                                            style="color:#f97316">30m Reversal</span>
-                                    </label>
-                                    <div class="oip-ind-reversal-inputs">
-                                        <span class="oip-ind-mini-lbl">Count</span>
-                                        <input type="number" id="oipReversal30mCount" class="oip-ind-mini-inp"
-                                            value="10" min="1" max="30" step="1">
-                                        <span class="oip-ind-mini-lbl">Range</span>
-                                        <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp"
-                                            value="50" min="5" max="500" step="5">
-                                    </div>
-                                </div>
-                                <div class="oip-ind-reversal-wrap">
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShow1DReversalLines"><span
-                                            style="color:#8b5cf6">1D Reversal</span>
-                                    </label>
-                                    <div class="oip-ind-reversal-inputs">
-                                        <span class="oip-ind-mini-lbl">Count</span>
-                                        <input type="number" id="oipReversal1DCount" class="oip-ind-mini-inp" value="10"
-                                            min="1" max="30" step="1">
-                                        <span class="oip-ind-mini-lbl">Range</span>
-                                        <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="30"
-                                            min="1" max="500" step="1">
-                                    </div>
-                                </div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShow2ndCandle30s" checked><span
-                                        style="color:#FFC800">2nd 30Sec Candle</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Horizontal Ray drawing tool -->
-                    <div class="oip-prem-group" style="position:relative;">
-                        <button id="oipOIRayToolBtn" class="oip-btn" type="button"
-                            title="Draw Horizontal Ray — click the chart to place, right-click a ray to remove it">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none" />
-                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3" />
-                            </svg>
-                            Ray
-                        </button>
-                        <button id="oipOIRayClearBtn" class="oip-btn oip-btn--icon" type="button"
-                            title="Clear all ray lines">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="3 6 5 6 21 6" />
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                                <path d="M10 11v6" />
-                                <path d="M14 11v6" />
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                            </svg>
-                        </button>
-
-                        <div id="oipOIRayOptionsPopup" class="oip-ind-popup hidden">
-                            <div class="oip-ind-popup-header">Ray Style</div>
-                            <div class="oip-ind-section">
-                                <div class="oip-ind-item">
-                                    <span>Color</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" id="oipOIRayColorInp" class="oip-ray-color-inp"
-                                            value="#f33968" title="Ray color">
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Width</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipOIRayWidthSel" class="oip-ray-width-sel" title="Ray width">
-                                            <option value="1">1px</option>
-                                            <option value="2" selected>2px</option>
-                                            <option value="3">3px</option>
-                                            <option value="4">4px</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Style</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipOIRayStyleSel" class="oip-ray-style-sel" title="Ray style">
-                                            <option value="0">Solid</option>
-                                            <option value="1" selected>Dotted</option>
-                                            <option value="2">Dashed</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-hint">Click the chart to place the ray</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- OI mode toggle -->
-                    <div class="oip-mode-group oip-mode-group--xs">
-                        <label class="oip-radio"><input type="radio" name="oipMode" value="total">
-                            <span>OI</span></label>
-                        <label class="oip-radio"><input type="radio" name="oipMode" value="change">
-                            <span>CHG</span></label>
-                        <label class="oip-radio"><input type="radio" name="oipMode" value="off" checked>
-                            <span>OFF</span></label>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- OI Bar button -->
-                    <button id="oipOIBarBtn" class="oip-btn" type="button" title="Open Interest Bar">
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="12" y1="20" x2="12" y2="10" />
-                            <line x1="18" y1="20" x2="18" y2="4" />
-                            <line x1="6" y1="20" x2="6" y2="16" />
-                        </svg>
-                        OI Bar
-                    </button>
-
-                </div>
-            </div>
-
-            <!-- IV Crush Alert Banner (Hidden by default) -->
-            <div id="ivCrushAlert" class="oip-alert-banner hidden">
-                <div class="oip-alert-content">
-                    <span class="oip-alert-icon">⚠️</span>
-                    <span class="oip-alert-msg">IV CRUSH DETECTED! Premiums dropping rapidly.</span>
-                </div>
-            </div>
-        </div>
-
-        <div class="oip-chart-wrap" id="oipChartWrap">
-
-
-
-            <div id="oipCandleChart"></div>
-            <canvas id="oipOICanvas"></canvas>
-            <div id="oipTooltip" class="oip-tooltip hidden"></div>
-        </div>
-        <!-- Drag handle — pulls the OI Profile chart taller or shorter. -->
-        <div class="oip-resize-grip" data-resize-target="oipChartWrap"
-             title="Drag to resize the OI Profile chart · double-click to reset"></div>
-    </div>
 
     <!-- Strike Logic popup modal — explains how each Opt Prem strike mode
          (Prem. Str. / Custom / CE & PE) picks its CE/PE strike. Static text,
@@ -1140,8 +1182,11 @@
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_shared.js') }}?v={{ sv('js/oi_profile_shared.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_orderflow.js') }}?v={{ sv('js/components/mine_orderflow.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile.js') }}?v={{ sv('js/oi_profile.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v={{ sv('js/oi_profile_init.js') }}"></script>
+<script src="{{ url_for('static', filename='js/oi_profile_live.js') }}?v={{ sv('js/oi_profile_live.js') }}"></script>
 <script
     src="{{ url_for('static', filename='js/oi_profile_round_strike.js') }}?v={{ sv('js/oi_profile_round_strike.js') }}"></script>
 {% endblock %}

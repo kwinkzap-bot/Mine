@@ -152,6 +152,24 @@ let oipLotSize = 50, oipStrikeStep = 50;
 let oipInterval = '5minute';
 let oipStrikeCount = 15;
 let oipMode = 'off';
+/* Spot / Fut — the OI Profile chart's instrument, and nothing else's.
+   'future' asks /api/oi-profile/candles for the current-expiry future's bars
+   (the ones it already pulls for the Nifty Vol Fut overlay, so the switch costs
+   no extra broker request) instead of the index's.
+
+   Only the BARS move. The strike dropdowns, the OI ladder, Max Pain and the
+   header cards are quoted against the index and the server keeps deriving them
+   from it, so on Fut they sit a basis away from the candles. The Opt Prem block
+   is untouched either way — it charts option premiums, which have no spot/future
+   of their own — which is why the reload below asks for opt=false.
+
+   Per browser, like the rest of this page's view state, and separate from the
+   Replay page's own key so the two pages remember their own choice. */
+const OIP_CHART_SRC_KEY = 'oipProfileChartSource';
+let oipChartSource = 'spot';
+try {
+    if (localStorage.getItem(OIP_CHART_SRC_KEY) === 'future') oipChartSource = 'future';
+} catch (e) { /* private window — the default stands */ }
 let oipRafId = null;
 // Refresh All is the only data trigger on this page (Round Strike aside) — one
 // click can be several broker round-trips, so it is guarded rather than queued.
@@ -452,6 +470,39 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Hide/show the app nav bar. The class itself is already on <html> — the
+    // inline script in this page's <head> put it there before anything painted
+    // — so all that is left here is the button's own state and the write-back.
+    (() => {
+        const btn = document.getElementById('oipChrome');
+        if (!btn) return;
+        const CHROME_KEY = 'oip.hideChrome';
+        // localStorage can throw outright (private window, blocked site data),
+        // and a page that cannot remember a view preference must still work.
+        const paint = hidden => {
+            const label = hidden ? 'Show the nav bar' : 'Hide the nav bar on this screen';
+            btn.textContent = hidden ? '\u25BE' : '\u25B4';
+            btn.setAttribute('aria-pressed', String(hidden));
+            btn.setAttribute('aria-label', label);
+            btn.title = label;
+        };
+        paint(document.documentElement.classList.contains('oip-bare'));
+        btn.addEventListener('click', () => {
+            const hidden = !document.documentElement.classList.contains('oip-bare');
+            document.documentElement.classList.toggle('oip-bare', hidden);
+            paint(hidden);
+            try { localStorage.setItem(CHROME_KEY, hidden ? '1' : '0'); } catch (e) { /* not fatal */ }
+        });
+    })();
+
+    // Spot / Fut — paints the stored choice before the first load so the button
+    // on and the bars asked for agree from the very first request.
+    oipSyncChartSourceUI();
+    document.getElementById('oipChartSrc')?.addEventListener('click', e => {
+        const btn = e.target.closest('.oip-src-btn');
+        if (btn) oipSetChartSource(btn.dataset.src);
+    });
+
     [oipElems.spotHigh, oipElems.spotLow].forEach(el => {
         el?.addEventListener('change', () => oipLoadCandles(true));
     });
@@ -638,24 +689,57 @@ const OIP_MINECPR_STORE_KEY = 'oip-minecpr-v1';
 const OIP_MINE_DAILY_TTL_MS = 5 * 60 * 1000;
 let oipMineCprSettings = {};
 let oipMinePane = null;                       // { chart, series, lines, primitive } for MineCPR.attach
+const oipMineOfCache = new Map();             // Order Flow, one entry per finished session
 let oipMineDaily = { symbol: null, rows: [], at: 0, pending: null };
 
-const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key] : MineCPR.DEFAULTS[key];
+const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key]
+    : (typeof MineOrderFlow !== 'undefined' && key in MineOrderFlow.DEFAULTS) ? MineOrderFlow.DEFAULTS[key]
+    : (typeof MineTPO !== 'undefined' && key in MineTPO.DEFAULTS) ? MineTPO.DEFAULTS[key]
+    : MineCPR.DEFAULTS[key];
+
+// The TPO profile's memo of finished sessions, and the (symbol, interval) it
+// was built for. A session is keyed by its DATE, so another symbol's bars for
+// the same dates would otherwise be served a stale profile — the row step
+// usually differs enough to miss, but "usually" is not a cache key.
+const oipMineTpoCache = new Map();
+let oipMineTpoFor = '';
+
+// The Order Flow set joins the CPR one in this popup. Its price cells are NOT
+// drawn here: the trade tape is collected on the front-month FUTURE and this
+// chart is the spot index, so every price in the tape sits a basis away from
+// these candles. What does carry over is everything bucketed by TIME — the
+// per-bar volume, delta, the intra-bar extremes and the running total — which
+// is exact on any chart of the same underlying, so the bar-stats pane and the
+// per-bar header work here unchanged. `cells: false` is what says so.
+const oipMineSpec = () => {
+    let spec = MineCPR.SPEC;
+    if (typeof MineOrderFlow !== 'undefined') spec = spec.concat(MineOrderFlow.SPEC);
+    if (typeof MineTPO !== 'undefined') spec = spec.concat(MineTPO.SPEC);
+    return spec;
+};
 
 function oipInitMineCpr() {
     if (typeof MineCPR === 'undefined' || !oipOIChart || !oipOISeries) return;
     try { oipMineCprSettings = JSON.parse(localStorage.getItem(OIP_MINECPR_STORE_KEY) || '{}') || {}; }
     catch (e) { oipMineCprSettings = {}; }
-    oipMinePane = { chart: oipOIChart, series: oipOISeries, lines: {}, primitive: null };
+    oipMinePane = { chart: oipOIChart, series: oipOISeries, lines: {}, primitive: null,
+                    ofCache: oipMineOfCache };
 
     const host = document.getElementById('oipMineCprSections');
     if (host && !host.dataset.built) {
         host.dataset.built = '1';
-        host.innerHTML = MineCPR.renderSettings(oipMineSetting);
+        host.innerHTML = MineCPR.renderSettings(oipMineSetting, oipMineSpec());
         MineCPR.bindSettings(host, (key, v) => {
             oipMineCprSettings[key] = v;
             try { localStorage.setItem(OIP_MINECPR_STORE_KEY, JSON.stringify(oipMineCprSettings)); } catch (e) {}
-        }, () => oipApplyMineCpr());
+        }, key => {
+            // An order-flow input moves the cells themselves, so the memoised
+            // sessions go with it.
+            if (typeof MineOrderFlow !== 'undefined' && key in MineOrderFlow.DEFAULTS) oipMineOfCache.clear();
+            // A TPO input moves the rows themselves, so its sessions go too.
+            if (typeof MineTPO !== 'undefined' && key in MineTPO.DEFAULTS) oipMineTpoCache.clear();
+            oipApplyMineCpr();
+        });
     }
     // EMA 200 / Monday box colours follow the theme, as on Multichart.
     window.addEventListener('themechanged', () => oipApplyMineCpr());
@@ -668,10 +752,56 @@ function oipApplyMineCpr() {
         const result = MineCPR.compute(candles, oipInterval, oipMineDaily.rows, oipMineCprSettings);
         MineCPR.attach(oipMinePane, result);
     } catch (e) { console.warn('[OIP] Mine CPR:', e); }
+    oipApplyMineOrderFlow(candles);
+    oipApplyMineTpo(candles);
     const host = document.getElementById('oipMineCprSections');
-    if (host) MineCPR.refreshGates(host, [MineCPR.tfInfo(oipInterval)]);
+    if (host) {
+        // `ofCells` stays dark here: this chart is the index, not the tape's
+        // own contract, so the footprint-cells row is offered but cannot light.
+        const info = (typeof MineOrderFlow !== 'undefined')
+            ? Object.assign({}, MineCPR.tfInfo(oipInterval), MineOrderFlow.tfInfo(oipInterval),
+                            { ofCells: false })
+            : MineCPR.tfInfo(oipInterval);
+        if (typeof MineTPO !== 'undefined') Object.assign(info, MineTPO.tfInfo(oipInterval));
+        MineCPR.refreshGates(host, [info]);
+    }
     if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
     if (candles.length) oipLoadMineDaily();
+}
+
+// The TPO profile, off the same candles the CPR set gets. Symbol-agnostic:
+// it is built from the session's own bars, so an index and a stock are the
+// same computation — only the auto row step differs, and that comes from the
+// sessions' own range.
+function oipApplyMineTpo(candles) {
+    if (typeof MineTPO === 'undefined' || !oipMinePane) return;
+    // The Spot / Fut source belongs in the key beside symbol and interval: a
+    // session is memoised by its DATE, and the future's bars for that date sit
+    // a basis above the index's, so without it flipping the switch would serve
+    // the other instrument's profile back for every finished day.
+    const forKey = `${oipSymbol}|${oipInterval}|${oipChartSource}`;
+    if (forKey !== oipMineTpoFor) { oipMineTpoCache.clear(); oipMineTpoFor = forKey; }
+    try {
+        MineTPO.attach(oipMinePane,
+            MineTPO.compute(candles, oipInterval, oipMineCprSettings, oipMineTpoCache));
+    } catch (e) { console.warn('[OIP] TPO:', e); }
+}
+
+// The Order Flow set, off the same candles. `cells: false` — see oipMineSpec.
+// The tape is fetched asynchronously and shared with every other chart on the
+// page, so a day landing late repaints through the Tape listener below.
+function oipApplyMineOrderFlow(candles) {
+    if (typeof MineOrderFlow === 'undefined' || !oipMinePane) return;
+    try {
+        MineOrderFlow.apply(oipMinePane, candles || [], oipInterval, oipMineCprSettings,
+                            { root: oipSymbol, cells: false });
+    } catch (e) { console.warn('[OIP] Order flow:', e); }
+}
+
+if (typeof MineOrderFlow !== 'undefined') {
+    MineOrderFlow.Tape.setListener(() => {
+        if (oipMinePane) oipApplyMineOrderFlow(oipOILastCandles || []);
+    });
 }
 
 // Daily bars for the pivots — one request per symbol, re-fetched after the
@@ -1134,7 +1264,13 @@ async function oipLoadOI() {
 //
 // forceFetch=false short-circuits to a local re-render (oipRefreshLocalView)
 // when the data already in hand is enough, e.g. flipping between chart views.
-async function oipLoadCandles(forceFetch = true, resetZoom = false) {
+//
+// indexOnly=true is the Spot / Fut switch's path: it asks for opt=false (no
+// option legs, no 30-second sub-candles) and drops the leg-shaped keys out of
+// the response before anything is merged, so flipping the instrument repaints
+// THIS chart off one cheap live request and leaves the Opt Prem charts holding
+// exactly the premiums they were already showing.
+async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = false) {
     try {
 
         const h = parseFloat(oipElems.spotHigh?.value || 0);
@@ -1179,14 +1315,38 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
         // Only a Refresh All sets this — see oipRefreshAll.
         const forceParam = oipForceNextFetch ? '&force=true' : '';
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
+        // source is the Spot / Fut switch — it rides every read of this endpoint,
+        // not just the switch's own, so a later Refresh All keeps charting the
+        // instrument the user picked instead of quietly dropping back to spot.
+        const srcParam = `&source=${oipChartSource}`;
+        const optParam = indexOnly ? '&opt=false&include_30s=false' : '';
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${srcParam}${optParam}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
 
+        // An opt=false response carries the option-leg keys back EMPTY rather
+        // than absent, so merging it whole would blank the Opt Prem charts and
+        // this chart's own 2nd-30-second box. Drop them and the values already
+        // in hand stand.
+        if (indexOnly) {
+            for (const k of ['ce_opt_candles', 'pe_opt_candles',
+                             'fixed_ce_candles', 'fixed_pe_candles',
+                             'fixed_ce_symbol', 'fixed_pe_symbol',
+                             'fixed_future_volume', 'fixed_banknifty_volume',
+                             'second_30s_candle_oi', 'second_30s_candle_ce',
+                             'second_30s_candle_pe']) {
+                delete data[k];
+            }
+        }
+
 
         if (!data.success) throw new Error(data.error);
         if (data.fetch_error) showNotification(`Data fetch error: ${data.fetch_error}`, 'error');
+        // What the bars actually are — 'future' only if the server found a listed
+        // contract with data in this window; otherwise the switch falls back to
+        // Spot and says so, rather than highlighting Fut over index candles.
+        oipNoteChartSource(data);
 
         oipOIData = Object.assign(oipOIData || {}, data);
         const indexCandles = data.candles || [];
@@ -1271,9 +1431,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             if (view === 'index') {
                 if (oipElems.itmCE) if (oipElems.itmCE) oipElems.itmCE.textContent = 'NIFTY';
                 if (oipElems.itmPE) if (oipElems.itmPE) oipElems.itmPE.textContent = 'Index';
-                oip30sSecondCandle.oi = data.second_30s_candle_oi || [];
-                oip30sSecondCandle.ce = [];
-                oip30sSecondCandle.pe = [];
+                if (!indexOnly) {
+                    oip30sSecondCandle.oi = data.second_30s_candle_oi || [];
+                    oip30sSecondCandle.ce = [];
+                    oip30sSecondCandle.pe = [];
+                }
                 // No option data in index view — draw OI-chart boxes only
                 // (the 2nd 5-min and Monday boxes on THIS chart are Mine CPR's;
                 // oipDraw2nd5mCandleBox only serves the option charts now).
@@ -1305,9 +1467,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                         if (oipElems.itmPE) if (oipElems.itmPE) oipElems.itmPE.textContent = `${peStrike} PE`;
                     }
                 }
-                oip30sSecondCandle.oi = data.second_30s_candle_oi || [];
-                oip30sSecondCandle.ce = data.second_30s_candle_ce || [];
-                oip30sSecondCandle.pe = data.second_30s_candle_pe || [];
+                if (!indexOnly) {
+                    oip30sSecondCandle.oi = data.second_30s_candle_oi || [];
+                    oip30sSecondCandle.ce = data.second_30s_candle_ce || [];
+                    oip30sSecondCandle.pe = data.second_30s_candle_pe || [];
+                }
                 // Draw boxes after oipOptionData is refreshed so CE/PE charts use the new strike's candles
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
@@ -1369,6 +1533,64 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             }
         }
     } catch (e) { console.error('[OIP] Refresh Err:', e); }
+}
+
+/* ── Spot / Fut switch (OI Profile chart only) ────────────────────────────────
+   One path in: a different instrument means the bars on screen are wrong the
+   moment it moves, so the switch always goes to the broker — force=true, past
+   the endpoint's 0.5 s live / 1 h after-hours response cache — rather than
+   waiting for the next Refresh All. opt=false keeps it to one cheap request and
+   leaves the Opt Prem charts on the premiums they already hold. */
+let oipChartSrcBusy = false;
+
+async function oipSetChartSource(src) {
+    const next = src === 'future' ? 'future' : 'spot';
+    if (next === oipChartSource || oipChartSrcBusy) return;
+    oipChartSource = next;
+    try { localStorage.setItem(OIP_CHART_SRC_KEY, next); } catch (e) { /* not fatal */ }
+    oipSyncChartSourceUI();
+
+    oipChartSrcBusy = true;
+    oipSetChartSourceBusy(true);
+    const wasForcing = oipForceNextFetch;
+    oipForceNextFetch = true;
+    try {
+        await oipLoadCandles(true, true, true);
+    } finally {
+        oipForceNextFetch = wasForcing;
+        oipChartSrcBusy = false;
+        oipSetChartSourceBusy(false);
+    }
+}
+
+function oipSetChartSourceBusy(busy) {
+    document.querySelectorAll('#oipChartSrc .oip-src-btn').forEach(btn => { btn.disabled = busy; });
+}
+
+function oipSyncChartSourceUI() {
+    document.querySelectorAll('#oipChartSrc .oip-src-btn').forEach(btn => {
+        const on = btn.dataset.src === oipChartSource;
+        btn.classList.toggle('on', on);
+        btn.setAttribute('aria-pressed', String(on));
+    });
+}
+
+// The contract goes in the Fut button's tooltip — a silent "Fut" says nothing
+// about WHICH month is drawn. A requested future the server could not serve
+// falls the switch back to Spot, so the highlight never claims bars it is not
+// showing.
+function oipNoteChartSource(data) {
+    const fut = document.querySelector('#oipChartSrc .oip-src-btn[data-src="future"]');
+    if (fut) {
+        fut.title = data.future_symbol
+            ? `Chart the current-expiry futures contract — ${data.future_symbol}`
+            : 'Chart the current-expiry futures contract';
+    }
+    if (data.source_requested !== 'future' || data.source === 'future') return;
+    oipChartSource = 'spot';
+    try { localStorage.setItem(OIP_CHART_SRC_KEY, 'spot'); } catch (e) { /* not fatal */ }
+    oipSyncChartSourceUI();
+    showNotification(`No future data for ${oipSymbol} in this window — charting spot instead.`, 'warning');
 }
 
 // VWAP Bias card — 3-day avg VWAP (same value as the chart's 3-AVG_VWAP line)

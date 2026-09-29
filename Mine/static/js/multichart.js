@@ -1,11 +1,15 @@
 /**
- * multichart.js — one symbol, three timeframes, live.
+ * multichart.js — one symbol, one to four timeframes, live.
  *
- * Three Lightweight Charts panes share a symbol, an indicator set (mine_cpr.js)
+ * The Lightweight Charts panes share a symbol, an indicator set (mine_cpr.js)
  * and ONE poll: every tick fetches today's 1-minute bars once and each pane
  * re-buckets them into its own timeframe — 09:15-anchored, so 1-min → 5/60
- * is exact — and patches its forming bar with series.update(). Three live
- * charts, one broker request per tick.
+ * is exact — and patches its forming bar with series.update(). Every pane
+ * live, one broker request per tick.
+ *
+ * The chart count (1-4) is a toolbar control, remembered per browser along
+ * with the timeframes each count was last left with. TF_PRESETS is where a
+ * count starts from: 1 → 5m, 2 → 1m + 1h, 3 → 1m + 5m + 1h, 4 → + 1D.
  *
  * Bars are on the app's fake-IST grid (IST clock as UTC seconds), hence the
  * `timezone: 'Etc/UTC'` and the UTC getters in every date split.
@@ -15,8 +19,17 @@
 
     const $ = id => document.getElementById(id);
     const STORE_KEY = 'multichart-v1';
-    const DEFAULT_TFS = ['minute', '5minute', '60minute'];
-    const PANE_COUNT = DEFAULT_TFS.length;
+    const MAX_PANES = 4;
+    const DEFAULT_COUNT = 2;
+    // What each chart count opens at. A pane's own dropdown overrides its
+    // entry and the override is kept under that count (see save()), so
+    // 2 → 3 → 2 comes back to the timeframes you had, not to these.
+    const TF_PRESETS = {
+        1: ['5minute'],
+        2: ['minute', '60minute'],
+        3: ['minute', '5minute', '60minute'],
+        4: ['minute', '5minute', '60minute', 'day'],
+    };
     const TF_OPTIONS = [
         ['minute', '1m'], ['2minute', '2m'], ['3minute', '3m'], ['5minute', '5m'], ['10minute', '10m'],
         ['15minute', '15m'], ['30minute', '30m'], ['60minute', '1h'], ['day', '1D'],
@@ -24,6 +37,7 @@
     const TF_LABEL = Object.fromEntries(TF_OPTIONS);
     const POLL_MS = { open: 2000, hidden: 10000, closed: 60000, error: 5000 };
     const REFRESH_MS = 5 * 60 * 1000;          // full re-fetch of every pane, heals gaps
+    const HEAL_MS = 20000;                     // and no faster than this after a failed load
     const RIGHT_OFFSET = 12;                   // bars of whitespace — Future CPR lives there
     const INITIAL_BARS = 80;                   // bars on screen after a load — the zoom the charts open at
     const SPLIT_PX = 6;                        // the drag handle between two panes, also their spacing
@@ -44,11 +58,14 @@
 
     const state = {
         symbol: 'NIFTY',
-        tfs: DEFAULT_TFS.slice(),
+        count: DEFAULT_COUNT,      // how many panes
+        tfs: TF_PRESETS[DEFAULT_COUNT].slice(),   // the live count's timeframes, one per pane
+        tfsBy: {},                 // count -> the timeframes that count was last left with
         settings: {},
         maximised: null,
-        cols: null,        // pane width shares side by side, summing to 1; null = equal
-        rows: null,        // pane height shares when stacked; null = equal
+        // Track shares per layout ('row:3', 'stack:2', 'quad:cols', 'quad:rows'),
+        // each summing to 1; a missing key means equal panes.
+        shares: {},
         height: null,      // grid height in px set by the bottom handle; null = fit the window
         symbols: [],
         panes: [],
@@ -56,10 +73,12 @@
         prevClose: null,
         contract: 'spot',          // what the last load actually charted
         contractLabel: '',         // 'SEPFUT' — the resolved contract, for the pane title
+        futureSymbol: '',          // 'NSE:NIFTY26SEPFUT' — the key today's trade tape is kept under
         loadSeq: 0,
         pollTimer: null,
         pollAbort: null,
         lastRefresh: 0,
+        lastHeal: 0,
         hoverPane: null,
     };
 
@@ -68,20 +87,35 @@
         try {
             const raw = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
             if (raw.symbol) state.symbol = String(raw.symbol).toUpperCase();
-            if (Array.isArray(raw.tfs) && raw.tfs.length === PANE_COUNT && raw.tfs.every(t => TF_LABEL[t])) state.tfs = raw.tfs;
             if (raw.settings && typeof raw.settings === 'object') state.settings = raw.settings;
-            if (Number.isInteger(raw.maximised) && raw.maximised >= 0 && raw.maximised < PANE_COUNT) state.maximised = raw.maximised;
-            if (validShares(raw.cols)) state.cols = raw.cols;
-            if (validShares(raw.rows)) state.rows = raw.rows;
+            if (TF_PRESETS[raw.count]) state.count = Number(raw.count);
+            // One entry per count. A saved shape from before the count control
+            // (a bare array of three) has no key that matches, so it is simply
+            // dropped and the presets stand.
+            if (raw.tfs && typeof raw.tfs === 'object') {
+                for (const n of Object.keys(raw.tfs)) {
+                    if (TF_PRESETS[n] && validTfs(raw.tfs[n], Number(n))) state.tfsBy[n] = raw.tfs[n].slice();
+                }
+            }
+            if (raw.shares && typeof raw.shares === 'object') {
+                for (const k of Object.keys(raw.shares)) if (validShares(raw.shares[k])) state.shares[k] = raw.shares[k].slice();
+            }
+            if (Number.isInteger(raw.maximised) && raw.maximised >= 0 && raw.maximised < state.count) state.maximised = raw.maximised;
             if (Number.isFinite(raw.height) && raw.height >= MIN_HEIGHT) state.height = Math.min(raw.height, MAX_HEIGHT);
         } catch (e) { /* first visit or blocked storage */ }
+        state.tfs = tfsFor(state.count);
     }
-    const validShares = a => Array.isArray(a) && a.length === PANE_COUNT && a.every(v => Number.isFinite(v) && v > 0);
+    const validTfs = (a, n) => Array.isArray(a) && a.length === n && a.every(t => TF_LABEL[t]);
+    const validShares = a => Array.isArray(a) && a.length >= 2 && a.length <= MAX_PANES
+        && a.every(v => Number.isFinite(v) && v > 0);
+    const tfsFor = n => (state.tfsBy[n] || TF_PRESETS[n] || TF_PRESETS[DEFAULT_COUNT]).slice();
     function save() {
+        state.tfsBy[state.count] = state.tfs.slice();   // so the count remembers its dropdowns
         try {
             localStorage.setItem(STORE_KEY, JSON.stringify({
-                symbol: state.symbol, tfs: state.tfs, settings: state.settings, maximised: state.maximised,
-                cols: state.cols, rows: state.rows, height: state.height,
+                symbol: state.symbol, count: state.count, tfs: state.tfsBy,
+                settings: state.settings, maximised: state.maximised,
+                shares: state.shares, height: state.height,
             }));
         } catch (e) { /* storage blocked — the page still works */ }
     }
@@ -89,7 +123,7 @@
     // profile is drawn on ('all', or a pane index as a string) — a Multichart
     // question, since it is the only page with more than one chart, so it
     // lives here rather than in the shared MineTPO.SPEC.
-    const PAGE_DEFAULTS = { countdown: true, futVolume: true, futChart: false, tpoPane: 'all' };
+    const PAGE_DEFAULTS = { countdown: true, futVolume: true, futChart: false, tpoPane: 'all', ofPane: 'all' };
 
     // A per-browser view preference, kept apart from the chart state above
     // so it never rides along with a symbol/timeframe save. Guarded like the
@@ -118,7 +152,8 @@
     }
     const setting = key => (key in state.settings) ? state.settings[key]
         : (key in PAGE_DEFAULTS) ? PAGE_DEFAULTS[key]
-        : (key in MineTPO.DEFAULTS) ? MineTPO.DEFAULTS[key] : MineCPR.DEFAULTS[key];
+        : (key in MineTPO.DEFAULTS) ? MineTPO.DEFAULTS[key]
+        : (key in MineOrderFlow.DEFAULTS) ? MineOrderFlow.DEFAULTS[key] : MineCPR.DEFAULTS[key];
 
     // Spot or the current-expiry future — the page's data source, sent with
     // every read so the candles, the daily CPR rows and the TPO profile all
@@ -145,6 +180,41 @@
         if (!msg) { el.hidden = true; el.textContent = ''; return; }
         el.textContent = msg; el.title = msg; el.hidden = false;
     }
+
+    // Same banner with something to click. `msg` stays SHORT: the banner is
+    // one ellipsised line capped at half the viewport, and a long message
+    // truncates the link away — which is the one part that has to be
+    // reachable. The explanation goes in the tooltip instead.
+    function bannerLink(msg, href, label, title) {
+        banner(msg);
+        const el = $('mcBanner');
+        const a = document.createElement('a');
+        a.href = href; a.textContent = label; a.className = 'mc-banner-link';
+        el.append(' ', a);
+        el.title = title || msg;
+    }
+
+    // TWO different logins can 401 this page and the server sends
+    // `auth_required` for both, so the message is what tells them apart.
+    // The app's own session is the common one: the LaunchAgent respawns this
+    // app several times a session and a restart drops it — saying "Fyers
+    // login required" then sends you to the wrong page.
+    function authBanner(e) {
+        if (/user authentication|login first/i.test(e.message || '')) {
+            bannerLink('Session expired.', '/auth/user-login', 'Sign in',
+                       'The app restarted, which drops the browser session. Sign in again and the charts reload.');
+        } else {
+            banner('Fyers login required — log in on the Login page, then reload.');
+        }
+    }
+
+    // A failure worth another go: the fetch itself never landed (the page was
+    // open across an app restart — the LaunchAgent is back in ~15s), or the
+    // server answered 5xx. A 4xx is an answer, not a blip, so it is not
+    // retried. The waits are the restart's own shape: serving again at ~8s.
+    const RETRY_MS = [1500, 4000, 8000];
+    const transient = e => !e.status || e.status >= 500;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     /* ── panes ───────────────────────────────────────────────────────────── */
     function themeCfg() {
@@ -199,17 +269,20 @@
             index, node, chart, series, volume, el,
             tf: state.tfs[index], candles: [], daily: [], lines: {}, primitive: null,
             tpoPrimitive: null, tpoCache: new Map(),   // one entry per finished session
+            ofPrimitive: null, ofCache: new Map(),     // footprints, likewise one entry per session
             futVol: new Map(),        // bar time -> future volume, on this pane's grid
             titleEl: node.querySelector('.mc-pane-title'), ohlcEl: node.querySelector('.mc-ohlc'),
-            cprEl: node.querySelector('.mc-pane-cpr'), tpoEl: node.querySelector('.mc-pane-tpo'), sel,
+            cprEl: node.querySelector('.mc-pane-cpr'), tpoEl: node.querySelector('.mc-pane-tpo'),
+            ofEl: node.querySelector('.mc-pane-of'), sel,
         };
 
         sel.addEventListener('change', () => {
-            pane.tf = sel.value; state.tfs[index] = sel.value; pane.tpoCache.clear(); save();
+            pane.tf = sel.value; state.tfs[index] = sel.value;
+            pane.tpoCache.clear(); pane.ofCache.clear(); save();
             chart.timeScale().applyOptions({ timeVisible: pane.tf !== 'day' });
             loadPane(pane, ++pane.seq);
             refreshGateTags();
-            refreshTpoPaneLabels();
+            refreshPaneOptions();
         });
         node.querySelector('.mc-max').addEventListener('click', () => toggleMax(index));
         node.querySelector('.mc-pane-head').addEventListener('dblclick', e => { if (e.target === pane.titleEl || e.target.classList.contains('mc-pane-head')) toggleMax(index); });
@@ -223,7 +296,20 @@
             upColor: UP, downColor: DOWN,
         });
         pane.seq = 0;
+        linkCrosshair(pane);
         return pane;
+    }
+
+    // Undoing buildPane. Two things outlive the chart on their own: the
+    // countdown primitive, held in a module-level set behind a 1-second timer,
+    // and the footprint's stats-pane sizing poll — both would go on ticking
+    // against a chart that is gone.
+    function destroyPane(pane) {
+        pane.seq++;                                    // a load in flight lands on nothing
+        try { if (pane.countdown) pane.countdown.detach(); } catch (e) { /* already gone */ }
+        try { MineOrderFlow.detach(pane); } catch (e) { /* never drew one */ }
+        try { pane.chart.remove(); } catch (e) { /* already gone */ }
+        pane.node.remove();
     }
 
     const lastBar = pane => pane.candles.length ? pane.candles[pane.candles.length - 1] : null;
@@ -241,6 +327,9 @@
     // loud — the levels on screen are not the ones being traded.
     function setContract(body) {
         state.contract = body.source || 'spot';
+        // Sent whether the chart is on spot or the future, and it is what the
+        // trade tape — and so the footprint — is collected under.
+        state.futureSymbol = body.future_symbol || '';
         // 'NSE:NIFTY25SEPFUT' -> 'SEPFUT'; the root is already in the title.
         const m = /([A-Z]{3}FUT)$/.exec(body.fy_symbol || '');
         state.contractLabel = m ? m[1] : 'FUT';
@@ -282,6 +371,7 @@
         MineCPR.attach(pane, result);
         pane.cprEl.textContent = setting('cpr') && result.anchor ? (ANCHOR_LABEL[result.anchor] || '') : '';
         applyTpo(pane);
+        applyOrderFlow(pane);
     }
 
     // The TPO profile is its own engine and its own primitive, drawn under the
@@ -311,6 +401,85 @@
         const want = MineTPO.periodSecs(pane.tf, state.settings);
         return TF_OPTIONS.reduce((best, [v]) => MineCPR.SECONDS[v] === want ? v : best, pane.tf);
     }
+
+    /* ── order flow ──────────────────────────────────────────────────────── */
+    // The footprint is the only indicator here with a data source of its own:
+    // the app's trade tape, which is collected on the FRONT-MONTH FUTURE and
+    // nothing else. Spot candles sit a basis away from those prints, so a
+    // spot pane is told to switch rather than shown cells against prices that
+    // never traded on it — turning the box on does the switch (see the popup's
+    // onChange), and this is the guard for every other way of getting here.
+    //
+    // Asking the tape for the days on screen is what drives the fetch: today's
+    // is polled on the seq cursor by the same live tick that patches the bars,
+    // and an earlier session is read out of the archive once.
+    function applyOrderFlow(pane) {
+        // The footprint's data source is the trade tape, which is collected on
+        // the FRONT-MONTH FUTURE and nothing else. This page can chart that
+        // instrument, so it is the one page that draws the price cells — and
+        // ticking the box on switches the source (see the popup's onChange).
+        // A spot pane gets nothing rather than cells against prices that never
+        // traded on it.
+        const on = setting('of') && ofWanted(pane) && state.contract === 'future';
+        if (setting('of') && ofWanted(pane) && state.contract !== 'future') {
+            MineOrderFlow.apply(pane, pane.candles, pane.tf, state.settings, { on: false });
+            candleStyle(pane, 'normal');
+            setOfLabel(pane, 'OF · needs Fut',
+                       'The trade tape is collected on the future — switch the data source to Fut.');
+            return;
+        }
+        const out = MineOrderFlow.apply(pane, pane.candles, pane.tf, state.settings, {
+            on, root: state.symbol, futureSymbol: state.futureSymbol, cells: true,
+        });
+        // The candle only makes way for cells that are actually drawn: with the
+        // footprint hidden there is nothing to sit between, so it goes back to
+        // the chart's own full-width one.
+        candleStyle(pane, out.result.bars.length && setting('ofFootprint')
+            ? setting('ofCandle') : 'normal');
+        setOfLabel(pane, out.text, out.title);
+    }
+
+    function setOfLabel(pane, text, title) {
+        pane.ofEl.textContent = text;
+        pane.ofEl.title = title || '';
+    }
+
+    // 'all' draws it everywhere; otherwise only the pane whose index was picked.
+    function ofWanted(pane) {
+        const target = setting('ofPane');
+        return target === 'all' || String(pane.index) === String(target);
+    }
+
+    // How this pane's candles are painted while a footprint is on them.
+    //
+    // The series cannot be drawn narrower than a bar, and the footprint
+    // primitive is at zOrder 'bottom', so at full width a solid body covers
+    // the figures inside it. 'narrow' answers that the way footprint charts
+    // do: the SERIES is painted transparent here and MineOrderFlow draws a
+    // thin candle down the middle of the cells instead. The series still holds
+    // the data, so the crosshair, the OHLC readout, the price line and the
+    // countdown are all untouched — it is only not painted.
+    //
+    // Restored in full the moment the pane stops drawing cells, so a chart
+    // without order flow looks exactly as it did.
+    const CANDLE_STYLES = {
+        normal: { upColor: UP, downColor: DOWN, borderVisible: false,
+                  wickUpColor: UP, wickDownColor: DOWN },
+        full:   { upColor: UP, downColor: DOWN, borderVisible: false,
+                  wickUpColor: UP, wickDownColor: DOWN },
+        hollow: { upColor: 'transparent', downColor: 'transparent', borderVisible: true,
+                  borderUpColor: UP, borderDownColor: DOWN,
+                  wickUpColor: UP, wickDownColor: DOWN },
+        narrow: { upColor: 'transparent', downColor: 'transparent', borderVisible: false,
+                  wickUpColor: 'transparent', wickDownColor: 'transparent' },
+    };
+
+    function candleStyle(pane, mode) {
+        if (pane.candleMode === mode) return;
+        pane.candleMode = mode;
+        pane.series.applyOptions(CANDLE_STYLES[mode] || CANDLE_STYLES.normal);
+    }
+
 
     // Histogram bars tinted by the spot candle's direction; blank when off.
     function paintVolume(pane) {
@@ -342,24 +511,37 @@
         pane.node.classList.remove('empty');
         pane.titleEl.textContent = `${paneSymbol()} · ${TF_LABEL[pane.tf]}`;
         try {
-            const body = await getJSON(`/api/multichart/candles?symbol=${encodeURIComponent(state.symbol)}&interval=${pane.tf}&source=${dataSource()}`);
-            if (seq !== pane.seq) return;                 // a newer load superseded this one
-            setContract(body);
-            pane.daily = body.daily || [];
-            pane.futVol = new Map((body.future_volume || []).map(v => [v.time, v.volume]));
-            setCandles(pane, body.candles || [], true);
-            if (!body.candles || !body.candles.length) {
-                pane.node.classList.add('empty');
-                pane.el.dataset.empty = body.fetch_error ? `no data — ${body.fetch_error}` : 'no data';
+            for (let attempt = 0; ; attempt++) {
+                try {
+                    const body = await getJSON(`/api/multichart/candles?symbol=${encodeURIComponent(state.symbol)}&interval=${pane.tf}&source=${dataSource()}`);
+                    if (seq !== pane.seq) return;                 // a newer load superseded this one
+                    setContract(body);
+                    pane.daily = body.daily || [];
+                    pane.futVol = new Map((body.future_volume || []).map(v => [v.time, v.volume]));
+                    setCandles(pane, body.candles || [], true);
+                    if (!body.candles || !body.candles.length) {
+                        pane.node.classList.add('empty');
+                        pane.el.dataset.empty = body.fetch_error ? `no data — ${body.fetch_error}` : 'no data';
+                    }
+                    updatePrevClose(pane.daily);
+                    banner('');
+                    return;
+                } catch (e) {
+                    if (e.name === 'AbortError' || seq !== pane.seq) return;
+                    if (transient(e) && attempt < RETRY_MS.length) {
+                        pane.el.dataset.empty = `${e.message} — retrying…`;
+                        banner(`${e.message} — retrying…`);
+                        await sleep(RETRY_MS[attempt]);
+                        if (seq !== pane.seq) return;
+                        continue;
+                    }
+                    pane.node.classList.add('empty');
+                    pane.el.dataset.empty = e.message;
+                    if (e.authRequired) authBanner(e);
+                    else banner(`Load failed: ${e.message}`);
+                    return;
+                }
             }
-            updatePrevClose(pane.daily);
-            banner('');
-        } catch (e) {
-            if (e.name === 'AbortError' || seq !== pane.seq) return;
-            pane.node.classList.add('empty');
-            pane.el.dataset.empty = e.message;
-            if (e.authRequired) banner('Fyers login required — log in on the Login page, then reload.');
-            else banner(`Load failed: ${e.message}`);
         } finally {
             if (seq === pane.seq) pane.node.classList.remove('loading');
         }
@@ -423,7 +605,7 @@
         // the loop wakes itself at the open.
         if (!marketOpenNow()) {
             state.marketOpen = false;
-            setLive('closed', `closed · ${new Date().toLocaleTimeString('en-IN', { hour12: false })}`);
+            setLive('closed', `${new Date().toLocaleTimeString('en-IN', { hour12: false })}`);
             schedule(POLL_MS.closed);
             return;
         }
@@ -442,15 +624,22 @@
             }
             renderQuote(body.ltp);
             const stamp = new Date().toLocaleTimeString('en-IN', { hour12: false });
-            if (state.marketOpen) setLive('open', `live ${stamp}`);
-            else setLive('closed', `closed · ${stamp}`);   // server says closed (holiday it knows, we don't)
+            if (state.marketOpen) setLive('open', `${stamp}`);
+            else setLive('closed', `${stamp}`);   // server says closed (holiday it knows, we don't)
             if (body.fetch_error && !(body.candles || []).length) banner(`Live: ${body.fetch_error}`);
             next = document.hidden ? POLL_MS.hidden : (state.marketOpen ? POLL_MS.open : POLL_MS.closed);
-            if (Date.now() - state.lastRefresh > REFRESH_MS) loadAll();
+            // A pane the server was down for is still empty; this tick proves
+            // the server is answering again, so reload it rather than leave a
+            // dead chart until someone presses F5. Rate-limited, or a pane
+            // that is legitimately empty (a symbol with no data) would refetch
+            // every two seconds for the rest of the session.
+            const dead = state.panes.some(p => p.node.classList.contains('empty'));
+            if (dead && Date.now() - state.lastHeal > HEAL_MS) { state.lastHeal = Date.now(); loadAll(); }
+            else if (Date.now() - state.lastRefresh > REFRESH_MS) loadAll();
         } catch (e) {
             if (e.name === 'AbortError') return;
             setLive('error', e.authRequired ? 'login required' : 'feed error');
-            if (e.authRequired) banner('Fyers login required — log in on the Login page, then reload.');
+            if (e.authRequired) authBanner(e);
             next = e.authRequired ? POLL_MS.closed : POLL_MS.error;
         }
         schedule(next);
@@ -516,33 +705,34 @@
         while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (c[mid].time <= when) lo = mid; else hi = mid - 1; }
         return c[lo];
     }
-    function linkCrosshairs() {
-        let syncing = false;
-        state.panes.forEach((pane, i) => {
-            // Only the pane under the pointer drives the others. Every live
-            // tick makes a chart re-fire its crosshair event, and a pane that
-            // was merely being synced would otherwise answer by pushing the
-            // hovered pane's line to the bar close — the crosshair "jumping to
-            // the candle" on each update.
-            pane.el.addEventListener('pointerenter', () => { state.hoverPane = i; });
-            pane.el.addEventListener('pointerleave', () => { if (state.hoverPane === i) state.hoverPane = null; });
+    // Set up by buildPane, so a pane added by the count control is linked to
+    // the rest the moment it exists. The flag is module-level for the same
+    // reason: the panes it guards are rebuilt, the guard is not.
+    let crossSyncing = false;
+    function linkCrosshair(pane) {
+        // Only the pane under the pointer drives the others. Every live tick
+        // makes a chart re-fire its crosshair event, and a pane that was merely
+        // being synced would otherwise answer by pushing the hovered pane's
+        // line to the bar close — the crosshair "jumping to the candle" on
+        // each update.
+        pane.el.addEventListener('pointerenter', () => { state.hoverPane = pane.index; });
+        pane.el.addEventListener('pointerleave', () => { if (state.hoverPane === pane.index) state.hoverPane = null; });
 
-            pane.chart.subscribeCrosshairMove(param => {
-                if (syncing || state.hoverPane !== i) return;
-                syncing = true;
-                try {
-                    const when = typeof param.time === 'number' ? param.time : null;
-                    // The horizontal line carries the hovered PRICE across the
-                    // panes — same instrument, same axis — not each bar's close.
-                    const price = param.point ? pane.series.coordinateToPrice(param.point.y) : null;
-                    state.panes.forEach((other, j) => {
-                        if (j === i) return;
-                        const bar = when != null ? barAt(other, when) : null;
-                        if (!bar) other.chart.clearCrosshairPosition();
-                        else other.chart.setCrosshairPosition(price != null ? price : bar.close, bar.time, other.series);
-                    });
-                } finally { syncing = false; }
-            });
+        pane.chart.subscribeCrosshairMove(param => {
+            if (crossSyncing || state.hoverPane !== pane.index) return;
+            crossSyncing = true;
+            try {
+                const when = typeof param.time === 'number' ? param.time : null;
+                // The horizontal line carries the hovered PRICE across the
+                // panes — same instrument, same axis — not each bar's close.
+                const price = param.point ? pane.series.coordinateToPrice(param.point.y) : null;
+                for (const other of state.panes) {
+                    if (other === pane) continue;
+                    const bar = when != null ? barAt(other, when) : null;
+                    if (!bar) other.chart.clearCrosshairPosition();
+                    else other.chart.setCrosshairPosition(price != null ? price : bar.close, bar.time, other.series);
+                }
+            } finally { crossSyncing = false; }
         });
     }
 
@@ -569,21 +759,63 @@
     }
     window.addEventListener('resize', fitGrid);
 
+    // How the panes sit: one row side by side, a 2x2 block for four charts —
+    // four in a row is too narrow to read anything off — or one column down
+    // the page on a narrow screen, whatever the count.
+    function gridMode() {
+        if (isStacked()) return 'stack';
+        return state.count === MAX_PANES ? 'quad' : 'row';
+    }
+    // The shares for one axis of one mode, or equal tracks if it has never
+    // been dragged. Kept per mode so a 2x2 split and a 3-across split can
+    // both be remembered, and switching back finds each as it was left.
+    function shareTracks(key, n) {
+        const s = state.shares[key];
+        const f = (Array.isArray(s) && s.length === n) ? s : Array(n).fill(1 / n);
+        return f.map(v => `minmax(${MIN_PANE}px, ${v}fr)`).join(` ${SPLIT_PX}px `);
+    }
+
     // Tracks: pane, handle, pane, handle, pane — across the row on a wide
-    // screen, down the column when stacked. The shares are fractions of the
-    // pane space (the handles are fixed), so a window resize keeps the split.
-    // A maximised pane leaves the templates to the .max rule.
+    // screen, down the column when stacked, both ways for the 2x2. The shares
+    // are fractions of the pane space (the handles are fixed), so a window
+    // resize keeps the split. A maximised pane leaves the templates to the
+    // .max rule.
     function applyLayout() {
         const grid = $('mcGrid');
-        const stacked = isStacked();
-        grid.classList.toggle('stacked', stacked);
+        const mode = gridMode();
+        grid.classList.toggle('stacked', mode === 'stack');
+        grid.classList.toggle('quad', mode === 'quad');
+        placePanes(mode);
         if (state.maximised !== null) { grid.style.gridTemplateColumns = ''; grid.style.gridTemplateRows = ''; return; }
-        const equal = Array(PANE_COUNT).fill(1 / PANE_COUNT);
-        const tracks = shares => shares.map(f => `minmax(${MIN_PANE}px, ${f}fr)`).join(` ${SPLIT_PX}px `);
-        grid.style.gridTemplateColumns = stacked ? '1fr' : tracks(state.cols || equal);
-        grid.style.gridTemplateRows = stacked ? tracks(state.rows || equal) : '1fr';
+        const n = state.count;
+        if (mode === 'quad') {
+            grid.style.gridTemplateColumns = shareTracks('quad:cols', 2);
+            grid.style.gridTemplateRows = shareTracks('quad:rows', 2);
+        } else if (mode === 'stack') {
+            grid.style.gridTemplateColumns = '1fr';
+            grid.style.gridTemplateRows = shareTracks(`stack:${n}`, n);
+        } else {
+            grid.style.gridTemplateColumns = shareTracks(`row:${n}`, n);
+            grid.style.gridTemplateRows = '1fr';
+        }
     }
-    stackedMQ.addEventListener('change', applyLayout);
+
+    // Only the 2x2 needs saying where anything goes: each of its two handles
+    // spans the whole grid (one down the middle, one across it), so DOM-order
+    // placement would not put the panes where they belong. Every other mode
+    // is pane/handle/pane in order, which grid does by itself.
+    function placePanes(mode) {
+        const quad = mode === 'quad' && state.maximised === null;
+        state.panes.forEach((p, i) => {
+            p.node.style.gridColumn = quad ? ((i % 2) ? '3' : '1') : '';
+            p.node.style.gridRow = quad ? ((i > 1) ? '3' : '1') : '';
+        });
+    }
+
+    // Both halves of a layout change: the tracks, and the handles that drag
+    // them. The handle set itself depends on the mode, so it is rebuilt.
+    function relayout() { applyLayout(); rebuildSplitters(); }
+    stackedMQ.addEventListener('change', relayout);
 
     // Shared drag loop: capture the pointer on the handle, feed each move's
     // pixel delta to `onMove`, and save once on release. Charts under the
@@ -609,34 +841,61 @@
         bar.addEventListener('pointercancel', end);
     }
 
-    // One handle between each pair of panes. Dragging moves size from one
-    // neighbour to the other and leaves the third alone; the pair is clamped
-    // at MIN_PANE each. Double-click makes the panes equal again.
-    function initSplitters() {
-        for (let k = 0; k < PANE_COUNT - 1; k++) {
-            const bar = document.createElement('div');
-            bar.className = 'mc-split';
-            bar.setAttribute('role', 'separator');
-            bar.title = 'Drag to resize · double-click for equal panes';
-            state.panes[k].node.after(bar);
-            bar.addEventListener('dblclick', () => {
-                if (isStacked()) state.rows = null; else state.cols = null;
-                save(); applyLayout();
-            });
-            bar.addEventListener('pointerdown', e => {
-                const stacked = isStacked();
-                const sizes = state.panes.map(p => { const r = p.node.getBoundingClientRect(); return stacked ? r.height : r.width; });
-                const a0 = sizes[k], b0 = sizes[k + 1];
-                drag(e, bar, (dx, dy) => {
-                    const d = Math.max(MIN_PANE - a0, Math.min(b0 - MIN_PANE, stacked ? dy : dx));
-                    const next = sizes.slice(); next[k] = a0 + d; next[k + 1] = b0 - d;
-                    const total = next.reduce((s, v) => s + v, 0);
-                    const shares = next.map(v => v / total);
-                    if (stacked) state.rows = shares; else state.cols = shares;
-                    applyLayout();
-                });
-            });
+    // The handles for the current mode: one between each pair of panes in a
+    // row or a column, and for the 2x2 one down the middle and one across —
+    // each of those moving a whole column / row, so the block stays a block.
+    // Rebuilt rather than reused, since the mode decides how many there are.
+    function rebuildSplitters() {
+        const grid = $('mcGrid');
+        for (const el of grid.querySelectorAll('.mc-split')) el.remove();
+        const mode = gridMode();
+        if (state.count < 2) return;                   // one chart, nothing to split
+        if (mode === 'quad') {
+            makeSplit({ key: 'quad:cols', axis: 'col', idx: 0, tracks: () => [0, 1],
+                        place: { gridColumn: '2', gridRow: '1 / -1' } });
+            makeSplit({ key: 'quad:rows', axis: 'row', idx: 0, tracks: () => [0, 2],
+                        place: { gridColumn: '1 / -1', gridRow: '2' } });
+            return;
         }
+        const axis = mode === 'stack' ? 'row' : 'col';
+        const key = `${mode}:${state.count}`;
+        const all = () => state.panes.map((p, i) => i);
+        for (let k = 0; k < state.count - 1; k++) {
+            makeSplit({ key, axis, idx: k, tracks: all, after: state.panes[k].node });
+        }
+    }
+
+    // One handle. `tracks` names the panes whose boxes measure each track —
+    // every pane in a row or column, the two of a 2x2 axis — and `idx` which
+    // neighbouring pair the drag trades size between; the rest are left alone
+    // and the pair is clamped at MIN_PANE each. Double-click makes the tracks
+    // of that axis equal again.
+    function makeSplit(opts) {
+        const horz = opts.axis === 'row';
+        const bar = document.createElement('div');
+        bar.className = `mc-split ${horz ? 'horz' : 'vert'}`;
+        bar.setAttribute('role', 'separator');
+        bar.title = 'Drag to resize · double-click for equal panes';
+        if (opts.place) Object.assign(bar.style, opts.place);
+        if (opts.after) opts.after.after(bar); else $('mcGrid').appendChild(bar);
+        bar.addEventListener('dblclick', () => {
+            delete state.shares[opts.key];
+            save(); applyLayout();
+        });
+        bar.addEventListener('pointerdown', e => {
+            const sizes = opts.tracks().map(i => {
+                const r = state.panes[i].node.getBoundingClientRect();
+                return horz ? r.height : r.width;
+            });
+            const k = opts.idx, a0 = sizes[k], b0 = sizes[k + 1];
+            drag(e, bar, (dx, dy) => {
+                const d = Math.max(MIN_PANE - a0, Math.min(b0 - MIN_PANE, horz ? dy : dx));
+                const next = sizes.slice(); next[k] = a0 + d; next[k + 1] = b0 - d;
+                const total = next.reduce((s, v) => s + v, 0);
+                state.shares[opts.key] = next.map(v => v / total);
+                applyLayout();
+            });
+        });
     }
 
     // The bar under the grid sets its height; taller than the window scrolls
@@ -655,6 +914,53 @@
                 fitGrid();
             });
         });
+    }
+
+    /* ── chart count ─────────────────────────────────────────────────────── */
+    // Changing the count rebuilds the panes: a chart cannot be moved into a
+    // new grid slot, and a new pane needs its own series, primitives and
+    // session caches. save() puts the outgoing count's timeframes away first,
+    // so coming back to it finds the dropdowns it was left with.
+    function setCount(n) {
+        n = Number(n);
+        if (!TF_PRESETS[n] || n === state.count) return;
+        save();
+        state.count = n;
+        state.tfs = tfsFor(n);
+        state.maximised = null;             // the pane it pointed at may be gone
+        state.hoverPane = null;
+        $('mcGrid').classList.remove('max');
+        for (const pane of state.panes) destroyPane(pane);
+        state.panes = [];
+        for (let i = 0; i < n; i++) state.panes.push(buildPane(i));
+        // A "draw on" target that no longer has a pane would draw nowhere.
+        for (const key of ['tpoPane', 'ofPane']) {
+            const v = setting(key);
+            if (v !== 'all' && !(Number(v) < n)) state.settings[key] = 'all';
+        }
+        save();
+        syncCountUI();
+        refreshPaneOptions();
+        relayout();
+        fitGrid();
+        loadAll();
+        refreshGateTags();
+    }
+
+    function syncCountUI() {
+        for (const btn of document.querySelectorAll('#mcCount .mc-src-btn')) {
+            const on = Number(btn.dataset.count) === state.count;
+            btn.classList.toggle('on', on);
+            btn.setAttribute('aria-pressed', String(on));
+        }
+    }
+
+    function initCount() {
+        $('mcCount').addEventListener('click', e => {
+            const btn = e.target.closest('.mc-src-btn');
+            if (btn) setCount(btn.dataset.count);
+        });
+        syncCountUI();
     }
 
     /* ── symbol picker ───────────────────────────────────────────────────── */
@@ -724,7 +1030,9 @@
         if (symbol === state.symbol) return;
         state.symbol = symbol;
         state.prevClose = null;
-        for (const p of state.panes) p.tpoCache.clear();   // another instrument, another price grid
+        // Another instrument: another price grid, and another tape entirely.
+        for (const p of state.panes) { p.tpoCache.clear(); p.ofCache.clear(); }
+        MineOrderFlow.Tape.forget();
         save();
         document.title = `${symbol} · Multichart`;
         renderQuote(null);
@@ -787,7 +1095,7 @@
     }
 
     // Built at render time so the options name each pane's current timeframe;
-    // refreshTpoPaneLabels() keeps them honest when one is changed.
+    // refreshPaneLabels() keeps them honest when one is changed.
     const tpoPaneOptions = () => [['all', 'All charts']].concat(
         state.tfs.map((tf, i) => [String(i), `Chart ${i + 1} · ${TF_LABEL[tf]}`]));
 
@@ -797,27 +1105,52 @@
         ] },
     ];
 
-    function refreshTpoPaneLabels() {
-        const sel = document.querySelector('#mcIndPopup select[data-key="tpoPane"]');
-        if (!sel) return;
+    // Same question for the footprint, and for the same reason it is a page
+    // setting rather than a MineOrderFlow one: Multichart is the only page
+    // with more than one chart. A footprint is the densest thing drawn here,
+    // so picking one pane for it is the normal way to use it.
+    const OF_PANE_SPEC = () => [
+        { title: 'Order flow chart', items: [
+            { key: 'ofPane', type: 'select', label: 'Draw order flow on', options: tpoPaneOptions() },
+        ] },
+    ];
+
+    // Rebuilt, not relabelled: the count decides how many rows these two
+    // selects have, so a pane appearing or going away changes the list.
+    function refreshPaneOptions() {
         const opts = tpoPaneOptions();
-        for (const [value, label] of opts) {
-            const o = sel.querySelector(`option[value="${value}"]`);
-            if (o) o.textContent = label;
+        for (const key of ['tpoPane', 'ofPane']) {
+            const sel = document.querySelector(`#mcIndPopup select[data-key="${key}"]`);
+            if (!sel) continue;
+            const current = String(setting(key));
+            sel.innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+            sel.value = opts.some(([v]) => v === current) ? current : 'all';
         }
     }
 
     function buildIndicatorsPopup() {
         const popup = $('mcIndPopup');
         popup.innerHTML = '<div class="mc-ind-head">Indicators · Mine CPR</div>' +
-            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC, MineTPO.SPEC, TPO_PANE_SPEC()));
+            MineCPR.renderSettings(setting, PAGE_SPEC.concat(MineCPR.SPEC, MineTPO.SPEC, TPO_PANE_SPEC(),
+                                                             MineOrderFlow.SPEC, OF_PANE_SPEC()));
 
         MineCPR.bindSettings(popup, (key, v) => { state.settings[key] = v; save(); },
             key => {
                 // A TPO input changes the rows themselves, so every memoised
                 // session has to go — the developing one alone is not enough.
                 if (key in MineTPO.DEFAULTS) for (const pane of state.panes) pane.tpoCache.clear();
+                // Every order-flow input moves the cells themselves, so the
+                // memoised sessions go with it.
+                if (key in MineOrderFlow.DEFAULTS) for (const pane of state.panes) pane.ofCache.clear();
                 if (key === 'futChart') { syncSourceUI(); setDataSourceFromSetting(); return; }
+                // The footprint can only be drawn against the contract the
+                // tape was collected on, so turning it on takes the charts
+                // there rather than leaving the user with an empty indicator.
+                if (key === 'of' && v && !setting('futChart')) {
+                    banner('Order flow reads the futures trade tape — charting the current-expiry future.');
+                    setDataSource(true);
+                    return;
+                }
                 // Switching the target pane means one pane starts drawing and
                 // another stops: both need the pass, so nothing is left behind.
                 if (key === 'tpoPane') { for (const pane of state.panes) applyTpo(pane); return; }
@@ -834,8 +1167,13 @@
     }
 
     function refreshGateTags() {
+        // `ofCells` lights the footprint row's tag: this page can chart the
+        // future the tape is collected on, so the cells are available here
+        // whenever it is doing so.
         MineCPR.refreshGates($('mcIndPopup'),
-            state.panes.map(p => Object.assign({}, MineCPR.tfInfo(p.tf), MineTPO.tfInfo(p.tf))));
+            state.panes.map(p => Object.assign({}, MineCPR.tfInfo(p.tf), MineTPO.tfInfo(p.tf),
+                                               MineOrderFlow.tfInfo(p.tf),
+                                               { ofCells: state.contract === 'future' })));
     }
 
     /* ── theme ───────────────────────────────────────────────────────────── */
@@ -852,14 +1190,17 @@
         restore();
         initChrome();   // before fitGrid: the nav's height decides where the grid starts
         document.title = `${state.symbol} · Multichart`;
-        for (let i = 0; i < PANE_COUNT; i++) state.panes.push(buildPane(i));
-        initSplitters();
+        for (let i = 0; i < state.count; i++) state.panes.push(buildPane(i));
+        initCount();
         initHeightHandle();
         if (state.maximised !== null) { const m = state.maximised; state.maximised = null; toggleMax(m); }
-        applyLayout();
+        relayout();
         fitGrid();
-        linkCrosshairs();
         initPicker();
+        // The tape is fetched asynchronously and shared by every pane, so a
+        // day landing after the candles did has to repaint them itself —
+        // nothing else would call applyOrderFlow until the next live tick.
+        MineOrderFlow.Tape.setListener(() => { for (const pane of state.panes) applyOrderFlow(pane); });
         buildIndicatorsPopup();
         initSource();          // after the popup: it syncs that row's checkbox
         loadAll();

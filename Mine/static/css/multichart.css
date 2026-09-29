@@ -1,4 +1,4 @@
-/* multichart.css — three live panes of one symbol. Compact by design: a 28px
+/* multichart.css — one to four live panes of one symbol. Compact by design: a 28px
    toolbar, 22px pane headers, and the rest of the viewport is chart.
    Colours come from the theme tokens in theme.css so the page follows the
    body theme like every other page. */
@@ -127,6 +127,9 @@
     text-overflow: ellipsis;
     max-width: 50vw;
 }
+/* The banner's own link — an expired session says where to sign in. */
+.mc-banner-link { color: inherit; text-decoration: underline; font-weight: 600; }
+.mc-banner-link:hover { opacity: .8; }
 
 /* ── indicators popup (same bones as the OI Profile one) ─────────────── */
 .mc-ind-wrap { position: relative; }
@@ -151,13 +154,14 @@
 
 /* ── grid + panes ────────────────────────────────────────────────────── */
 /* The tracks are written by multichart.js (applyLayout): panes and the 6px
-   drag handles between them alternate — `Afr 6px Bfr 6px Cfr` across on a
-   wide screen, the same down the page when stacked — so the handles double
-   as the spacing and there is no gap. The values here are only the
-   pre-script fallback. */
+   drag handles between them alternate — `Afr 6px Bfr` across on a wide
+   screen, the same down the page when stacked, and both ways for the 2x2
+   four-chart grid — so the handles double as the spacing and there is no
+   gap. The values here are only the pre-script fallback, for the default
+   two charts. */
 .mc-grid {
     display: grid;
-    grid-template-columns: 1fr 6px 1fr 6px 1fr;
+    grid-template-columns: 1fr 6px 1fr;
     grid-template-rows: 1fr;
     min-height: 200px;
 }
@@ -165,15 +169,17 @@
 .mc-grid.max .mc-pane:not(.maxed), .mc-grid.max .mc-split { display: none; }
 
 /* Drag handles. Between panes: a transparent track that lights up on hover
-   and while dragging; below the grid: an 8px bar with a short grip. While a
+   and while dragging; below the grid: an 8px bar with a short grip. The axis
+   is a class rather than a grid state, since the 2x2 has one of each. While a
    drag is on, the charts stop taking the pointer so a fast move over a
    canvas cannot start a pan. */
 .mc-split {
     position: relative;
-    cursor: col-resize;
     touch-action: none;
     user-select: none;
 }
+.mc-split.vert { cursor: col-resize; }
+.mc-split.horz { cursor: row-resize; }
 .mc-split::after {
     content: '';
     position: absolute;
@@ -182,8 +188,7 @@
     background: transparent;
     transition: background .12s;
 }
-.mc-grid.stacked .mc-split { cursor: row-resize; }
-.mc-grid.stacked .mc-split::after { inset: 2px 0; }
+.mc-split.horz::after { inset: 2px 0; }
 .mc-split:hover::after, .mc-split.active::after { background: var(--color-accent); }
 
 .mc-hsplit {
@@ -255,9 +260,15 @@
 .mc-src-btn + .mc-src-btn { border-left: 1px solid var(--color-border); }
 .mc-src-btn:hover { color: var(--color-text); }
 .mc-src-btn.on { color: #fff; background: var(--color-accent); }
+/* The chart-count group: same segmented look as the data source beside it.
+   Its label is the only word the group needs and the first thing dropped
+   when the toolbar runs out of room (the 900px block below). */
+.mc-count-lbl { font-size: 9px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-text-3); }
+.mc-count .mc-src-btn { padding: 0 2px; font-variant-numeric: tabular-nums; }
 
 .mc-pane-cpr { font-size: 9px; letter-spacing: .05em; color: var(--color-text-3); text-transform: uppercase; }
 .mc-pane-tpo { font-size: 9px; letter-spacing: .05em; color: var(--color-text-3); text-transform: uppercase; }
+.mc-pane-of { font-size: 9px; letter-spacing: .05em; color: var(--color-text-3); text-transform: uppercase; }
 .mc-max {
     width: 18px; height: 18px;
     padding: 0;
@@ -308,20 +319,21 @@
     /* .mc-grid tracks: multichart.js stacks the panes at this width (applyLayout). */
     .mc-page { --mc-ctl-h: 20px; }
     .mc-toolbar { gap: 0px 2px; min-height: 24px; }
-    .mc-title { font-size: 11px; }
+    .mc-title { font-size: 10px; }
     .mc-search-wrap { width: 110px; }
     .mc-search { font-size: 11px; padding: 0 6px; }
     .mc-quote { min-width: 0; gap: 4px; }
     .mc-ltp { font-size: 12px; }
     .mc-chg { font-size: 10px; }
-    .mc-btn { font-size: 10px; padding: 0 6px; gap: 4px; }
+    .mc-btn { font-size: 10px; padding: 0 2px; gap: 1px; }
     .mc-live { font-size: 9px; }
     .mc-banner { font-size: 10px; }
     .mc-pane-head { font-size: 10px; gap: 6px; }
     .mc-tf { font-size: 10px; height: 16px; }
     .mc-ohlc { font-size: 9.5px; }
-    .mc-pane-cpr, .mc-pane-tpo { font-size: 8px; }
-    .mc-src-btn { padding: 0 6px; }
+    .mc-pane-cpr, .mc-pane-tpo, .mc-pane-of { font-size: 8px; }
+    .mc-src-btn { padding: 0 2px; }
+    .mc-count-lbl { display: none; }
 }
 /* Below 700 the nav bar can go: charts are the whole point of the page and
    a phone has no height to spare above them. The title stays — the toolbar
