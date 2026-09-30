@@ -138,6 +138,56 @@ def _quota_exhausted() -> bool:
         return _QUOTA_EXHAUSTED_ON == dt_date.today()
 
 
+# Symbols Breeze keeps REFUSING for a reason that will not change today — a
+# contract it cannot name, an argument shape it will not take — as opposed to
+# the transient failures the stale-cache rescue already covers.
+#
+# The quota guard above only catches the refusal that says so. A refusal of any
+# other shape was retried forever, once per poll, per symbol: on 2026-09-30
+# fifteen EMA Confluence futures were re-asked 3,508 times between 09:15 and
+# 12:00 ("Right cannot be empty for Exchange-Code"), each one a request charged
+# against the ~5,000/day ceiling, which is how that ceiling was reached before
+# lunch on a day the algos themselves had barely spent anything. Failing
+# symbols now stand down for the rest of the session after _DEAD_SYMBOL_STRIKES
+# refusals and are answered from Fyers, so one broken mapping costs three
+# requests a day instead of hundreds.
+#
+# Deliberately per-session and in-memory: a restart re-tests everything, and so
+# does tomorrow.
+_DEAD_SYMBOL_STRIKES = 3
+_DEAD_LOCK = threading.Lock()
+_DEAD_SYMBOLS: Dict[str, int] = {}
+_DEAD_SYMBOLS_ON: Optional[dt_date] = None
+
+
+def _dead_symbol(symbol: str) -> bool:
+    """True when `symbol` has earned its way out of the Breeze quote path."""
+    with _DEAD_LOCK:
+        global _DEAD_SYMBOLS_ON
+        if _DEAD_SYMBOLS_ON != dt_date.today():
+            _DEAD_SYMBOLS_ON = dt_date.today()
+            _DEAD_SYMBOLS.clear()
+        return _DEAD_SYMBOLS.get(symbol, 0) >= _DEAD_SYMBOL_STRIKES
+
+
+def _note_symbol_result(symbol: str, ok: bool, err: str = '') -> None:
+    """One strike per refusal, cleared the moment the symbol answers again."""
+    with _DEAD_LOCK:
+        global _DEAD_SYMBOLS_ON
+        if _DEAD_SYMBOLS_ON != dt_date.today():
+            _DEAD_SYMBOLS_ON = dt_date.today()
+            _DEAD_SYMBOLS.clear()
+        if ok:
+            _DEAD_SYMBOLS.pop(symbol, None)
+            return
+        n = _DEAD_SYMBOLS.get(symbol, 0) + 1
+        _DEAD_SYMBOLS[symbol] = n
+        if n == _DEAD_SYMBOL_STRIKES:
+            logger.error("[IciciAdapter] %s refused %d times (%s) — standing it down "
+                         "for today and serving it from Fyers.",
+                         symbol, n, (err or '')[:120])
+
+
 def _fyers_quotes(symbols: List[str]) -> Dict[str, Any]:
     """Quotes for `symbols` from the Fyers adapter, which speaks the same
     tokens. Empty when Fyers is unavailable too — the caller then falls back
@@ -594,17 +644,37 @@ class IciciDataServiceAdapter:
     def _get_quote_row(self, info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self.breeze is None:
             return None
+        if _dead_symbol(info['symbol']):
+            return None            # stood down for today — the caller uses Fyers
+        right = info['right'] or ''
+        strike = info['strike_price'] or ''
+        # A FUTURE has no right and no strike, but get_quotes refuses one with
+        # them blank: "Right cannot be empty for Exchange-Code NFO". Breeze
+        # wants the placeholders 'others'/'0' instead — get_historical_data_v2
+        # does NOT, which is why the futures candles worked and only the quote
+        # failed, and why the mismatch went unnoticed for so long.
+        #
+        # It was not cheap. On 30 Sep this refused 3,508 times across 15 EMA
+        # Confluence futures — every one a Breeze request charged against a
+        # 90/min pacer and a ~5,000/day quota shared with the live algos, which
+        # duly logged "daily quote quota is exhausted". Each failure then fell
+        # through to _fyers_quotes below, so the quotes this adapter exists to
+        # keep OFF Fyers were landing on Fyers anyway, on top of a Fyers budget
+        # already at its own limit.
+        if (info['product_type'] or '').lower() == 'futures':
+            right, strike = 'others', '0'
         kwargs = {'stock_code': info['stock_code'],
                   'exchange_code': info['exchange_code'],
                   'product_type': info['product_type'],
                   'expiry_date': info['expiry_date'] or '',
-                  'right': info['right'] or '',
-                  'strike_price': info['strike_price'] or ''}
+                  'right': right,
+                  'strike_price': strike}
         _rate_limiter.wait()
         try:
             resp = self.breeze.get_quotes(**kwargs)
         except Exception as exc:
             logger.error("[IciciAdapter] get_quotes(%s) failed: %s", info['symbol'], exc)
+            _note_symbol_result(info['symbol'], False, str(exc))
             return None
         rows = _success(resp)
         if not rows:
@@ -612,7 +682,12 @@ class IciciDataServiceAdapter:
             if not _note_quota_error(err):
                 logger.warning("[IciciAdapter] get_quotes(%s) empty: %s",
                                info['symbol'], err)
+                # Quota refusals are the whole account's problem and already
+                # have their own sticky flag; only a symbol-specific refusal
+                # earns that symbol a strike.
+                _note_symbol_result(info['symbol'], False, err)
             return None
+        _note_symbol_result(info['symbol'], True)
         return rows[0]
 
     # ── Option chain ──────────────────────────────────────────────────────

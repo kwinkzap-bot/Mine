@@ -234,14 +234,23 @@ window.oipInitSecondaryCharts = function() {
             // any pair of these. CE Only/PE Only ("5-group", rightOffset=5) need
             // ± _OIP_OPTION_RIGHT_ADJ crossing groups.
             //
-            // Round Strike is deliberately NOT in this pan/zoom web, for the same
-            // reason: it syncs LOGICAL ranges (bar indices), which only line up
-            // when every chart shares a bar grid, and Round Strike has its own TF
-            // dropdown (oipRSInterval) independent of the oipInterval these four
+            // Round Strike is deliberately NOT in this pan/zoom web: it syncs
+            // LOGICAL ranges (bar indices), which only line up when every chart
+            // shares a bar grid, and Round Strike has its own TF dropdown
+            // (oipRSInterval) independent of the oipInterval the Opt Prem charts
             // follow. It still joins the crosshair-sync web below, which matches
             // on TIME and so works across mismatched bar grids.
+            //
+            // The OI Profile chart now has its own TF dropdown too, so it leaves
+            // this web for exactly the same reason the moment the two part — a
+            // 1-minute grid and a 15-minute one share no bar index. It rejoins by
+            // itself when they agree again.
+            const oiPanPartner = () =>
+                (typeof oipTfSplit === 'function' && oipTfSplit()) ? null : oipOIChart;
+
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || window._oipActiveChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
+                if (!oiPanPartner()) return;
                 syncRange(oipOIChart, [
                     oipIntrinsicChart?.chart,
                     { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
@@ -252,7 +261,7 @@ window.oipInitSecondaryCharts = function() {
             oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || window._oipActiveChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipIntrinsicChart.chart, [
-                    oipOIChart,
+                    oiPanPartner(),
                     { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
                     { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
                 ]);
@@ -261,7 +270,7 @@ window.oipInitSecondaryCharts = function() {
             oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || window._oipActiveChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipCEChart.chart, [
-                    { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    { chart: oiPanPartner(), adj: _OIP_OPTION_RIGHT_ADJ },
                     { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
                     oipPEChart?.chart
                 ]);
@@ -270,7 +279,7 @@ window.oipInitSecondaryCharts = function() {
             oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || window._oipActiveChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipPEChart.chart, [
-                    { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    { chart: oiPanPartner(), adj: _OIP_OPTION_RIGHT_ADJ },
                     { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
                     oipCEChart?.chart
                 ]);

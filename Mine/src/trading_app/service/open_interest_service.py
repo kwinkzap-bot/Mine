@@ -38,6 +38,21 @@ _global_nfo_cache = {
 # Get global rate limiter for historical API calls
 _rate_limiter = get_global_rate_limiter()
 
+# The Fyers pacer is a different limiter for a different broker — named apart
+# from the Kite one above so the two are never confused at a call site. Imported
+# lazily: fyers_data_service is only reachable when Fyers is the provider, and
+# importing it at module scope would make this file depend on it unconditionally.
+PRIORITY_CHART = 1
+
+
+def _fyers_pace(priority: int = PRIORITY_CHART) -> None:
+    """Charge one Fyers request to the app-wide 200/min budget."""
+    try:
+        from trading_app.service.fyers_data_service import _rate_limiter as fyers_limiter
+        fyers_limiter.wait(priority)
+    except Exception as exc:                 # never let pacing break a data read
+        logger.debug(f"[OI] Fyers pacer unavailable: {exc}")
+
 
 def _normal_cdf(x: float) -> float:
     """Approximate normal CDF using error function approximation."""
@@ -312,10 +327,20 @@ class OpenInterestService:
         from trading_app.service.fyers_data_service import FyersDataServiceAdapter
         self._is_fyers = isinstance(kite_instance, FyersDataServiceAdapter)
         
-        # When switching providers, clear the global NFO cache
-        provider_type = 'fyers' if self._is_fyers else 'kite'
+        # When switching providers, clear the global NFO cache.
+        #
+        # A service built with NO instance is not a provider change — it is a
+        # caller that only wants the DB side (the reader routes construct
+        # OpenInterestService(None) for exactly that). Reading it as 'kite'
+        # flipped this flag against whatever the live provider was and wiped the
+        # shared instrument master: 76 wipes on 30 Sep, each one a fresh
+        # symbol-master download on the next chain read, against a Fyers budget
+        # that was already over its per-minute cap. Nothing asked for it and
+        # nothing used the result.
+        provider_type = ('fyers' if self._is_fyers
+                         else 'kite' if kite_instance is not None else None)
         with _global_nfo_cache['lock']:
-            if _global_nfo_cache['provider_type'] != provider_type:
+            if provider_type is not None and _global_nfo_cache['provider_type'] != provider_type:
                 logger.info(f"[OI] Provider change detected ({_global_nfo_cache['provider_type']} -> {provider_type}) — clearing global NFO cache")
                 _global_nfo_cache['instruments'] = None
                 _global_nfo_cache['timestamp'] = None
@@ -1445,6 +1470,12 @@ class OpenInterestService:
                     logger.info(f"[OI] Using native Fyers optionchain API for {symbol}...")
                     # Fyers expects 'NSE:NIFTY50-INDEX'
                     root_token = config.get('instrument_key')
+                    # Through the app-wide pacer like everything else. These two
+                    # calls used to go straight to the SDK, so they were spent
+                    # but never counted — and a budget that under-counts is a
+                    # budget that lets the account be refused by the broker
+                    # anyway, which is the whole thing it exists to prevent.
+                    _fyers_pace(PRIORITY_CHART)
                     chain_resp = self.kite.fyers.optionchain(data={
                         "symbol": root_token,
                         "strikecount": 50 # Fetch 50 strikes (covers the dashboard range)
@@ -1559,6 +1590,7 @@ class OpenInterestService:
                                             f"expiry {target_dt} (default was {expiry_dt}, "
                                             f"offset={expiry_offset})"
                                         )
+                                        _fyers_pace(PRIORITY_CHART)
                                         next_resp = self.kite.fyers.optionchain(data={
                                             "symbol": root_token,
                                             "strikecount": 50,

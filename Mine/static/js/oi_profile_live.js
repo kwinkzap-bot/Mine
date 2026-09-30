@@ -70,7 +70,9 @@
         el.textContent = text;
     }
 
-    const canLive = () => typeof oipInterval === 'string' && LIVE_TFS.has(oipInterval);
+    // This loop patches the OI Profile chart, so it follows THAT chart's own
+    // timeframe (#oipOIInterval) — not the Opt Prem block's #oipInterval.
+    const canLive = () => typeof oipOIInterval === 'string' && LIVE_TFS.has(oipOIInterval);
 
     // NSE hours in IST, holidays included (common.js); the local fallback is
     // only for a page loaded without it.
@@ -90,7 +92,7 @@
 
     /* ── today's minute bars → this chart's timeframe ─────────────────────── */
     function rebucket(minuteBars) {
-        if (oipInterval === 'day') {
+        if (oipOIInterval === 'day') {
             const t0 = minuteBars[0].time;
             return [{
                 time: t0 - (t0 % 86400),
@@ -101,7 +103,7 @@
                 volume: minuteBars.reduce((s, b) => s + (b.volume || 0), 0),
             }];
         }
-        return MineCPR.aggregate(minuteBars, MineCPR.SECONDS[oipInterval]);
+        return MineCPR.aggregate(minuteBars, MineCPR.SECONDS[oipOIInterval]);
     }
 
     const sameBar = (a, b) => a && b && a.time === b.time && a.open === b.open &&
@@ -143,10 +145,13 @@
         }
 
         oipOILastCandles = merged;
-        oipLatestIndexCandles = merged;        // the Opt Prem charts align to this timeline
+        // The Opt Prem charts align to this timeline — but only while they are on
+        // the same bar width. On a TF split these bars are this chart's alone, and
+        // parking them would drag every premium and IV line onto the wrong grid.
+        if (!oipTfSplit()) oipLatestIndexCandles = merged;
 
         const fm = oip5mCloseSettings('main');
-        const marked = oipMarkSynthetic(oipMark5mCloseBorders(merged, fm.enabled, fm.color));
+        const marked = oipMarkSynthetic(oipMark5mCloseBorders(merged, fm.enabled, fm.color, oipOIInterval));
         try {
             if (onlyTail) oipOISeries.update(marked[marked.length - 1]);
             else oipOISeries.setData(marked);
@@ -161,8 +166,11 @@
 
         oipApplyMineCpr();
         if (rolled) {
-            oipDraw2ndCandle30sBox(merged);
-            oipDraw2nd5mCandleBox(merged);
+            // 'main' on a split — these are this chart's bars, and the Opt Prem
+            // boxes are drawn off their own (see oipDraw2ndCandle30sBox).
+            const half = oipTfSplit() ? 'main' : 'both';
+            oipDraw2ndCandle30sBox(merged, half);
+            oipDraw2nd5mCandleBox(merged, half);
             oipDraw30mReversalLines(merged);
             oipDraw1DReversalLines(merged);
             oipDrawAtmCeOiLines();
@@ -178,14 +186,14 @@
     // is not in this feed and keeps whatever the last Refresh All gave it.
     function mergeVolume(minuteVol) {
         if (!minuteVol || !minuteVol.length || !oipVolumeSeries) return;
-        const secs = oipInterval === 'day' ? 86400 : MineCPR.SECONDS[oipInterval];
+        const secs = oipOIInterval === 'day' ? 86400 : MineCPR.SECONDS[oipOIInterval];
         if (!secs) return;
         const sums = new Map();
         for (const v of minuteVol) {
             const t = Number(v.time);
             const s = MineCPR.sessionStart(t);
-            const key = oipInterval === 'day' ? t - (t % 86400)
-                                              : s + Math.floor((t - s) / secs) * secs;
+            const key = oipOIInterval === 'day' ? t - (t % 86400)
+                                                : s + Math.floor((t - s) / secs) * secs;
             sums.set(key, (sums.get(key) || 0) + Number(v.volume || 0));
         }
         const kept = (oipOIData?.future_volume || []).filter(v => !sums.has(Number(v.time)));
@@ -320,7 +328,12 @@
 
     // The TF dropdown can move between a patchable timeframe and one that is
     // not, and a new timeframe needs a new bucket stamp before the next patch.
+    // Either dropdown matters: this chart's own decides the buckets, and the Opt
+    // Prem one decides whether the two are still sharing a timeline.
     document.addEventListener('change', e => {
-        if (e.target && e.target.id === 'oipInterval') { lastBarTime = 0; schedule(2500); }
+        if (e.target && (e.target.id === 'oipOIInterval' || e.target.id === 'oipInterval')) {
+            lastBarTime = 0;
+            schedule(2500);
+        }
     });
 })();

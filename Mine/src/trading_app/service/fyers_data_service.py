@@ -8,31 +8,174 @@ import re
 
 import time
 import threading
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import time
 import threading
 
+# Priority lanes for _rate_limiter.wait(). LOWER IS MORE IMPORTANT.
+#
+#   CRITICAL — orders, positions, an algo's own quote. Only ever waits behind
+#              the per-second pace.
+#   CHART    — the pages' live polls: the history and quotes behind
+#              /multichart/live and /oi-profile/round-strike.
+#   BULK     — whole-universe background sweeps (the OI Crossover scan) and the
+#              per-minute OI recorder. Yields first, and can be refused outright
+#              rather than paced, because a sweep can always finish next time.
+PRIORITY_CRITICAL = 0
+PRIORITY_CHART    = 1
+PRIORITY_BULK     = 2
+
+
 class FyersRateLimiter:
-    """Thread-safe strict queue-based rate limiter for Fyers API (max 10 requests/second)."""
+    """Paces every Fyers call to the broker's PUBLISHED limits, not just one.
+
+    Fyers meters three ways — ~10 req/s, 200 req/min and 100k/day — and until
+    2026-09-30 only the per-second one was honoured here. 8 req/s is 480/min,
+    so nothing in the app stopped it running at more than twice the minute cap
+    and the broker did the rejecting instead: on 30 Sep the session sat at
+    180-280 calls a minute from the open and took 5,227 × 429 before lunch, in
+    bursts on a perfect 3-minute period — the OI Crossover sweep (214 chain
+    calls at 2.5/s) landing on top of the chart polls. Each rejection then cost
+    five retries with a 2/4/8 s backoff, so the charts went quiet exactly when
+    the refusals started. The 'reaching limit' message and the slow charts were
+    one event, not two.
+
+    Demand is genuinely over the budget — on 30 Sep the charts wanted ~113
+    calls/minute, the crossover sweep ~71 and the OI recorder ~12, against 178
+    — so this cannot be solved by pacing alone. Something has to give, and the
+    point of the lanes is to decide WHICH, rather than letting the broker
+    decide by refusing whatever happens to be in flight.
+
+    Each lane gets a guaranteed SHARE of the minute and may BORROW above it
+    while the minute as a whole is still quiet:
+
+        may go out  ⟺  total < PER_MIN_CAP
+                       ∧ (own lane's last 60s < SHARE[lane]
+                          ∨ total < BORROW_CEIL[lane])
+
+    So a busy chart window can never squeeze the sweep to nothing (it keeps its
+    share), and a quiet one lets the sweep run at full speed (it borrows). The
+    sweep stretches from ~100 s to ~4 minutes under load and _SCAN_LOCK skips a
+    run that would overlap the next — the scan goes from every 3 minutes to
+    every 3-6, which is the trade being made deliberately here.
+
+    Every count is of calls this process MADE, not of calls that succeeded: a
+    429 is metered by the broker too, so a retry has to be charged like any
+    other request or the window would drift under-count exactly when it matters.
+    """
+
+    # 200/min is the published cap. 178 leaves ~10% for the calls this pacer
+    # cannot see: the SDK's own token refresh, and anything a library retries
+    # internally.
+    PER_MIN_CAP = 178
+
+    # Each lane's guaranteed share of that minute — always available to it,
+    # however busy the lanes above are. They sum to PER_MIN_CAP: CRITICAL's 20
+    # is the headroom kept for orders and the algos, which never poll hard
+    # enough to need more and must never wait behind a chart.
+    SHARE = {
+        PRIORITY_CRITICAL: 20,
+        PRIORITY_CHART:    110,
+        PRIORITY_BULK:     48,
+    }
+    # …and how deep into the whole minute a lane may go once its share is gone.
+    # CRITICAL borrows to the cap; the others stop short so the lanes above
+    # them always find room.
+    BORROW_CEIL = {
+        PRIORITY_CRITICAL: PER_MIN_CAP,
+        PRIORITY_CHART:    158,
+        PRIORITY_BULK:     120,
+    }
+
     def __init__(self, requests_per_second: float = 8.0):
         self.delay = 1.0 / requests_per_second
         self.next_call = 0.0
         self.lock = threading.Lock()
+        self._window = deque()          # (timestamp, lane) for the last 60 s
+        self._lane_counts = {p: 0 for p in (PRIORITY_CRITICAL, PRIORITY_CHART, PRIORITY_BULK)}
+        self._deferred = 0              # lane-throttled waits, for stats()
+        self._refused = 0               # max_wait give-ups, for stats()
+        self._last_warn = 0.0
 
-    def wait(self, priority: int = 0):
-        sleep_time = 0
-        with self.lock:
-            now = time.time()
-            if now < self.next_call:
-                sleep_time = self.next_call - now
-                self.next_call += self.delay
-            else:
-                self.next_call = now + self.delay
-                
+    def _prune(self, now: float):
+        cutoff = now - 60.0
+        while self._window and self._window[0][0] <= cutoff:
+            _, lane = self._window.popleft()
+            self._lane_counts[lane] = max(0, self._lane_counts[lane] - 1)
+
+    def _may_go(self, lane: int) -> bool:
+        total = len(self._window)
+        if total >= self.PER_MIN_CAP:
+            return False
+        return (self._lane_counts.get(lane, 0) < self.SHARE.get(lane, 0)
+                or total < self.BORROW_CEIL.get(lane, self.PER_MIN_CAP))
+
+    def wait(self, priority: int = PRIORITY_CRITICAL,
+             max_wait: Optional[float] = None) -> bool:
+        """Block until this call may go out. True when it may, False when it
+        gave up because `max_wait` would be exceeded (nothing is charged)."""
+        lane = priority if priority in self._lane_counts else PRIORITY_CRITICAL
+        deadline = None if max_wait is None else time.time() + max_wait
+
+        while True:
+            with self.lock:
+                now = time.time()
+                self._prune(now)
+
+                if self._may_go(lane):
+                    # A slot in the minute: take it, then smooth to the
+                    # per-second pace exactly as this class always did.
+                    if now < self.next_call:
+                        sleep_time = self.next_call - now
+                        self.next_call += self.delay
+                    else:
+                        sleep_time = 0.0
+                        self.next_call = now + self.delay
+                    self._window.append((now + sleep_time, lane))
+                    self._lane_counts[lane] += 1
+                    break
+
+                # Nothing available for this lane. The oldest call aging out of
+                # the window is the earliest moment that can change.
+                wait_for = max(0.01, (self._window[0][0] + 60.0) - now)
+                self._deferred += 1
+                if now - self._last_warn > 10.0:
+                    self._last_warn = now
+                    logger.warning(
+                        "[FyersLimiter] lane %d held: %d calls in the last 60s "
+                        "(lane %d/%d, borrow ceiling %d, broker cap %d) — waiting %.1fs",
+                        lane, len(self._window), self._lane_counts.get(lane, 0),
+                        self.SHARE.get(lane, 0), self.BORROW_CEIL.get(lane, 0),
+                        self.PER_MIN_CAP, wait_for)
+
+            if deadline is not None and time.time() + wait_for > deadline:
+                with self.lock:
+                    self._refused += 1
+                return False
+            time.sleep(min(wait_for, 1.0))
+
         if sleep_time > 0:
             time.sleep(sleep_time)
+        return True
 
-_rate_limiter = FyersRateLimiter(8.0) # Strictly pace all combined endpoint queries to max 8 req/s
+    def stats(self) -> Dict[str, Any]:
+        """What the last minute cost, by lane — for working out which lane is
+        doing the spending when the charts start lagging."""
+        with self.lock:
+            self._prune(time.time())
+            return {
+                'last_60s': len(self._window),
+                'by_lane': dict(self._lane_counts),
+                'per_min_cap': self.PER_MIN_CAP,
+                'share': dict(self.SHARE),
+                'borrow_ceiling': dict(self.BORROW_CEIL),
+                'deferred': self._deferred,
+                'refused': self._refused,
+            }
+
+
+_rate_limiter = FyersRateLimiter(8.0) # Per-second smoothing under the 200/min cap above
 logger = logging.getLogger(__name__)
 
 # Global Static Caches to survive transient Adapter regenerations from api.py routes
@@ -698,7 +841,13 @@ class FyersDataServiceAdapter:
 
         return kite_quotes
     def ltp(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-        quotes = self.quote(symbols, priority=1)
+        # PRIORITY_CHART, and it should stay there even though the live algos
+        # also call ltp(): the Round Strike price pill calls it once a SECOND
+        # (routes/api.py `_live_ltp`), which is up to 60/min, and CRITICAL's
+        # share exists so an order never queues behind exactly that. The algos
+        # configured on ICICI reach Fyers through _fyers_quotes' quote() on the
+        # failover path instead, which is CRITICAL as it should be.
+        quotes = self.quote(symbols, priority=PRIORITY_CHART)
         return {k: {'last_price': v['last_price']} for k, v in quotes.items()}
 
     def historical_data(

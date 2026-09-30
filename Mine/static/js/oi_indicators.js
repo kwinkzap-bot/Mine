@@ -2526,8 +2526,13 @@ let _oip30mLevelCache = null;
 function oipDraw30mReversalLines(candles, recompute = true) {
     oipClear30mReversalLines();
     if (!document.getElementById('oipShow30mReversalLines')?.checked) return;
-    // Only valid for 30-min and below; silent no-op for 60m / daily / weekly
-    if (typeof oipInterval !== 'undefined' && !_OIP_30M_ALLOWED.has(oipInterval)) return;
+    // Only valid for 30-min and below; silent no-op for 60m / daily / weekly.
+    // These lines sit on the OI Profile chart, so it is that chart's own bar
+    // width that decides — oipOIInterval where the page defines one (OI
+    // Profile), oipInterval on Replay, which has a single timeframe.
+    const _revTf = (typeof oipOIInterval !== 'undefined') ? oipOIInterval
+                 : (typeof oipInterval !== 'undefined') ? oipInterval : undefined;
+    if (_revTf !== undefined && !_OIP_30M_ALLOWED.has(_revTf)) return;
     if (!oipOIChart || !oipOISeries || !candles?.length) return;
 
     const lastTime = candles[candles.length - 1].time;

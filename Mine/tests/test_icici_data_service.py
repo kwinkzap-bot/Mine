@@ -675,3 +675,131 @@ def test_a_first_put_wins_and_a_second_is_ignored(slice_store):
     ids._slice_cache_put('k', _slice(1))
     ids._slice_cache_put('k', _slice(5))
     assert len(ids._slice_cache_get('k')) == 1
+
+
+# ── Quote requests Breeze will never answer ──────────────────────────────────
+# Both of these exist because of 2026-09-30: fifteen EMA Confluence futures were
+# re-asked 3,508 times between 09:15 and 12:00 and refused every time ("Right
+# cannot be empty for Exchange-Code"), which spent the ~5,000/day Breeze ceiling
+# before lunch and pushed every one of those quotes onto a Fyers budget that was
+# already over its own per-minute cap.
+
+@pytest.fixture(autouse=True)
+def _clear_dead_symbols():
+    with ids._DEAD_LOCK:
+        ids._DEAD_SYMBOLS.clear()
+        ids._DEAD_SYMBOLS_ON = None
+    yield
+    with ids._DEAD_LOCK:
+        ids._DEAD_SYMBOLS.clear()
+        ids._DEAD_SYMBOLS_ON = None
+
+
+def test_a_futures_quote_carries_breezes_placeholders(loaded_master, monkeypatch):
+    """A future has no right and no strike, but get_quotes refuses one with
+    them blank — unlike get_historical_data_v2, which is why the candles worked
+    and only the quote failed."""
+    adapter = _adapter_with([], monkeypatch)
+    sent = {}
+
+    class _Breeze:
+        def get_quotes(self, **kw):
+            sent.update(kw)
+            return {'Success': [{'ltp': 1234.5}]}
+
+    adapter.breeze = _Breeze()
+    adapter._get_quote_row({'stock_code': 'AXIBAN', 'exchange_code': 'NFO',
+                            'product_type': 'futures', 'expiry_date': '2026-10-27T06:00:00.000Z',
+                            'right': None, 'strike_price': None,
+                            'symbol': 'NSE:AXISBANK26OCTFUT'})
+    assert sent['right'] == 'others'
+    assert sent['strike_price'] == '0'
+
+
+def test_an_option_quote_is_unchanged(loaded_master, monkeypatch):
+    """The placeholders are for futures only — an option's real right and
+    strike must still go out as themselves."""
+    adapter = _adapter_with([], monkeypatch)
+    sent = {}
+
+    class _Breeze:
+        def get_quotes(self, **kw):
+            sent.update(kw)
+            return {'Success': [{'ltp': 81.0}]}
+
+    adapter.breeze = _Breeze()
+    adapter._get_quote_row({'stock_code': 'NIFTY', 'exchange_code': 'NFO',
+                            'product_type': 'options', 'expiry_date': '2026-10-27T06:00:00.000Z',
+                            'right': 'call', 'strike_price': '23150',
+                            'symbol': 'NSE:NIFTY26OCT23150CE'})
+    assert sent['right'] == 'call'
+    assert sent['strike_price'] == '23150'
+
+
+def test_a_symbol_breeze_keeps_refusing_stands_down_for_the_day(loaded_master, monkeypatch):
+    """Three strikes, then it stops costing requests — whatever the reason for
+    the refusal. The quota guard only catches the one refusal that says so."""
+    adapter = _adapter_with([], monkeypatch)
+    calls = []
+
+    class _Breeze:
+        def get_quotes(self, **kw):
+            calls.append(kw)
+            return {'Error': 'Right cannot be empty for Exchange-Code NFO'}
+
+    adapter.breeze = _Breeze()
+    info = {'stock_code': 'CDSL', 'exchange_code': 'NFO', 'product_type': 'futures',
+            'expiry_date': '2026-10-27T06:00:00.000Z', 'right': None,
+            'strike_price': None, 'symbol': 'NSE:CDSL26OCTFUT'}
+
+    for _ in range(20):
+        assert adapter._get_quote_row(info) is None
+    assert len(calls) == ids._DEAD_SYMBOL_STRIKES
+
+
+def test_a_symbol_that_answers_again_clears_its_strikes(loaded_master, monkeypatch):
+    """A transient refusal must not retire a symbol that works — the stale
+    cache already covers those, and a wrongly retired symbol goes to Fyers for
+    the rest of the session."""
+    adapter = _adapter_with([], monkeypatch)
+    reply = {'value': {'Error': 'boom'}}
+
+    class _Breeze:
+        def get_quotes(self, **kw):
+            return reply['value']
+
+    adapter.breeze = _Breeze()
+    info = {'stock_code': 'CDSL', 'exchange_code': 'NFO', 'product_type': 'futures',
+            'expiry_date': '2026-10-27T06:00:00.000Z', 'right': None,
+            'strike_price': None, 'symbol': 'NSE:CDSL26OCTFUT'}
+
+    assert adapter._get_quote_row(info) is None
+    assert adapter._get_quote_row(info) is None
+    reply['value'] = {'Success': [{'ltp': 1234.5}]}
+    assert adapter._get_quote_row(info) == {'ltp': 1234.5}
+
+    reply['value'] = {'Error': 'boom'}
+    for _ in range(ids._DEAD_SYMBOL_STRIKES - 1):
+        assert adapter._get_quote_row(info) is None
+    assert ids._dead_symbol('NSE:CDSL26OCTFUT') is False     # the count restarted
+
+
+def test_a_quota_refusal_does_not_retire_the_symbol(loaded_master, monkeypatch):
+    """Over quota EVERY symbol fails; retiring them all would leave nothing on
+    Breeze tomorrow morning. That refusal has its own sticky flag."""
+    adapter = _adapter_with([], monkeypatch)
+
+    class _Breeze:
+        def get_quotes(self, **kw):
+            return {'Status': 5, 'Error': 'Limit exceed: API call per day: '}
+
+    adapter.breeze = _Breeze()
+    info = {'stock_code': 'CDSL', 'exchange_code': 'NFO', 'product_type': 'futures',
+            'expiry_date': '2026-10-27T06:00:00.000Z', 'right': None,
+            'strike_price': None, 'symbol': 'NSE:CDSL26OCTFUT'}
+
+    for _ in range(5):
+        assert adapter._get_quote_row(info) is None
+    assert ids._dead_symbol('NSE:CDSL26OCTFUT') is False
+    with ids._QUOTA_LOCK:
+        ids._QUOTA_EXHAUSTED_ON = None

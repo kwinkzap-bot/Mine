@@ -561,6 +561,32 @@
                 <!-- Compact single-row controls -->
                 <div class="oip-prem-toolbar">
 
+                    <!-- TF — THIS chart's timeframe and nothing else's. The Opt
+                         Prem block below keeps its own dropdown (#oipInterval)
+                         and Round Strike keeps its own (#oipRSInterval), so all
+                         three can sit on different bar widths. Changing this one
+                         costs a single index-only request: the option premiums
+                         on the Opt Prem charts are left exactly as they are. -->
+                    <div class="oip-prem-group">
+                        <span class="oip-label">TF</span>
+                        <select id="oipOIInterval" class="oip-select oip-select--xs"
+                            title="Timeframe for the OI Profile chart only">
+                            <option value="30second">30s</option>
+                            <option value="minute">1m</option>
+                            <option value="2minute">2m</option>
+                            <option value="3minute">3m</option>
+                            <option value="5minute" selected>5m</option>
+                            <option value="15minute">15m</option>
+                            <option value="30minute">30m</option>
+                            <option value="60minute">1h</option>
+                            <option value="day">1D</option>
+                            <option value="week">1W</option>
+                            <option value="month">1M</option>
+                        </select>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
                     <!-- Spot / Fut — THIS chart's instrument only, the same switch
                          /oi-profile/replay and /multichart carry. It swaps the bars
                          drawn here for the current-expiry future's (live, straight
@@ -817,15 +843,16 @@
                 <!-- Compact single-row controls -->
                 <div class="oip-prem-toolbar">
 
-                    <!-- TF for every chart on this page EXCEPT Round Strike, which
-                         has its own dropdown in its own header: these charts (Opt
-                         Prem CE/PE/Combined, OI Profile index, intrinsic levels)
-                         only reload on Refresh All, so a slower default than Round
-                         Strike's live 1m is the sensible starting point. -->
+                    <!-- TF for the Opt Prem charts (Combined / CE Only / PE Only
+                         and the intrinsic levels). The OI Profile chart above and
+                         Round Strike each carry their own dropdown, so this one no
+                         longer speaks for them. These charts only reload on Refresh
+                         All, so a slower default than Round Strike's live 1m is the
+                         sensible starting point. -->
                     <div class="oip-prem-group">
                         <span class="oip-label">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs"
-                            title="Timeframe for every chart except Round Strike">
+                            title="Timeframe for the Opt Prem charts">
                             <option value="30second">30s</option>
                             <option value="minute">1m</option>
                             <option value="2minute">2m</option>

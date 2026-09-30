@@ -83,9 +83,25 @@ MIN_STRIKES = 6
 # 8/s therefore lands ~200 symbols and starves the rest, and since the universe
 # is alphabetical it starves the *same* tail every scan: TITAN through
 # ZYDUSLIFE would never once be recorded. Pacing to ~2.5/s puts the whole
-# sweep at ~150 requests/minute, finishing a 215-symbol scan in ~90s — inside
-# the 3-minute cadence, and leaving most of the shared budget for the algos.
+# sweep at ~150 requests/minute, finishing a 215-symbol scan in ~90s.
+#
+# "Leaving most of the shared budget for the algos" was the wrong way round:
+# 150 of a 200/minute quota is three quarters of it, and the charts alone want
+# ~110/min. On 30 Sep that showed up as 429 bursts on a perfect 3-minute
+# period — this sweep's ~102 seconds, every time, all session. The pacing below
+# is now only the sweep's own smoothing; what actually holds it inside the
+# budget is the BULK lane in FyersRateLimiter, which parks a request here as
+# soon as the last 60 seconds are more than ~104 calls deep, whoever made them.
+# The sweep stretches under load instead of finishing on time and taking the
+# charts down with it — and _SCAN_LOCK already skips a run that would overlap
+# the next one.
 SCAN_REQUESTS_PER_SEC = 2.5
+
+# How long one symbol may hold a scan thread waiting for lane budget. Longer
+# than the ~35 s it can take for a full minute-window to roll over under chart
+# load, short enough that a stalled sweep still ends well inside its 3-minute
+# cadence. A symbol that times out is a failure for THIS sweep only.
+SCAN_BUDGET_WAIT = 45.0
 
 # 429s can still happen when something else is using the broker at the same
 # time. Failed symbols get one more attempt after the quota window rolls over.
@@ -367,8 +383,17 @@ class OICrossoverService:
 
         underlying = self.underlying_for(symbol)
         try:
-            from trading_app.service.fyers_data_service import _rate_limiter
-            _rate_limiter.wait()
+            from trading_app.service.fyers_data_service import _rate_limiter, PRIORITY_BULK
+            # The sweep is ~214 of these every three minutes — by far the
+            # biggest single spender of the app-wide Fyers budget, and it used
+            # to spend it at the same priority as a chart waiting on a tick. In
+            # the BULK lane it yields instead: the sweep simply takes longer
+            # while the pages are busy, and a symbol it cannot afford within
+            # SCAN_BUDGET_WAIT is reported as a failure for this sweep and
+            # picked up by the next one three minutes later.
+            if not _rate_limiter.wait(PRIORITY_BULK, max_wait=SCAN_BUDGET_WAIT):
+                self.last_error = 'skipped — Fyers minute budget held for the charts'
+                return None
             resp = fyers.optionchain(data={'symbol': underlying, 'strikecount': STRIKE_COUNT})
         except Exception as e:
             self.last_error = f'exception: {e}'
@@ -485,8 +510,9 @@ class OICrossoverService:
         if fyers is None:
             return None
         try:
-            from trading_app.service.fyers_data_service import _rate_limiter
-            _rate_limiter.wait()
+            from trading_app.service.fyers_data_service import _rate_limiter, PRIORITY_BULK
+            if not _rate_limiter.wait(PRIORITY_BULK, max_wait=SCAN_BUDGET_WAIT):
+                return None
             resp = fyers.optionchain(data={'symbol': self.underlying_for(symbol),
                                            'strikecount': 1})
         except Exception as e:
@@ -686,8 +712,9 @@ class OICrossoverService:
         if fyers is None:
             return None
         try:
-            from trading_app.service.fyers_data_service import _rate_limiter
-            _rate_limiter.wait()
+            from trading_app.service.fyers_data_service import _rate_limiter, PRIORITY_BULK
+            if not _rate_limiter.wait(PRIORITY_BULK, max_wait=SCAN_BUDGET_WAIT):
+                return None
             resp = fyers.optionchain(data={'symbol': self.underlying_for(symbol),
                                            'strikecount': 10})
         except Exception as e:

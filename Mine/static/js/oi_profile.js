@@ -146,10 +146,24 @@ let oipAllStrikes = [];
 let oipCurrentPrice = 0;
 let oipSymbol = 'NIFTY';
 let oipLotSize = 50, oipStrikeStep = 50;
-// Timeframe for every chart on this page EXCEPT Round Strike, which has its own
-// dropdown and its own oipRSInterval (see oi_profile_round_strike.js). Must match
-// the <option selected> on #oipInterval in the Opt Prem header.
+// Timeframe for the Opt Prem block (Combined / CE Only / PE Only and the
+// intrinsic levels). Must match the <option selected> on #oipInterval in the Opt
+// Prem header. Two other blocks run on their own bar width: Round Strike
+// (oipRSInterval, oi_profile_round_strike.js) and the OI Profile chart itself.
 let oipInterval = '5minute';
+/* The OI Profile chart's OWN timeframe — #oipOIInterval in its own header, and
+   nothing else's. It starts equal to oipInterval, and while the two agree the
+   page behaves exactly as it always did: one request serves both blocks.
+
+   Once they differ ("TF split"), the shared request keeps asking for oipInterval
+   — the option legs are fetched at it, and the index bars that come back are the
+   master timeline the Opt Prem charts align their premiums and IV lines to, so
+   that half must not move. This chart is then painted from a second, INDEX-ONLY
+   request at oipOIInterval (opt=false, no 30-second legs: one cheap call), and
+   only this chart's own overlays are recomputed from those bars. */
+let oipOIInterval = '5minute';
+// True while the OI Profile chart is on a different bar width from Opt Prem.
+const oipTfSplit = () => oipOIInterval !== oipInterval;
 let oipStrikeCount = 15;
 let oipMode = 'off';
 /* Spot / Fut — the OI Profile chart's instrument, and nothing else's.
@@ -188,7 +202,7 @@ let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTY MIDC
 
 // DOM Cache for optimized performance
 const oipElems = {
-    symbolInput: null, symbolList: null, interval: null,
+    symbolInput: null, symbolList: null, interval: null, oiInterval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapInt: null, showVwapGroup: null, showCVWAP: null, showPVWAP: null, show3AvgVWAP: null,
     showCpr: null, showEMA: null, showOIBars: null, showVolume: null, autoHL: null, chartWrap: null, canvas: null,
@@ -213,6 +227,7 @@ function oipInitElems() {
     oipElems.symbolInput = document.getElementById('symbolSelect');
     oipElems.symbolList = document.getElementById('symbolDropdownList');
     oipElems.interval = document.getElementById('oipInterval');
+    oipElems.oiInterval = document.getElementById('oipOIInterval');
     oipElems.spotHigh = document.getElementById('oipSpotHigh');
     oipElems.spotLow = document.getElementById('oipSpotLow');
     oipElems.step = document.getElementById('oipStep');
@@ -449,13 +464,24 @@ document.addEventListener('DOMContentLoaded', () => {
     fetch('/api/symbols').then(r => r.json()).then(d => { if (d.success) oipAllSymbols = d.symbols; }).catch(console.warn);
 
     // Toolbar Listeners
-    // Opt Prem's TF dropdown — drives every chart on this page except Round
-    // Strike, which has its own (#oipRSInterval) and is deliberately left alone
-    // here so the two blocks can sit on different timeframes.
+    // Opt Prem's TF dropdown — drives the Opt Prem charts only. Round Strike
+    // (#oipRSInterval) and the OI Profile chart (#oipOIInterval) each have their
+    // own and are deliberately left alone here, so the three blocks can sit on
+    // different timeframes.
     oipElems.interval?.addEventListener('change', e => {
         oipInterval = e.target.value;
         if (window.oipReplayMode) oipResetReplay();
         else oipLoadCandles();
+    });
+
+    // The OI Profile chart's own TF. While it matches Opt Prem's the full load
+    // paints this chart as before; once it does not, one index-only request
+    // repaints THIS chart and leaves the option premiums untouched.
+    oipElems.oiInterval?.addEventListener('change', e => {
+        oipOIInterval = e.target.value;
+        if (window.oipReplayMode) oipResetReplay();
+        else if (oipTfSplit()) oipLoadCandles(true, true, true);
+        else oipLoadCandles(true, true);
     });
 
     oipElems.days?.addEventListener('change', () => {
@@ -749,7 +775,7 @@ function oipApplyMineCpr() {
     if (!oipMinePane) return;
     const candles = oipOILastCandles || [];
     try {
-        const result = MineCPR.compute(candles, oipInterval, oipMineDaily.rows, oipMineCprSettings);
+        const result = MineCPR.compute(candles, oipOIInterval, oipMineDaily.rows, oipMineCprSettings);
         MineCPR.attach(oipMinePane, result);
     } catch (e) { console.warn('[OIP] Mine CPR:', e); }
     oipApplyMineOrderFlow(candles);
@@ -759,10 +785,10 @@ function oipApplyMineCpr() {
         // `ofCells` stays dark here: this chart is the index, not the tape's
         // own contract, so the footprint-cells row is offered but cannot light.
         const info = (typeof MineOrderFlow !== 'undefined')
-            ? Object.assign({}, MineCPR.tfInfo(oipInterval), MineOrderFlow.tfInfo(oipInterval),
+            ? Object.assign({}, MineCPR.tfInfo(oipOIInterval), MineOrderFlow.tfInfo(oipOIInterval),
                             { ofCells: false })
-            : MineCPR.tfInfo(oipInterval);
-        if (typeof MineTPO !== 'undefined') Object.assign(info, MineTPO.tfInfo(oipInterval));
+            : MineCPR.tfInfo(oipOIInterval);
+        if (typeof MineTPO !== 'undefined') Object.assign(info, MineTPO.tfInfo(oipOIInterval));
         MineCPR.refreshGates(host, [info]);
     }
     if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
@@ -779,11 +805,11 @@ function oipApplyMineTpo(candles) {
     // session is memoised by its DATE, and the future's bars for that date sit
     // a basis above the index's, so without it flipping the switch would serve
     // the other instrument's profile back for every finished day.
-    const forKey = `${oipSymbol}|${oipInterval}|${oipChartSource}`;
+    const forKey = `${oipSymbol}|${oipOIInterval}|${oipChartSource}`;
     if (forKey !== oipMineTpoFor) { oipMineTpoCache.clear(); oipMineTpoFor = forKey; }
     try {
         MineTPO.attach(oipMinePane,
-            MineTPO.compute(candles, oipInterval, oipMineCprSettings, oipMineTpoCache));
+            MineTPO.compute(candles, oipOIInterval, oipMineCprSettings, oipMineTpoCache));
     } catch (e) { console.warn('[OIP] TPO:', e); }
 }
 
@@ -793,7 +819,7 @@ function oipApplyMineTpo(candles) {
 function oipApplyMineOrderFlow(candles) {
     if (typeof MineOrderFlow === 'undefined' || !oipMinePane) return;
     try {
-        MineOrderFlow.apply(oipMinePane, candles || [], oipInterval, oipMineCprSettings,
+        MineOrderFlow.apply(oipMinePane, candles || [], oipOIInterval, oipMineCprSettings,
                             { root: oipSymbol, cells: false });
     } catch (e) { console.warn('[OIP] Order flow:', e); }
 }
@@ -821,7 +847,7 @@ function oipLoadMineDaily() {
             d.symbol = symbol; d.at = Date.now();
             d.rows = (body && body.success && Array.isArray(body.daily)) ? body.daily : [];
             if (d.rows.length && oipMinePane) {
-                try { MineCPR.attach(oipMinePane, MineCPR.compute(oipOILastCandles || [], oipInterval, d.rows, oipMineCprSettings)); } catch (e) {}
+                try { MineCPR.attach(oipMinePane, MineCPR.compute(oipOILastCandles || [], oipOIInterval, d.rows, oipMineCprSettings)); } catch (e) {}
                 if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
             }
         })
@@ -926,12 +952,12 @@ function oipInitCharts() {
             oipElems.showBnfVolume?.checked ?? false);
 
         // Horizontal Ray drawing tool — `timeframe` is a getter (not the plain
-        // string the Opt Prem charts pass) because oipInterval can change via
-        // the TF dropdown after this chart is created (this chart, unlike the
+        // string the Opt Prem charts pass) because oipOIInterval can change via
+        // this chart's TF dropdown after it is created (this chart, unlike the
         // Opt Prem ones, is never recreated on interval change).
         if (typeof TradingViewChart !== 'undefined' && TradingViewChart.attachRayTool) {
             oipOIRayTool = TradingViewChart.attachRayTool(oipOIChart, oipOISeries, elOI, {
-                timeframe: () => oipInterval,
+                timeframe: () => oipOIInterval,
                 rightOffset: 20,
                 onRayDrawn: oipOIRayDisarm,
                 reapplyZOrder: () => { if (typeof oipApplyZOrder === 'function') oipApplyZOrder(); }
@@ -959,9 +985,9 @@ function oipInitCharts() {
         }
         // Price + bar-close countdown block on the axis (shared with every
         // other chart in the app). `interval` is a getter for the same reason
-        // the ray tool's is: the TF dropdown changes oipInterval in place.
+        // the ray tool's is: the TF dropdown changes oipOIInterval in place.
         if (typeof TradingViewChart !== 'undefined' && TradingViewChart.attachCountdown) {
-            TradingViewChart.attachCountdown(oipOIChart, oipOISeries, { interval: () => oipInterval });
+            TradingViewChart.attachCountdown(oipOIChart, oipOISeries, { interval: () => oipOIInterval });
         }
     }
     if (window.oipInitSecondaryCharts) window.oipInitSecondaryCharts();
@@ -1325,13 +1351,25 @@ function oipToastFetchError(msg) {
 // forceFetch=false short-circuits to a local re-render (oipRefreshLocalView)
 // when the data already in hand is enough, e.g. flipping between chart views.
 //
-// indexOnly=true is the Spot / Fut switch's path: it asks for opt=false (no
-// option legs, no 30-second sub-candles) and drops the leg-shaped keys out of
-// the response before anything is merged, so flipping the instrument repaints
+// indexOnly=true is the Spot / Fut switch's path — and the TF-split path: it
+// asks for opt=false (no option legs, no 30-second sub-candles) and drops the
+// leg-shaped keys out of the response before anything is merged, so it repaints
 // THIS chart off one cheap live request and leaves the Opt Prem charts holding
-// exactly the premiums they were already showing.
+// exactly the premiums they were already showing. An index-only pass is also the
+// only one that may ask for oipOIInterval rather than oipInterval.
 async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = false) {
     try {
+        // Which bar width this pass is for, and which half of the page it may
+        // paint. With the two TFs equal (the usual case) tfSplit is false and
+        // everything below behaves exactly as it did before the OI chart got its
+        // own dropdown. With them apart, a full pass serves the Opt Prem block
+        // only and hands this chart over to the index-only pass it fires at the
+        // end; the index-only pass serves this chart alone.
+        const tfSplit = oipTfSplit();
+        const reqInterval = indexOnly ? oipOIInterval : oipInterval;
+        const paintIndexChart = indexOnly || !tfSplit;
+        // Which half of the page's shared box indicators this pass owns.
+        const boxHalf = !tfSplit ? 'both' : (indexOnly ? 'main' : 'opt');
 
         const h = parseFloat(oipElems.spotHigh?.value || 0);
         const l = parseFloat(oipElems.spotLow?.value || 0);
@@ -1364,7 +1402,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
         }
 
         const _daysForInterval = { day: 365, week: 1095, month: 3650 };
-        let days    = _daysForInterval[oipInterval] ?? (parseInt(oipElems.days?.value) || 5);
+        let days    = _daysForInterval[reqInterval] ?? (parseInt(oipElems.days?.value) || 5);
         const optDays = days; // match option candle range to spot range so chart scales stay in sync
         let dateRangeParams = "";
         if (window.oipReplayMode && oipElems.startDate?.value && oipElems.endDate?.value) {
@@ -1380,7 +1418,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
         // instrument the user picked instead of quietly dropping back to spot.
         const srcParam = `&source=${oipChartSource}`;
         const optParam = indexOnly ? '&opt=false&include_30s=false' : '';
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${srcParam}${optParam}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${reqInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${srcParam}${optParam}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1440,10 +1478,13 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
             window._oipDataRefreshing = true;
 
             // Parked for the Opt Prem charts, which align their bars to this
-            // timeline (see oipRefreshLocalView).
-            if (validCandles.length) oipLatestIndexCandles = validCandles;
+            // timeline (see oipRefreshLocalView). On a TF split these bars are
+            // this chart's, not theirs — parking them would drag every option
+            // premium and IV line onto the wrong grid, so the index-only pass
+            // leaves the master timeline exactly where the last full load put it.
+            if (validCandles.length && !(tfSplit && indexOnly)) oipLatestIndexCandles = validCandles;
 
-            if (validCandles.length) {
+            if (validCandles.length && paintIndexChart) {
                 try {
                     // Parked untagged so the 5m Close Border indicator can be
                     // re-applied on a toggle/colour change without a refetch.
@@ -1451,7 +1492,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
                     const _fm = oip5mCloseSettings('main');
                     oipSetSyntheticBanner(oipHasSynthetic(validCandles));
                     oipOISeries.setData(
-                        oipMarkSynthetic(oipMark5mCloseBorders(validCandles, _fm.enabled, _fm.color)));
+                        oipMarkSynthetic(oipMark5mCloseBorders(validCandles, _fm.enabled, _fm.color, oipOIInterval)));
                     oipOIChartReady = true;
 
                     if (resetZoom) {
@@ -1466,21 +1507,22 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
                     if (oipElems.hdrVolSymbol) oipElems.hdrVolSymbol.textContent = data.future_symbol || '--';
                     if (oipElems.hdrVolCard) oipElems.hdrVolCard.classList.toggle('hidden', !data.future_symbol);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
-            } else if (oipOILastCandles?.length) {
+            } else if (oipOILastCandles?.length || !paintIndexChart) {
                 // The response carried no usable index candles, but the chart
                 // still holds the last painted set — keep it flagged ready or
                 // the cross-chart sync below would treat it as unloaded.
                 oipOIChartReady = true;
             }
 
-            // CPR / Multi CPR / EMAs / VWAP / boxes — the Mine CPR set, in one pass.
-            oipApplyMineCpr();
+            // CPR / Multi CPR / EMAs / VWAP / boxes — the Mine CPR set, in one
+            // pass, off whatever bars this chart is actually holding.
+            if (paintIndexChart) oipApplyMineCpr();
 
             // 9:18 ATM CE OI lines — always compute & cache (kept ready);
             // oipDrawAtmCeOiLines() only renders when the checkbox is on.
             const _atmCeOiDate = (window.oipReplayMode && oipElems.startDate?.value) ? oipElems.startDate.value : null;
             await oipFetchAtmCeOiStrikes(oipSymbol, oipStrikeStep, _atmCeOiDate);
-            oipDrawAtmCeOiLines();
+            if (paintIndexChart) oipDrawAtmCeOiLines();
             oipUpdateAtmCeOiBiasCard(oipCurrentPrice);
         }
 
@@ -1501,10 +1543,12 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
                 // No option data in index view — draw OI-chart boxes only
                 // (the 2nd 5-min and Monday boxes on THIS chart are Mine CPR's;
                 // oipDraw2nd5mCandleBox only serves the option charts now).
-                oipDraw2ndCandle30sBox(validCandles);
-                oipDraw2nd5mCandleBox(validCandles);
-                oipDraw30mReversalLines(validCandles);
-                oipDraw1DReversalLines(validCandles);
+                oipDraw2ndCandle30sBox(validCandles, boxHalf);
+                oipDraw2nd5mCandleBox(validCandles, boxHalf);
+                if (paintIndexChart) {
+                    oipDraw30mReversalLines(validCandles);
+                    oipDraw1DReversalLines(validCandles);
+                }
             } else {
 
                 const ceStrike = data.intrinsic?.itm_ce_strike, peStrike = data.intrinsic?.itm_pe_strike;
@@ -1535,18 +1579,23 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
                     oip30sSecondCandle.pe = data.second_30s_candle_pe || [];
                 }
                 // Draw boxes after oipOptionData is refreshed so CE/PE charts use the new strike's candles
-                oipDraw2ndCandle30sBox(validCandles);
-                oipDraw2nd5mCandleBox(validCandles);
+                oipDraw2ndCandle30sBox(validCandles, boxHalf);
+                oipDraw2nd5mCandleBox(validCandles, boxHalf);
                 // Index-chart-only overlays.
-                oipDraw30mReversalLines(validCandles);
-                oipDraw1DReversalLines(validCandles);
+                if (paintIndexChart) {
+                    oipDraw30mReversalLines(validCandles);
+                    oipDraw1DReversalLines(validCandles);
+                }
             }
 
             // After every overlay/box has been (re)added, enforce the full z-policy
             // (fills → lines → candles) so nothing hides behind another indicator.
             if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
 
-            oipFullCandles = validCandles;
+            // The bar set the OI Profile chart is holding — the reversal lines
+            // and the 5m Close Border toggle redraw off it, so a pass that did
+            // not paint that chart must not move it.
+            if (paintIndexChart) oipFullCandles = validCandles;
             oipFullOptionData = oipOptionData;
 
             if (window.oipReplayMode) {
@@ -1563,7 +1612,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
             // user explicitly resets zoom (symbol/date/timeframe change). Periodic candle
             // refreshes use resetZoom=false and must NOT sync — that would snap the chart
             // back to the right edge on every poll tick, fighting the user's manual scroll.
-            if (resetZoom || !_oipChartsSyncedOnce) {
+            // Skipped outright on a TF split: this is a LOGICAL (bar-index) sync,
+            // and the OI chart's bars and the Opt Prem charts' are no longer the
+            // same width, so copying one's scroll position to the others would
+            // land them somewhere unrelated. See oiPanPartner in oi_profile_init.js.
+            if ((resetZoom || !_oipChartsSyncedOnce) && !tfSplit) {
                 if (resetZoom) _oipChartsSyncedOnce = false;
                 setTimeout(() => {
                     if (!oipOIChart || !oipOIChartReady || !oipIntChartReady) return;
@@ -1593,6 +1646,15 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
                     _oipChartsSyncedOnce = true;
                 }, 50);
             }
+        }
+
+        // TF split: this pass served the Opt Prem block at oipInterval and left
+        // the OI Profile chart alone. Paint it now off its own bar width — one
+        // index-only request, no option legs, so the premiums above are not
+        // refetched. indexOnly is already true inside that call, so it cannot
+        // come back round here.
+        if (!indexOnly && tfSplit && !window.oipReplayMode) {
+            await oipLoadCandles(true, resetZoom, true);
         }
     } catch (e) { console.error('[OIP] Refresh Err:', e); }
 }
@@ -1989,7 +2051,7 @@ function oipRedraw5mCloseMain() {
         _oip5mCloseMainPending = false;
         const { enabled, color } = oip5mCloseSettings('main');
         window._oipDataRefreshing = true;
-        try { oipOISeries.setData(oipMark5mCloseBorders(oipOILastCandles, enabled, color)); } catch (e) {}
+        try { oipOISeries.setData(oipMark5mCloseBorders(oipOILastCandles, enabled, color, oipOIInterval)); } catch (e) {}
         requestAnimationFrame(() => { window._oipDataRefreshing = false; });
     });
 }
@@ -2376,20 +2438,31 @@ function _oipL(c) { return parseFloat(c.low  ?? c.l); }
 let oip30sSecondCandle = { oi: [], ce: [], pe: [] };
 let oip2ndCandle30sBox = { oi: [], ce: [], pe: [], intCe: [], intPe: [] };
 
-function oipDraw2ndCandle30sBox(candles) {
-    oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
-    oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
-    oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
-    oip2ndCandle30sBox.intCe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intCe = [];
-    oip2ndCandle30sBox.intPe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intPe = [];
+// `which` is which half of the page this call owns: 'main' (the OI Profile
+// chart), 'opt' (the three Opt Prem charts) or 'both'. It matters because the
+// two halves can now run on different timeframes, so each is redrawn by its own
+// load pass off its own bars — and a call that only owns one half must leave the
+// other half's boxes standing rather than clearing them with everything else.
+function oipDraw2ndCandle30sBox(candles, which = 'both') {
+    const doMain = which !== 'opt', doOpt = which !== 'main';
+    if (doMain) { oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = []; }
+    if (doOpt) {
+        oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
+        oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+        oip2ndCandle30sBox.intCe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intCe = [];
+        oip2ndCandle30sBox.intPe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intPe = [];
+    }
 
     const _30s_allowed = ['30second', 'minute', '2minute', '3minute', '5minute', '15minute', '30minute'];
-    if (!_30s_allowed.includes(oipInterval) || !candles || !candles.length) return;
+    if (!candles || !candles.length) return;
     // Main chart and option (CE/PE-only) charts are gated independently —
     // the main Indicators popup checkbox only controls the main chart; the
-    // Opt Indicator popup checkbox only controls the option charts.
-    const showMain = document.getElementById('oipShow2ndCandle30s')?.checked;
-    const showOpt  = document.getElementById('oipShow2ndCandle30sOpt')?.checked;
+    // Opt Indicator popup checkbox only controls the option charts. The bar
+    // width gate is per half too, for the same reason.
+    const showMain = doMain && _30s_allowed.includes(oipOIInterval)
+                     && document.getElementById('oipShow2ndCandle30s')?.checked;
+    const showOpt  = doOpt && _30s_allowed.includes(oipInterval)
+                     && document.getElementById('oipShow2ndCandle30sOpt')?.checked;
     if (!showMain && !showOpt) return;
 
     // Build a day-key → candle lookup from the backend-supplied 2nd 30s candles.
@@ -2404,7 +2477,7 @@ function oipDraw2ndCandle30sBox(candles) {
         return m;
     }
 
-    function _draw30sAllDays(chart, src, map30s) {
+    function _draw30sAllDays(chart, src, map30s, interval) {
         const boxes = [];
         const srcMap = _oipGroupByDay(src);
         Object.keys(srcMap).sort().forEach(dk => {
@@ -2418,7 +2491,7 @@ function oipDraw2ndCandle30sBox(candles) {
             let c2;
             if (map30s && map30s[dk]) {
                 c2 = map30s[dk];
-            } else if (oipInterval === '30second' && day.length >= 2) {
+            } else if (interval === '30second' && day.length >= 2) {
                 c2 = day[1];
             } else {
                 return;
@@ -2433,10 +2506,11 @@ function oipDraw2ndCandle30sBox(candles) {
 
     const _oi30sMap  = _build30sMap(oip30sSecondCandle.oi);
     if (showMain && oipOIChart)
-        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles, _oi30sMap);
+        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles, _oi30sMap, oipOIInterval);
 
     requestAnimationFrame(() => {
         try {
+            if (!doOpt) return;
             oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
             oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
             oip2ndCandle30sBox.intCe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intCe = [];
@@ -2445,16 +2519,16 @@ function oipDraw2ndCandle30sBox(candles) {
             const _ce30sMap = _build30sMap(oip30sSecondCandle.ce);
             const _pe30sMap = _build30sMap(oip30sSecondCandle.pe);
             if (oipCEChart?.chart && oipOptionData)
-                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap);
+                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap, oipInterval);
             if (oipPEChart?.chart && oipOptionData)
-                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap);
+                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap, oipInterval);
             // All 3 option charts (CE-only, PE-only, Combined) — Combined gets
             // both legs' boxes on its own CE/PE series.
             if (oipIntrinsicChart?.chart && oipOptionData) {
                 if (oipIntrinsicSeries)
-                    oip2ndCandle30sBox.intCe = _draw30sAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap);
+                    oip2ndCandle30sBox.intCe = _draw30sAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap, oipInterval);
                 if (oipIntrinsicPeSeries)
-                    oip2ndCandle30sBox.intPe = _draw30sAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap);
+                    oip2ndCandle30sBox.intPe = _draw30sAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap, oipInterval);
             }
             if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder();
         } catch(e) {}
@@ -2465,19 +2539,25 @@ function oipDraw2ndCandle30sBox(candles) {
 // ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
 let oip2nd5mCandleBox = { oi: [], ce: [], pe: [], intCe: [], intPe: [] };
 
-function oipDraw2nd5mCandleBox(candles) {
-    oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
-    oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
-    oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
-    oip2nd5mCandleBox.intCe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intCe = [];
-    oip2nd5mCandleBox.intPe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intPe = [];
+// `which` — see oipDraw2ndCandle30sBox above for what it is and why.
+function oipDraw2nd5mCandleBox(candles, which = 'both') {
+    const doMain = which !== 'opt', doOpt = which !== 'main';
+    if (doMain) { oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = []; }
+    if (doOpt) {
+        oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
+        oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+        oip2nd5mCandleBox.intCe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intCe = [];
+        oip2nd5mCandleBox.intPe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intPe = [];
+    }
 
     const allowedIntervals = ['minute', '2minute', '3minute', '5minute', '15minute', '30minute'];
-    if (!allowedIntervals.includes(oipInterval) || !candles || !candles.length) return;
+    if (!candles || !candles.length) return;
     // Main chart and option (CE/PE-only) charts are gated independently — see
     // oipDraw2ndCandle30sBox above for the same convention.
-    const showMain = document.getElementById('oipShow2nd5mCandle')?.checked;
-    const showOpt  = document.getElementById('oipShow2nd5mCandleOpt')?.checked;
+    const showMain = doMain && allowedIntervals.includes(oipOIInterval)
+                     && document.getElementById('oipShow2nd5mCandle')?.checked;
+    const showOpt  = doOpt && allowedIntervals.includes(oipInterval)
+                     && document.getElementById('oipShow2nd5mCandleOpt')?.checked;
     if (!showMain && !showOpt) return;
 
     // Bar duration in minutes per interval — needed to find which bar(s)
@@ -2486,10 +2566,10 @@ function oipDraw2nd5mCandleBox(candles) {
     // (matches the old exact-match behavior); a 15/30min bar starting before
     // 09:20 can still span across it, so overlap is checked instead.
     const _5M_BAR_MINUTES = { minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '30minute': 30 };
-    const barMin = _5M_BAR_MINUTES[oipInterval] || 5;
     const WIN_START = 9 * 60 + 20, WIN_END = 9 * 60 + 25; // minutes since midnight
 
-    function _draw5mAllDays(chart, src) {
+    function _draw5mAllDays(chart, src, interval) {
+        const barMin = _5M_BAR_MINUTES[interval] || 5;
         const boxes = [];
         const map = _oipGroupByDay(src);
         Object.keys(map).sort().forEach(dk => {
@@ -2511,27 +2591,28 @@ function oipDraw2nd5mCandleBox(candles) {
     }
 
     if (showMain && oipOIChart)
-        oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
+        oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles, oipOIInterval);
 
     // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
     // LC's async render RAF which crashes if the chart isn't yet initialized.
     requestAnimationFrame(() => {
         try {
+            if (!doOpt) return;
             oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
             oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
             oip2nd5mCandleBox.intCe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intCe = [];
             oip2nd5mCandleBox.intPe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intPe = [];
             if (!showOpt) return;
             if (oipCEChart?.chart && oipOptionData)
-                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'), oipInterval);
             if (oipPEChart?.chart && oipOptionData)
-                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'), oipInterval);
             // All 3 option charts (CE-only, PE-only, Combined).
             if (oipIntrinsicChart?.chart && oipOptionData) {
                 if (oipIntrinsicSeries)
-                    oip2nd5mCandleBox.intCe = _draw5mAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+                    oip2nd5mCandleBox.intCe = _draw5mAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'CE'), oipInterval);
                 if (oipIntrinsicPeSeries)
-                    oip2nd5mCandleBox.intPe = _draw5mAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+                    oip2nd5mCandleBox.intPe = _draw5mAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'PE'), oipInterval);
             }
             if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder();
         } catch(e) {}
