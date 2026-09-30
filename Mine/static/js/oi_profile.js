@@ -165,7 +165,11 @@ let oipOIInterval = '5minute';
 // True while the OI Profile chart is on a different bar width from Opt Prem.
 const oipTfSplit = () => oipOIInterval !== oipInterval;
 let oipStrikeCount = 15;
-let oipMode = 'off';
+// The OI Bars overlay opens on CHG — bar-to-bar change in each strike's open
+// interest, the reading the page is actually for — matching the radio's own
+// default in the template and /oi-profile/replay, which has always opened on
+// it. OFF is still a click away and total OI is the other radio.
+let oipMode = 'change';
 /* Spot / Fut — the OI Profile chart's instrument, and nothing else's.
    'future' asks /api/oi-profile/candles for the current-expiry future's bars
    (the ones it already pulls for the Nifty Vol Fut overlay, so the switch costs
@@ -716,7 +720,10 @@ const OIP_MINE_DAILY_TTL_MS = 5 * 60 * 1000;
 let oipMineCprSettings = {};
 let oipMinePane = null;                       // { chart, series, lines, primitive } for MineCPR.attach
 const oipMineOfCache = new Map();             // Order Flow, one entry per finished session
-let oipMineDaily = { symbol: null, rows: [], at: 0, pending: null };
+// `source` belongs in the key beside the symbol: the pivots are the daily
+// bars of the instrument ON the chart, and the future's daily HLC sits a
+// basis above the index's (see oipLoadMineDaily).
+let oipMineDaily = { symbol: null, source: null, rows: [], at: 0, pending: null };
 
 const oipMineSetting = key => (key in oipMineCprSettings) ? oipMineCprSettings[key]
     : (typeof MineOrderFlow !== 'undefined' && key in MineOrderFlow.DEFAULTS) ? MineOrderFlow.DEFAULTS[key]
@@ -782,11 +789,11 @@ function oipApplyMineCpr() {
     oipApplyMineTpo(candles);
     const host = document.getElementById('oipMineCprSections');
     if (host) {
-        // `ofCells` stays dark here: this chart is the index, not the tape's
-        // own contract, so the footprint-cells row is offered but cannot light.
+        // `ofCells` lights on Fut and stays dark on Spot: the tape is the
+        // future's, so only there is this chart the contract the cells belong to.
         const info = (typeof MineOrderFlow !== 'undefined')
             ? Object.assign({}, MineCPR.tfInfo(oipOIInterval), MineOrderFlow.tfInfo(oipOIInterval),
-                            { ofCells: false })
+                            { ofCells: oipOfCells() })
             : MineCPR.tfInfo(oipOIInterval);
         if (typeof MineTPO !== 'undefined') Object.assign(info, MineTPO.tfInfo(oipOIInterval));
         MineCPR.refreshGates(host, [info]);
@@ -813,14 +820,46 @@ function oipApplyMineTpo(candles) {
     } catch (e) { console.warn('[OIP] TPO:', e); }
 }
 
-// The Order Flow set, off the same candles. `cells: false` — see oipMineSpec.
-// The tape is fetched asynchronously and shared with every other chart on the
-// page, so a day landing late repaints through the Tape listener below.
+// Whether this chart can carry the footprint's price CELLS — the Sell × Buy
+// columns inside each candle. The tape is collected on the FUTURE, so on Spot
+// every price in it sits a basis away from these candles and only the
+// time-bucketed figures (volume, buy, sell, delta, cum delta) are honest;
+// they keep working and the cells are left off. On Fut the candles ARE that
+// contract, so the whole footprint is drawn, the same reading DEXT gives.
+const oipOfCells = () => oipChartSource === 'future';
+
+// The narrow candle exists only to sit in the gap between the cells' two
+// columns, so the chart's own candle makes way exactly while cells are drawn
+// and comes straight back when they are not (Spot, footprint off, no tape).
+let oipOfCandleMode = null;
+function oipOfCandleStyle(mode) {
+    if (!oipOISeries || oipOfCandleMode === mode) return;
+    oipOfCandleMode = mode;
+    const base = candleStyle();
+    const styles = {
+        normal: Object.assign({}, base, { borderVisible: true }),
+        full: Object.assign({}, base, { borderVisible: true }),
+        hollow: Object.assign({}, base, { upColor: 'transparent', downColor: 'transparent',
+                                          borderVisible: true }),
+        narrow: Object.assign({}, base, { upColor: 'transparent', downColor: 'transparent',
+                                          borderVisible: false,
+                                          wickUpColor: 'transparent', wickDownColor: 'transparent' }),
+    };
+    try { oipOISeries.applyOptions(styles[mode] || styles.normal); } catch (e) {}
+}
+
+// The Order Flow set, off the same candles. The tape is fetched asynchronously
+// and shared with every other chart on the page, so a day landing late
+// repaints through the Tape listener below.
 function oipApplyMineOrderFlow(candles) {
     if (typeof MineOrderFlow === 'undefined' || !oipMinePane) return;
     try {
-        MineOrderFlow.apply(oipMinePane, candles || [], oipOIInterval, oipMineCprSettings,
-                            { root: oipSymbol, cells: false });
+        const cells = oipOfCells();
+        const out = MineOrderFlow.apply(oipMinePane, candles || [], oipOIInterval, oipMineCprSettings,
+                                        { root: oipSymbol, cells,
+                                          futureSymbol: (oipOIData && oipOIData.future_symbol) || null });
+        oipOfCandleStyle(cells && out.result.bars.length && oipMineSetting('ofFootprint')
+                         ? oipMineSetting('ofCandle') : 'normal');
     } catch (e) { console.warn('[OIP] Order flow:', e); }
 }
 
@@ -837,21 +876,28 @@ if (typeof MineOrderFlow !== 'undefined') {
 function oipLoadMineDaily() {
     const d = oipMineDaily;
     if (d.pending) return;
-    if (d.symbol === oipSymbol && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
+    // Spot / Fut decides which instrument's daily bars the pivots come off. The
+    // chart draws the future's candles, so asking for the index's daily rows put
+    // every CPR / R-S / PDH-PDL line a basis (tens of NIFTY points) below where
+    // the same script draws them on the future — the mismatch against the
+    // TradingView Mine CPR on NIFTY <MON>FUT. `source` is in the cache key too,
+    // so flipping the toggle re-fetches instead of keeping the other side's rows.
+    const source = oipChartSource;
+    if (d.symbol === oipSymbol && d.source === source && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
     const symbol = oipSymbol;
-    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day`, { credentials: 'same-origin' })
+    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day&source=${source}`, { credentials: 'same-origin' })
         .then(r => r.json())
         .then(body => {
             d.pending = null;
-            if (symbol !== oipSymbol) return;
-            d.symbol = symbol; d.at = Date.now();
+            if (symbol !== oipSymbol || source !== oipChartSource) return;
+            d.symbol = symbol; d.source = source; d.at = Date.now();
             d.rows = (body && body.success && Array.isArray(body.daily)) ? body.daily : [];
             if (d.rows.length && oipMinePane) {
                 try { MineCPR.attach(oipMinePane, MineCPR.compute(oipOILastCandles || [], oipOIInterval, d.rows, oipMineCprSettings)); } catch (e) {}
                 if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
             }
         })
-        .catch(() => { d.pending = null; d.symbol = symbol; d.at = Date.now(); d.rows = []; });
+        .catch(() => { d.pending = null; d.symbol = symbol; d.source = source; d.at = Date.now(); d.rows = []; });
 }
 
 /* ── Main OI Profile chart: Horizontal Ray drawing tool ──────── */

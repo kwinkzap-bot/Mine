@@ -32,6 +32,7 @@
 }
 .mc-ind-item:hover { background: var(--color-row-hover); }
 .mc-ind-item.sub { padding-left: 28px; font-size: 11px; }
+.mc-ind-item.sub2 { padding-left: 46px; }
 .mc-ind-item input[type="checkbox"] { width: 13px; height: 13px; margin: 0; accent-color: var(--color-accent); cursor: pointer; }
 .mc-ind-item select, .mc-ind-item input[type="number"] {
     margin-left: auto;

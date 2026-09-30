@@ -778,7 +778,7 @@ const OIP_REPLAY_MINE_DEFAULTS = { pivotsBack: 200 };
 const OIP_REPLAY_MINE_DAILY_FROM = '2025-01-01';
 let oipMineCprSettings = {};
 let oipMinePane = null;                       // { chart, series, lines, primitive } for MineCPR.attach
-let oipMineDaily = { symbol: null, rows: [], at: 0, pending: null };
+let oipMineDaily = { symbol: null, source: null, rows: [], at: 0, pending: null };
 let _oipMineLastIdx = -2;                     // playhead index the lines were last set to (-2: never)
 let _oipMineLastKeys = '';                    // line keys drawn at that index
 
@@ -882,10 +882,11 @@ function oipApplyMineCpr(index) {
         let info = (typeof MineTPO !== 'undefined')
             ? Object.assign({}, MineCPR.tfInfo(oipInterval), MineTPO.tfInfo(oipInterval))
             : MineCPR.tfInfo(oipInterval);
-        // `ofCells` stays dark: this chart is the index, not the contract the
-        // tape was collected on, so the cells row is offered but cannot light.
+        // `ofCells` lights on Fut and stays dark on Spot: the tape is the
+        // future's, so only there is this chart the contract the cells belong to.
         if (typeof MineOrderFlow !== 'undefined') {
-            info = Object.assign({}, info, MineOrderFlow.tfInfo(oipInterval), { ofCells: false });
+            info = Object.assign({}, info, MineOrderFlow.tfInfo(oipInterval),
+                                 { ofCells: oipOfCells() });
         }
         MineCPR.refreshGates(host, [info]);
     }
@@ -917,11 +918,47 @@ function oipApplyMineTpo(candles) {
 //
 // Replay reads back days, which come out of the tape ARCHIVE. A day nobody
 // watched has no rows and the pane simply stays empty.
+//
+// The price CELLS — the Sell × Buy columns inside each candle — need this
+// chart to BE the contract the tape was collected on, which is the FUTURE. On
+// Spot every price in the tape sits a basis away from these candles, so the
+// cells are left off and only the time-bucketed figures are drawn; on Fut the
+// whole footprint appears.
+const oipOfCells = () => oipChartSource === 'future';
+
+// The narrow candle only exists to sit in the gap between the cells' two
+// columns, so the chart's own candle makes way exactly while cells are drawn.
+const OIP_OF_CANDLE_BASE = {
+    upColor: '#1b9981', downColor: '#f23645',
+    borderUpColor: '#1b9981', borderDownColor: '#f23645',
+    wickUpColor: '#1b9981', wickDownColor: '#f23645',
+};
+let oipOfCandleMode = null;
+function oipOfCandleStyle(mode) {
+    if (!oipOISeries || oipOfCandleMode === mode) return;
+    oipOfCandleMode = mode;
+    const B = OIP_OF_CANDLE_BASE;
+    const styles = {
+        normal: Object.assign({}, B, { borderVisible: true }),
+        full: Object.assign({}, B, { borderVisible: true }),
+        hollow: Object.assign({}, B, { upColor: 'transparent', downColor: 'transparent',
+                                       borderVisible: true }),
+        narrow: Object.assign({}, B, { upColor: 'transparent', downColor: 'transparent',
+                                       borderVisible: false,
+                                       wickUpColor: 'transparent', wickDownColor: 'transparent' }),
+    };
+    try { oipOISeries.applyOptions(styles[mode] || styles.normal); } catch (e) {}
+}
+
 function oipApplyMineOrderFlow(candles) {
     if (typeof MineOrderFlow === 'undefined' || !oipMinePane) return;
     try {
-        MineOrderFlow.apply(oipMinePane, candles || [], oipInterval, oipMineEffectiveSettings(),
-                            { root: oipSymbol, cells: false });
+        const cells = oipOfCells();
+        const out = MineOrderFlow.apply(oipMinePane, candles || [], oipInterval, oipMineEffectiveSettings(),
+                                        { root: oipSymbol, cells,
+                                          futureSymbol: (oipOIData && oipOIData.future_symbol) || null });
+        oipOfCandleStyle(cells && out.result.bars.length && oipMineSetting('ofFootprint')
+                         ? oipMineSetting('ofCandle') : 'normal');
     } catch (e) { console.warn('[Replay] Order flow:', e); }
 }
 
@@ -936,21 +973,25 @@ if (typeof MineOrderFlow !== 'undefined') {
 function oipLoadMineDaily() {
     const d = oipMineDaily;
     if (d.pending) return;
-    if (d.symbol === oipSymbol && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
+    // Spot / Fut picks the instrument the pivots come off — the future's daily
+    // HLC sits a basis above the index's, so the index's rows drew every level
+    // in the wrong place on a Fut chart.
+    const source = oipChartSource;
+    if (d.symbol === oipSymbol && d.source === source && Date.now() - d.at < OIP_MINE_DAILY_TTL_MS) return;
     const symbol = oipSymbol;
-    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day&daily_from=${OIP_REPLAY_MINE_DAILY_FROM}`, { credentials: 'same-origin' })
+    d.pending = fetch(`/api/multichart/candles?symbol=${encodeURIComponent(symbol)}&interval=day&daily_from=${OIP_REPLAY_MINE_DAILY_FROM}&source=${source}`, { credentials: 'same-origin' })
         .then(r => r.json())
         .then(body => {
             d.pending = null;
-            if (symbol !== oipSymbol) return;
-            d.symbol = symbol; d.at = Date.now();
+            if (symbol !== oipSymbol || source !== oipChartSource) return;
+            d.symbol = symbol; d.source = source; d.at = Date.now();
             d.rows = (body && body.success && Array.isArray(body.daily)) ? body.daily : [];
             if (d.rows.length && oipMinePane && oipFullCandles?.length) {
                 _oipMineLastIdx = -2;          // levels moved — the lines must be re-set, not appended to
                 oipApplyMineCpr(oipReplayIndex);
             }
         })
-        .catch(() => { d.pending = null; d.symbol = symbol; d.at = Date.now(); d.rows = []; });
+        .catch(() => { d.pending = null; d.symbol = symbol; d.source = source; d.at = Date.now(); d.rows = []; });
 }
 
 // Kept for the shared call sites; the index chart's VWAP lines are Mine CPR's now.

@@ -343,7 +343,7 @@
         },
         {
           "symbol": "KIRLOSENG",
-          "entry_price": 2281.7,
+          "entry_price": 2281.68,
           "qty": 4,
           "entry_date": "2026-07-03",
           "order": {
@@ -457,7 +457,7 @@
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       },
-      "cash_balance": 96.38,
+      "cash_balance": 96.46,
       "exit_history": [
         {
           "symbol": "SCHNEIDER",
@@ -619,7 +619,7 @@
         },
         {
           "symbol": "IFCI",
-          "entry_price": 89.99,
+          "entry_price": 90.03,
           "qty": 102,
           "entry_date": "2026-08-31",
           "order": {
@@ -635,7 +635,7 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 196.37,
+      "cash_balance": 192.29,
       "exit_history": [
         {
           "symbol": "HSCL",
@@ -735,7 +735,7 @@
         },
         {
           "symbol": "CEMPRO",
-          "entry_price": 1212.7,
+          "entry_price": 1214.46,
           "qty": 7,
           "entry_date": "2026-09-01"
         },

@@ -74,8 +74,28 @@ window.MineOrderFlow = (function () {
         ofImbalance: true,       // diagonal bid/ask imbalance
         ofImbFactor: 300,        // an imbalance is this percent of the diagonal cell
         ofStack: 3,              // this many in a row is a stacked imbalance, bracketed
-        ofHeader: true,          // volume / delta / cumulative delta above each bar
+        ofHeader: true,          // the figures printed above each bar at all
+        // Which of them. Buy and Sell are the two halves the delta is the
+        // difference of. DEXT reads them off the cells, column by column — but
+        // the cells only exist on a chart that IS the tape's contract, and two
+        // of the three pages here chart the index, so a bar's buy and sell were
+        // not readable at all. They are their own lines, on by default.
+        ofHeadVolume: true,
+        ofHeadBuy: true,
+        ofHeadSell: true,
+        ofHeadDelta: true,
+        ofHeadCumDelta: true,
         ofStats: true,           // the bar-stats pane under the chart
+        // ...and which rows it carries. Every row is its own switch: a reader
+        // watching cumulative delta alone wants one row at full height, not
+        // four at a quarter each, and the pane divides its height by however
+        // many are on. Buy and Sell are the same two halves as above.
+        ofStatBuy: false,
+        ofStatSell: false,
+        ofStatDelta: true,
+        ofStatMaxDelta: true,
+        ofStatMinDelta: true,
+        ofStatCumDelta: true,
         ofOpacity: 45,           // cell fill, percent — the candles are read through them
         // How the candle is drawn while a footprint is on it. 'narrow' is the
         // footprint idiom and the default: the chart's own candle is hidden
@@ -125,19 +145,30 @@ window.MineOrderFlow = (function () {
     const MIN_CELL_W_PAIR = 46;             // two columns of figures
     const MIN_CELL_W_ONE = 26;              // one
     const MARK_MIN_W = 7, MARK_MIN_H = 5;   // below this a cell is heat only, no boxes
-    const HEADER_PX = 9, HEADER_LINES = 3;
+    const HEADER_PX = 9;
     const STATS_PX = 9;
-    const STATS_ROWS = [
-        ['delta', 'Delta'], ['maxDelta', 'Max Delta'], ['minDelta', 'Min Delta'], ['cumDelta', 'Cum. Delta'],
+    // Every figure the per-bar header can print, in the order it stacks:
+    // [field on the bar, settings key]. The header draws the ones switched on.
+    const HEADER_LINES = [
+        ['volume', 'ofHeadVolume'], ['buy', 'ofHeadBuy'], ['sell', 'ofHeadSell'],
+        ['delta', 'ofHeadDelta'], ['cumDelta', 'ofHeadCumDelta'],
     ];
-    // The height the stats pane OPENS at: its four rows and a little air,
+    const headerLines = set => HEADER_LINES.filter(([, key]) => key in set ? !!set[key] : !!DEFAULTS[key]);
+    // The same for the bar-stats pane: [field, row name, settings key].
+    const STATS_ROWS = [
+        ['buy', 'Buy', 'ofStatBuy'], ['sell', 'Sell', 'ofStatSell'],
+        ['delta', 'Delta', 'ofStatDelta'], ['maxDelta', 'Max Delta', 'ofStatMaxDelta'],
+        ['minDelta', 'Min Delta', 'ofStatMinDelta'], ['cumDelta', 'Cum. Delta', 'ofStatCumDelta'],
+    ];
+    const statsRows = set => STATS_ROWS.filter(([, , key]) => key in set ? !!set[key] : !!DEFAULTS[key]);
+    // The height the stats pane OPENS at: its switched-on rows and a little air,
     // in CSS px. An absolute height rather than a share of the chart, because
-    // what it has to fit is four lines of 9px text however tall the pane above
+    // what it has to fit is a few lines of 9px text however tall the pane above
     // it is — a proportional one opened at a third of the chart for four rows.
     // Set ONCE, when the pane is created: the separator is draggable, and
     // re-applying this on every redraw would pull it back from under the user.
     const STATS_ROW_PX = 21;
-    const STATS_OPEN_PX = STATS_ROWS.length * STATS_ROW_PX + 6;
+    const statsOpenPx = rows => Math.max(1, rows) * STATS_ROW_PX + 6;
     const STATS_MAX_SHARE = 0.35;           // never more of a short chart than this
     const STATS_GAP_PX = 1;                 // air between two value boxes, CSS px
     const MAX_ROWS_PER_BAR = 200;           // a guard on the row loop, never hit by a real bar
@@ -639,6 +670,7 @@ window.MineOrderFlow = (function () {
                 const { series, chart, result } = state;
                 if (!series || !chart || !result.bars || !result.bars.length) return;
                 const set = result.settings || DEFAULTS;
+                const head = headerLines(set);       // the figures over each bar, in order
                 const dark = isDark();
                 const C = dark ? DARK : LIGHT;
                 const ts = chart.timeScale();
@@ -807,22 +839,32 @@ window.MineOrderFlow = (function () {
                             }
                         }
 
-                        // Volume / delta / cumulative delta, stacked above the
-                        // bar's own high the way the reference chart prints it.
-                        if (drawOn && set.ofHeader && cellW >= MIN_CELL_W_ONE * hr) {
+                        // Volume / buy / sell / delta / cumulative delta,
+                        // stacked above the bar's own high the way the
+                        // reference chart prints it. Which of the five is the
+                        // user's, one switch each; the stack is however many
+                        // of them are on, so turning one off closes the gap
+                        // rather than leaving a hole in the block.
+                        if (drawOn && set.ofHeader && head.length && cellW >= MIN_CELL_W_ONE * hr) {
                             const yHi = cells ? yOf((bar.maxRow + 1) * result.step)
                                               : (bar.h != null ? yOf(bar.h) : null);
                             if (yHi !== null) {
                                 ctx.font = `${Math.round(HEADER_PX * vr)}px Inter, system-ui, sans-serif`;
                                 ctx.textAlign = 'center';
                                 const mid = Math.round(l + cellW / 2);
-                                const lines = [
-                                    [brief(bar.volume), C.sub],
-                                    [signed(bar.delta), bar.delta >= 0 ? C.buy : C.sell],
-                                    [signed(bar.cumDelta), bar.cumDelta >= 0 ? C.buy : C.sell],
-                                ];
-                                let y = yHi - (HEADER_LINES + 0.2) * (HEADER_PX + 2) * vr;
-                                for (const [text, color] of lines) {
+                                let y = yHi - (head.length + 0.2) * (HEADER_PX + 2) * vr;
+                                for (const [field] of head) {
+                                    const v = bar[field];
+                                    // Volume has no side, buy is always the
+                                    // buy colour and sell the sell one; only
+                                    // the two deltas are coloured by sign, and
+                                    // only they carry a sign in front.
+                                    const color = field === 'volume' ? C.sub
+                                        : field === 'buy' ? C.buy
+                                        : field === 'sell' ? C.sell
+                                        : v >= 0 ? C.buy : C.sell;
+                                    const text = field === 'volume' || field === 'buy' || field === 'sell'
+                                        ? brief(v) : signed(v);
                                     if (y > 0 && y < H) { ctx.fillStyle = color; ctx.fillText(text, mid, y); }
                                     y += (HEADER_PX + 2) * vr;
                                 }
@@ -858,7 +900,7 @@ window.MineOrderFlow = (function () {
     //
     // It is a PANE primitive, not a series one: the pane holds no series at
     // all (`setPreserveEmptyPane` keeps it alive without one), so there is no
-    // price scale to fight with and the four rows simply divide the height.
+    // price scale to fight with and the rows simply divide the height.
     function makeStatsPrimitive() {
         const state = { result: { bars: [] }, chart: null, requestUpdate: null };
 
@@ -870,11 +912,16 @@ window.MineOrderFlow = (function () {
                 const C = dark ? DARK : LIGHT;
                 const ts = chart.timeScale();
                 const byTime = typeof ts.timeToIndex === 'function';
+                // Only the rows the user left on, and the height divided by
+                // however many that is — the pane is not four rows, it is the
+                // rows it was asked for.
+                const rows = statsRows(result.settings || DEFAULTS);
+                if (!rows.length) return;
 
                 target.useBitmapCoordinateSpace(scope => {
                     const ctx = scope.context, hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
                     const W = scope.bitmapSize.width, H = scope.bitmapSize.height;
-                    const rowH = H / STATS_ROWS.length;
+                    const rowH = H / rows.length;
                     const bars = result.bars || [];
 
                     ctx.save();
@@ -909,7 +956,7 @@ window.MineOrderFlow = (function () {
                         // its OWN row, so a row reads as a row and not as four
                         // different scales stacked on top of each other.
                         const peak = {};
-                        for (const [key] of STATS_ROWS) {
+                        for (const [key] of rows) {
                             peak[key] = 1;
                             for (const bar of bars) peak[key] = Math.max(peak[key], Math.abs(bar[key]));
                         }
@@ -922,7 +969,7 @@ window.MineOrderFlow = (function () {
                             // candle now that the box is the width of the slot.
                             const l = cx - slot / 2;
                             if (l + cellW < 0 || l > W) continue;
-                            STATS_ROWS.forEach(([key], i) => {
+                            rows.forEach(([key], i) => {
                                 const v = bar[key];
                                 const y = i * rowH;
                                 // Cumulative delta is a running total, so its
@@ -934,7 +981,12 @@ window.MineOrderFlow = (function () {
                                 // That change IS this bar's delta, which is
                                 // also what makes it right at a session
                                 // boundary, where the running total resets.
-                                const dir = key === 'cumDelta' ? bar.delta : v;
+                                // Buy and Sell are both positive numbers, so
+                                // their sign says nothing either: a buy row is
+                                // the buy colour and a sell row the sell one,
+                                // always, and only the size varies.
+                                const dir = key === 'cumDelta' ? bar.delta
+                                    : key === 'buy' ? 1 : key === 'sell' ? -1 : v;
                                 ctx.fillStyle = withAlpha(dir >= 0 ? C.buy : C.sell,
                                                           0.12 + 0.5 * Math.min(1, Math.abs(v) / peak[key]));
                                 ctx.fillRect(Math.round(l), Math.round(y),
@@ -948,11 +1000,11 @@ window.MineOrderFlow = (function () {
                         }
                     }
 
-                    // The row rules, so four rows read as four rows even where
+                    // The row rules, so the rows read as rows even where
                     // a bar has no box to fill — over the boxes, and the same
                     // one pixel the boxes leave for them.
                     ctx.fillStyle = C.panelLine;
-                    for (let i = 1; i < STATS_ROWS.length; i++) {
+                    for (let i = 1; i < rows.length; i++) {
                         ctx.fillRect(0, Math.round(i * rowH) - gapY, W, gapY);
                     }
 
@@ -964,7 +1016,7 @@ window.MineOrderFlow = (function () {
                     // two numbers in one place.
                     ctx.textAlign = 'right';
                     const padX = 5 * hr, chipH = Math.min(rowH - 4 * vr, 15 * vr);
-                    STATS_ROWS.forEach(([, label], i) => {
+                    rows.forEach(([, label], i) => {
                         const w = ctx.measureText(label).width;
                         const right = W - 4 * hr;
                         const cy = i * rowH + rowH / 2;
@@ -994,7 +1046,14 @@ window.MineOrderFlow = (function () {
     // pane = { chart, ofStatsPane, ofStatsPrimitive }
     function attachStats(pane, result) {
         const set = (result && result.settings) || DEFAULTS;
-        if (!set.ofStats || !result || !result.bars || !result.bars.length) { detachStats(pane); return; }
+        const rows = statsRows(set).length;
+        // No rows left on is the same as the pane switched off: an empty strip
+        // under the chart is height taken from the candles for nothing.
+        if (!set.ofStats || !rows || !result || !result.bars || !result.bars.length) { detachStats(pane); return; }
+        // The opening height is the rows' height, so a change to how many
+        // there are re-opens it at the new one — the drag is only the user's
+        // until they ask for a different pane.
+        if (pane.ofStatsRows !== rows) { pane.ofStatsRows = rows; pane.ofStatsSized = false; }
         if (!pane.ofStatsPane) {
             const p = pane.chart.addPane(true);
             p.setPreserveEmptyPane(true);       // it holds a primitive and no series
@@ -1007,8 +1066,8 @@ window.MineOrderFlow = (function () {
         pane.ofStatsPrimitive.setResult(result);
     }
 
-    // Opens the pane at its four rows, ONCE — the separator is the user's from
-    // then on, so this must never run twice.
+    // Opens the pane at its rows' own height, ONCE — the separator is the
+    // user's from then on, so this must never run twice for one row count.
     //
     // Through stretch factors, not `setHeight`: stretch is what the layout is
     // actually built on, and setHeight resolves against whatever height the
@@ -1048,9 +1107,10 @@ window.MineOrderFlow = (function () {
             // measures a couple of hundred pixels, the cap fires, and latching
             // THAT left the pane at a third of a chart that then grew to twice
             // the size. So the size is only final once the chart is tall
-            // enough to give the four rows their own height.
-            const roomy = total * STATS_MAX_SHARE >= STATS_OPEN_PX;
-            const want = roomy ? STATS_OPEN_PX : total * STATS_MAX_SHARE;
+            // enough to give the rows their own height.
+            const open = statsOpenPx(pane.ofStatsRows || STATS_ROWS.length);
+            const roomy = total * STATS_MAX_SHARE >= open;
+            const want = roomy ? open : total * STATS_MAX_SHARE;
             mine.setStretchFactor(main.getStretchFactor() * want / Math.max(1, total - want));
             if (roomy) pane.ofStatsSized = true;
         } catch (e) { /* try again on the next pass */ }
@@ -1064,6 +1124,7 @@ window.MineOrderFlow = (function () {
         pane.ofStatsPane = null;
         pane.ofStatsPrimitive = null;
         pane.ofStatsSized = false;
+        pane.ofStatsRows = 0;
     }
 
     /* ── attach / detach ─────────────────────────────────────────────────── */
@@ -1176,10 +1237,22 @@ window.MineOrderFlow = (function () {
             { key: 'ofImbFactor', type: 'number', label: 'Imbalance %, of the diagonal', min: 120, max: 2000, sub: true },
             { key: 'ofStack', type: 'number', label: 'Stacked imbalance: rows in a row', min: 2, max: 10, sub: true },
             // Drawn on the candles, so it follows 'Draw the cells on the chart'
-            // above: off, this indicator paints nothing over the price pane.
-            // The stats pane below is separate and keeps running.
-            { key: 'ofHeader', label: 'Volume / delta / cum Δ over each bar', sub: true },
+            // above: off, this indicator paints nothing over the price pane —
+            // the five lines below go with it. The stats pane after them is
+            // separate and keeps running.
+            { key: 'ofHeader', label: 'Figures over each bar', sub: true },
+            { key: 'ofHeadVolume', label: 'Volume', sub: 2 },
+            { key: 'ofHeadBuy', label: 'Buy', color: COLORS.buy, sub: 2 },
+            { key: 'ofHeadSell', label: 'Sell', color: COLORS.sell, sub: 2 },
+            { key: 'ofHeadDelta', label: 'Delta', sub: 2 },
+            { key: 'ofHeadCumDelta', label: 'Cum. Delta', sub: 2 },
             { key: 'ofStats', label: 'Bar-stats pane (drag its edge to resize)', sub: true },
+            { key: 'ofStatBuy', label: 'Buy', color: COLORS.buy, sub: 2 },
+            { key: 'ofStatSell', label: 'Sell', color: COLORS.sell, sub: 2 },
+            { key: 'ofStatDelta', label: 'Delta', sub: 2 },
+            { key: 'ofStatMaxDelta', label: 'Max Delta', sub: 2 },
+            { key: 'ofStatMinDelta', label: 'Min Delta', sub: 2 },
+            { key: 'ofStatCumDelta', label: 'Cum. Delta', sub: 2 },
             { key: 'ofCandle', type: 'select', label: 'Candle', options: CANDLE_OPTIONS, sub: true },
         ] },
     ];

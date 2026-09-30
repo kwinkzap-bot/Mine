@@ -811,18 +811,22 @@ window.MineCPR = (function () {
         for (const sec of sections || SPEC) {
             html += `<div class="mc-ind-section"><div class="mc-ind-title">${sec.title}${gateTag(sec.gate, sec.gateLabel)}</div>`;
             for (const it of sec.items) {
+                // `sub: true` is one indent, `sub: 2` a second — a row
+                // that belongs to the sub-row above it, like the lines
+                // of the order-flow header under their own switch.
+                const sub = it.sub === 2 ? ' sub sub2' : it.sub ? ' sub' : '';
                 if (it.row) {
                     html += `<div class="mc-ind-row">${swatch(it.color)}<span>${it.row}</span>` +
                         it.keys.map(k => `<label><input type="checkbox" data-key="${k}" ${get(k) ? 'checked' : ''}>${k.toUpperCase()}</label>`).join('') +
                         `</div>`;
                 } else if (it.type === 'select') {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><select data-key="${it.key}">` +
+                    html += `<label class="mc-ind-item${sub}"><span>${it.label}</span><select data-key="${it.key}">` +
                         it.options.map(([v, l]) => `<option value="${v}" ${get(it.key) === v ? 'selected' : ''}>${l}</option>`).join('') +
                         `</select></label>`;
                 } else if (it.type === 'number') {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}"${it.max != null ? ` max="${it.max}"` : ''} value="${get(it.key)}"></label>`;
+                    html += `<label class="mc-ind-item${sub}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}"${it.max != null ? ` max="${it.max}"` : ''} value="${get(it.key)}"></label>`;
                 } else {
-                    html += `<label class="mc-ind-item${it.sub ? ' sub' : ''}"><input type="checkbox" data-key="${it.key}" ${get(it.key) ? 'checked' : ''}>${swatch(it.color)}<span>${it.label}</span>${gateTag(it.gate, it.gateLabel)}</label>`;
+                    html += `<label class="mc-ind-item${sub}"><input type="checkbox" data-key="${it.key}" ${get(it.key) ? 'checked' : ''}>${swatch(it.color)}<span>${it.label}</span>${gateTag(it.gate, it.gateLabel)}</label>`;
                 }
             }
             html += '</div>';
