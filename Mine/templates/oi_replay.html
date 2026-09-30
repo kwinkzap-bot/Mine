@@ -31,22 +31,27 @@
                              are meant to be read together was a way to end up
                              comparing different instruments without noticing.
 
-                             The three indices are the page's own, written here so
-                             the control is usable before any fetch returns. Every
-                             NSE stock carrying a futures contract is appended below
-                             them at load (oipLoadSymbolOptions, off the same
-                             /api/multichart/symbols list the Multichart picker
-                             uses) — the index group stays on top, the stocks follow
-                             in one labelled group, and a failed fetch simply leaves
-                             the three. -->
+                             A type-to-search box rather than a dropdown: the list
+                             is the three indices plus every NSE stock carrying a
+                             futures contract (~210 of them), and scrolling a native
+                             select that long to reach TATASTEEL is not a control.
+                             Same shape as /multichart's picker (.mc-search there),
+                             at this toolbar's height.
+
+                             The indices are written into the JS fallback, not here,
+                             because this is an input and not an option list; the
+                             suggestions come from /api/multichart/symbols — the
+                             very list the Multichart picker uses, so the two pages
+                             can never disagree about what is tradable — and a
+                             failed fetch leaves the three indices typeable. -->
                         <span class="oip-label">Sym</span>
-                        <select id="oipSymbolSelect" class="oip-select oip-select--xs" title="Symbol (drives both charts)">
-                            <optgroup label="Index" id="oipSymbolIndexGroup">
-                                <option value="NIFTY" selected>NIFTY</option>
-                                <option value="BANKNIFTY">BANKNIFTY</option>
-                                <option value="SENSEX">SENSEX</option>
-                            </optgroup>
-                        </select>
+                        <div class="oip-sym-wrap">
+                            <input type="search" id="oipSymbolSearch" class="oip-sym-search"
+                                   autocomplete="off" spellcheck="false" value="NIFTY"
+                                   placeholder="Symbol…"
+                                   title="Search an index or F&amp;O stock (drives both charts)">
+                            <div class="oip-sym-suggest" id="oipSymbolSuggest" hidden></div>
+                        </div>
                         <!-- Spot or the current-expiry future, the same pair /multichart
                              carries beside its symbol box. A data source, not an
                              indicator, so it sits here rather than in the Indicators

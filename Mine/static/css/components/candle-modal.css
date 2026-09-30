@@ -106,6 +106,10 @@
     border-color: #7c3aed;
 }
 .cm-cpr.active span { color: rgba(255, 255, 255, .75); }
+/* TPO shares the CPR button's shape but not its colour — the two overlays
+   are on at once and the header is how you tell which. Crimson is the
+   profile's own first-period block (mine_tpo.js GRADIENT). */
+.cm-tpo.active { background: #e0446f; border-color: #e0446f; }
 
 .cm-out {
     font-size: 11px;
@@ -148,6 +152,13 @@
     display: grid;
     grid-template-rows: 1fr 1fr;
 }
+
+/* TPO mode is one chart: the profile is read against the CPR band on the
+   same pane, and half the height is not enough for a profile. The weekly
+   pane is not drawn at all in that mode — this only stops the grid still
+   reserving its row. Must sit after .cm-panes, whose rows it overrides. */
+.cm-panes--single { grid-template-rows: 1fr; }
+.cm-panes--single .cm-pane:last-child { display: none; }
 
 /* Positioning context for the caption that names each pane's timeframe. */
 .cm-pane {

@@ -13,55 +13,26 @@
     <!-- Left side: Segmented tab buttons -->
     <div class="scanner-tabs">
         <button class="scanner-tab-btn active" data-tab="cpr" onclick="switchScannerTab('cpr')">
-            <span class="tab-icon">🔍</span> IV & Cam/Nar CPR
+            <span class="tab-icon">🔥</span> High IV
         </button>
         <!-- <button class="scanner-tab-btn" data-tab="ema" onclick="switchScannerTab('ema')">
             <span class="tab-icon">📊</span> EMA & RSI Touch
         </button> -->
-        <button class="scanner-tab-btn" data-tab="ema-narrow" onclick="switchScannerTab('ema-narrow')">
-            <span class="tab-icon">🧲</span> EMA Narrow
-        </button>
-        <button class="scanner-tab-btn" data-tab="ema-touch-all" onclick="switchScannerTab('ema-touch-all')">
-            <span class="tab-icon">🎯</span> EMA Touch All
-        </button>
-        <button class="scanner-tab-btn" data-tab="candlestick" onclick="switchScannerTab('candlestick')">
-            <span class="tab-icon">🕯️</span> Candlesticks
+        <button class="scanner-tab-btn" data-tab="narrow-cpr" onclick="switchScannerTab('narrow-cpr')">
+            <span class="tab-icon">📏</span> Narrow CPR
         </button>
     </div>
 
-    <!-- Right side: CPR Controls (visible when CPR tab is active) -->
+    <!-- Right side: High IV Controls (visible when the High IV tab is active) -->
     <div id="cpr-header-controls" class="header-controls-container"
         style="display: flex; gap: 8px; align-items: center;">
         <input type="date" id="cprDateFilter" class="date-picker">
-        <button id="cprRefreshBtn" class="refresh-btn" title="Refresh CPR & D-RSI Scanners" style="display: none;">
-            <span class="refresh-icon">🔄</span> CPR Refresh
-        </button>
         <button id="highIvRefreshBtn" class="refresh-btn" title="Refresh High IV Scanner">
             <span class="refresh-icon">🔥</span> High IV Scan
         </button>
-        <select id="camarillaMode" class="date-picker tf-picker"
-                title="Candle judged, and the CPR/Camarilla timeframe it is judged against">
-            <option value="daily" selected>Monthly CPR</option>
-            <option value="weekly">Yearly CPR</option>
-        </select>
-        <button id="camarillaRefreshBtn" class="refresh-btn" title="Refresh Camarilla inside CPR Scanner">
-            <span class="refresh-icon">📌</span> Camarilla Scan
-        </button>
-        <select id="narrowCprTimeframe" class="date-picker tf-picker"
-                title="Which CPR must be narrow. The scan reads both either way — this only picks what the grid shows.">
-            <option value="both" selected>N CPR · W + M</option>
-            <option value="weekly">N CPR · W</option>
-            <option value="monthly">N CPR · M</option>
-        </select>
-        <select id="narrowCprRatio" class="date-picker tf-picker"
-                title="How far below its own normal the CPR must sit. Smaller is a tighter, shorter list.">
-            <option value="0.8">CPR ≤ 0.8× its normal</option>
-            <option value="0.5">CPR ≤ 0.5× its normal</option>
-            <option value="0.3" selected>CPR ≤ 0.3× its normal</option>
-            <option value="0.2">CPR ≤ 0.2× its normal</option>
-        </select>
-        <button id="narrowCprRefreshBtn" class="refresh-btn" title="Refresh Narrow CPR Scanner">
-            <span class="refresh-icon">📏</span> N CPR
+        <button id="tpoSinglesRefreshBtn" class="refresh-btn"
+                title="Scan every futures stock for a TPO single print in the selected date's session">
+            <span class="refresh-icon">📐</span> TPO Singles
         </button>
     </div>
 
@@ -81,63 +52,32 @@
         <button id="ema-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
     </div>
 
-    <!-- Right side: EMA Narrow Controls (visible when EMA Narrow tab is active, hidden by default) -->
-    <div id="ema-narrow-header-controls" class="header-controls-container"
+    <!-- Right side: Narrow CPR Controls (visible when that tab is active).
+         Its own date picker — the tab is self-contained, so nothing here
+         re-runs the High IV scan and vice versa. -->
+    <div id="narrow-cpr-header-controls" class="header-controls-container"
         style="display: none; gap: 8px; align-items: center;">
-        <select id="emaNarrowGroup" class="date-picker tf-picker" title="Timeframes that must ALL be narrow">
-            <option value="wd" selected>Week / Day</option>
-            <option value="mwd">Month / Week / Day</option>
-            <option value="mw">Month / Week</option>
-            <option value="d">Day</option>
-            <option value="w">Week</option>
-            <option value="m">Month</option>
+        <select id="narrowCprTimeframe" class="date-picker tf-picker"
+                title="Which CPR must be narrow. The scan reads both either way — this only picks what the grid shows.">
+            <option value="both" selected>N CPR · W + M</option>
+            <option value="weekly">N CPR · W</option>
+            <option value="monthly">N CPR · M</option>
         </select>
-        <select id="emaNarrowEmaSet" class="date-picker tf-picker" title="Which EMAs must be near each other">
-            <option value="20_50_100" selected>EMA 20/50/100</option>
-            <option value="20_50_100_200">EMA 20/50/100/200</option>
+        <select id="narrowCprRatio" class="date-picker tf-picker"
+                title="How far below its own normal the CPR must sit. Smaller is a tighter, shorter list.">
+            <option value="0.8">CPR ≤ 0.8× its normal</option>
+            <option value="0.5">CPR ≤ 0.5× its normal</option>
+            <option value="0.3" selected>CPR ≤ 0.3× its normal</option>
+            <option value="0.2">CPR ≤ 0.2× its normal</option>
         </select>
-        <select id="emaNarrowThreshold" class="date-picker tf-picker" title="Max EMA spread (% of price)">
-            <option value="1">Spread ≤ 1%</option>
-            <option value="3" selected>Spread ≤ 3%</option>
-            <option value="5">Spread ≤ 5%</option>
-            <option value="8">Spread ≤ 8%</option>
-            <option value="10">Spread ≤ 10%</option>
-        </select>
-        <input type="date" id="emaNarrowDateFilter" class="date-picker" title="Select analysis date">
-        <button id="ema-narrow-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
-    </div>
-
-    <!-- Right side: EMA Touch All Controls (visible when that tab is active) -->
-    <div id="ema-touch-all-header-controls" class="header-controls-container"
-        style="display: none; gap: 8px; align-items: center;">
-        <select id="emaTouchAllDirFilter" class="date-picker tf-picker"
-            title="Show only signals each symbol is configured to trade">
-            <option value="allowed" selected>Allowed direction only</option>
-            <option value="all">All matches</option>
-        </select>
-        <input type="date" id="emaTouchAllDateFilter" class="date-picker" title="Select analysis date">
-        <button id="ema-touch-all-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
-    </div>
-
-    <!-- Right side: Candlestick Controls (visible when that tab is active) -->
-    <div id="candlestick-header-controls" class="header-controls-container"
-        style="display: none; gap: 8px; align-items: center;">
-        <select id="candleTimeframe" class="date-picker tf-picker" title="Candle timeframe">
-            <option value="daily" selected>Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-        </select>
-        <select id="candlePattern" class="date-picker tf-picker" title="Candlestick pattern">
-            <option value="all" selected>All Patterns</option>
-            <option value="bullish_strong">Strong Bullish</option>
-            <option value="bearish_strong">Strong Bearish</option>
-        </select>
-        <input type="date" id="candleDateFilter" class="date-picker" title="Select analysis date">
-        <button id="candlestick-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
+        <input type="date" id="narrowCprDateFilter" class="date-picker" title="Select analysis date">
+        <button id="narrowCprRefreshBtn" class="refresh-btn" title="Refresh Narrow CPR Scanner">
+            <span class="refresh-icon">📏</span> N CPR
+        </button>
     </div>
 </div>
 
-<!-- CPR & Camarilla Scanner Section -->
+<!-- High IV Scanner Section -->
 <div id="cpr-scanner-content">
     <div class="results-row">
         <div id="highIvResults" class="results results-hidden results-block">
@@ -154,130 +94,30 @@
             </div>
         </div>
     </div>
-    <!-- Camarilla inside CPR — the gate (S3/R3 between BC and TC) picks the
-         side, the touch (Pivot or that same Camarilla line) is the trigger.
-         Touch only: a wick through the level counts, no close condition.
-         See filters/cpr_camarilla_scanner.py. -->
+    <!-- TPO single prints — a run of price rows only ONE 30-minute period
+         reached, with busier rows on BOTH sides: the gap a fast move tore
+         through the body of the profile, and the level the auction tends to
+         come back and fill. A run touching the profile's own top or bottom
+         is the session's buying / selling tail and is NOT counted — every
+         session has one, so counting those would match everything.
+         Clicking a row opens the chart with the profile on it, on the same
+         row grid the scan measured the band on. The rule is a port of
+         static/js/components/mine_tpo.js; see
+         filters/tpo_single_print_scanner.py. -->
     <div class="results-row">
-        <div id="camarillaBuyResults" class="results results-hidden results-block">
+        <div id="tpoSinglesResults" class="results results-hidden results-block">
             <div class="dg-card">
                 <div class="dg-card-hdr">
-                    <span class="dg-card-title">🟢 Camarilla S3 inside CPR — BUY</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="camarillaBuyCount">(0)</span>
+                    <span class="dg-card-title" id="tpoSinglesTitle">📐 TPO Single Prints — 30-min periods</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="tpoSinglesCount">(0)</span>
                 </div>
-                <div id="camarillaBuyGrid"></div>
-            </div>
-        </div>
-        <div id="camarillaSellResults" class="results results-hidden results-block">
-            <div class="dg-card">
-                <div class="dg-card-hdr">
-                    <span class="dg-card-title">🔴 Camarilla R3 inside CPR — SELL</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="camarillaSellCount">(0)</span>
-                </div>
-                <div id="camarillaSellGrid"></div>
+                <div id="tpoSinglesGrid"></div>
             </div>
         </div>
     </div>
-    <!-- Narrow CPR — the CURRENT weekly / monthly CPR, built from the week or
-         month being traded now (mid-period it is still forming, and says so),
-         classified against that symbol's OWN recent CPR widths. An absolute
-         cut-off cannot work here: CPR width is capped at (H-L)/3C, so a fixed
-         stock-sized threshold reads Narrow on every index period. See
-         filters/narrow_cpr_scanner.py. -->
-    <div class="results-row">
-        <div id="narrowCprResults" class="results results-hidden results-block">
-            <div class="dg-card">
-                <div class="dg-card-hdr">
-                    <span class="dg-card-title" id="narrowCprTitle">📏 Narrow CPR — Weekly + Monthly</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="narrowCprCount">(0)</span>
-                </div>
-                <div id="narrowCprGrid"></div>
-            </div>
-        </div>
-    </div>
-    <!-- Coverage note sits OUTSIDE #narrowCprResults, which is hidden when
+    <!-- Coverage note sits OUTSIDE #tpoSinglesResults, which is hidden when
          nothing matches — exactly when "0 matches, N skipped" matters. -->
-    <div id="narrowCprFootnote"></div>
-    <!-- Camarilla Monthly S3/R3 Reversal Scanner — commented out
-    <div class="results-row">
-        <div id="camarillaCprReversalBullishResults" class="results results-hidden results-block">
-            <h3>🟢 Camarilla Monthly S3 Reversal (Bullish) <span id="camarillaCprReversalBullishCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="camarillaCprReversalBullishTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">Monthly S3</th>
-                            <th data-column-index="3">Monthly TC</th>
-                            <th data-column-index="4">Monthly BC</th>
-                            <th data-column-index="5">Monthly PP</th>
-                        </tr>
-                    </thead>
-                    <tbody id="camarillaCprReversalBullishBody"></tbody>
-                </table>
-            </div>
-        </div>
-        <div id="camarillaCprReversalBearishResults" class="results results-hidden results-block">
-            <h3>🔴 Camarilla Monthly R3 Reversal (Bearish) <span id="camarillaCprReversalBearishCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="camarillaCprReversalBearishTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">Monthly R3</th>
-                            <th data-column-index="3">Monthly TC</th>
-                            <th data-column-index="4">Monthly BC</th>
-                            <th data-column-index="5">Monthly PP</th>
-                        </tr>
-                    </thead>
-                    <tbody id="camarillaCprReversalBearishBody"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    -->
-    <!-- D-RSI Reversal Scanner — commented out
-    <div class="results-row">
-        <div id="drsiReversalBullishResults" class="results results-hidden results-block">
-            <h3>🟢 D-RSI Reversal Bullish (Flip-UP) <span id="drsiReversalBullishCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="drsiReversalBullishTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">RSI(21)</th>
-                            <th data-column-index="3">D-RSI</th>
-                            <th data-column-index="4">Signal</th>
-                            <th data-column-index="5">Trigger</th>
-                        </tr>
-                    </thead>
-                    <tbody id="drsiReversalBullishBody"></tbody>
-                </table>
-            </div>
-        </div>
-        <div id="drsiReversalBearishResults" class="results results-hidden results-block">
-            <h3>🔴 D-RSI Reversal Bearish (Flip-DOWN) <span id="drsiReversalBearishCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="drsiReversalBearishTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">RSI(21)</th>
-                            <th data-column-index="3">D-RSI</th>
-                            <th data-column-index="4">Signal</th>
-                            <th data-column-index="5">Trigger</th>
-                        </tr>
-                    </thead>
-                    <tbody id="drsiReversalBearishBody"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    -->
+    <div id="tpoSinglesFootnote"></div>
 </div>
 
 <!-- EMA & RSI Touch Section -->
@@ -342,134 +182,45 @@
     </div>
 </div>
 
-<!-- EMA Narrow Section -->
-<div id="ema-narrow-scanner-content" style="display: none;">
-    <div class="ema-section-label">
-        <span class="ema-tf-badge weekly-badge" id="narrow-tf-badge">📅 Week / Day</span>
-        <span class="ema-section-title" id="ema-narrow-section-title">EMA Narrow — EMA 20 / 50 / 100
-            compressed on ALL selected timeframes</span>
-    </div>
+<!-- Narrow CPR Section — the CURRENT weekly / monthly CPR, built from the week
+     or month being traded now (mid-period it is still forming, and says so),
+     classified against that symbol's OWN recent CPR widths. An absolute
+     cut-off cannot work here: CPR width is capped at (H-L)/3C, so a fixed
+     stock-sized threshold reads Narrow on every index period. See
+     filters/narrow_cpr_scanner.py. -->
+<div id="narrow-cpr-scanner-content" style="display: none;">
     <div class="results-row">
-        <div id="emaNarrowResults" class="results results-hidden results-block">
-            <!-- Shared outer card (static/css/components/data-grid.css) — same
-                 header+surface used by the Algo "Active Trades" screen.
-                 Shared grid (DataGrid.mountSortable, static/js/ema_narrow_filter.js).
-                 #emaNarrowLoader is a separate sibling, not a table row — the
-                 background scan's progress message no longer has to be spliced
-                 into (and pinned at the bottom of) the row list. -->
+        <div id="narrowCprResults" class="results results-hidden results-block">
             <div class="dg-card">
                 <div class="dg-card-hdr">
-                    <span class="dg-card-title">🧲 EMA Narrow (each timeframe spread ≤ <span id="emaNarrowThresholdLabel">3%</span>)</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="emaNarrowCount">(0)</span>
+                    <span class="dg-card-title" id="narrowCprTitle">📏 Narrow CPR — Weekly + Monthly</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="narrowCprCount">(0)</span>
                 </div>
-                <div id="emaNarrowGrid"></div>
-                <div id="emaNarrowLoader"></div>
-            </div>
-        </div>
-
-        <!-- Shown only when 0 matches — closest stocks to compression -->
-        <div id="emaNarrowNearestSection" class="results results-block ema-hidden">
-            <div class="dg-card">
-                <div class="dg-card-hdr">
-                    <span class="dg-card-title">🎯 Closest to EMA Narrow</span>
-                    <span class="dg-card-meta nearest-count"></span>
-                </div>
-                <div style="padding:6px 12px;font-size:0.75rem;opacity:0.7;">— no compression yet, showing tightest stocks</div>
-                <div id="emaNarrowNearestGrid"></div>
+                <div id="narrowCprGrid"></div>
             </div>
         </div>
     </div>
-
-    <!-- Empty State -->
-    <div id="ema-narrow-empty-state" class="ema-empty-state ema-hidden">
-        <div class="ema-empty-icon">🧲</div>
-        <div class="ema-empty-title">No EMA compression found</div>
-        <div class="ema-empty-sub">No equity stocks have EMA 20/50/100/200 within the selected spread on all
-            chosen timeframes.</div>
-    </div>
+    <!-- Coverage note sits OUTSIDE #narrowCprResults, which is hidden when
+         nothing matches — exactly when "0 matches, N skipped" matters. -->
+    <div id="narrowCprFootnote"></div>
 </div>
-
-<!-- EMA Touch All Section — one grid, no split: the daily candle either sweeps
-     all four EMAs or it isn't a match, so UP/DOWN is a status column here
-     rather than two separate bullish/bearish grids. -->
-<div id="ema-touch-all-scanner-content" style="display: none;">
-    <div class="ema-section-label">
-        <span class="ema-tf-badge daily-badge">📆 Daily</span>
-        <span class="ema-section-title">EMA Touch All — futures watchlist, daily candle range contains
-            EMA 20 / 50 / 100 / 200</span>
-    </div>
-    <div class="results-row">
-        <div id="emaTouchAllResults" class="results results-hidden results-block">
-            <div class="dg-card">
-                <div class="dg-card-hdr">
-                    <span class="dg-card-title">🎯 Daily Candle Touching EMA 20 / 50 / 100 / 200</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="emaTouchAllCount">(0)</span>
-                </div>
-                <div id="emaTouchAllGrid"></div>
-                <div id="emaTouchAllLoader"></div>
-            </div>
-        </div>
-    </div>
-    <!-- Coverage note sits OUTSIDE #emaTouchAllResults: that block is hidden
-         when there are no matches, and "0 matches, N symbols skipped" is
-         exactly when this line matters most. -->
-    <div id="emaTouchAllFootnote"></div>
-
-    <!-- Empty State -->
-    <div id="ema-touch-all-empty-state" class="ema-empty-state ema-hidden">
-        <div class="ema-empty-icon">🎯</div>
-        <div class="ema-empty-title">No candle touching all EMAs</div>
-        <div class="ema-empty-sub">No symbol on the futures watchlist has a latest daily candle containing
-            EMA 20, 50, 100 and 200 within its high–low range.</div>
-    </div>
-</div>
-
-<!-- Candlesticks Section — futures watchlist only, one grid with the pattern
-     as a column; the Pattern dropdown narrows it client-side. -->
-<div id="candlestick-scanner-content" style="display: none;">
-    <div class="ema-section-label">
-        <span class="ema-tf-badge daily-badge" id="candle-tf-badge">📆 Daily</span>
-        <span class="ema-section-title">Candlesticks — futures watchlist, latest candle and the one
-            before it are both strong-bodied (body ≥ 60% of range) and flip direction:
-            red → green = Bullish, green → red = Bearish</span>
-    </div>
-    <div class="results-row">
-        <div id="candlestickResults" class="results results-hidden results-block">
-            <div class="dg-card">
-                <div class="dg-card-hdr">
-                    <span class="dg-card-title" id="candleCardTitle">🕯️ Daily Strong Candles</span>
-                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="candlestickCount">(0)</span>
-                </div>
-                <div id="candlestickGrid"></div>
-                <div id="candlestickLoader"></div>
-            </div>
-        </div>
-    </div>
-    <!-- Coverage note sits OUTSIDE #candlestickResults, which is hidden when
-         there are no matches — exactly when "0 matches, N skipped" matters. -->
-    <div id="candlestickFootnote"></div>
-
-    <!-- Empty State -->
-    <div id="candlestick-empty-state" class="ema-empty-state ema-hidden">
-        <div class="ema-empty-icon">🕯️</div>
-        <div class="ema-empty-title">No strong candles found</div>
-        <div class="ema-empty-sub">No symbol on the futures watchlist closed two consecutive
-            strong-bodied candles that flip direction (red → green or green → red) on the
-            selected timeframe.</div>
-    </div>
-</div>
-{# Candle chart popup, opened by clicking a Camarilla scanner row. Same
+{# Candle chart popup, opened by clicking a Narrow CPR scanner row. Same
    component the Watchlist grid opens — see templates/_candle_modal.html. #}
 {% include "_candle_modal.html" %}
 {% endblock %}
 {% block scripts %}
 {{ super() }}
+{# The popup's TPO overlay is the Multichart page's own engine, so it needs
+   the same three scripts — tradingview-chart.js for the device-pixel drawing
+   kit the primitive renders through, mine_cpr.js for the session/period
+   clock MineTPO shares with it. Loaded before candle-modal.js, which looks
+   them up when a profile is drawn. #}
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/candle-modal.js') }}?v={{ sv('js/components/candle-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/cpr_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
-<script src="{{ url_for('static', filename='js/ema_narrow_filter.js') }}"></script>
-<script src="{{ url_for('static', filename='js/ema_touch_all_filter.js') }}"></script>
-<script src="{{ url_for('static', filename='js/candlestick_filter.js') }}"></script>
 <script>
     /**
      * Premium Tab switcher function for merged scanner page
@@ -482,9 +233,7 @@
         const sections = {
             'cpr':        { content: 'cpr-scanner-content',        controls: 'cpr-header-controls' },
             'ema':        { content: 'ema-scanner-content',        controls: 'ema-header-controls' },
-            'ema-narrow': { content: 'ema-narrow-scanner-content', controls: 'ema-narrow-header-controls' },
-            'ema-touch-all': { content: 'ema-touch-all-scanner-content', controls: 'ema-touch-all-header-controls' },
-            'candlestick':   { content: 'candlestick-scanner-content',   controls: 'candlestick-header-controls' },
+            'narrow-cpr': { content: 'narrow-cpr-scanner-content', controls: 'narrow-cpr-header-controls' },
         };
         if (!sections[tab]) tab = 'cpr';
 
@@ -495,17 +244,11 @@
             if (controls) controls.style.display = (key === tab) ? 'flex'  : 'none';
         });
 
-        // Lazy-load EMA Narrow data on first open
-        if (tab === 'ema-narrow' && typeof initEmaNarrowOnce === 'function') {
-            initEmaNarrowOnce();
-        }
-        // Lazy-load EMA Touch All data on first open
-        if (tab === 'ema-touch-all' && typeof initEmaTouchAllOnce === 'function') {
-            initEmaTouchAllOnce();
-        }
-        // Lazy-load Candlestick data on first open
-        if (tab === 'candlestick' && typeof initCandlestickOnce === 'function') {
-            initCandlestickOnce();
+        // Lazy-load Narrow CPR data on first open — the scan is the expensive
+        // one on this page, and it is no longer on the tab that opens by
+        // default, so it should not run until it is actually looked at.
+        if (tab === 'narrow-cpr' && typeof initNarrowCprOnce === 'function') {
+            initNarrowCprOnce();
         }
     }
 
@@ -513,8 +256,7 @@
     document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
-        if (tabParam === 'ema' || tabParam === 'ema-narrow' || tabParam === 'ema-touch-all'
-            || tabParam === 'candlestick') {
+        if (tabParam === 'ema' || tabParam === 'narrow-cpr') {
             switchScannerTab(tabParam);
         } else {
             switchScannerTab('cpr');

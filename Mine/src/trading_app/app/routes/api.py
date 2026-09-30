@@ -2431,6 +2431,94 @@ def get_narrow_cpr_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'Narrow-CPR scanner error: {str(e)}'}), 500
 
 
+@api_bp.route('/cpr-filter/tpo-singles', methods=['GET'])
+@limiter.exempt
+def get_tpo_single_print_results() -> EndpointResponse:
+    """Scan futures stocks + indices for a TPO SINGLE PRINT on one session.
+
+    A single print is a run of price rows only ONE 30-minute period reached,
+    with busier rows on both sides — the gap a fast move tore through the
+    body of the profile. A run touching the profile's own top or bottom is a
+    tail, not a single print, and is not counted: every session has one at
+    each end.
+
+    `date` picks the session (today by default; a weekend rolls back to
+    Friday). The rule is a port of static/js/components/mine_tpo.js, which is
+    the engine the popup chart a row opens draws with, so the row and the
+    band on that chart are the same band — each row carries the `row_step`
+    the chart has to be told to use to reproduce it. See
+    filters/tpo_single_print_scanner.py.
+
+    The scan is independent of any dropdown and cached per session date, so
+    re-reading it is instant."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
+
+    date_str = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    from trading_app.filters.tpo_single_print_scanner import (
+        TPO_INTERVAL, filter_tpo_singles, select_singles)
+
+    from trading_app.app.utils.cache import cpr_filter_cache
+    cache_user = session.get('username', 'anonymous')
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key = f"cpr_filter_tpo_singles:{cache_user}:{cache_date}"
+
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    results = None
+    if not refresh:
+        results = cpr_filter_cache.get(cache_key)
+    else:
+        cpr_filter_cache.delete(cache_key)
+
+    try:
+        if results is None:
+            if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
+                logger.warning("TPO single-print request: KiteConnect instance has no access token")
+                return jsonify({
+                    'success': False,
+                    'error': 'No valid access token on KiteConnect instance. Please login again.',
+                    'auth_error': True
+                }), 401
+
+            cpr_service = _get_cpr_service(current_kite)
+            results = filter_tpo_singles(cpr_service, root_date=target_date)
+            cpr_filter_cache.set(cache_key, results, timeout=600)  # 10 minutes
+
+        rows = select_singles(results.get('rows', []))
+        return jsonify({
+            'success': True,
+            'rows': rows,
+            'interval': TPO_INTERVAL,
+            'scanned': results.get('scanned', 0),
+            'skipped': results.get('skipped', 0),
+            # The session actually read, which a weekend request rolls back —
+            # the page names it rather than echoing what was asked for.
+            'date': results.get('date', cache_date),
+        })
+    except Exception as e:
+        logger.error(f"Error in TPO single-print scanner: {type(e).__name__}: {e}", exc_info=True)
+        error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str or 'invalid' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': f'TPO single-print scanner error: {str(e)}'}), 500
+
+
 # ====================== NOTIFICATIONS ======================
 
 @api_bp.route('/notifications', methods=['GET'])
@@ -10147,6 +10235,19 @@ def oi_profile_candles() -> EndpointResponse:
         # key, and read after every future has been resolved.
         _empty_fetch_reasons = {}
 
+        # A short adapter-cache TTL rather than use_cache=False. Opting out of
+        # the cache also opted out of the two things that keep a throttled leg
+        # from coming back empty — the adapter's stale-cache rescue (gated on
+        # use_cache) and its single-flight collapsing (the waiter re-reads the
+        # cache the winner just filled) — so on a Fyers "request limit reached"
+        # burst the CE/PE legs returned [] and the page toasted "Broker returned
+        # no candles for CE, PE" while the Round Strike block beside it, which
+        # already fetches this way, kept drawing. Defeating single-flight also
+        # doubled the history calls for the same bars, which fed the throttle
+        # that caused it. A force=true refresh still goes to the broker: TTL 0
+        # never satisfies a cache hit, and the rescue stays armed.
+        _hist_ttl = 0.0 if force_refresh else 2.0
+
         def fetch_task(token, from_dt, to_dt, inter):
             try:
                 if _is_symbol_provider and _data_provider:
@@ -10158,7 +10259,8 @@ def oi_profile_candles() -> EndpointResponse:
                     # today's bars from the OI snapshots + quote feed rather than
                     # drawing a chart that stops at the previous session's close.
                     res = _data_provider.historical_data(str(token), from_str, to_str, inter,
-                                                         use_cache=False, allow_synthetic=True)
+                                                         use_cache=True, cache_ttl=_hist_ttl,
+                                                         allow_synthetic=True)
                     if not res:
                         # Must be read on the fetching thread — it is thread-local.
                         reason = getattr(_data_provider, 'last_history_error', lambda: None)()
@@ -10167,6 +10269,14 @@ def oi_profile_candles() -> EndpointResponse:
                 elif kite:
                     # Use KiteService's retry logic and rate limiting
                     res = kite_service._historical_with_retry(instrument_token=int(token), from_date=from_dt, to_date=to_dt, interval=inter)
+                    if not res:
+                        # Kite has no last_history_error(), so without this the
+                        # empty-leg branch below could only fall through to its
+                        # "strike/expiry may be untraded or wrong" guess — which
+                        # names the wrong culprit whenever the real cause was the
+                        # fetch, not the contract.
+                        _empty_fetch_reasons[str(token)] = (
+                            f'Kite returned no {inter} candles for {token} in this window')
                 else:
                     return []
                 return res
@@ -10467,6 +10577,13 @@ def oi_profile_candles() -> EndpointResponse:
         ce_raw = future_ce.result() if future_ce else []
         pe_raw = future_pe.result() if future_pe else []
 
+        # What the broker actually handed back, before the trading-day filters
+        # below touch it. The empty-leg report at the bottom keys on the
+        # FORMATTED lists, so a leg the filter emptied used to be reported as
+        # "Broker returned no candles" — blaming the strike for a window
+        # mismatch of our own making.
+        _raw_returned = {'CE': len(ce_raw or []), 'PE': len(pe_raw or [])}
+
         # Filter option candles to their own opt_days trading-day window
         if start_date_str and end_date_str:
             # Explicit range: align options with index dates
@@ -10575,6 +10692,15 @@ def oi_profile_candles() -> EndpointResponse:
             ('fixed CE', fixed_ce_token, fixed_ce_candles),
             ('fixed PE', fixed_pe_token, fixed_pe_candles),
         ) if tok and not cds]
+        # A leg whose rows all fell to the trading-day filter is not a broker
+        # failure and must not be reported as one — the bars exist, they just
+        # sit outside the window the index leg settled on.
+        _filtered_out = sorted(lbl for lbl, n in _raw_returned.items()
+                               if n and any(lbl == l for l, _ in empty_legs))
+        if _filtered_out:
+            logger.info(f"[OI-Profile] {', '.join(_filtered_out)} returned rows but none fell in "
+                        f"the requested trading days — not reported as a fetch failure")
+            empty_legs = [(l, t) for l, t in empty_legs if l not in _filtered_out]
         fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
         # The index leg goes through the same never-raises adapter as the
         # options, so an expired Fyers token used to reach the page as the

@@ -162,7 +162,7 @@ try {
 
 // DOM Cache
 const oipElems = {
-    symbolSelect: null, interval: null,
+    symbolSearch: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapOI: null, showVwapInt: null,
     showCpr: null, showEMA: null, showOIBars: null, showVolume: null, showBnfVolume: null,
@@ -181,7 +181,7 @@ const oipElems = {
 
 /* ── Initialization ────────────────────────────────────────── */
 function oipInitElems() {
-    oipElems.symbolSelect = document.getElementById('oipSymbolSelect');
+    oipElems.symbolSearch = document.getElementById('oipSymbolSearch');
     oipElems.interval = document.getElementById('oipInterval');
     oipElems.spotHigh = document.getElementById('oipSpotHigh');
     oipElems.spotLow = document.getElementById('oipSpotLow');
@@ -2302,11 +2302,12 @@ document.addEventListener('DOMContentLoaded', () => {
         oipApplyReplayDate();
         oipResetReplay();
     });
-    // The page's single symbol control. oipSelectSymbol reloads the index
-    // chart and tells the Round Strike block to follow.
-    oipElems.symbolSelect?.addEventListener('change', e => oipSelectSymbol(e.target.value));
-    // Fire and forget: the F&O stocks land in the dropdown a moment after the
-    // page does, and nothing below waits on the symbol master for the chart.
+    // The page's single symbol control — a search box whose own handlers call
+    // oipSelectSymbol, which reloads the index chart and tells the Round Strike
+    // block to follow. Wired before the list arrives so typing works from the
+    // first paint; the fetch is fire-and-forget, and re-renders nothing that is
+    // on screen, so nothing below waits on the symbol master for the chart.
+    oipInitSymbolPicker();
     oipLoadSymbolOptions();
     // Spot / Fut — the two buttons beside the symbol. Delegated off the group so
     // the highlight and the reload go through the one path (oipSetChartSource).
@@ -2604,24 +2605,33 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     return parseFloat(oipElems.customStrikeDropdown.value) || atm;
 }
 
-/* ── Symbol list ──────────────────────────────────────────────────────────────
-   The three indices are in the markup (see oi_replay.html) so the control works
-   from the first paint; this appends every NSE stock with a futures contract
-   under them, in its own group, so the index the page opens on stays at the top
-   of the list.
+/* ── Symbol picker ────────────────────────────────────────────────────────────
+   A type-to-search box (#oipSymbolSearch) rather than a <select>: the list is
+   three indices plus every NSE stock with a futures contract, and a native
+   dropdown ~210 entries long is a scroll, not a control.
 
    The list is /api/multichart/symbols — the Multichart picker's, which is the
    3-day file cache behind the Fyers NFO symbol master (stock_list_store), so it
    costs nothing per page load and the two pages can never disagree about what
    is tradable. INDEX entries beyond the page's own three are dropped: this page
-   replays the three it is built for, and an index it cannot draw in a dropdown
-   is a dead entry.
+   replays the three it is built for.
 
-   Everything here is best-effort — a broker that is not logged in, or any other
-   failure, leaves the markup's three indices exactly as they are. */
+   OIP_SYMBOL_FALLBACK is what the box offers before the fetch lands and after
+   one that failed — an unreachable symbol master must not leave the page with
+   no way to change symbol at all, which is what an empty <select> would have
+   been. Matching and the popup's shape mirror /multichart's picker, so the two
+   behave the same under the fingers. */
+const OIP_SYMBOL_FALLBACK = [
+    { symbol: 'NIFTY', kind: 'INDEX' },
+    { symbol: 'BANKNIFTY', kind: 'INDEX' },
+    { symbol: 'SENSEX', kind: 'INDEX' }
+];
+// The page's three, in this order, whatever order the API lists them in: they
+// stay at the top of an empty query so the common pick is one keystroke away.
+const OIP_SYMBOL_INDICES = OIP_SYMBOL_FALLBACK.map(s => s.symbol);
+let oipSymbolList = OIP_SYMBOL_FALLBACK.slice();
+
 async function oipLoadSymbolOptions() {
-    const sel = oipElems.symbolSelect;
-    if (!sel) return;
     let symbols;
     try {
         const res = await fetch('/api/multichart/symbols', { credentials: 'same-origin' });
@@ -2631,38 +2641,136 @@ async function oipLoadSymbolOptions() {
         console.warn('[Replay] Symbol list unavailable — indices only:', e);
         return;
     }
-    const stocks = symbols.filter(s => s && s.kind === 'FUT' && s.symbol)
-                          .map(s => String(s.symbol).toUpperCase());
+    const stocks = symbols
+        .filter(s => s && s.kind === 'FUT' && s.symbol)
+        .map(s => ({ symbol: String(s.symbol).toUpperCase(), kind: 'FUT' }))
+        .filter(s => !OIP_SYMBOL_INDICES.includes(s.symbol));
     if (!stocks.length) return;
+    stocks.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    oipSymbolList = OIP_SYMBOL_FALLBACK.concat(stocks);
+}
 
-    // This group goes first, THEN the set of what is left — the other way round
-    // a re-run sees its own options in `seen`, filters every stock out as a
-    // duplicate and leaves the select with the indices alone.
-    document.getElementById('oipSymbolStockGroup')?.remove();
-    const seen = new Set(Array.from(sel.options, o => o.value.toUpperCase()));
+/* Prefix matches before substring ones — typing "TA" should reach TATASTEEL
+   before BHARTIARTL, which merely contains it.
 
-    const group = document.createElement('optgroup');
-    group.id = 'oipSymbolStockGroup';
-    group.label = 'F&O Stocks';
-    for (const sym of stocks) {
-        if (seen.has(sym)) continue;
-        seen.add(sym);
-        const opt = document.createElement('option');
-        opt.value = sym;
-        opt.textContent = sym;
-        group.appendChild(opt);
+   Uncapped, unlike Multichart's 40: an empty box lists every symbol the page
+   knows, so the picker can be BROWSED as well as searched — opening it and
+   scrolling is how you find a name you cannot spell. The popup is a fixed
+   height with its own scrollbar, so a long list costs nothing but rows. */
+function oipSymbolMatches(q) {
+    q = (q || '').trim().toUpperCase();
+    if (!q) return oipSymbolList.slice();
+    const pre = [], sub = [];
+    for (const s of oipSymbolList) {
+        if (s.symbol.startsWith(q)) pre.push(s);
+        else if (s.symbol.includes(q)) sub.push(s);
     }
-    if (!group.childElementCount) return;
-    sel.appendChild(group);
+    return pre.concat(sub);
+}
 
-    // Rebuilding the options can drop the selection on some browsers; the page's
-    // symbol is the truth, not the widget.
-    if (sel.value !== oipSymbol) sel.value = oipSymbol;
+function oipInitSymbolPicker() {
+    const input = document.getElementById('oipSymbolSearch');
+    const box = document.getElementById('oipSymbolSuggest');
+    if (!input || !box) return;
+    let active = -1, items = [];
+    input.value = oipSymbol;
+
+    const close = () => { box.hidden = true; box.innerHTML = ''; active = -1; items = []; };
+    const render = () => {
+        items = oipSymbolMatches(input.value);
+        box.innerHTML = items.length
+            ? items.map((s, i) => `<button type="button" class="oip-sym-sug${i === active ? ' active' : ''}" data-i="${i}">`
+                                + `<span class="oip-sym-sug-sym">${s.symbol}</span>`
+                                + `<span class="oip-sym-sug-kind">${s.kind}</span></button>`).join('')
+            : '<div class="oip-sym-sug-empty">No match</div>';
+        box.hidden = false;
+    };
+    const scrollActive = () => { box.querySelector('.oip-sym-sug.active')?.scrollIntoView({ block: 'nearest' }); };
+    // The box shows the live symbol at rest and is EMPTY while being edited, so
+    // resting has to be restorable from three places: a pick, Escape, and
+    // leaving the box without choosing.
+    const rest = () => { input.value = oipSymbol; input.placeholder = 'Symbol…'; };
+    const choose = s => {
+        close();
+        // oipSelectSymbol before blur, not after: its first statement moves
+        // oipSymbol, and the blur handler below restores the box FROM oipSymbol.
+        // The other order blurs while oipSymbol is still the old one and puts
+        // the symbol we just left back in the box.
+        // Only a real change reloads: re-picking the symbol already on screen
+        // would otherwise throw the window and the playhead away for nothing.
+        if (s.symbol !== oipSymbol) oipSelectSymbol(s.symbol);
+        rest();
+        input.blur();
+    };
+
+    // Focus clears the box and opens the full list: the common move is to type a
+    // different symbol, and select-all left the old one there to be typed over —
+    // one stray arrow key and you were editing "NIFTY" instead of replacing it.
+    // The symbol being charted moves into the placeholder so it is still on
+    // screen while the box is empty.
+    input.addEventListener('focus', () => {
+        input.value = '';
+        input.placeholder = oipSymbol;
+        render();
+    });
+    // Tabbed or clicked away without picking — the box goes back to what is
+    // actually charted rather than staying empty. Deferred because choosing
+    // with the mouse blurs through here on its way, and choose() has already
+    // set the resting state by then.
+    input.addEventListener('blur', () => { close(); rest(); });
+    input.addEventListener('input', () => { active = -1; render(); });
+    input.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (box.hidden) render();
+            active = Math.min(active + 1, items.length - 1); render(); scrollActive();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            active = Math.max(active - 1, 0); render(); scrollActive();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const typed = input.value.trim().toUpperCase();
+            // Nothing typed and nothing highlighted: the box was opened and
+            // left alone, so Enter abandons like Escape. Without this the
+            // items[0] fallback below reads an untouched box as a pick of the
+            // first row and reloads the chart onto NIFTY — focus empties the
+            // box now, so that is one stray keystroke away.
+            if (!typed && active < 0) { close(); rest(); input.blur(); return; }
+            // items[0] last: with a list, Enter takes the highlighted row, else
+            // an exact hit, else the best match. With NO list — the symbol
+            // master never arrived — an exactly typed symbol is still honoured
+            // rather than swallowed, so the page stays usable.
+            const pick = items[active]
+                      || items.find(s => s.symbol === typed)
+                      || items[0]
+                      || (/^[A-Z0-9&-]{1,20}$/.test(typed) ? { symbol: typed, kind: 'FUT' } : null);
+            if (pick) choose(pick);
+        } else if (e.key === 'Escape') {
+            close(); rest(); input.blur();
+        }
+    });
+    // mousedown, not click: the input's blur would close the popup first.
+    // preventDefault on EVERY press inside the popup, not just on a row — the
+    // list is the whole symbol master now, so it is a list people drag the
+    // scrollbar of, and a press on the scrollbar that blurs the input closes
+    // the popup out from under the drag.
+    box.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const b = e.target.closest('.oip-sym-sug');
+        if (b) choose(items[+b.dataset.i]);
+    });
+    // Clicking away abandons the edit — the box goes back to the live symbol
+    // rather than keeping a half-typed name that is not what is charted.
+    document.addEventListener('mousedown', e => {
+        if (box.hidden || e.target.closest('.oip-sym-wrap')) return;
+        close();
+        rest();
+    });
 }
 
 async function oipSelectSymbol(s) {
     oipSymbol = s;
-    if (oipElems.symbolSelect && oipElems.symbolSelect.value !== s) oipElems.symbolSelect.value = s;
+    if (oipElems.symbolSearch && oipElems.symbolSearch.value !== s) oipElems.symbolSearch.value = s;
     oipCustomStrikeSetOnLoad = false;
     oipResetReplay();
     // The Round Strike block has no symbol control of its own any more — it

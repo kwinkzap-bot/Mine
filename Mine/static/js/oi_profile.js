@@ -1218,18 +1218,37 @@ async function oipRefreshAll() {
     }
 }
 
+// The option chain behind the in-chart OI bars. `/api/open-interest` is cheap
+// to re-ask: the oi_persistence job writes a snapshot every minute at :30 and
+// the endpoint serves that row while it is under a minute old, so a live
+// re-read is a DB hit, not a chain fetch at the broker.
+async function oipFetchOIChain() {
+    const res = await fetch('/api/open-interest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: oipSymbol })
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+    return data;
+}
+
+// Everything the OI bars, the header and the max-pain line read off a chain
+// response. Deliberately does NOT touch the strike dropdowns — see
+// oipRefreshOIChain below.
+function oipApplyOIChain(data) {
+    oipOIData = Object.assign(oipOIData || {}, data);
+    oipAllStrikes = data.strikes || [];
+    oipCurrentPrice = data.current_price || 0;
+    oipUpdateHeader(data);
+    oipUpdateMaxPainLine(oipCurrentPrice, data.max_pain);
+    oipRequestDraw();
+}
+
 async function oipLoadOI() {
     if (window.oipReplayMode) return;
     try {
-        const res = await fetch('/api/open-interest', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbol: oipSymbol })
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error);
-        oipOIData = Object.assign(oipOIData || {}, data);
-        oipAllStrikes = data.strikes || [];
-        oipCurrentPrice = data.current_price || 0;
+        const data = await oipFetchOIChain();
+        oipApplyOIChain(data);
 
         // Update custom strikes using actual strikes from the option chain
         let resolvedStrike = 0;
@@ -1244,12 +1263,53 @@ async function oipLoadOI() {
             }
             oipCustomStrikeSetOnLoad = true; // Mark as initialized
         }
-
-        oipUpdateHeader(data);
-        oipUpdateMaxPainLine(oipCurrentPrice, data.max_pain);
         oipRequestDraw();
 
     } catch (e) { console.warn('[OIP] OI Load Err:', e); }
+}
+
+// The live re-read, driven by oi_profile_live.js. Only the chain moves: the
+// three strike dropdowns keep whatever the user picked and are NOT rebuilt.
+// Rebuilding them here would re-derive oipStrikeStep and re-populate three
+// <select>s underneath an open menu every half minute, and the strike set
+// itself barely changes within a session — it is the OI on those strikes that
+// does, which is the whole point of this call.
+async function oipRefreshOIChain() {
+    if (window.oipReplayMode) return false;
+    try {
+        const symbolAtStart = oipSymbol;
+        const data = await oipFetchOIChain();
+        // A symbol change while this was in flight — the full reload it kicked
+        // off owns the chain now, and this one is the old instrument's.
+        if (symbolAtStart !== oipSymbol) return false;
+        oipApplyOIChain(data);
+        return true;
+    } catch (e) {
+        console.warn('[OIP] OI refresh:', e);
+        return false;
+    }
+}
+
+// A fetch_error toast, at most once per distinct message per minute
+// (_oipFetchErrShown maps message -> when it was last shown). A Fyers throttle
+// lasts a burst of polls and the banner covers the top of the chart, so
+// repeating the identical sentence hid the very chart it was complaining about.
+const _oipFetchErrShown = new Map();
+const OIP_FETCH_ERR_QUIET_MS = 60000;
+
+function oipToastFetchError(msg) {
+    const now = Date.now();
+    const last = _oipFetchErrShown.get(msg) || 0;
+    if (now - last < OIP_FETCH_ERR_QUIET_MS) {
+        console.warn('[OI-Profile] fetch_error (toast suppressed):', msg);
+        return;
+    }
+    // Keep the map from growing across a long session of differing messages.
+    for (const [k, t] of _oipFetchErrShown) {
+        if (now - t > OIP_FETCH_ERR_QUIET_MS) _oipFetchErrShown.delete(k);
+    }
+    _oipFetchErrShown.set(msg, now);
+    showNotification(`Data fetch error: ${msg}`, 'error');
 }
 
 // Fetches and paints every chart on this page bar Round Strike: the OI Profile
@@ -1342,7 +1402,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
 
 
         if (!data.success) throw new Error(data.error);
-        if (data.fetch_error) showNotification(`Data fetch error: ${data.fetch_error}`, 'error');
+        // Throttled to one toast per distinct cause per minute — the message
+        // already says "Retrying next poll", so a recurrence carries nothing new.
+        if (data.fetch_error) oipToastFetchError(data.fetch_error);
         // What the bars actually are — 'future' only if the server found a listed
         // contract with data in this window; otherwise the switch falls back to
         // Spot and says so, rather than highlighting Fut over index candles.

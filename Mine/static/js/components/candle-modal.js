@@ -40,6 +40,23 @@
 
     const CACHE_MAX = 40;
 
+    // TPO mode's own source. The profile is built from periods anchored on
+    // 09:15, and only the broker feed is on that grid — /api/watchlist's
+    // Yahoo bars start the day at 09:00, which shifts every letter by half a
+    // period and can move a single print. It also arrives on the app's
+    // "fake IST epoch" (IST wall clock stored as UTC seconds), which is what
+    // MineTPO reads, so its bars are tagged `fakeIst` and formatted with the
+    // UTC getters instead of the Asia/Kolkata ones.
+    const TPO_API = '/api/multichart/candles';
+    const TPO_INTERVAL = '30minute';
+    const TPO_LABEL = '30m';
+    // A 30-minute chart reads against DAILY pivots — the same step up
+    // INTERVALS['30m'] makes for every other timeframe here.
+    const TPO_CPR_PERIOD = 'Daily';
+    // Camarilla's R3/S3 multiplier, as _CAMARILLA_R3 in watchlist_service.py.
+    const CAMARILLA_R3 = 1.1 / 4;
+    const SESSION_OPEN_SECS = 9 * 3600 + 15 * 60;
+
     const state = {
         symbol: null,
         rows: [],
@@ -47,6 +64,13 @@
         // The CPR period is derived from the timeframe, so this is only
         // whether the overlay is drawn at all.
         cprOn: true,
+        // TPO profile on the top pane. Off unless asked for — it is a lot of
+        // ink, and it forces the pane onto 30-minute broker bars.
+        tpoOn: false,
+        // What a caller pinned for this open: `rowStep` is the row grid the
+        // scanner measured its bands on, so the band in the grid is the band
+        // on the chart. Per row, because each session sizes its own rows.
+        tpoPin: {},
         // One entry per pane: {chart, series, bars, times}. Disposed
         // together — Lightweight Charts holds a canvas and a resize
         // observer each.
@@ -101,6 +125,81 @@
                 }
                 return data;
             })
+            .finally(() => state.inflight.delete(key));
+
+        state.inflight.set(key, request);
+        return request;
+    }
+
+    // TPO mode's top pane. Same cache and de-dupe as fetchCandles, under a
+    // key of its own so the two sources cannot be served for each other.
+    //
+    // Returned in this popup's payload shape, with `fakeIst` set: these
+    // times are IST wall clock stored as UTC seconds, so they must be read
+    // with the UTC getters. MineTPO wants them exactly that way — it is what
+    // anchors a period on 09:15 — and the axis formatters below switch to
+    // match rather than shifting the bars, which would move them off the
+    // grid the profile's own x positions are resolved against.
+    // CPR (TC/P/BC) and Camarilla R3/S3 per session, from the PREVIOUS
+    // session's OHLC — the rule that makes them levels to trade against
+    // rather than a restatement of the day they sit on. Same arithmetic as
+    // _period_levels() server-side; only the source and the time grid
+    // differ, because these have to land on the fake-IST bars beside them.
+    function dailyCprLevels(daily) {
+        const out = [];
+        for (let i = 1; i < (daily || []).length; i++) {
+            const prev = daily[i - 1];
+            const day = daily[i];
+            if (prev.h == null || prev.l == null || prev.c == null || !day.date) continue;
+            const pp = (prev.h + prev.l + prev.c) / 3;
+            const bc = (prev.h + prev.l) / 2;
+            const tc = 2 * pp - bc;
+            const span = prev.h - prev.l;
+            const [y, m, d] = day.date.split('-').map(Number);
+            out.push({
+                // The session these levels are in force for, on the pane's
+                // own grid: 09:15 of that day as a fake-IST epoch.
+                from: Date.UTC(y, m - 1, d) / 1000 + SESSION_OPEN_SECS,
+                p:  +pp.toFixed(2),
+                bc: +Math.min(bc, tc).toFixed(2),
+                tc: +Math.max(bc, tc).toFixed(2),
+                r3: +(prev.c + span * CAMARILLA_R3).toFixed(2),
+                s3: +(prev.c - span * CAMARILLA_R3).toFixed(2),
+            });
+        }
+        return out;
+    }
+
+    function fetchTpoCandles(symbol) {
+        const key = `${symbol}|tpo`;
+        const hit = state.candles.get(key);
+        if (hit) return Promise.resolve(hit);
+        const pending = state.inflight.get(key);
+        if (pending) return pending;
+
+        const request = getJSON(
+            `${TPO_API}?symbol=${encodeURIComponent(symbol)}`
+            + `&interval=${TPO_INTERVAL}&source=spot`)
+            .then((data) => {
+                const bars = (data && data.candles) || [];
+                if (!data || !data.success || !bars.length) {
+                    return { success: false,
+                             error: (data && data.error) || 'No 30-minute bars for this symbol' };
+                }
+                const payload = {
+                    success: true, intraday: true, fakeIst: true,
+                    cpr_period: TPO_CPR_PERIOD,
+                    levels: dailyCprLevels(data.daily),
+                    points: bars.map((c) => ({ t: c.time, o: c.open, h: c.high,
+                                               l: c.low, c: c.close, v: c.volume })),
+                };
+                if (state.candles.size >= CACHE_MAX) {
+                    state.candles.delete(state.candles.keys().next().value);
+                }
+                state.candles.set(key, payload);
+                return payload;
+            })
+            .catch((e) => ({ success: false, error: e.message }))
             .finally(() => state.inflight.delete(key));
 
         state.inflight.set(key, request);
@@ -320,29 +419,53 @@
     const IST_STAMP = istFmt({ weekday: 'short', day: '2-digit', month: 'short', year: '2-digit',
                               hour: '2-digit', minute: '2-digit', hour12: false });
 
+    // The fake-IST grid reads as IST already, so its labels come off the UTC
+    // getters — running them through Asia/Kolkata would add the offset a
+    // second time and put the 09:15 bar at 14:45.
+    const UTC = 'UTC';
+    const utcFmt = (opts) => new Intl.DateTimeFormat('en-GB', { timeZone: UTC, ...opts });
+    const UTC_TIME  = utcFmt({ hour: '2-digit', minute: '2-digit', hour12: false });
+    const UTC_DAY   = utcFmt({ day: 'numeric' });
+    const UTC_MONTH = utcFmt({ month: 'short' });
+    const UTC_YEAR  = utcFmt({ year: 'numeric' });
+    const UTC_STAMP = utcFmt({ weekday: 'short', day: '2-digit', month: 'short', year: '2-digit',
+                               hour: '2-digit', minute: '2-digit', hour12: false });
+
     // Axis tick marks. The library picks the granularity and hands it over
     // as a TickMarkType; only the rendering of it changes here.
-    function istTickMark(time, tickMarkType) {
-        const at = toDate(time);
-        if (!at) return '';
-        const T = (global.LightweightCharts && global.LightweightCharts.TickMarkType)
-            || { Year: 0, Month: 1, DayOfMonth: 2 };
-        if (tickMarkType === T.Year) return IST_YEAR.format(at);
-        if (tickMarkType === T.Month) return IST_MONTH.format(at);
-        if (tickMarkType === T.DayOfMonth) return IST_DAY.format(at);
-        return IST_TIME.format(at);
+    function tickMarkWith(F) {
+        return function (time, tickMarkType) {
+            const at = toDate(time);
+            if (!at) return '';
+            const T = (global.LightweightCharts && global.LightweightCharts.TickMarkType)
+                || { Year: 0, Month: 1, DayOfMonth: 2 };
+            if (tickMarkType === T.Year) return F.year.format(at);
+            if (tickMarkType === T.Month) return F.month.format(at);
+            if (tickMarkType === T.DayOfMonth) return F.day.format(at);
+            return F.time.format(at);
+        };
     }
 
     // The crosshair's time label, matching window.lwCrosshairTime elsewhere in
     // the app: "Wed 02 Sep '26  13:15". This page does not load
     // tradingview-chart.js, so the format is rebuilt here off the IST formatter.
-    function istStamp(time) {
-        const at = toDate(time);
-        if (!at) return '';
-        const part = {};
-        for (const piece of IST_STAMP.formatToParts(at)) part[piece.type] = piece.value;
-        return `${part.weekday} ${part.day} ${part.month} '${part.year}  ${part.hour}:${part.minute}`;
+    function stampWith(F) {
+        return function (time) {
+            const at = toDate(time);
+            if (!at) return '';
+            const part = {};
+            for (const piece of F.stamp.formatToParts(at)) part[piece.type] = piece.value;
+            return `${part.weekday} ${part.day} ${part.month} '${part.year}  ${part.hour}:${part.minute}`;
+        };
     }
+
+    // Real epoch seconds (every Yahoo-backed timeframe) vs the fake-IST grid
+    // TPO mode runs on.
+    const CLOCKS = {
+        ist:  { year: IST_YEAR, month: IST_MONTH, day: IST_DAY, time: IST_TIME, stamp: IST_STAMP },
+        fake: { year: UTC_YEAR, month: UTC_MONTH, day: UTC_DAY, time: UTC_TIME, stamp: UTC_STAMP },
+    };
+    const clockFor = (payload) => (payload && payload.fakeIst) ? CLOCKS.fake : CLOCKS.ist;
 
     // The bar of `pane` covering `when` — the last one that had started by
     // then. Hovering 10:30 on a 30-minute chart should light up the week
@@ -465,12 +588,14 @@
                 scaleMargins: { top: 0.06, bottom: 0.20 },
             },
             // An intraday bar is only identifiable with its time on the axis,
-            // and that time has to read in IST — see istTickMark.
+            // and that time has to read in IST — see tickMarkWith / clockFor.
             timeScale: { borderVisible: false, timeVisible: !!payload.intraday,
                          secondsVisible: false,
-                         tickMarkFormatter: payload.intraday ? istTickMark : undefined },
-            localization: payload.intraday ? { locale: 'en-IN', timeFormatter: istStamp }
-                                           : { locale: 'en-IN' },
+                         tickMarkFormatter: payload.intraday
+                             ? tickMarkWith(clockFor(payload)) : undefined },
+            localization: payload.intraday
+                ? { locale: 'en-IN', timeFormatter: stampWith(clockFor(payload)) }
+                : { locale: 'en-IN' },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
             autoSize: true,
         });
@@ -497,16 +622,62 @@
         }
 
         drawCprOverlay(series, payload, candles);
+        const pane = { chart, series, bars: candles.length };
+        if (payload.tpo) drawTpoProfile(pane, candles);
         fitWithRightPad(chart, candles.length);
         return {
             chart,
             series,
             bars: candles.length,
+            tpoPrimitive: pane.tpoPrimitive,
             // Kept for the crosshair link: the two panes are on different
             // timeframes, so a hovered bar has to be mapped onto whichever
             // bar of the other pane contains the same moment.
             times: candles.map((c) => ({ time: c.time, at: toDate(c.time), close: c.close })),
         };
+    }
+
+    // ── TPO profile ──────────────────────────────────────────────────
+    //
+    // MineTPO is the Multichart page's engine, unchanged: this only decides
+    // how many sessions to draw and on what row grid, then hands it the
+    // pane's own candles so the blocks and the candles cannot disagree.
+    //
+    // `tpoRowStep` is the important one. Left auto, the engine sizes rows
+    // from the MEDIAN range of the sessions on screen; the scanner sized
+    // them from one session's range. Two different grids put the same gap
+    // at two different prices, so a caller that measured a band passes the
+    // step it measured on and the chart reproduces that band exactly.
+    //
+    // EVERY session in the payload gets a profile — about two months of
+    // them on the 30-minute feed — not a window ending at the one that
+    // matched. Scrolling back has to show the profile for the day being
+    // scrolled to, or the past is just candles. It is affordable because a
+    // finished session is built once and cached and the draw loop skips
+    // profiles that are off screen.
+    function tpoSessionsBack(candles) {
+        const keys = new Set();
+        for (const c of candles) keys.add(new Date(c.time * 1000).toISOString().slice(0, 10));
+        return Math.max(1, keys.size);
+    }
+
+    function drawTpoProfile(pane, candles) {
+        if (!global.MineTPO || !global.MineCPR) return;
+        const pin = state.tpoPin || {};
+        const settings = {
+            tpo: true,
+            tpoSize: TPO_INTERVAL,
+            tpoSessions: tpoSessionsBack(candles),
+            tpoRowStep: pin.rowStep || 0,
+        };
+        try {
+            const result = global.MineTPO.compute(candles, TPO_INTERVAL, settings, null);
+            if (result && result.profiles && result.profiles.length) {
+                global.MineTPO.attach(pane, result);
+            }
+        } catch (e) {
+            console.error('TPO profile failed:', e);
+        }
     }
 
     // ── load / open / close ──────────────────────────────────────────
@@ -521,10 +692,17 @@
         $('cmNext').disabled = i < 0 || i >= state.rows.length - 1;
         $('cmInterval').value = state.interval;
         $('cmCpr').classList.toggle('active', state.cprOn);
+        const tpoBtn = $('cmTpo');
+        if (tpoBtn) tpoBtn.classList.toggle('active', state.tpoOn);
+        // TPO pins the top pane to 30-minute broker bars, so the timeframe
+        // picker has nothing to pick while it is on — disabled rather than
+        // hidden, so it is clear the setting is still there.
+        $('cmInterval').disabled = state.tpoOn;
     }
 
     async function loadCandles(symbol) {
         const interval = state.interval;
+        const tpo = state.tpoOn;
         $('cmBack').classList.add('cm-loading');
 
         // Both panes in flight together — they are two independent requests
@@ -532,15 +710,19 @@
         let top, weekly;
         try {
             [top, weekly] = await Promise.all([
-                fetchCandles(symbol, interval),
-                fetchCandles(symbol, WEEKLY),
+                tpo ? fetchTpoCandles(symbol) : fetchCandles(symbol, interval),
+                // Not fetched in TPO mode: that pane is not drawn.
+                tpo ? Promise.resolve(null) : fetchCandles(symbol, WEEKLY),
             ]);
         } catch (e) {
             top = { success: false, error: e.message };
             weekly = top;
         }
-        // Stepped away, or switched timeframe, while this was loading.
-        if (state.symbol !== symbol || state.interval !== interval) return;
+        // Stepped away, or switched timeframe or mode, while this was loading.
+        if (state.symbol !== symbol || state.interval !== interval
+            || state.tpoOn !== tpo) return;
+        // The profile is drawn by drawPane, off the payload it is handed.
+        if (top && top.success) top = Object.assign({}, top, { tpo });
         $('cmBack').classList.remove('cm-loading');
         disposePanes();
 
@@ -555,9 +737,16 @@
             return drawPane(containerId, payload);
         };
 
+        // TPO mode is one chart: the profile and the levels are read
+        // against each other, and a half-height pane is not enough for a
+        // profile to be legible in. The weekly pane is not drawn at all
+        // rather than hidden — an undrawn chart is one less canvas and one
+        // less resize observer.
+        $('cmPanes').classList.toggle('cm-panes--single', tpo);
         state.panes = [
-            paint('cmBodyTop', 'cmCapTop', top, INTERVAL_LABELS[interval] || interval),
-            paint('cmBodyWeekly', 'cmCapBottom', weekly, INTERVAL_LABELS[WEEKLY]),
+            paint('cmBodyTop', 'cmCapTop', top,
+                  tpo ? `${TPO_LABEL} · TPO` : (INTERVAL_LABELS[interval] || interval)),
+            tpo ? null : paint('cmBodyWeekly', 'cmCapBottom', weekly, INTERVAL_LABELS[WEEKLY]),
         ].filter(Boolean);
         linkCrosshairs(state.panes);
 
@@ -572,6 +761,10 @@
         const options = opts || {};
         if (options.rows) state.rows = options.rows;
         if (options.interval) state.interval = options.interval;
+        if ('tpo' in options) state.tpoOn = !!options.tpo;
+        // Re-read per open: stepping with ‹ › lands on another symbol's row,
+        // whose band was measured on its own grid.
+        state.tpoPin = options.tpo ? (options.tpoPin || {}) : {};
         state.symbol = symbol;
 
         const row = rowFor(symbol);
@@ -593,6 +786,10 @@
         const i = state.rows.findIndex((r) => r.symbol === symbol);
         if (i >= 0) {
             [state.rows[i - 1], state.rows[i + 1]].filter(Boolean).forEach((neighbour) => {
+                if (state.tpoOn) {
+                    fetchTpoCandles(neighbour.symbol).catch(() => {});
+                    return;                 // no weekly pane to prime
+                }
                 fetchCandles(neighbour.symbol, state.interval).catch(() => {});
                 if (state.interval !== WEEKLY) {
                     fetchCandles(neighbour.symbol, WEEKLY).catch(() => {});
@@ -604,7 +801,11 @@
     function step(delta) {
         const i = state.rows.findIndex((r) => r.symbol === state.symbol);
         const next = state.rows[i + delta];
-        if (next) open(next.symbol);
+        if (!next) return;
+        // In TPO mode each row carries the grid its own band was measured
+        // on, so stepping has to take the neighbour's, not keep this one's.
+        open(next.symbol, state.tpoOn
+            ? { tpo: true, tpoPin: next.tpoPin || {} } : undefined);
     }
 
     function close() {
@@ -631,6 +832,16 @@
             // The payload is already in hand — this is a redraw, not a fetch.
             if (state.symbol) loadCandles(state.symbol);
         });
+        if ($('cmTpo')) {
+            $('cmTpo').addEventListener('click', () => {
+                state.tpoOn = !state.tpoOn;
+                // Turned on by hand rather than from a row: no measured grid
+                // to honour, so the engine sizes its own.
+                if (!state.tpoOn) state.tpoPin = {};
+                syncNav();
+                if (state.symbol) loadCandles(state.symbol);
+            });
+        }
         $('cmInterval').addEventListener('change', () => {
             state.interval = $('cmInterval').value;
             if (state.symbol) loadCandles(state.symbol);

@@ -1,6 +1,9 @@
 {# Candle chart popup — shared by the Watchlist grid and the Scanner's
-   Camarilla results. Include once per page, then drive it from JS with
+   results. Include once per page, then drive it from JS with
    CandleModal.open(symbol, {rows}).
+
+   The TPO button needs mine_cpr.js, mine_tpo.js and tradingview-chart.js on
+   the page; without them it simply draws nothing.
 
    Drawn here rather than embedded from TradingView: their widget will not
    serve NSE data to an anonymous embed — every Indian symbol comes back
@@ -28,6 +31,14 @@
               title="Central Pivot Range (TC/P/BC) with Camarilla R3 and S3, from the previous period">
         CPR <span id="cmCprPeriod">Monthly</span>
       </button>
+      {# TPO pins the top pane to 30-minute BROKER bars, because a market
+         profile's periods are anchored on 09:15 and the feed behind the
+         other timeframes starts the day at 09:00 — see candle-modal.js. The
+         timeframe picker is disabled while it is on for the same reason. #}
+      <button class="cm-cpr cm-tpo" id="cmTpo"
+              title="Market Profile (TPO) on 30-minute periods — blocks, POC, value area and single prints">
+        TPO <span>30m</span>
+      </button>
       <a class="cm-out" id="cmOut" target="_blank" rel="noopener noreferrer"
          title="Open this chart on tradingview.com">Open on TradingView ↗</a>
       <div class="cm-nav">
@@ -39,8 +50,12 @@
     {# Two panes, because the question "is this a buy" is asked at two
        timeframes at once: the top one follows the dropdown, the bottom is
        pinned to weekly so the higher-timeframe structure is always on
-       screen next to whatever is being examined above it. #}
-    <div class="cm-panes">
+       screen next to whatever is being examined above it.
+
+       TPO mode is the exception — .cm-panes--single drops the weekly one
+       and gives the whole height to the profile, which is read against the
+       CPR band on its own chart rather than across two. #}
+    <div class="cm-panes" id="cmPanes">
       <div class="cm-pane">
         <span class="cm-cap" id="cmCapTop">1D</span>
         <div class="cm-body" id="cmBodyTop"></div>

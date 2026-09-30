@@ -1364,6 +1364,92 @@ body.ocean-theme .oip-tooltip {
     box-shadow: inset 0 0 0 2px var(--oip-ring);
 }
 
+/* ── Symbol picker (Replay) ──────────────────────────────────────────────────
+   A type-to-search box in place of a <select>: the list is three indices plus
+   ~210 F&O stocks, which a native dropdown makes unreachable. The same control
+   /multichart carries (.mc-search / .mc-suggest), rebuilt on the oip tokens so
+   it sits at this toolbar's 22px row height rather than that page's 26px.
+
+   The popup is absolutely positioned inside the wrap, so it hangs over the
+   chart instead of stretching the sticky header. Its z-index clears the
+   header's own 1001. */
+.oip-sym-wrap {
+    position: relative;
+    width: 116px;
+    flex-shrink: 0;
+}
+
+.oip-sym-search {
+    width: 100%;
+    height: var(--oip-ctl-h);
+    padding: 0 6px;
+    box-sizing: border-box;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--oip-text);
+    background: var(--oip-ctl-bg);
+    border: 1px solid var(--oip-hairline);
+    border-radius: var(--oip-ctl-radius);
+    outline: none;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.oip-sym-search:hover { border-color: var(--oip-accent); background: var(--oip-ctl-bg-hover); }
+
+.oip-sym-search:focus {
+    border-color: var(--oip-accent);
+    box-shadow: 0 0 0 3px var(--oip-ring);
+    background: var(--oip-bg);
+}
+
+.oip-sym-search::placeholder { color: var(--oip-metric-lbl); opacity: 0.85; }
+/* The browser's own ✕ would clear the box to an empty symbol, which this page
+   has no meaning for — the picker is left on Escape, not emptied. */
+.oip-sym-search::-webkit-search-cancel-button { display: none; }
+
+.oip-sym-suggest {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 0;
+    min-width: 100%;
+    z-index: 1200;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--oip-card-bg, var(--oip-bg));
+    border: 1px solid var(--oip-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.oip-sym-sug {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 9px;
+    font-size: 11px;
+    text-align: left;
+    color: var(--oip-text);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--oip-hairline);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.oip-sym-sug:last-child { border-bottom: 0; }
+.oip-sym-sug:hover,
+.oip-sym-sug.active { background: var(--oip-ctl-bg-hover); }
+.oip-sym-sug-sym { font-weight: 700; }
+.oip-sym-sug-kind {
+    margin-left: auto;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    color: var(--oip-metric-lbl);
+}
+.oip-sym-sug-empty { padding: 7px 9px; font-size: 10px; color: var(--oip-metric-lbl); }
+
 /* Compact toolbar controls all share the row height — the 20px/22px mix used to
    leave the selects sitting a pixel low against the buttons beside them. */
 .oip-select--xs {

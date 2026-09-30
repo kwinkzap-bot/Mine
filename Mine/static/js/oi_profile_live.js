@@ -8,6 +8,8 @@
  *   every 2 s (market open)  GET /api/multichart/live?symbol=…&source=…
  *   → today's 1-MINUTE bars, re-bucketed here into the block's timeframe on
  *     the exchange's own 09:15 grid, patched onto the tail with series.update()
+ *   every 30 s               one /api/open-interest re-read, which moves the
+ *     in-chart OI bars (a DB row on the server — see oipRefreshOIChain)
  *   every 5 min              one index-only /oi-profile/candles re-fetch, which
  *     heals gaps the patch cannot (a bar the feed missed) and refreshes max pain
  *
@@ -19,9 +21,10 @@
  *    poll and is likewise untouched.
  *  · **It follows the Spot / Fut switch**, so the live bars are always the
  *    instrument the chart is drawing — the whole point of the switch.
- *  · **The OI ladder, the strike dropdowns and the option chain stay manual.**
- *    They come off a full option-chain read, which is not something to put on
- *    a 2-second timer; Refresh All is still what moves them.
+ *  · **The strike dropdowns stay manual.** The chain re-read above feeds the
+ *    OI bars, the header and the max-pain line and nothing else: rebuilding
+ *    three <select>s every half minute would fight whatever the user picked.
+ *    Refresh All is still what re-derives the strike set.
  *
  * Bars are on the app's fake-IST grid (IST clock as UTC seconds), the same one
  * /oi-profile/candles emits, so the two sets concatenate without conversion.
@@ -38,6 +41,10 @@
 
     const POLL_MS = { open: 2000, hidden: 10000, closed: 60000, error: 5000 };
     const HEAL_MS = 5 * 60 * 1000;     // the index-only re-fetch above
+    // The in-chart OI bars' own cadence. The server records a snapshot every
+    // minute at :30 and /api/open-interest serves that row while it is under a
+    // minute old, so asking more often than this only re-reads the same row.
+    const OI_CHAIN_MS = 30 * 1000;
     // Timeframes this loop can rebuild from 1-minute bars. 30-second bars
     // cannot be (the feed's own bars are coarser than the chart's) and
     // week/month are not intraday, so both keep the manual badge and the
@@ -48,6 +55,7 @@
     let timer = null;
     let abortCtl = null;
     let lastHeal = 0;
+    let lastOiChain = 0;
     let lastBarTime = 0;    // the forming bar's stamp last tick — a new one is a new bar
 
     const badgeEl = () => document.getElementById('oipLiveBadge');
@@ -187,16 +195,41 @@
         oipSetVolumeBars(oipVolumeSeries, out, oipOILastCandles);
     }
 
+    /* ── the in-chart OI bars ─────────────────────────────────────────────── */
+    // The option chain behind them used to move only on Refresh All, so a page
+    // opened at the bell kept the session's opening change-in-OI — every bar
+    // reading ~0 — for as long as it stayed up, which looked like the OI Bar
+    // toggle being broken. Cheap on the server (see oipRefreshOIChain), so it
+    // sits on its own timer.
+    //
+    // Runs BEFORE the bar feed's own guards, not inside the success path: the
+    // OI bars are not bars, so a timeframe this loop cannot rebuild (30s, week,
+    // month) and a quiet or erroring feed must not freeze them too.
+    async function maybeRefreshOIChain() {
+        if (window.oipReplayMode) return;
+        if (!marketOpenNow()) return;
+        if (Date.now() - lastOiChain <= OI_CHAIN_MS) return;
+        if (typeof oipRefreshOIChain !== 'function') return;
+        // Refresh All is already fetching the chain — let it finish.
+        if (oipIsRefreshing) return;
+        lastOiChain = Date.now();
+        await oipRefreshOIChain();
+    }
+
     /* ── the loop ─────────────────────────────────────────────────────────── */
     async function tick() {
         if (abortCtl) abortCtl.abort();
+
+        await maybeRefreshOIChain();
 
         // A timeframe this loop cannot rebuild, or a replay/date-ranged window:
         // say so in the badge and keep checking cheaply, since the TF dropdown
         // can put it back on a live one at any moment.
         if (!canLive() || window.oipReplayMode) {
             badge(false, 'On Refresh');
-            schedule(POLL_MS.closed);
+            // The chain still wants its own cadence on a non-patchable
+            // timeframe — POLL_MS.closed is a minute, twice OI_CHAIN_MS.
+            schedule(marketOpenNow() ? OI_CHAIN_MS : POLL_MS.closed);
             return;
         }
         if (!marketOpenNow()) {
@@ -279,7 +312,9 @@
         if (window.oipReplayMode) return;
         if (typeof MineCPR === 'undefined') return;   // no aggregator, no live loop
         // Behind the first full load: the patch needs history to attach to.
+        // Same for the chain — oipLoadOI has just fetched it.
         lastHeal = Date.now();
+        lastOiChain = Date.now();
         schedule(4000);
     });
 
