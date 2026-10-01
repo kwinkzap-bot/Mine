@@ -1090,3 +1090,162 @@ def test_the_route_serves_an_archived_day_without_touching_the_live_tape(monkeyp
 
         bad = c.get('/api/time-and-sales?symbol=NSE:NIFTY26SEPFUT&day=yesterday')
         assert bad.status_code == 400
+
+
+# ── rebuilding a day nobody taped ──────────────────────────────────────────
+#
+# The archive only ever held the sessions this app happened to be running for,
+# so the footprint had a present and no past. These cover the way back: one
+# on-demand fetch of ICICI 1-second bars for the contract that was front month
+# THAT day, archived under the same key a taped day uses.
+
+class _FakeIcici:
+    """Just enough adapter: daily index bars for the holiday calendar, and
+    1-second bars for one futures contract."""
+
+    def __init__(self, seconds=None):
+        self.seconds = seconds if seconds is not None else [
+            {'date': datetime(2026, 9, 18, 9, 15, 0), 'open': 100, 'close': 101, 'volume': 75},
+            {'date': datetime(2026, 9, 18, 9, 15, 1), 'open': 101, 'close': 101, 'volume': 0},
+            {'date': datetime(2026, 9, 18, 9, 15, 2), 'open': 101, 'close': 100, 'volume': 50},
+        ]
+        self.future_calls = []
+
+    def historical_data(self, symbol, start, end, interval, **kw):
+        s = datetime.strptime(start, '%Y-%m-%d').date()
+        e = datetime.strptime(end, '%Y-%m-%d').date()
+        out, d = [], s
+        while d <= e:
+            if d.weekday() < 5:
+                out.append({'date': datetime.combine(d, time(15, 30))})
+            d += timedelta(days=1)
+        return out
+
+    def historical_future(self, root, expiry, start, end, interval, **kw):
+        self.future_calls.append((root, expiry, start, end, interval))
+        return list(self.seconds)
+
+    def last_history_error(self):
+        return None
+
+
+@pytest.fixture
+def icici(monkeypatch):
+    from trading_app.service import provider_logic
+    fake = _FakeIcici()
+    monkeypatch.setattr(provider_logic, 'get_icici_adapter', lambda user=None: fake)
+    return fake
+
+
+def _past_session(days_back=5):
+    """A weekday far enough back to be a settled session."""
+    d = tas._today() - timedelta(days=days_back)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def test_a_day_nobody_taped_is_rebuilt_from_one_second_history(icici):
+    day = _past_session()
+    out = tas.rebuild_day('NIFTY', day)
+
+    assert out['state'] == 'ready' and out['rows'] == 2      # the flat second is not a trade
+    # The contract that was front month THEN, named the way the archive is keyed.
+    assert out['symbol'].startswith('NSE:NIFTY') and out['symbol'].endswith('FUT')
+    assert icici.future_calls[0][0] == 'NIFTY'
+    assert icici.future_calls[0][2] == icici.future_calls[0][3] == day.isoformat()
+    assert icici.future_calls[0][4] == '1second'
+    assert icici.future_calls[0][1] >= day                   # an expiry it had not reached
+
+    # …and it is now an ordinary archived day: listed by root, read back whole.
+    assert [d['day'] for d in tas.archived_days('NIFTY')] == [day.isoformat()]
+    st = tas.archived_view(out['symbol'], day)
+    assert [r['qty'] for r in st['rows']] == [75, 50]
+    assert [r['side'] for r in st['rows']] == ['buy', 'sell']
+    assert all(r['src'] == 'bar' for r in st['rows'])        # never passed off as prints
+    assert st['historical'] is True
+
+
+def test_a_rebuilt_day_is_fetched_once_and_then_read_off_the_archive(icici):
+    day = _past_session()
+    assert tas.rebuild_day('NIFTY', day)['state'] == 'ready'
+    again = tas.rebuild_day('NIFTY', day)
+    assert again['state'] == 'held' and len(icici.future_calls) == 1
+
+
+def test_today_and_the_weekend_are_never_rebuilt(icici):
+    for day in (tas._today(), tas._today() + timedelta(days=1)):
+        assert tas.rebuild_day('NIFTY', day)['state'].startswith('unavailable')
+    saturday = tas._today() - timedelta(days=tas._today().weekday() + 2)
+    assert tas.rebuild_day('NIFTY', saturday)['state'] == 'unavailable:not a trading day'
+    assert icici.future_calls == []
+
+
+def test_a_day_breeze_serves_nothing_for_is_not_asked_again(icici):
+    """Breeze's coverage of older contracts is patchy and no amount of asking
+    fixes it; a chart left open must not re-spend the budget every redraw."""
+    icici.seconds = []
+    day = _past_session()
+    first = tas.rebuild_day('NIFTY', day)
+    assert first['state'].startswith('unavailable')
+    assert tas.rebuild_day('NIFTY', day)['state'] == first['state']
+    assert len(icici.future_calls) == 1
+
+
+def test_the_rebuild_budget_caps_how_many_days_one_hour_may_cost(icici):
+    """One day is ~25 broker requests out of the 5,000 the live algos share."""
+    days = []
+    d = _past_session()
+    while len(days) < tas._HIST_BUDGET_PER_HOUR + 2:
+        if d.weekday() < 5:
+            days.append(d)
+        d -= timedelta(days=1)
+    states = [tas.rebuild_day('NIFTY', x)['state'] for x in days]
+    assert states.count('ready') == tas._HIST_BUDGET_PER_HOUR
+    assert all(s == 'unavailable:rebuilding too many days'
+               for s in states[tas._HIST_BUDGET_PER_HOUR:])
+
+
+def test_an_archived_day_still_wins_over_a_rebuild(icici):
+    day = _past_session()
+    _archive_day_rows(day, 'NSE:NIFTY26SEPFUT', [_row(1001, 65, 1)])
+    assert tas.rebuild_day('NIFTY', day) == {
+        'symbol': 'NSE:NIFTY26SEPFUT', 'rows': 0, 'state': 'held'}
+    assert icici.future_calls == []
+
+
+def test_the_route_rebuilds_a_day_asked_for_by_root_alone(monkeypatch, icici):
+    """The client cannot name the contract that was front month on a day the
+    archive never held — that is the whole reason root+backfill exists."""
+    import sys
+    sys.path.insert(0, 'tests')
+    from route_app import build_route_app
+    from trading_app.app.routes import api
+    monkeypatch.setattr(api, 'check_auth', lambda: None)
+    app = build_route_app()
+    app.secret_key = 'test'
+    day = _past_session()
+
+    with app.test_client() as c:
+        with c.session_transaction() as sess:
+            sess['user_authenticated'] = True
+            sess['username'] = 'test-user'
+
+        # Without a root there is nothing to resolve, and nothing is fetched.
+        assert c.get(f'/api/time-and-sales?day={day.isoformat()}').status_code == 400
+
+        # Asking for the day without backfill=1 reports it empty rather than
+        # quietly spending 25 broker requests.
+        quiet = c.get(f'/api/time-and-sales?day={day.isoformat()}&root=NIFTY').get_json()
+        assert quiet['success'] and quiet['rows'] == [] and icici.future_calls == []
+
+        got = c.get(f'/api/time-and-sales?day={day.isoformat()}&root=NIFTY&backfill=1').get_json()
+        assert got['success'] and got['historical'] is True
+        assert got['rebuilt']['state'] == 'ready'
+        assert got['symbol'] == got['rebuilt']['symbol']
+        assert [r['qty'] for r in got['rows']] == [75, 50]
+
+        # Second read is the archive, not the broker.
+        again = c.get(f'/api/time-and-sales?day={day.isoformat()}&root=NIFTY&backfill=1').get_json()
+        assert [r['qty'] for r in again['rows']] == [75, 50]
+        assert len(icici.future_calls) == 1

@@ -15731,6 +15731,14 @@ def time_and_sales() -> EndpointResponse:
     `historical: true`. Neither marks a symbol hot — an archived day has no
     stream to keep alive.
 
+    An archived day may be named by root instead of symbol (day=…&root=NIFTY):
+    the contract that was front month THEN is resolved here, which is the only
+    way to reach a day whose future has since expired. With backfill=1 a day
+    the archive does not hold is rebuilt out of Breeze's 1-second history and
+    archived (tas.rebuild_day), and the answer carries `rebuilt`. That costs
+    ~25 broker requests, so it is rate-limited in the service and never
+    retried in a loop.
+
     This reads the in-memory tape and nothing else, so the 1 Hz poll behind it
     costs the broker nothing — the collector's websocket is what talks to
     Fyers, and it does so once per app, not once per client. The only side
@@ -15758,8 +15766,13 @@ def time_and_sales() -> EndpointResponse:
         root = (request.args.get('root') or 'NIFTY').upper()
         return jsonify({'success': True, 'root': root, 'days': tas.archived_days(root)})
 
+    day_raw = (request.args.get('day') or '').strip()
+    root = (request.args.get('root') or '').strip().upper()
     symbol = (request.args.get('symbol') or '').strip()
-    if not symbol:
+    # An archived day may be asked for by ROOT alone: the contract that was
+    # front month then is not one the client can name, and for a day that was
+    # never taped there is no day-list entry to read it off either.
+    if not symbol and not (day_raw and root):
         return jsonify({'success': False, 'error': 'symbol is required'}), 400
 
     try:
@@ -15790,13 +15803,25 @@ def time_and_sales() -> EndpointResponse:
     except ValueError:
         client_epoch = None
 
-    day_raw = (request.args.get('day') or '').strip()
+    rebuilt = None
     if day_raw:
         try:
             day = datetime.strptime(day_raw[:10], '%Y-%m-%d').date()
         except ValueError:
             return jsonify({'success': False, 'error': f'Bad day {day_raw!r}, want YYYY-MM-DD'}), 400
+        if not symbol and root:
+            symbol = tas.archived_day_symbol(root, day) or ''
         state = tas.archived_view(symbol, day, limit, min_qty)
+        # Nothing taped that day. With a root to go on, rebuild it out of
+        # Breeze's 1-second history once and archive it, so the footprint has
+        # a past as well as a present (see tas.rebuild_day).
+        if not state.get('rows') and root and request.args.get('backfill'):
+            rebuilt = tas.rebuild_day(root, day)
+            if rebuilt.get('symbol'):
+                symbol = rebuilt['symbol']
+                state = tas.archived_view(symbol, day, limit, min_qty)
+            else:
+                state['backfill_state'] = rebuilt.get('state') or state.get('backfill_state')
     else:
         tas.register(symbol)
         state = tas.view(symbol, since, limit, min_qty, client_epoch)
@@ -15806,6 +15831,7 @@ def time_and_sales() -> EndpointResponse:
         'symbol': symbol,
         'server_time': int(datetime.now().timestamp()),
         **state,
+        **({'rebuilt': rebuilt} if rebuilt else {}),
     })
 
 

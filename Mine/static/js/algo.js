@@ -2439,6 +2439,11 @@ const _smHoldingsData = {};
 // doesn't reformat "205" into "205.00" under the caret.
 const _smFlowManual = { on: false, prices: {}, raw: {} };
 
+// The plan prices every holding, but only some get a share at this budget. The
+// table shows the rows that actually trade; the count in the summary toggles
+// back to the full basket.
+let _smFlowShowAll = false;
+
 // Build the SIP/SWP plan.
 //
 // SIP — the budget is the entered amount plus whatever idle cash the group is
@@ -2525,6 +2530,7 @@ function _smOpenFlowModal(id, mode) {
     // data (holdings, live prices, deployed value) and recompute the split so the
     // popup always reflects the current state — not a stale snapshot.
     _smFlowManual.on = true; _smFlowManual.prices = {}; _smFlowManual.raw = {};
+    _smFlowShowAll = false;
     _smBuildFlowModal(id, mode);
     _smInvalidateCache(id);
     _smPrefetch(id, true);
@@ -2636,16 +2642,17 @@ function _smRenderFlowTable(id, mode) {
     const keepCar = keepSym ? act.selectionStart : null;
 
     let deployed = 0;
-    body.innerHTML = allocs.map(a => {
+    allocs.forEach(a => { deployed += a.qty * a.price; });
+    const traded = allocs.filter(a => a.qty > 0);
+    const shown  = (_smFlowShowAll || !traded.length) ? allocs : traded;
+    body.innerHTML = shown.map(a => {
         let detail;
         if (isSip) {
             const newQty = a.held + a.qty;
             const newAvg = newQty ? (a.held * a.entry + a.qty * a.price) / newQty : a.entry;
-            deployed += a.qty * a.price;
             detail = `<td>${newQty}</td><td>₹${newAvg.toFixed(2)}</td>`;
         } else {
             const left = a.held - a.qty;
-            deployed += a.qty * a.price;
             detail = `<td>${left}${left === 0 ? ' <span class="sm-flow-out">(exit)</span>' : ''}</td><td>${fmt(a.qty * a.price)}</td>`;
         }
         return `<tr>
@@ -2679,9 +2686,17 @@ function _smRenderFlowTable(id, mode) {
     document.getElementById('flowSummary').innerHTML =
         `${isSip ? 'Total to deploy' : 'Total to withdraw'}: <strong>${fmt(headline)}</strong>` +
         breakdown +
-        `<span class="sm-flow-sub"> · ${allocs.filter(a => a.qty > 0).length}/${holdings.length} stocks` +
+        `<span class="sm-flow-sub"> · <a href="#" class="sm-flow-toggle" onclick="_smFlowToggleAll(event, '${id}', '${mode}')"` +
+        ` title="${_smFlowShowAll ? 'Show only the stocks being ' + (isSip ? 'bought' : 'sold') : 'Show every stock in the basket'}">` +
+        `${traded.length}/${holdings.length} stocks</a>` +
         (plan.leftover >= 1 ? ` · ${fmt(plan.leftover)} left over` : '') +
         `</span>`;
+}
+
+function _smFlowToggleAll(ev, id, mode) {
+    ev.preventDefault();
+    _smFlowShowAll = !_smFlowShowAll;
+    _smRenderFlowTable(id, mode);
 }
 
 function _smSubmitFlow(id, mode) {

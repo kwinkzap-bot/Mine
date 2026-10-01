@@ -1,21 +1,21 @@
 [
   {
-    "symbol": "YESBANK",
+    "symbol": "JINDALSTEL",
     "direction": "BUY",
     "mode": "paper",
-    "qty": 31100,
-    "lot_size": 31100,
-    "entry_price": 22.55,
-    "exit_price": 22.05,
-    "spot_entry_price": 23.97,
-    "spot_exit_price": 22.05,
-    "sl_price": 22.07,
-    "target_price": 24.45,
-    "pnl": -15550.0,
+    "qty": 625,
+    "lot_size": 625,
+    "entry_price": 1172.3,
+    "exit_price": 1110.1,
+    "spot_entry_price": 1137.2,
+    "spot_exit_price": 1104.0,
+    "sl_price": 1104.1,
+    "target_price": 1307.78,
+    "pnl": -38875.0,
     "reason": "SL",
-    "signal_date": "2026-09-11",
-    "entry_time": "2026-09-24T12:00:02.631870",
-    "exit_time": "2026-09-28T09:16:00",
-    "date": "2026-09-28"
+    "signal_date": "2026-09-17",
+    "entry_time": "2026-09-24T12:00:02.629683",
+    "exit_time": "2026-10-01T12:28:53.063245",
+    "date": "2026-10-01"
   }
 ]

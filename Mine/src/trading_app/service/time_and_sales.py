@@ -1476,6 +1476,207 @@ def archived_view(symbol: str, day: date, limit: int = 500,
     }
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Historical backfill — a day nobody taped, rebuilt out of Breeze
+# ──────────────────────────────────────────────────────────────────────────
+#
+# The archive above is forward-only: it holds the days this app happened to be
+# running and watching, so the footprint stopped at whatever the tape reached
+# and an older session on the same chart drew nothing at all. Nothing about
+# that is a data problem — Breeze serves 1-second bars for a PAST day, and for
+# an already-expired contract too (it addresses a future by its fields, not by
+# a token; see IciciDataServiceAdapter.historical_future). It is exactly the
+# series the opening backfill lays down for today, asked for with a date.
+#
+# So a day with no rows is fetched once, on demand, and written into the same
+# archive the live tape folds into — after which it is a normal archived day
+# and costs nothing to read again.
+#
+# WHAT THESE ROWS ARE. All of them are src='bar': one row per traded second,
+# the whole second's volume, the side from whether the second closed up or
+# down. A day the app DID tape also carries the socket's true prints; a
+# rebuilt day never can, because that feed is only live. The totals and the
+# shape are the same measurement either way, which is what the footprint reads.
+#
+# COST. One day is ~25 Breeze requests (the day is windowed; see
+# _second_history) out of the 5,000/day the live algos share, so it is
+# rate-limited here and never retried in a loop, and the raw 1-second windows
+# are flushed out of the shared chunk cache afterwards for the reason the
+# opening backfill flushes them.
+
+_HIST_LOCK = threading.Lock()                    # one day at a time
+_HIST_STATE: Dict[str, Tuple[str, float]] = {}   # 'ROOT:day' -> (state, monotonic)
+_HIST_RETRY_SEC = 30 * 60.0                      # a failed day is not re-asked sooner
+_HIST_BUDGET_PER_HOUR = 8                        # days rebuilt per rolling hour
+_HIST_SPENT: List[float] = []                    # monotonic() of each one
+# Breeze's own coverage of old contracts thins out with age, and a chart
+# scrolled back years would otherwise spend the whole budget finding that out.
+_HIST_MAX_AGE_DAYS = 400
+
+# The roots whose futures live on BSE/BFO rather than NSE/NFO.
+_BFO_ROOTS = {'SENSEX', 'BANKEX', 'SENSEX50'}
+_INDEX_SPOT = {
+    'NIFTY': 'NSE:NIFTY50-INDEX', 'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+    'FINNIFTY': 'NSE:FINNIFTY-INDEX', 'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+    'SENSEX': 'BSE:SENSEX-INDEX', 'BANKEX': 'BSE:BANKEX-INDEX',
+}
+
+
+def _fut_symbol(root: str, expiry: date) -> str:
+    """The Fyers-shaped name for a monthly future — the key the archive and
+    the day list speak, so a rebuilt day is indistinguishable from a taped one.
+    """
+    exch = 'BSE' if root.upper() in _BFO_ROOTS else 'NSE'
+    return f"{exch}:{root.upper()}{expiry.strftime('%y%b').upper()}FUT"
+
+
+def _trading_days(root: str, around: date, adapter) -> List[date]:
+    """Sessions either side of `around` — the holiday calendar we do not
+    otherwise have, and what an expiry date has to be snapped to."""
+    spot = _INDEX_SPOT.get(root.upper()) or f'NSE:{root.upper()}-EQ'
+    bars = adapter.historical_data(spot, (around - timedelta(days=120)).isoformat(),
+                                   (around + timedelta(days=45)).isoformat(), 'day',
+                                   cache_ttl=3600.0)
+    out = []
+    for b in bars or []:
+        d = b.get('date')
+        out.append(d.date() if hasattr(d, 'date') else d)
+    return [d for d in out if d]
+
+
+def front_future_expiry(root: str, day: date, adapter) -> Optional[date]:
+    """The monthly contract that was the FRONT month on `day`.
+
+    Replaying an August session has to read August's future: the September one
+    existed then too and traded a fraction of the volume, so the wrong contract
+    draws a real series that is quietly several times too small.
+    """
+    try:
+        from trading_app.service.expiry_calendar import expiry_on_or_after
+        days = _trading_days(root, day, adapter)
+        if not days:
+            return None
+        return expiry_on_or_after(day, days, cadence='monthly')
+    except Exception as e:
+        logger.debug(f"[TimeAndSales] expiry lookup failed for {root} {day}: {e}")
+        return None
+
+
+def _hist_budget_ok() -> bool:
+    now = monotonic()
+    _HIST_SPENT[:] = [t for t in _HIST_SPENT if now - t < 3600.0]
+    return len(_HIST_SPENT) < _HIST_BUDGET_PER_HOUR
+
+
+def archived_day_symbol(root: str, day: date) -> Optional[str]:
+    """The contract the archive already holds `day` under, if any."""
+    iso = day.isoformat()
+    for row in archived_days(root):
+        if row['day'] == iso:
+            return row['symbol']
+    return None
+
+
+def rebuild_day(root: str, day: date) -> Dict[str, Any]:
+    """Fetch one past session's 1-second bars and archive them as a tape.
+
+    Returns {'symbol', 'rows', 'state'} — `state` being 'ready', 'held' (it was
+    already archived), or 'unavailable:<why>'. Never raises: a day that cannot
+    be rebuilt leaves the chart without a footprint, which is what it had
+    anyway.
+    """
+    global _ARCHIVE_GEN
+    root = (root or '').upper()
+    iso = day.isoformat()
+    key = f'{root}:{iso}'
+
+    held = archived_day_symbol(root, day)
+    if held:
+        return {'symbol': held, 'rows': 0, 'state': 'held'}
+
+    if day >= _today():
+        # Today is the live tape's own business, and a day that has not
+        # happened has no history to ask for.
+        return {'symbol': None, 'rows': 0, 'state': 'unavailable:not a past session'}
+    if (_today() - day).days > _HIST_MAX_AGE_DAYS:
+        return {'symbol': None, 'rows': 0,
+                'state': f'unavailable:older than {_HIST_MAX_AGE_DAYS} days'}
+    if day.weekday() >= 5:
+        return {'symbol': None, 'rows': 0, 'state': 'unavailable:not a trading day'}
+
+    prev = _HIST_STATE.get(key)
+    if prev and prev[0].startswith('unavailable') and monotonic() - prev[1] < _HIST_RETRY_SEC:
+        return {'symbol': None, 'rows': 0, 'state': prev[0]}
+
+    with _HIST_LOCK:
+        # Another request may have rebuilt it while we waited for the lock.
+        held = archived_day_symbol(root, day)
+        if held:
+            return {'symbol': held, 'rows': 0, 'state': 'held'}
+        if not _hist_budget_ok():
+            return {'symbol': None, 'rows': 0, 'state': 'unavailable:rebuilding too many days'}
+
+        def fail(why: str) -> Dict[str, Any]:
+            _HIST_STATE[key] = (f'unavailable:{why}', monotonic())
+            logger.info(f"[TimeAndSales] {root} {iso} not rebuilt: {why}")
+            return {'symbol': None, 'rows': 0, 'state': f'unavailable:{why}'}
+
+        try:
+            from trading_app.service.provider_logic import get_icici_adapter
+            adapter = get_icici_adapter('Mine')
+        except Exception as e:
+            return fail(f'ICICI unavailable: {e}')
+        if adapter is None:
+            return fail('ICICI not connected')
+
+        expiry = front_future_expiry(root, day, adapter)
+        if expiry is None:
+            return fail('no front-month contract for that day')
+        symbol = _fut_symbol(root, expiry)
+
+        _HIST_SPENT.append(monotonic())
+        try:
+            bars = adapter.historical_future(
+                root, expiry, iso, iso, '1second',
+                exchange_code='BFO' if root in _BFO_ROOTS else 'NFO',
+                use_cache=False)
+        except Exception as e:
+            return fail(str(e))
+        finally:
+            # Same reason the opening backfill flushes: a day of raw 1-second
+            # windows would evict the aggregated day caches the live algos read.
+            try:
+                from trading_app.service.icici_data_service import flush_second_windows
+                flush_second_windows(f"{root}:{expiry.isoformat()}:FUT")
+            except Exception:
+                pass
+
+        if not bars:
+            why = ''
+            try:
+                why = adapter.last_history_error() or ''
+            except Exception:
+                pass
+            return fail(why or 'no 1-second history')
+
+        rows = _bar_rows(bars)
+        if not rows:
+            return fail('no traded seconds in that session')
+        for seq, row in enumerate(rows, 1):
+            row['seq'] = seq
+
+        try:
+            # source_mtime 0.0 says "rebuilt, not taped": a real snapshot for
+            # the same day carries a true mtime and so supersedes this, while a
+            # second rebuild of the same day is skipped as a no-op.
+            written = _archive_day(symbol, iso, rows, 0.0)
+        except Exception as e:
+            return fail(f'archive write failed: {e}')
+        _ARCHIVE_GEN += 1
+        _HIST_STATE[key] = ('ready', monotonic())
+        logger.info(f"[TimeAndSales] rebuilt {symbol} {iso} from Breeze: {written} rows")
+        return {'symbol': symbol, 'rows': written, 'state': 'ready'}
+
 def reset(symbol: Optional[str] = None) -> None:
     """Drop the tape for one symbol, or all of them. Used by tests."""
     with _lock:
@@ -1486,6 +1687,11 @@ def reset(symbol: Optional[str] = None) -> None:
             # a backfill state set before a single print arrived would
             # otherwise survive into the next test.
             targets = set(_PRINTS) | set(_BACKFILL) | set(_SEQ) | set(_TOPUP_AT) | set(_SEEN)
+            # The rebuilt-day memo and its budget are process-wide, not
+            # per-symbol: a test that cleared the tape but kept them would
+            # find the next day's rebuild refused by the one before it.
+            _HIST_STATE.clear()
+            _HIST_SPENT[:] = []
         for s in targets:
             _PRINTS.pop(s, None)
             _SEQ.pop(s, None)

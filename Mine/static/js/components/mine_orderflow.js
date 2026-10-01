@@ -17,6 +17,14 @@
  * /api/time-and-sales — the app's own trade tape (service/time_and_sales.py),
  * live for today and out of the SQLite archive for earlier sessions.
  *
+ * That archive is forward-only: it holds the sessions the app was running and
+ * watching for, which is why this used to draw today and nothing else. A day
+ * it does not hold is now asked for with `root` and `backfill=1`, and the
+ * server rebuilds it from ICICI's 1-second history for the contract that was
+ * front month THAT day and archives it (tas.rebuild_day) — after which it is
+ * an ordinary archived day. A rebuilt day is all 1-second bars, with none of
+ * the live socket's true prints, because that feed only exists in the moment.
+ *
  * Be honest about what that tape is. Most of it is ICICI's 1-SECOND bars
  * (src='bar'): one row per traded second, carrying that whole second's volume,
  * with the side taken from whether the second closed up or down. It is not a
@@ -67,8 +75,21 @@ window.MineOrderFlow = (function () {
         ofCell: 'bidask',        // what a cell says: sell×buy, delta, or plain volume
         ofRowStep: 0,            // price per row; 0 = auto from the drawn bars' own ranges
         ofRowsTarget: 6,         // rows a bar comes out around when the step is auto
-        ofSessions: 1,           // sessions of tape to load and draw, newest back
-        ofBars: 200,             // never footprint more bars than this, whatever is loaded
+        // Sessions of tape to load and draw, newest back. More than one on
+        // purpose: the days before today are drawn out of the archive, and a
+        // day the archive never held is rebuilt from 1-second history the
+        // first time it is asked for (Tape.fetchArchived). A footprint that
+        // stopped at midnight was the single most misleading thing here.
+        ofSessions: 3,
+        // Never draw more footprints than this, newest first — a guard on the
+        // size of the result array, not on the work (every bar of every
+        // session asked for is built either way; this only trims what comes
+        // back). It was 200, which is 3h20m of a 1-minute pane: a session
+        // crosses it at 12:35 and the morning starts falling off the left a
+        // bar at a time, and with ofSessions > 1 it cut the older sessions
+        // away entirely before they could be drawn. 1,500 covers three
+        // 1-minute sessions (375 bars each) whole.
+        ofBars: 1500,
         ofNumbers: true,         // print the figures; off leaves the heat map alone
         ofPoc: true,             // ring the bar's busiest row
         ofImbalance: true,       // diagonal bid/ask imbalance
@@ -305,6 +326,17 @@ window.MineOrderFlow = (function () {
             }
         }
 
+        // One past session. A day the archive holds is read straight out of
+        // it; a day it does not is asked for by ROOT with `backfill=1`, which
+        // is the server rebuilding it from Breeze's 1-second history and
+        // archiving it (see tas.rebuild_day). That is the whole of "show the
+        // footprint on history": the archive is forward-only and only holds
+        // sessions this app happened to be watching, so without it the
+        // indicator was a today-only indicator on a chart full of yesterdays.
+        //
+        // The rebuild is ~25 broker requests and takes tens of seconds, so the
+        // day sits in 'loading' while it runs — one request per day, never
+        // retried in a loop, and the server rate-limits it besides.
         async function fetchArchived(day, root) {
             const e = entry(day);
             const key = `day:${day}`;
@@ -314,13 +346,18 @@ window.MineOrderFlow = (function () {
             try {
                 const list = await archivedDays(root);
                 const hit = list.find(d => d.day === day);
-                if (!hit) { e.state = 'empty'; changed(); return; }
-                const body = await getJSON(`/api/time-and-sales?symbol=${encodeURIComponent(hit.symbol)}`
-                    + `&day=${day}&limit=${ROW_LIMIT}`);
-                e.symbol = hit.symbol;
+                const url = hit
+                    ? `/api/time-and-sales?symbol=${encodeURIComponent(hit.symbol)}&day=${day}`
+                    : `/api/time-and-sales?day=${day}&root=${encodeURIComponent(root)}&backfill=1`;
+                const body = await getJSON(`${url}&limit=${ROW_LIMIT}`);
+                e.symbol = body.symbol || (hit ? hit.symbol : null);
                 e.rows = body.rows || [];
                 e.live = false;
+                e.why = body.backfill_state || null;
                 e.state = e.rows.length ? 'ready' : 'empty';
+                // A rebuilt day is a day the archive now holds, so the cached
+                // day list is a session short.
+                if (!hit && e.rows.length) rootDays.delete(root);
                 changed();
             } catch (err) {
                 e.state = 'error';
@@ -378,6 +415,7 @@ window.MineOrderFlow = (function () {
             want, forget, front,
             rows: day => (days.get(day) || {}).rows || null,
             state: day => (days.get(day) || {}).state || 'idle',
+            why: day => (days.get(day) || {}).why || (days.get(day) || {}).error || null,
             generation: () => generation,
             coverage: () => lastCoverage,
             setListener: fn => { listener = fn; },
@@ -624,8 +662,8 @@ window.MineOrderFlow = (function () {
         for (let k = 0; k < used.length; k++) {
             const sess = used[k];
             const rows = Tape.rows(sess.key);
-            if (!rows) { missing.push({ day: sess.key, state: Tape.state(sess.key) }); continue; }
-            if (!rows.length) { missing.push({ day: sess.key, state: 'empty' }); continue; }
+            if (!rows) { missing.push({ day: sess.key, state: Tape.state(sess.key), why: Tape.why(sess.key) }); continue; }
+            if (!rows.length) { missing.push({ day: sess.key, state: 'empty', why: Tape.why(sess.key) }); continue; }
 
             // A finished session is keyed by the settings that shape it, its
             // bar count and the tape's own generation — a top-up that renumbers
@@ -647,9 +685,13 @@ window.MineOrderFlow = (function () {
             for (const key of Array.from(store.keys())) if (!live.has(key)) store.delete(key);
         }
 
-        // The newest bars are the ones anyone reads; an older one off the left
-        // of the screen is skipped in the draw anyway, but capping here keeps
-        // the array itself small on a 1-minute pane with several sessions.
+        // A ceiling on the result array only — every bar of every session asked
+        // for has already been built above, and one scrolled off the left is
+        // skipped in the draw anyway. So set it to cover the sessions wanted
+        // rather than to save work: under-setting it silently deletes the
+        // OLDEST bars, which looks exactly like a hole in the tape (reported
+        // 2026-10-01 as "9:15 to 9:28 no data" — the cap was 200 on a
+        // 214-minute session).
         const cap = Math.max(10, s('ofBars') | 0);
         return {
             bars: bars.length > cap ? bars.slice(-cap) : bars,
@@ -1180,13 +1222,21 @@ window.MineOrderFlow = (function () {
 
         const miss = (result.missing || [])[0];
         if (!result.bars.length && miss) {
+            // `why` is the server's own word on a day it could not rebuild —
+            // ICICI not connected, no 1-second history, too many days at once.
+            // Worth showing: every one of them is actionable, and "no tape"
+            // alone reads as a dead end when it usually is not.
+            const why = miss.why && /^unavailable:/.test(miss.why) ? miss.why.slice('unavailable:'.length) : null;
             return {
                 result,
                 text: miss.state === 'empty' ? `OF · no tape ${miss.day}`
                     : miss.state === 'error' ? 'OF · tape error' : 'OF · loading tape…',
                 title: miss.state === 'empty'
-                    ? `Nothing was taped for ${miss.day} — the archive only holds sessions the app watched.`
-                    : 'Reading /api/time-and-sales for the sessions on screen.',
+                    ? (why ? `No tape for ${miss.day}: ${why}. Days the app did not watch are rebuilt from `
+                           + 'ICICI 1-second history on demand, which needs an ICICI login.'
+                           : `Nothing was taped for ${miss.day}, and it could not be rebuilt from history.`)
+                    : 'Reading /api/time-and-sales for the sessions on screen — a day that was never '
+                      + 'taped is being rebuilt from 1-second history, which takes a few seconds.',
             };
         }
         if (!result.bars.length) return { result, text: '', title: '' };
@@ -1226,10 +1276,10 @@ window.MineOrderFlow = (function () {
             { key: 'ofFootprint', label: 'Draw the cells on the chart', sub: true,
               gate: 'ofCells', gateLabel: 'futures chart' },
             { key: 'ofCell', type: 'select', label: 'Cell shows', options: CELL_OPTIONS, sub: true },
-            { key: 'ofSessions', type: 'number', label: 'Sessions back (tape)', min: 1, max: 20, sub: true },
+            { key: 'ofSessions', type: 'number', label: 'Sessions back (tape)', min: 1, max: 30, sub: true },
             { key: 'ofRowStep', type: 'number', label: 'Row size in points (0 = auto)', min: 0, max: 1000, sub: true },
             { key: 'ofRowsTarget', type: 'number', label: 'Rows per bar (when auto)', min: 2, max: 60, sub: true },
-            { key: 'ofBars', type: 'number', label: 'Bars drawn (newest)', min: 10, max: 2000, sub: true },
+            { key: 'ofBars', type: 'number', label: 'Bars drawn (newest)', min: 10, max: 5000, sub: true },
             { key: 'ofOpacity', type: 'number', label: 'Cell opacity %', min: 5, max: 100, sub: true },
             { key: 'ofNumbers', label: 'Print the figures', sub: true },
             { key: 'ofPoc', label: 'Ring each bar’s POC row', color: COLORS.poc, sub: true },
