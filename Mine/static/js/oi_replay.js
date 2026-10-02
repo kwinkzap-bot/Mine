@@ -899,11 +899,13 @@ function oipApplyMineCpr(index) {
 // nothing past it is drawn. It has no per-bar lines, so there is no
 // incremental path to take: the engine's session cache is what keeps a step
 // cheap. 5-minute replays only — MineTPO.tfInfo gates it, same as Multichart.
+let oipMineTpoResult = null;
 function oipApplyMineTpo(candles) {
     if (typeof MineTPO === 'undefined' || !oipMinePane) return;
     try {
-        MineTPO.attach(oipMinePane,
-            MineTPO.compute(candles, oipInterval, oipMineEffectiveSettings(), oipMineTpoCache));
+        const tpo = MineTPO.compute(candles, oipInterval, oipMineEffectiveSettings(), oipMineTpoCache);
+        MineTPO.attach(oipMinePane, tpo);
+        oipMineTpoResult = tpo;          // ΔX target levels, see oipApplyMineOrderFlow
     } catch (e) { console.warn('[Replay] TPO:', e); }
 }
 
@@ -950,15 +952,800 @@ function oipOfCandleStyle(mode) {
     try { oipOISeries.applyOptions(styles[mode] || styles.normal); } catch (e) {}
 }
 
+/* ── ΔX Trades popup ─────────────────────────────────────────────────────
+ * One button on the replay toolbar, one popup: every Delta Extreme Breakout
+ * signal MineOrderFlow has found up to the playhead, the statistics for them,
+ * and the list of entries and exits underneath.
+ *
+ * It reads `result.signals` — it does NOT recompute anything. The engine
+ * already builds those on every `apply`, and Replay applies on every step, so
+ * the panel follows the playhead for free: step a session through and the
+ * trades fill in as they happen. That also means what the panel says and what
+ * the chart draws can never disagree.
+ *
+ * Numbers are in INDEX POINTS, which is what this chart is. Replay charts the
+ * spot index while the tape is the future's, so the deltas behind a signal are
+ * exact (they are bucketed by time) but the prices are the index's — these are
+ * the move the rule caught, not a fill, and the footer says so.
+ */
+let oipDxLast = { signals: [], bars: [], on: false };
+
+/* The option leg behind each trade, filled in on demand.
+ *
+ * Why on demand and not with the rest: every leg is read off the CONTRACT's
+ * own 1-minute candles, and only Breeze serves an expired contract, so a
+ * session of trades is a few dozen Breeze requests out of a daily quota the
+ * live algos share. Pricing on every replay step would spend it in minutes.
+ * One button, one pass, and the answers are kept per trade — a key of date,
+ * side and the two minutes — so stepping the playhead never refetches a leg
+ * that is already priced. The cache is dropped when the strike target
+ * changes, because that is a different contract. */
+const oipDxOpt = { by: new Map(), premium: 200, busy: false, error: null, lot: null };
+const oipDxOptKey = r => `${oipDxDate(r.time)}|${r.side}|${oipDxTime(r.entryTime)}|${oipDxTime(r.exitTime)}`;
+
+// The session date a bar time belongs to, as the API wants it.
+const oipDxDate = t => {
+    const d = new Date(t * 1000);          // fake-IST grid: UTC getters on purpose
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+         + `-${String(d.getUTCDate()).padStart(2, '0')}`;
+};
+
+// How many legs one request asks for. The server's own cap is 60; this is
+// smaller so the panel fills in visibly rather than sitting on one long
+// request, and so a failure costs one batch instead of the session.
+const OIP_DX_BATCH = 20;
+
+// Price every trade on screen that has an entry and an exit and no leg yet,
+// a batch at a time until there are none left or one fails.
+async function oipDxPriceOptions(rows) {
+    if (oipDxOpt.busy) return;
+    const pending = () => rows.filter(r => r.entry != null && r.exitTime != null
+                                           && !oipDxOpt.by.has(oipDxOptKey(r)));
+    while (pending().length) {
+        const before = pending().length;
+        await oipDxPriceBatch(pending().slice(0, OIP_DX_BATCH));
+        // Stop on an error, and stop if a pass made no progress — a leg the
+        // server cannot price comes back with its own `error` and is cached
+        // as such, so this only trips if nothing came back at all.
+        if (oipDxOpt.error || pending().length >= before) break;
+    }
+}
+
+async function oipDxPriceBatch(want) {
+    if (!want.length || oipDxOpt.busy) return;
+    oipDxOpt.busy = true; oipDxOpt.error = null;
+    oipDxRender();
+    try {
+        const res = await fetch('/api/trend/option-legs', {
+            method: 'POST', credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': (document.querySelector('meta[name="csrf-token"]') || {}).content || '',
+            },
+            body: JSON.stringify({
+                symbol: oipSymbol, premium: oipDxOpt.premium,
+                // The bar length and the chart's own series, so the server can
+                // take each premium at the MINUTE the trade entered and left
+                // rather than at the stamp of the 5-minute bar it happened in.
+                // Without them the option is bought before its own breakout
+                // and sold before its own stop — which is why the option total
+                // was beating the index total.
+                span_min: Math.max(1, Math.round((MineCPR.SECONDS[oipInterval] || 300) / 60)),
+                source: oipChartSource === 'future' ? 'future' : 'spot',
+                trades: want.map(r => ({
+                    key: oipDxOptKey(r), date: oipDxDate(r.time), side: r.side,
+                    level: r.entry, entry_time: oipDxTime(r.entryTime),
+                    exit_time: oipDxTime(r.exitTime), exit_price: r.exit,
+                })),
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+            // The one failure worth its own wording: the contract has expired
+            // and only Breeze holds its candles.
+            // The ICICI session is a DAILY login, so this is the failure the
+            // column will hit most mornings. Say what to do about it and link
+            // straight there, rather than leaving a row of dashes that reads
+            // like the feature is broken.
+            oipDxOpt.error = data.icici_required
+                ? 'ICICI (Breeze) session not live — option premiums come from the contract\u2019s own '
+                  + 'candles and only Breeze serves an expired contract. '
+                  + '<a href="/auth/login/icici" target="_blank" rel="noopener">Log in to ICICI</a>, '
+                  + 'then press the button again.'
+                : DataGrid.escape(data.error || `option pricing failed (${res.status})`);
+            oipDxOpt.errorHtml = !!data.icici_required;
+        } else {
+            oipDxOpt.lot = data.lot || null;
+            for (const leg of data.legs || []) if (leg.key) oipDxOpt.by.set(leg.key, leg);
+        }
+    } catch (e) {
+        // Everything written into oipDxOpt.error is HTML from here on (the
+        // ICICI branch carries a link), so anything from the wire is escaped
+        // where it is set, and a literal like this one needs no escaping.
+        oipDxOpt.error = 'option pricing request failed';
+    } finally {
+        oipDxOpt.busy = false;
+        oipDxRender();
+    }
+}
+
+// The open trade's mark, and the glyphs the chart uses, so the two read alike.
+// Short labels on purpose: the badge is the narrowest column that still has
+// to be readable, and "VOID · CUM DELTA" was being cut off by the panel edge.
+// The reason goes in the cell's tooltip instead.
+const OIP_DX_OUTCOME = {
+    target:  { label: 'Target',  tone: 'pos'  },
+    stop:    { label: 'Stop',    tone: null   },   // a trailed stop is often a win
+    exit:    { label: 'ΔX',      tone: null   },
+    live:    { label: 'Open',    tone: 'warn' },
+    close:   { label: 'Close',   tone: null   },   // still on at the session's end
+    armed:   { label: 'Armed',   tone: 'muted' },
+    void:    { label: 'Void',    tone: 'muted' },
+    expired: { label: 'Expired', tone: 'muted' },
+};
+const OIP_DX_WHY = {
+    target:  'Reached the target',
+    stop:    'Stopped out — the trailing stop if it moved, else the signal candle\u2019s other side',
+    exit:    'The other side printed an unusual delta',
+    live:    'Still running at the playhead, marked to the last played bar',
+    close:   'Still on when the session ended, so it is priced at that session\u2019s last bar — this rule carries nothing overnight',
+    armed:   'Waiting for the break; the level is still armed',
+    void:    'Cancelled before any entry',
+    expired: 'The level was never broken inside its window',
+};
+
+const OIP_DX_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const oipDxTime = t => {
+    if (t == null) return null;
+    const d = new Date(t * 1000);          // fake-IST grid: UTC getters on purpose
+    return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+};
+// The signal column carries the DATE as well: the list spans every session on
+// the chart, and three sessions of 12:05s are indistinguishable without it.
+const oipDxStamp = t => {
+    if (t == null) return null;
+    const d = new Date(t * 1000);
+    return `${String(d.getUTCDate()).padStart(2, '0')} ${OIP_DX_MON[d.getUTCMonth()]} ${oipDxTime(t)}`;
+};
+const oipDxNum = (v, dp) => v == null || !isFinite(v) ? null : v.toFixed(dp == null ? 2 : dp);
+
+// One row per signal, taken or not. A trade still running is marked to the
+// last drawn bar's close so the panel has a number for it; `open` says so.
+function oipDxRows(signals, bars) {
+    const last = bars && bars.length ? bars[bars.length - 1] : null;
+    return (signals || []).map((s, i) => {
+        const taken = s.entry != null;
+        // `sessionEnd` is the engine saying this one was still on when its
+        // session closed: it is priced at that session's last bar, not marked
+        // to a bar from another day.
+        const open = taken && s.state === 'live' && !s.sessionEnd;
+        const exit = s.outPrice != null ? s.outPrice : (open && last ? last.c : null);
+        const pts = taken && exit != null
+            ? (s.dir > 0 ? exit - s.entry : s.entry - exit) : null;
+        // Risk is measured off the stop the trade ENTERED on, which is where
+        // the trail started — not the stop it finished on, or every trailed
+        // trade would read as a different R than it was taken for.
+        const stop0 = s.trail && s.trail.length ? s.trail[0].price : s.stop;
+        const risk = taken ? Math.abs(s.entry - stop0) : null;
+        return {
+            n: i + 1,
+            time: s.time, side: s.dir > 0 ? 'BUY' : 'SELL',
+            state: s.sessionEnd ? 'close' : s.state, open,
+            entryTime: s.trigTime, entry: taken ? s.entry : null,
+            exitTime: s.outTime, exit,
+            stop0, stopNow: s.stop,
+            trail: s.trail ? s.trail.length - 1 : 0,
+            target: s.target != null ? s.target : s.armTarget,
+            targetFrom: s.targetFrom || s.armTargetFrom,
+            points: pts,
+            r: pts != null && risk > 0 ? pts / risk : null,
+            repeats: s.repeats || 0,
+            why: s.why || null,
+        };
+    });
+}
+
+function oipDxSummary(rows) {
+    const taken = rows.filter(r => r.points != null);
+    const closed = taken.filter(r => !r.open);
+    const wins = closed.filter(r => r.points > 0);
+    const losses = closed.filter(r => r.points <= 0);
+    const sum = a => a.reduce((t, r) => t + r.points, 0);
+    const gross = sum(wins), bad = -sum(losses);
+    return {
+        signals: rows.length,
+        taken: taken.length,
+        longs: taken.filter(r => r.side === 'BUY').length,
+        shorts: taken.filter(r => r.side === 'SELL').length,
+        untaken: rows.length - taken.length,
+        open: taken.filter(r => r.open).length,
+        closed: closed.length,
+        wins: wins.length, losses: losses.length,
+        winRate: closed.length ? wins.length / closed.length * 100 : null,
+        net: taken.length ? sum(taken) : null,
+        netClosed: closed.length ? sum(closed) : null,
+        avgWin: wins.length ? gross / wins.length : null,
+        avgLoss: losses.length ? bad / losses.length : null,
+        // Infinity when nothing was lost yet says more than a blank does.
+        factor: bad > 0 ? gross / bad : (gross > 0 ? Infinity : null),
+        expectancy: closed.length ? sum(closed) / closed.length : null,
+        best: closed.length ? Math.max(...closed.map(r => r.points)) : null,
+        worst: closed.length ? Math.min(...closed.map(r => r.points)) : null,
+        avgR: closed.filter(r => r.r != null).length
+            ? closed.filter(r => r.r != null).reduce((t, r) => t + r.r, 0)
+              / closed.filter(r => r.r != null).length : null,
+    };
+}
+
+function oipDxCard(label, value, sub, tone, title) {
+    const cls = tone === 'pos' ? ' oip-dx-pos' : tone === 'neg' ? ' oip-dx-neg' : '';
+    const tip = title ? ` title="${DataGrid.escape(title)}"` : '';
+    return `<div class="oip-dx-card"${tip}>
+        <div class="oip-dx-card-label">${DataGrid.escape(label)}</div>
+        <div class="oip-dx-card-value${cls}">${DataGrid.escape(value)}</div>
+        <div class="oip-dx-card-sub">${sub == null ? '&nbsp;' : DataGrid.escape(sub)}</div>
+    </div>`;
+}
+
+// Eight cards on ONE line (asked for 2026-10-01), so each one is a small
+// label / value / sub stack rather than a tile. Every value is kept short
+// enough to survive an eighth of the panel: percentages whole, points to one
+// decimal, R to two.
+// What a round trip on one lot of this leg costs, off the app's own rate card
+// (ZerodhaCharges, calibrated against Zerodha's sample option contract note —
+// the same module the live-algo tabs net their P&L with). The option leg is
+// always BOUGHT, so `short` is false whichever way the index trade faced.
+// ₹ in the Indian short scale. A card is an eighth of the panel wide and a
+// 238-leg set runs to lakhs, which was being cut off mid-number.
+function oipDxRs(v) {
+    const n = Math.abs(v);
+    const s = v < 0 ? '\u2212\u20b9' : '\u20b9';
+    if (n >= 1e7) return s + (n / 1e7).toFixed(2) + 'Cr';
+    if (n >= 1e5) return s + (n / 1e5).toFixed(2) + 'L';
+    if (n >= 1e3) return s + (n / 1e3).toFixed(1) + 'K';
+    return s + Math.round(n).toLocaleString('en-IN');
+}
+const oipDxRsFull = v => (v < 0 ? '\u2212\u20b9' : '\u20b9')
+    + Math.abs(Math.round(v)).toLocaleString('en-IN');
+
+function oipDxCharges(leg, lot) {
+    if (typeof ZerodhaCharges === 'undefined' || !leg || !lot
+        || leg.entry == null || leg.exit == null) return null;
+    return ZerodhaCharges.forTrade({ segment: 'option', entry: leg.entry,
+                                     exit: leg.exit, qty: lot, short: false });
+}
+
+function oipDxCards(s, opt) {
+    const pts = v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1);
+    const sign = v => v == null ? null : v > 0 ? 'pos' : v < 0 ? 'neg' : null;
+    // Win % and loss % of the trades that actually FINISHED — an armed level
+    // or a voided one was never a trade, and an open one has not decided yet.
+    const lossRate = s.winRate == null ? null : 100 - s.winRate;
+    return '<div class="oip-dx-cards">'
+        + oipDxCard('Signals', String(s.signals),
+                    `${s.taken} taken · ${s.untaken} not`)
+        + oipDxCard('Trades', String(s.taken),
+                    `${s.longs}L · ${s.shorts}S${s.open ? ` · ${s.open} open` : ''}`)
+        + oipDxCard('Win / Loss %',
+                    s.winRate == null ? '—'
+                        : `${s.winRate.toFixed(0)}% / ${lossRate.toFixed(0)}%`,
+                    `${s.wins}W · ${s.losses}L of ${s.closed}`,
+                    s.winRate == null ? null : s.winRate >= 50 ? 'pos' : 'neg')
+        + oipDxCard('Net points', pts(s.net),
+                    s.open ? `${pts(s.netClosed)} closed` : 'closed trades', sign(s.net))
+        + oipDxCard('Expectancy', pts(s.expectancy), 'per trade', sign(s.expectancy))
+        + oipDxCard('Avg R', s.avgR == null ? '—' : (s.avgR > 0 ? '+' : '') + s.avgR.toFixed(2) + 'R',
+                    'reward ÷ risk', sign(s.avgR))
+        + oipDxCard('Avg win / loss',
+                    (s.avgWin == null ? '—' : '+' + s.avgWin.toFixed(1))
+                    + ' / ' + (s.avgLoss == null ? '—' : '−' + s.avgLoss.toFixed(1)),
+                    s.factor == null ? 'no closed trades'
+                        : s.factor === Infinity ? 'nothing lost yet'
+                        : `factor ${s.factor.toFixed(2)}`)
+        + oipDxCard('Best / Worst',
+                    pts(s.best) + ' / ' + pts(s.worst), 'single trade')
+        // The ninth card: the same trades on the OPTION they would have been
+        // placed on. Premium points, not index points — two different
+        // currencies, never added together, which is why this is its own card
+        // beside Net Points rather than folded into it.
+        // Net of BROKERAGE, because that is the number that decides whether
+        // the rule made money: on 1 lot these legs grossed ₹13,163 and cost
+        // ₹569 to trade. Premium points and the gross are in the tooltip; the
+        // per-leg charge is in the column's own tooltip.
+        + oipDxCard('Opt P&L (net)',
+                    opt && opt.legs
+                        ? (opt.money == null ? (opt.net > 0 ? '+' : '') + opt.net.toFixed(1)
+                           : (opt.money > 0 ? '+' : '') + oipDxRs(opt.money))
+                        : '—',
+                    opt && opt.legs
+                        ? (opt.charges != null
+                           ? `${opt.legs} legs · ${oipDxRs(opt.charges)} brokerage`
+                           : `${opt.legs} leg${opt.legs === 1 ? '' : 's'} · 1 lot`)
+                        : (opt && opt.pending ? `${opt.pending} to price` : 'not priced'),
+                    opt && opt.legs ? sign(opt.money == null ? opt.net : opt.money) : null,
+                    opt && opt.legs && opt.charges != null
+                        ? `${opt.legs} legs, 1 lot each: ${opt.net > 0 ? '+' : ''}${opt.net.toFixed(2)} `
+                          + `premium points = ${oipDxRsFull(opt.gross)} gross, less `
+                          + `${oipDxRsFull(opt.charges)} total brokerage and charges `
+                          + `(brokerage, STT, exchange txn, GST, stamp, SEBI — Zerodha’s option `
+                          + `rate card) = ${oipDxRsFull(opt.money)} net.`
+                        : null)
+        + '</div>';
+}
+
+function oipDxGrid(rows) {
+    const price = v => v == null ? '—' : v.toFixed(2);
+    return DataGrid.render({
+        rows,
+        empty: 'No ΔX signals in the bars played so far',
+        columns: [
+            { key: 'time', label: 'Signal', format: oipDxStamp, strong: true },
+            { key: 'side', label: 'Side', strong: true,
+              tone: v => v === 'BUY' ? 'pos' : 'neg' },
+            { key: 'entryTime', label: 'In', format: oipDxTime },
+            { key: 'entry', label: 'Entry', align: 'right', format: price },
+            { key: 'exitTime', label: 'Out', format: oipDxTime },
+            { key: 'exit', label: 'Exit', align: 'right', format: price },
+            { key: 'stop0', label: 'Stop', align: 'right', format: price,
+              // DataGrid hands a cell callback (value, row) — not (row).
+              // Getting that backwards reads properties off the VALUE, which
+              // is silently wrong for a number and throws on a null cell.
+              title: (v, r) => r.trail ? `Entered on ${r.stop0.toFixed(2)}, trailed ${r.trail} time(s) to ${r.stopNow.toFixed(2)}`
+                                  : 'The signal candle’s other side' },
+            { key: 'trail', label: 'Trail', align: 'right',
+              format: v => v ? '↑' + v : '—',
+              thTitle: 'How many times the stop was moved after the entry.\n'
+                     + 'A bar that closes against the trade AND prints a notable\n'
+                     + 'opposing delta moves it; it never loosens.',
+              title: (v, r) => v ? `Entered on ${r.stop0.toFixed(2)}, moved ${v} time(s) to ${r.stopNow.toFixed(2)}`
+                                 : 'The stop never moved' },
+            { key: 'target', label: 'Target', align: 'right',
+              format: (v) => v == null ? '—' : v.toFixed(2),
+              title: (v, r) => r.targetFrom ? `from ${r.targetFrom}` : '' },
+            { key: 'points', label: 'Points', align: 'right', strong: true,
+              format: v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(1),
+              tone: DataGrid.sign,
+              thTitle: 'What the move was worth, in index points.\n'
+                     + 'Entry to exit, the right way round for the side.' },
+            { key: 'r', label: 'R', align: 'right',
+              format: v => v == null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2),
+              tone: DataGrid.sign,
+              // Asked what this column was, 2026-10-01. It is the one number
+              // that lets a 6-point trade and a 130-point one be compared.
+              thTitle: 'R = the result in multiples of the RISK the trade was taken for.\n'
+                     + 'Risk is entry minus the stop it entered on (the signal candle\u2019s\n'
+                     + 'other side), so +2R made twice what it stood to lose and \u22121R is\n'
+                     + 'a full stop-out. Points alone cannot be compared across trades\n'
+                     + 'with different stop distances; R can.',
+              title: (v, r) => r.entry == null ? ''
+                  : `${Math.abs(r.entry - r.stop0).toFixed(1)} pts at risk (entry ${r.entry.toFixed(2)} vs stop ${r.stop0.toFixed(2)})` },
+            // The same trade on the OPTION it would have been taken on: a
+            // CALL for a BUY, a PUT for a SELL, both bought, at the strike
+            // whose premium was nearest the target at the entry minute. Empty
+            // until the button above has priced them — see oipDxPriceOptions.
+            { key: 'opt', label: 'Opt P&L', align: 'right', strong: true,
+              thTitle: 'What the OPTION leg did over the same entry and exit.\n'
+                     + 'CE for a BUY, PE for a SELL, both bought, so it is exit\n'
+                     + 'premium minus entry premium either way. The strike is the\n'
+                     + 'one whose premium at the entry minute was nearest the\n'
+                     + 'target (\u2248200 by default).\n'
+                     + 'Read off the contract\u2019s own 1-minute candles — needs an\n'
+                     + 'ICICI login, since only Breeze serves an expired contract.',
+              format: (v) => {
+                  if (!v) return '—';
+                  if (v.error) return '—';
+                  if (v.pnl == null) return '…';
+                  return (v.pnl > 0 ? '+' : '') + v.pnl.toFixed(2);
+              },
+              tone: (v) => v && v.pnl != null ? (v.pnl > 0 ? 'pos' : v.pnl < 0 ? 'neg' : null) : null,
+              title: (v) => {
+                  if (!v) return 'Not priced yet';
+                  if (v.error) return v.error;
+                  let t = `${v.strike}${v.option_type} exp ${v.expiry}: ${v.entry} → ${v.exit}`;
+                  if (v.pnl_inr != null) t += ` · ₹${v.pnl_inr.toLocaleString('en-IN')} a lot gross`;
+                  const c = oipDxCharges(v, oipDxOpt.lot);
+                  if (c != null && v.pnl_inr != null) {
+                      t += `, less ₹${c.toFixed(2)} charges`
+                         + ` = ₹${Math.round(v.pnl_inr - c).toLocaleString('en-IN')} net`;
+                  }
+                  return t;
+              } },
+            { key: 'state', label: 'Outcome',
+              badge: (v, r) => r.open ? 'warn' : (OIP_DX_OUTCOME[v] || {}).tone
+                               || (r.points > 0 ? 'pos' : r.points < 0 ? 'neg' : 'muted'),
+              // Label only — the reason is a tooltip. Printed inline it was
+              // wider than the column and the panel clipped it.
+              format: (v) => (OIP_DX_OUTCOME[v] || {}).label || v,
+              title: (v, r) => (OIP_DX_WHY[v] || '') + (r.why ? ` (${r.why})` : '') },
+        ],
+    });
+}
+
+/* ── Equity curve + P&L breakdown ────────────────────────────────────────
+ * The same pair of charts the EMA Confluence tab draws (see
+ * `_emacRenderEquityCurve` / `_emacRenderPeriodBreakdown` in
+ * algo_ema_confluence.js, which in turn follow the Backtest page) — same
+ * Chart.js 4, same shapes, same value labels over the bars — so a ΔX set
+ * reads like every other P&L in this app rather than like a second dialect.
+ *
+ * WHICH P&L. The panel holds two of them and they are different currencies:
+ * index POINTS, and the option leg's ₹ net of brokerage. The curve plots the
+ * option money when any leg has been priced, because that is the money that
+ * would have landed, and index points when none has. The header says which,
+ * and the two are never summed or silently swapped mid-series.
+ *
+ * It starts at ZERO and plots cumulative P&L, not a portfolio value: there is
+ * no capital base here to take a percentage of, and inventing one (the
+ * Backtest page has a real one) would put a fake return on the header.
+ */
+let _oipDxEquityChart = null, _oipDxPeriodChart = null;
+let _oipDxPeriod = 'daily';     // a replay rarely spans months; days are the useful bucket
+let _oipDxChartSig = '';        // redraw only when the data actually moved
+
+const _OIP_DX_CHART_THEME = {
+    light:  { tick: '#374151', grid: 'rgba(15, 23, 42, 0.05)' },
+    dark:   { tick: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)' },
+    forest: { tick: '#6ba88f', grid: 'rgba(16, 185, 129, 0.08)' },
+    cream:  { tick: '#7c7267', grid: 'rgba(180, 83, 9, 0.06)' },
+    ocean:  { tick: '#475569', grid: 'rgba(2, 132, 199, 0.06)' },
+};
+const _oipDxChartColors = () =>
+    (window.AppTheme && _OIP_DX_CHART_THEME[window.AppTheme.getActiveTheme()]) || _OIP_DX_CHART_THEME.ocean;
+
+// A trade's contribution to the curve, in whatever currency the curve is in.
+const _oipDxValue = (r, money) => money
+    ? (r.opt && r.opt.pnl != null && oipDxOpt.lot
+       ? r.opt.pnl * oipDxOpt.lot - (oipDxCharges(r.opt, oipDxOpt.lot) || 0) : null)
+    : (r.points != null ? r.points : null);
+
+const _oipDxFmtCompact = (v, money) => {
+    const abs = Math.abs(v), sign = v >= 0 ? '+' : '−';
+    if (!money) return sign + abs.toFixed(1);
+    if (abs >= 1e5) return sign + '₹' + (abs / 1e5).toFixed(1) + 'L';
+    if (abs >= 1e3) return sign + '₹' + (abs / 1e3).toFixed(1) + 'K';
+    return sign + '₹' + Math.round(abs);
+};
+
+const _oipDxBarLabels = {
+    id: 'oipDxBarLabels',
+    afterDatasetsDraw(chart) {
+        const { ctx, data } = chart;
+        const money = !!(chart.options.plugins.oipDxMoney);
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        chart.getDatasetMeta(0).data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            if (v >= 0) { ctx.textBaseline = 'bottom'; ctx.fillText(_oipDxFmtCompact(v, money), bar.x, bar.y - 3); }
+            else        { ctx.textBaseline = 'top';    ctx.fillText(_oipDxFmtCompact(v, money), bar.x, bar.y + 3); }
+        });
+        ctx.restore();
+    },
+};
+
+// Trades in the order they happened — the panel's grid is newest-first, which
+// is right for reading and backwards for a curve.
+function _oipDxChronological(rows) {
+    return rows.filter(r => r.points != null && !r.open)
+               .slice().sort((a, b) => a.time - b.time);
+}
+
+function _oipDxPeriodKey(t, period) {
+    const d = new Date(t * 1000);          // fake-IST grid: UTC getters on purpose
+    const y = d.getUTCFullYear(), m = d.getUTCMonth();
+    if (period === 'daily') return oipDxDate(t);
+    if (period === 'weekly') {
+        // The Monday of that week, so a key sorts as a date.
+        const day = (d.getUTCDay() + 6) % 7;
+        return oipDxDate(t - day * 86400);
+    }
+    if (period === 'monthly') return `${y}-${String(m + 1).padStart(2, '0')}`;
+    if (period === 'quarterly') return `${y}-Q${Math.floor(m / 3) + 1}`;
+    if (period === 'halfyearly') return `${y}-H${m < 6 ? 1 : 2}`;
+    return String(y);
+}
+
+function _oipDxPeriodLabel(key, period) {
+    if (period === 'daily' || period === 'weekly') {
+        const d = new Date(key + 'T00:00:00Z');
+        const s = `${String(d.getUTCDate()).padStart(2, '0')} ${OIP_DX_MON[d.getUTCMonth()]}`;
+        return period === 'weekly' ? 'W ' + s : s;
+    }
+    if (period === 'monthly') {
+        const [y, m] = key.split('-');
+        return `${OIP_DX_MON[+m - 1]} ${y.slice(2)}`;
+    }
+    if (period === 'quarterly' || period === 'halfyearly') {
+        const [y, p] = key.split('-');
+        return `${p} '${y.slice(2)}`;
+    }
+    return key;
+}
+
+function oipDxDrawCharts(rows) {
+    if (typeof Chart === 'undefined') return;
+    const trades = _oipDxChronological(rows);
+    // Money whenever a leg has been priced; points until then.
+    const money = trades.some(r => r.opt && r.opt.pnl != null) && !!oipDxOpt.lot;
+    const vals = trades.map(r => _oipDxValue(r, money)).filter(v => v != null);
+    const sig = `${money}|${_oipDxPeriod}|${trades.length}|${vals.length}|`
+              + `${vals.reduce((t, v) => t + v, 0).toFixed(2)}|${isDarkish()}`;
+    if (sig === _oipDxChartSig) return;        // nothing moved; leave the canvases alone
+    _oipDxChartSig = sig;
+
+    const C = _oipDxChartColors();
+    const unit = money ? '₹' : 'pts';
+
+    // ── the curve ────────────────────────────────────────────────────────
+    const head = document.getElementById('oipDxEquityTotal');
+    const labels = ['Start'], series = [0];
+    let run = 0, n = 0;
+    for (const r of trades) {
+        const v = _oipDxValue(r, money);
+        if (v == null) continue;
+        run += v; n += 1;
+        labels.push('T' + n);
+        series.push(money ? Math.round(run) : +run.toFixed(1));
+    }
+    const up = run >= 0;
+    if (head) {
+        head.textContent = n ? _oipDxFmtCompact(run, money) + (money ? '' : ' pts')
+                               + `  (${n} trade${n === 1 ? '' : 's'}, ${money ? 'option, net of brokerage' : 'index points'})`
+                             : 'no closed trades yet';
+        head.style.color = n ? (up ? '#00c853' : '#ff1744') : '';
+    }
+    if (_oipDxEquityChart) { _oipDxEquityChart.destroy(); _oipDxEquityChart = null; }
+    const eq = document.getElementById('oipDxEquityChart');
+    if (eq && n) {
+        _oipDxEquityChart = new Chart(eq.getContext('2d'), {
+            type: 'line',
+            data: { labels, datasets: [{
+                label: money ? 'Cumulative ₹ (net)' : 'Cumulative points',
+                data: series,
+                borderColor: up ? '#2962ff' : '#ff1744',
+                backgroundColor: up ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)',
+                fill: true, tension: 0.25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
+            }] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: c => `${unit === '₹' ? '₹' : ''}`
+                        + c.parsed.y.toLocaleString('en-IN') + (unit === 'pts' ? ' pts' : '') } },
+                },
+                scales: {
+                    x: { ticks: { color: C.tick, font: { size: 9 }, maxTicksLimit: 14 },
+                         grid: { display: false } },
+                    y: { ticks: { color: C.tick, font: { size: 9 },
+                                  callback: v => money ? _oipDxFmtCompact(v, true) : v },
+                         grid: { color: C.grid } },
+                },
+            },
+        });
+    }
+
+    // ── the breakdown ────────────────────────────────────────────────────
+    const groups = new Map();
+    for (const r of trades) {
+        const v = _oipDxValue(r, money);
+        if (v == null) continue;
+        const k = _oipDxPeriodKey(r.time, _oipDxPeriod);
+        groups.set(k, (groups.get(k) || 0) + v);
+    }
+    const keys = Array.from(groups.keys()).sort();
+    const values = keys.map(k => money ? Math.round(groups.get(k)) : +groups.get(k).toFixed(1));
+    if (_oipDxPeriodChart) { _oipDxPeriodChart.destroy(); _oipDxPeriodChart = null; }
+    const inner = document.getElementById('oipDxPeriodInner');
+    const bar = document.getElementById('oipDxPeriodChart');
+    if (inner && bar && keys.length) {
+        // A bar needs room for its own label; past that the wrap scrolls.
+        const MIN_BAR_PX = 46;
+        inner.style.minWidth = Math.max(inner.parentElement.clientWidth, keys.length * MIN_BAR_PX) + 'px';
+        _oipDxPeriodChart = new Chart(bar.getContext('2d'), {
+            type: 'bar',
+            data: { labels: keys.map(k => _oipDxPeriodLabel(k, _oipDxPeriod)), datasets: [{
+                data: values,
+                backgroundColor: values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)'),
+                borderColor: values.map(v => v >= 0 ? 'rgba(34,197,94,.90)' : 'rgba(239,68,68,.90)'),
+                borderWidth: 1, borderRadius: 3,
+                // A two-session replay otherwise draws two slabs the width of
+                // the panel; the reference charts are bars, not blocks.
+                maxBarThickness: 120,
+            }] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                layout: { padding: { top: 14, bottom: 14 } },
+                plugins: {
+                    legend: { display: false },
+                    oipDxMoney: money,
+                    tooltip: { callbacks: { label: c => _oipDxFmtCompact(c.parsed.y, money) } },
+                },
+                scales: {
+                    x: { ticks: { color: C.tick, font: { size: 9 } }, grid: { display: false } },
+                    y: { ticks: { color: C.tick, font: { size: 9 },
+                                  callback: v => money ? _oipDxFmtCompact(v, true) : v },
+                         grid: { color: C.grid } },
+                },
+            },
+            plugins: [_oipDxBarLabels],
+        });
+    }
+}
+
+// The popup is redrawn wholesale on every replay step, so the charts' canvases
+// are new elements each time and the signature above is what stops them being
+// rebuilt for nothing.
+function oipDxChartsHtml() {
+    const tabs = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'],
+                  ['quarterly', '3 Months'], ['halfyearly', '6 Months'], ['yearly', 'Yearly']];
+    return `<div class="oip-dx-chart-block">
+        <div class="oip-dx-chart-head">
+            <span class="oip-dx-card-label">Equity curve</span>
+            <span id="oipDxEquityTotal" class="oip-dx-chart-total"></span>
+        </div>
+        <div class="oip-dx-equity-wrap"><canvas id="oipDxEquityChart"></canvas></div>
+    </div>
+    <div class="oip-dx-chart-block">
+        <div class="oip-dx-chart-head">
+            <span class="oip-dx-card-label">P&amp;L breakdown</span>
+            <span class="oip-dx-tabs">${tabs.map(([v, l]) =>
+                `<button type="button" class="oip-dx-tab${v === _oipDxPeriod ? ' active' : ''}" data-period="${v}">${l}</button>`).join('')}</span>
+        </div>
+        <div class="oip-dx-period-wrap"><div id="oipDxPeriodInner" class="oip-dx-period-inner">
+            <canvas id="oipDxPeriodChart"></canvas>
+        </div></div>
+    </div>`;
+}
+
+const isDarkish = () => {
+    try { const t = window.AppTheme && window.AppTheme.getActiveTheme(); return t === 'dark' || t === 'forest'; }
+    catch (e) { return false; }
+};
+
+// Rebuild the panel from whatever the last apply() produced. Cheap enough to
+// run on every replay step while it is open — a session is a few dozen rows.
+function oipDxRender() {
+    const body = document.getElementById('oipDxTradesBody');
+    const meta = document.getElementById('oipDxTradesMeta');
+    if (!body || typeof DataGrid === 'undefined') return;
+    // Newest session at the top (asked for 2026-10-01): the list is read for
+    // what just happened, and on a three-session chart the morning of the
+    // oldest day is the last thing anyone wants to see first.
+    const rows = oipDxRows(oipDxLast.signals, oipDxLast.bars).sort((a, b) => b.time - a.time);
+    for (const r of rows) r.opt = oipDxOpt.by.get(oipDxOptKey(r)) || null;
+    oipDxLast.rows = rows;          // what the opener hands to the option pricer
+    const s = oipDxSummary(rows);
+    if (meta) meta.textContent = oipDxLast.on
+        ? `${s.taken} trade${s.taken === 1 ? '' : 's'} · ${s.signals} signal${s.signals === 1 ? '' : 's'}`
+        : '';
+    if (!oipDxLast.on) {
+        body.innerHTML = '<div class="oip-dx-empty">Delta Extreme Breakout is off.<br>'
+            + 'Turn on <b>Order flow footprint</b> and <b>Unusual Max/Min Delta breakout</b> '
+            + 'in the Indicators popup.</div>';
+        return;
+    }
+    // Option leg total, for the trades that have one — the same sum as Net
+    // Points but on the contract the trade would actually have been placed
+    // on, and in PREMIUM points. It has a card of its own, so it is worked
+    // out before the cards are built.
+    const priced = rows.map(r => r.opt).filter(o => o && o.pnl != null);
+    const optNet = priced.length ? priced.reduce((t, o) => t + o.pnl, 0) : null;
+    const pending = rows.filter(r => r.entry != null && r.exitTime != null
+                                     && !oipDxOpt.by.has(oipDxOptKey(r))).length;
+    // …and in money, after what the round trips cost. One lot per trade:
+    // the panel is reading a rule, not a position size.
+    const lot = oipDxOpt.lot;
+    let charges = null, gross = null, money = null;
+    if (priced.length && lot) {
+        gross = optNet * lot;
+        const each = priced.map(o => oipDxCharges(o, lot));
+        if (each.every(c => c != null)) {
+            charges = each.reduce((t, c) => t + c, 0);
+            money = gross - charges;
+        }
+    }
+    body.innerHTML = oipDxCards(s, { legs: priced.length, net: optNet, lot,
+                                     gross, charges, money, pending })
+        + `<div class="oip-dx-tools">
+             <label>Strike ≈
+               <select id="oipDxPremium" class="oip-select oip-select--xs">
+                 ${[150, 200, 250, 300].map(p => `<option value="${p}"${p === oipDxOpt.premium ? ' selected' : ''}>₹${p}</option>`).join('')}
+               </select>
+             </label>
+             <button type="button" id="oipDxPriceBtn" class="oip-btn"${oipDxOpt.busy || !pending ? ' disabled' : ''}>
+               ${oipDxOpt.busy ? `Pricing… ${pending} left` : pending ? `Price ${pending} option leg${pending === 1 ? '' : 's'}` : 'Option legs priced'}
+             </button>
+             ${oipDxOpt.error ? `<span class="oip-dx-card-sub oip-dx-neg">${oipDxOpt.error}</span>` : ''}
+           </div>`
+        + oipDxChartsHtml()
+        + `<div class="oip-dx-list">${oipDxGrid(rows)}</div>`
+        + '<div class="oip-dx-card-sub" style="padding:6px 2px 0;">'
+        + 'Index points, from the rule the chart draws — not fills. Trades are squared off at '
+        + '15:15 and nothing is carried overnight. Opt P&L is the premium move on the strike '
+        + 'nearest the target at entry.</div>';
+
+    // The canvases only exist once the HTML above is in the document.
+    _oipDxChartSig = '';            // new canvases — the old signature is void
+    oipDxDrawCharts(rows);
+    for (const tab of body.querySelectorAll('.oip-dx-tab')) {
+        tab.addEventListener('click', () => {
+            _oipDxPeriod = tab.dataset.period;
+            oipDxRender();
+        });
+    }
+
+    const btn = document.getElementById('oipDxPriceBtn');
+    if (btn) btn.addEventListener('click', () => oipDxPriceOptions(rows));
+    const sel = document.getElementById('oipDxPremium');
+    if (sel) sel.addEventListener('change', () => {
+        // A different target is a different contract, so nothing already
+        // priced still applies.
+        oipDxOpt.premium = parseInt(sel.value, 10) || 200;
+        oipDxOpt.by.clear(); oipDxOpt.error = null;
+        oipDxRender();
+    });
+}
+
+// Called by oipApplyMineOrderFlow on every step, so the count on the button is
+// live even while the popup is shut.
+function oipDxUpdate(result) {
+    const on = !!(result && result.settings && result.settings.ofSig && result.settings.of);
+    oipDxLast = { signals: (result && result.signals) || [], bars: (result && result.bars) || [], on };
+    const pill = document.getElementById('oipDxTradesCount');
+    if (pill) {
+        const n = on ? oipDxLast.signals.filter(x => x.entry != null).length : 0;
+        pill.textContent = String(n);
+        pill.hidden = !n;
+    }
+    const popup = document.getElementById('oipDxTradesPopup');
+    if (popup && !popup.classList.contains('hidden')) oipDxRender();
+}
+
+function oipDxInit() {
+    const btn = document.getElementById('oipDxTradesBtn');
+    const popup = document.getElementById('oipDxTradesPopup');
+    if (!btn || !popup) return;
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        popup.classList.toggle('hidden');
+        if (!popup.classList.contains('hidden')) {
+            oipDxRender();
+            // Fill the option column by itself. Opening the panel is already a
+            // deliberate act, which is the line this stays on the right side
+            // of: it is NOT priced on a replay step, where it would spend the
+            // Breeze quota a bar at a time. Legs already priced are cached, so
+            // re-opening costs nothing and only new trades are fetched.
+            oipDxPriceOptions(oipDxLast.rows || []);
+            // The toolbar's own placement helper: flips the panel left of the
+            // button when it would run off the window, pins it to the viewport
+            // when that is not enough, and caps its height to the room there is.
+            if (typeof oipPlaceIndicatorPopup === 'function') oipPlaceIndicatorPopup(popup);
+        }
+    });
+    // Same dismissal as the Indicators popup: anywhere outside it.
+    document.addEventListener('click', e => {
+        if (!popup.contains(e.target) && !btn.contains(e.target)) popup.classList.add('hidden');
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') popup.classList.add('hidden');
+    });
+}
+
 function oipApplyMineOrderFlow(candles) {
     if (typeof MineOrderFlow === 'undefined' || !oipMinePane) return;
     try {
         const cells = oipOfCells();
         const out = MineOrderFlow.apply(oipMinePane, candles || [], oipInterval, oipMineEffectiveSettings(),
                                         { root: oipSymbol, cells,
+                                          profiles: (oipMineTpoResult || {}).profiles,
                                           futureSymbol: (oipOIData && oipOIData.future_symbol) || null });
         oipOfCandleStyle(cells && out.result.bars.length && oipMineSetting('ofFootprint')
                          ? oipMineSetting('ofCandle') : 'normal');
+        oipDxUpdate(out.result);
     } catch (e) { console.warn('[Replay] Order flow:', e); }
 }
 
@@ -2311,6 +3098,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems();
     oipInitIndicatorsPopup('oip-ind-replay-v4');
+    oipDxInit();
     // Before the chart is created, so it is born at the remembered height
     // rather than snapping to it a frame later.
     oipReplayRestoreChartHeight();
@@ -2323,6 +3111,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!oipElems.replayDate.value) oipElems.replayDate.value = today;
         oipElems.replayDate.max = today;      // there is no history for tomorrow
     }
+    // From opens on the 1st of January of the as-of date's year (asked for
+    // 2026-10-02 as "01-01-2026"), so the page loads the year to date rather
+    // than the timeframe's own short window. Written as the year START, not a
+    // fixed 2026-01-01, so it does not go stale in January.
+    //
+    // Note what this costs: it IS the year-of-candles first fetch the window
+    // defaults were introduced to avoid, and it scales with the timeframe — a
+    // year of 5-minute bars is ~14,000 candles, of 1-minute bars ~70,000.
+    // Clearing the field puts the per-timeframe window back.
+    if (oipElems.replayFromDate && !oipElems.replayFromDate.value) {
+        const asOf = oipElems.replayDate?.value || today;
+        oipElems.replayFromDate.value = `${asOf.slice(0, 4)}-01-01`;
+    }
     // The window length is read off the timeframe, so take the dropdown's value
     // before sizing it: a reload can restore a TF the browser remembered, which
     // would otherwise be picked up further down (oipStartCharts) only after the
@@ -2331,6 +3132,16 @@ document.addEventListener('DOMContentLoaded', () => {
     oipApplyReplayDate();
 
     oipElems.replayDate?.addEventListener('change', () => {
+        // Keep the January default on the as-of date's OWN year. Picking a day
+        // in an earlier year otherwise leaves From ahead of it, where
+        // oipReplayFromDate ignores it and the field still reads 1 Jan of a
+        // year that is no longer on screen. A From the user typed themselves
+        // is not a 1 Jan and is left alone.
+        const asOf = oipElems.replayDate.value || '';
+        const from = oipElems.replayFromDate;
+        if (from && asOf && (!from.value || /^\d{4}-01-01$/.test(from.value))) {
+            from.value = `${asOf.slice(0, 4)}-01-01`;
+        }
         oipApplyReplayDate();
         oipResetReplay();
         // Same date, same window, one reload: the Round Strike block re-asks

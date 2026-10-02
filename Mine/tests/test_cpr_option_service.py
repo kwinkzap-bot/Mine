@@ -230,3 +230,41 @@ def test_options_route_401s_without_breeze(client, monkeypatch):
     monkeypatch.setattr(svc, 'options', boom)
     r = client.get('/api/trend/cpr-backtest/options')
     assert r.status_code == 401 and r.get_json()['icici_required'] is True
+
+
+# ── crossing_minute: where an option leg is priced ───────────────────────
+# A ΔX trade is decided on 5-minute bars but its option is priced on 1-minute
+# candles. Pricing at the BAR STAMP buys before the breakout that triggered the
+# entry and sells before the hit that ended it — both errors flatter the option,
+# and over a few hundred trades they turned a +917 index-point set into +1,818
+# premium points. These pin the minute down.
+
+def _mins(*rows):
+    return [{'time': t, 'low': lo, 'high': hi} for t, lo, hi in rows]
+
+
+def test_crossing_minute_is_when_the_price_was_actually_traded():
+    minutes = _mins(('12:30', 100, 101), ('12:31', 101, 103), ('12:32', 102, 107),
+                    ('12:33', 105, 106), ('12:34', 104, 108))
+    # The level 106 is first touched at 12:32, not at the bar's stamp.
+    assert svc.crossing_minute(minutes, '12:30', 5, 106) == '12:32'
+
+
+def test_crossing_minute_falls_back_to_the_bars_last_minute():
+    """A close-based exit — the 15:15 cut-off, a session end — never 'touches'
+    a level inside the bar, and belongs at the end of it, not the start."""
+    minutes = _mins(('15:10', 100, 101), ('15:11', 100, 101), ('15:14', 100, 101))
+    assert svc.crossing_minute(minutes, '15:10', 5, 999) == '15:14'
+
+
+def test_crossing_minute_stays_inside_its_own_bar():
+    """The search must not run on into the next bar's minutes."""
+    minutes = _mins(('12:30', 100, 101), ('12:34', 100, 101),
+                    ('12:35', 100, 200), ('12:36', 100, 200))
+    assert svc.crossing_minute(minutes, '12:30', 5, 150) == '12:34'   # not 12:35
+
+
+def test_crossing_minute_without_minutes_is_the_bar_stamp():
+    """No 1-minute path (no provider) must leave the old behaviour, not crash."""
+    assert svc.crossing_minute([], '12:30', 5, 106) == '12:30'
+    assert svc.crossing_minute([], None, 5, 106) is None

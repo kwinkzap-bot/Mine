@@ -824,7 +824,12 @@ window.MineCPR = (function () {
                         it.options.map(([v, l]) => `<option value="${v}" ${get(it.key) === v ? 'selected' : ''}>${l}</option>`).join('') +
                         `</select></label>`;
                 } else if (it.type === 'number') {
-                    html += `<label class="mc-ind-item${sub}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}"${it.max != null ? ` max="${it.max}"` : ''} value="${get(it.key)}"></label>`;
+                    // `step` is what makes a FRACTIONAL setting possible: the
+                    // binder below reads it back off the element and parses a
+                    // float when it is not a whole number. Without one a
+                    // number row is integers, as every one of them was.
+                    const step = it.step != null ? ` step="${it.step}"` : '';
+                    html += `<label class="mc-ind-item${sub}"><span>${it.label}</span><input type="number" data-key="${it.key}" min="${it.min}"${it.max != null ? ` max="${it.max}"` : ''}${step} value="${get(it.key)}"></label>`;
                 } else {
                     html += `<label class="mc-ind-item${sub}"><input type="checkbox" data-key="${it.key}" ${get(it.key) ? 'checked' : ''}>${swatch(it.color)}<span>${it.label}</span>${gateTag(it.gate, it.gateLabel)}</label>`;
                 }
@@ -844,7 +849,16 @@ window.MineCPR = (function () {
             if (!key) return;
             let v;
             if (el.type === 'checkbox') v = el.checked;
-            else if (el.type === 'number') { v = Math.max(+el.min, parseInt(el.value, 10) || +el.min); if (el.max !== '') v = Math.min(+el.max, v); el.value = v; }
+            else if (el.type === 'number') {
+                // A row rendered with a fractional `step` is parsed as one;
+                // everything else stays integer, which is what every number
+                // row here was before the order-flow signal thresholds.
+                const frac = el.step && el.step !== 'any' && (+el.step % 1 !== 0);
+                const raw = frac ? parseFloat(el.value) : parseInt(el.value, 10);
+                v = Math.max(+el.min, (Number.isFinite(raw) ? raw : +el.min));
+                if (el.max !== '') v = Math.min(+el.max, v);
+                el.value = v;
+            }
             else v = el.value;
             set(key, v);
             if (onChange) onChange(key, v);

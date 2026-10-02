@@ -258,6 +258,33 @@
                     </div>
 
                     <div class="oip-prem-sep"></div>
+
+                    <!-- ΔX trades — every Delta Extreme Breakout signal the
+                         footprint engine has found up to the playhead, with
+                         the statistics for them. One button, one popup; it
+                         rebuilds on every replay step, so stepping through a
+                         session fills it in as the trades happen. -->
+                    <div class="oip-prem-group" style="position:relative;">
+                        <button id="oipDxTradesBtn" class="oip-btn" type="button"
+                                title="Delta Extreme Breakout — every entry and exit up to the playhead">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 3v18h18"/><path d="m7 14 4-4 3 3 5-6"/>
+                            </svg>
+                            &Delta;X Trades
+                            <span id="oipDxTradesCount" class="oip-dx-pill" hidden>0</span>
+                        </button>
+
+                        <div id="oipDxTradesPopup" class="oip-ind-popup oip-dx-popup hidden">
+                            <div class="oip-ind-popup-header">
+                                &Delta;X Trades
+                                <span id="oipDxTradesMeta" class="oip-dx-meta"></span>
+                            </div>
+                            <div id="oipDxTradesBody" class="oip-dx-body"></div>
+                        </div>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group">
                         <button id="oipToggleReplayToolbar" class="oip-btn oip-btn--replay" type="button" title="Toggle Bar Replay">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -774,6 +801,12 @@
 <script src="{{ url_for('static', filename='js/oi_profile_shared.js') }}?v={{ sv('js/oi_profile_shared.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
+<!-- Chart.js, for the ΔX panel's equity curve and P&L breakdown — the same
+     version and the same charts the Algo and Backtest pages draw. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<!-- Zerodha's rate card — the ΔX panel nets its option legs off it, the same
+     one the live-algo tabs use, so a P&L here is the money that lands. -->
+<script src="{{ url_for('static', filename='js/algo_charges.js') }}?v={{ sv('js/algo_charges.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_orderflow.js') }}?v={{ sv('js/components/mine_orderflow.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_round_strike.js') }}?v={{ sv('js/oi_profile_round_strike.js') }}"></script>

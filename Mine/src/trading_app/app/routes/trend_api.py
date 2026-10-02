@@ -59,6 +59,70 @@ def cpr_backtest_update():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@trend_bp.route('/option-legs', methods=['POST'])
+@require_user_auth
+def option_legs():
+    """What the OPTION would have done over a list of index trades the caller
+    already has — the Replay page's ΔX Trades panel asks this of the signals
+    the footprint engine found, the same way the CPR sheet asks it of its own
+    rows. CE for a BUY, PE for a SELL, both bought, and with `premium` the
+    strike whose premium at the entry minute was nearest it.
+
+    POST because the trades are the request: a session of them does not
+    belong in a query string, and this is a read that computes rather than
+    one that is cached by a URL.
+
+    Body: {"symbol": "NIFTY", "premium": 200, "span_min": 5, "source": "spot",
+           "trades": [{"key": "...", "date": "YYYY-MM-DD", "side": "BUY|SELL",
+                       "level": 22609.0, "entry_time": "HH:MM",
+                       "exit_time": "HH:MM", "exit_price": 22478.0}]}
+
+    `span_min` is the caller's bar length and `exit_price` the price it left
+    at: with them the premium is taken at the MINUTE the trade entered and
+    left, not at the stamp of the bar it happened in. Without them the legs
+    price at their bar stamps, which flatters the option — see
+    cpr_option_service.crossing_minute.
+
+    401 with `icici_required` when no Breeze session is logged in — only
+    Breeze serves an expired contract."""
+    body = request.get_json(silent=True) or {}
+    symbol = (body.get('symbol') or 'NIFTY').strip().upper()
+    trades = body.get('trades') or []
+    if not isinstance(trades, list):
+        return jsonify({'success': False, 'error': 'trades must be a list'}), 400
+    raw = body.get('premium')
+    try:
+        premium = float(raw) if raw not in (None, '') else None
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': f'bad premium {raw!r}'}), 400
+    for t in trades:
+        if not isinstance(t, dict) or not t.get('date') or not t.get('entry_time'):
+            return jsonify({'success': False,
+                            'error': 'every trade needs a date and an entry_time'}), 400
+    try:
+        span = int(body.get('span_min') or 1)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'span_min must be a whole number'}), 400
+    source = (body.get('source') or 'spot').strip().lower()
+    if source not in mc.SOURCES:
+        return jsonify({'success': False, 'error': f'source must be one of {sorted(mc.SOURCES)}'}), 400
+    try:
+        mc.resolve_symbol(symbol)
+        return jsonify(cpr_opt.legs_at(symbol, trades, premium,
+                                       span_min=max(1, min(span, 60)), source=source))
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except mc.BadRequest as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except cpr_opt.OptionDataUnavailable as e:
+        return jsonify({'success': False, 'error': str(e), 'icici_required': True}), 401
+    except mc.ProviderUnavailable as e:
+        return jsonify({'success': False, 'error': str(e), 'auth_required': True}), 401
+    except Exception as e:
+        logger.error(f"[Trend API] option-legs {symbol} failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @trend_bp.route('/cpr-backtest/options', methods=['GET'])
 @require_user_auth
 def cpr_backtest_options():

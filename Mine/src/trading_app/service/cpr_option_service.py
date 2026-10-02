@@ -356,3 +356,181 @@ def options(symbol: str, premium: Optional[float] = None) -> Dict[str, Any]:
     logger.info(f"[CPR options] {symbol.upper()} {'≈' + str(premium) if premium else 'ATM'}: "
                 f"{out['summary']['trades']} legs priced, {out['summary']['missing']} without data")
     return {'success': True, 'symbol': symbol.upper(), **out}
+
+
+# ── Pricing an arbitrary list of trades ──────────────────────────────────
+# The CPR sheet is not the only thing that wants "what would the option leg
+# have done": the Replay page's ΔX Trades panel asks the same question of the
+# signals the footprint engine found. Everything it needs is already here —
+# the contract, the strike walk, the Breeze fetcher and its disk cache — so
+# this is a second entry point onto the same machinery, not a second copy.
+#
+# The difference from options() above is that the caller brings its own
+# trades. It hands over entry and exit MINUTES that it already knows (the ΔX
+# engine has decided them on the index), and this prices the premium at those
+# two minutes. There is no index replay here and no target/SL placement: the
+# trade has already happened, this only says what the option did over it.
+#
+# Cost: pick_strike walks the ladder, so a trade costs a handful of Breeze
+# requests the first time and nothing afterwards (settled sessions are disk
+# cached). The caller is expected to ask on demand, not on every redraw, and
+# MAX_TRADES is the backstop.
+MAX_TRADES = 60               # per request — the Breeze budget is shared with the live algos
+
+
+def _index_minutes(symbol: str, days: List[date], source: str) -> Dict[str, List[Dict[str, Any]]]:
+    """1-minute bars of the series the caller's CHART is on, by session — the
+    path the crossing search below walks. `source='future'` charts the
+    current-expiry future, which sits a basis above the index, so a level
+    taken off a futures chart has to be matched against futures minutes."""
+    from trading_app.service import multichart_service as mc
+    adapter = mc.provider()
+    chart_sym, _ = mc.chart_symbol(adapter, symbol, source)
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    first, last = days[0], days[-1]
+    start = first
+    while start <= last:
+        end = min(start + timedelta(days=cpr_bt.INTRADAY_CHUNK_DAYS - 1), last)
+        raw = adapter.historical_data(chart_sym, start.isoformat(), end.isoformat(),
+                                      'minute', use_cache=True, cache_ttl=3600.0)
+        out.update(cpr_bt._intraday_by_session(raw))
+        start = end + timedelta(days=1)
+    return out
+
+
+def crossing_minute(minutes: List[Dict[str, Any]], bar_time: str, span: int,
+                    price: Optional[float]) -> Optional[str]:
+    """The minute inside `bar_time`'s own bar at which the series traded
+    `price` — the minute the trade actually happened.
+
+    This exists because of a real and SYSTEMATIC error. A ΔX trade is decided
+    on, say, 5-minute bars: it enters when the index breaks a level somewhere
+    inside the trigger bar and leaves when the stop or target is hit somewhere
+    inside the exit bar. Pricing its option at those bars' STAMPS — their first
+    minute — buys before the breakout and sells before the hit. Both errors
+    favour the option leg, and over a few hundred trades they turned a +917
+    index-point session set into +1,818 premium points. Measured on 30 Sep:
+    the 12:20 BUY priced 12:30→12:55 came out +31.95, and the same leg over
+    12:34→12:59 came out +15.90.
+
+    Falls back to the LAST minute of the bar when the price is never touched in
+    it — which is what a close-based exit (the 15:15 cut-off, a session end)
+    is — and to the stamp when there are no minutes at all.
+    """
+    if not bar_time:
+        return None
+    window = [b for b in minutes
+              if bar_time <= b['time'] < _plus_minutes(bar_time, max(1, span))]
+    if not window:
+        return bar_time
+    if price is not None:
+        for b in window:
+            if b['low'] - 1e-9 <= price <= b['high'] + 1e-9:
+                return b['time']
+    return window[-1]['time']
+
+
+def _plus_minutes(hhmm: str, mins: int) -> str:
+    t = datetime.strptime(hhmm, '%H:%M') + timedelta(minutes=mins)
+    return t.strftime('%H:%M')
+
+
+def legs_at(symbol: str, trades: List[Dict[str, Any]],
+            premium: Optional[float] = None, span_min: int = 1,
+            source: str = 'spot') -> Dict[str, Any]:
+    """Price one option leg per trade in `trades`.
+
+    Each trade: {'date': 'YYYY-MM-DD', 'side': 'BUY'|'SELL', 'level': float,
+                 'entry_time': 'HH:MM', 'exit_time': 'HH:MM' | None,
+                 'exit_price': float | None}.
+
+    `entry_time` / `exit_time` are the caller's BAR stamps and `span_min` is
+    how long one of its bars is, so the premium can be taken at the minute the
+    trade actually happened rather than at the start of the bar it happened in
+    — see crossing_minute(), which is there to kill a look-ahead bias, not to
+    be precise for its own sake.
+
+    A BUY is a CALL and a SELL is a PUT, both BOUGHT — the leg is long premium
+    either way, so its P&L is exit minus entry whichever way the index trade
+    faced. `level` is the index price the strike is measured from (ATM), and
+    `premium` then walks the ladder to the strike nearest that premium at the
+    entry minute.
+    """
+    if not trades:
+        return {'success': True, 'symbol': symbol.upper(), 'legs': [], 'premium': premium,
+                'lot': lot_size(symbol)}
+    if len(trades) > MAX_TRADES:
+        raise ValueError(f'{len(trades)} trades asked for; {MAX_TRADES} is the limit per request')
+
+    fetch_option = _option_minutes_fetcher(symbol)        # fail before any fetch
+    days = sorted({date.fromisoformat(t['date']) for t in trades})
+    trading_days = _trading_days(symbol, days[0], days[-1])
+    lot = lot_size(symbol)
+    # The chart's own 1-minute path, for placing each leg at the minute the
+    # trade happened. One fetch for the whole span, cached like everything
+    # else here; a failure is not fatal — the legs are then priced at their
+    # bar stamps, the way they were before, and say so.
+    minutes: Dict[str, List[Dict[str, Any]]] = {}
+    align_error = None
+    if span_min > 1:
+        try:
+            minutes = _index_minutes(symbol, days, source)
+        except Exception as e:                            # noqa: BLE001
+            align_error = str(e)
+            logger.warning(f"[ΔX options] no {source} minutes for the crossing search: {e}")
+
+    legs: List[Dict[str, Any]] = []
+    priced = 0
+    for t in trades:
+        leg: Dict[str, Any] = {'key': t.get('key'), 'date': t['date'], 'strike': None,
+                               'option_type': None, 'expiry': None, 'entry': None,
+                               'exit': None, 'pnl': None, 'pnl_inr': None, 'error': None,
+                               'entry_time': None, 'exit_time': None}
+        try:
+            day = date.fromisoformat(t['date'])
+            con = contract(symbol, day, (t.get('side') or '').upper(), t.get('level'), trading_days)
+            if con is None:
+                leg['error'] = 'no expiry for that session'
+                legs.append(leg)
+                continue
+            # The minutes the trade really entered and left on.
+            mins = minutes.get(t['date']) or []
+            t_in = crossing_minute(mins, t.get('entry_time'), span_min,
+                                   t.get('level')) if mins else t.get('entry_time')
+            t_out = crossing_minute(mins, t.get('exit_time'), span_min,
+                                    t.get('exit_price')) if mins else t.get('exit_time')
+            leg.update(entry_time=t_in, exit_time=t_out)
+            if premium:
+                con, bars, _ = pick_strike(symbol, con, day, t_in, premium, fetch_option)
+            else:
+                bars = fetch_option(con, day)
+            leg.update(strike=con['strike'], option_type=con['option_type'], expiry=con['expiry'])
+            b_in = bar_at(bars, t_in)
+            b_out = bar_at(bars, t_out)
+            if b_in:
+                leg['entry'] = round(b_in['close'], 2)
+            if b_out:
+                leg['exit'] = round(b_out['close'], 2)
+            if leg['entry'] is not None and leg['exit'] is not None:
+                # Long premium on both sides: a CALL for a BUY, a PUT for a
+                # SELL. Exit minus entry is the move either way.
+                leg['pnl'] = round(leg['exit'] - leg['entry'], 2)
+                leg['pnl_inr'] = round(leg['pnl'] * lot, 2)
+                priced += 1
+            elif not bars:
+                leg['error'] = 'no candles for that contract'
+            else:
+                leg['error'] = 'no candle at that minute'
+        except OptionDataUnavailable:
+            raise
+        except Exception as e:                            # noqa: BLE001 — one dead strike is not the request
+            logger.warning(f"[ΔX options] {t.get('date')} {t.get('entry_time')}: {e}")
+            leg['error'] = str(e)
+        legs.append(leg)
+
+    logger.info(f"[ΔX options] {symbol.upper()} {'≈' + str(premium) if premium else 'ATM'}: "
+                f"{priced}/{len(trades)} legs priced")
+    return {'success': True, 'symbol': symbol.upper(), 'legs': legs,
+            'premium': premium, 'lot': lot,
+            'aligned': bool(minutes) or span_min <= 1,
+            'align_error': align_error}

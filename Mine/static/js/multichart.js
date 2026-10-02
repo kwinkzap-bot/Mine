@@ -381,10 +381,16 @@
         if (!tpoWanted(pane)) {                    // another pane owns the profile
             MineTPO.attach(pane, { profiles: [] });
             pane.tpoEl.textContent = '';
+            pane.tpoResult = null;
             return;
         }
         const tpo = MineTPO.compute(pane.candles, pane.tf, state.settings, pane.tpoCache);
         MineTPO.attach(pane, tpo);
+        // Kept for the footprint: ΔX reads VAH / VAL / POC off THIS result as
+        // target candidates, so the level it aims at is the line on screen
+        // and not a second value area of its own. applyTpo runs before
+        // applyOrderFlow in applyIndicators, which is what makes it current.
+        pane.tpoResult = tpo;
         pane.tpoEl.textContent = tpo.profiles.length
             ? `TPO ${TF_LABEL[tpoSizeFor(pane)] || ''} · ${setting('tpoVA')}%` : '';
     }
@@ -430,6 +436,7 @@
         }
         const out = MineOrderFlow.apply(pane, pane.candles, pane.tf, state.settings, {
             on, root: state.symbol, futureSymbol: state.futureSymbol, cells: true,
+            profiles: (pane.tpoResult || {}).profiles,
         });
         // The candle only makes way for cells that are actually drawn: with the
         // footprint hidden there is nothing to sit between, so it goes back to

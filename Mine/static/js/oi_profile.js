@@ -785,8 +785,10 @@ function oipApplyMineCpr() {
         const result = MineCPR.compute(candles, oipOIInterval, oipMineDaily.rows, oipMineCprSettings);
         MineCPR.attach(oipMinePane, result);
     } catch (e) { console.warn('[OIP] Mine CPR:', e); }
-    oipApplyMineOrderFlow(candles);
+    // TPO first: the footprint's ΔX signals read VAH / VAL / POC off that
+    // result as target candidates, so it has to be this tick's.
     oipApplyMineTpo(candles);
+    oipApplyMineOrderFlow(candles);
     const host = document.getElementById('oipMineCprSections');
     if (host) {
         // `ofCells` lights on Fut and stays dark on Spot: the tape is the
@@ -806,6 +808,7 @@ function oipApplyMineCpr() {
 // it is built from the session's own bars, so an index and a stock are the
 // same computation — only the auto row step differs, and that comes from the
 // sessions' own range.
+let oipMineTpoResult = null;
 function oipApplyMineTpo(candles) {
     if (typeof MineTPO === 'undefined' || !oipMinePane) return;
     // The Spot / Fut source belongs in the key beside symbol and interval: a
@@ -815,8 +818,9 @@ function oipApplyMineTpo(candles) {
     const forKey = `${oipSymbol}|${oipOIInterval}|${oipChartSource}`;
     if (forKey !== oipMineTpoFor) { oipMineTpoCache.clear(); oipMineTpoFor = forKey; }
     try {
-        MineTPO.attach(oipMinePane,
-            MineTPO.compute(candles, oipOIInterval, oipMineCprSettings, oipMineTpoCache));
+        const tpo = MineTPO.compute(candles, oipOIInterval, oipMineCprSettings, oipMineTpoCache);
+        MineTPO.attach(oipMinePane, tpo);
+        oipMineTpoResult = tpo;          // ΔX target levels, see oipApplyMineOrderFlow
     } catch (e) { console.warn('[OIP] TPO:', e); }
 }
 
@@ -857,6 +861,7 @@ function oipApplyMineOrderFlow(candles) {
         const cells = oipOfCells();
         const out = MineOrderFlow.apply(oipMinePane, candles || [], oipOIInterval, oipMineCprSettings,
                                         { root: oipSymbol, cells,
+                                          profiles: (oipMineTpoResult || {}).profiles,
                                           futureSymbol: (oipOIData && oipOIData.future_symbol) || null });
         oipOfCandleStyle(cells && out.result.bars.length && oipMineSetting('ofFootprint')
                          ? oipMineSetting('ofCandle') : 'normal');
