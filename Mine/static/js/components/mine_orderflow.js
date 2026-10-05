@@ -143,6 +143,22 @@ window.MineOrderFlow = (function () {
         // deliberately strict, because the whole point of the thing is that it
         // only speaks when a bar is UNUSUAL.
         ofSig: false,            // off until asked for, like the footprint itself
+        // WHICH entry logic runs. Two of them now, and they can run together —
+        // a side is a side, so the one-signal-per-side rule still holds across
+        // both and whichever fires first owns it.
+        //   'dx'    the original: an extreme that is unusual FOR THIS SESSION
+        //   'spike' one candle whose delta dwarfs everything around it
+        //   'both'  (default) each bar is offered to the spike rule first,
+        //           because a spike is the stronger event of the two
+        ofSigMode: 'both',
+        // A spike is this many times the MEDIAN bar's extreme over the same
+        // lookback. 10 is calibrated on the 30 Sep 12:50 bar the user pointed
+        // at — Min Delta −196,040 against a session median of 6,565, so 29.9×
+        // — while the biggest ordinary bar near it (44,395 at 12:45) is 6.8×
+        // and stays out. It is a different question from 'unusual': that one
+        // asks whether a bar stands out, this one asks whether it is in a
+        // different league.
+        ofSpikeMult: 10,
         ofSigLook: 30,           // bars of the same session an extreme is judged against
         ofSigMult: 2.5,          // unusual = median + this × robust deviation
         ofSigVolPct: 25,         // …and at least this % of the bar's own volume
@@ -182,6 +198,17 @@ window.MineOrderFlow = (function () {
         // POC / ΔX target back.
         ofSigTrail: true,
         ofSigTrailMult: 2,       // how unusual the opposing delta has to be to move the stop
+        // How far BEYOND the candle the stop sits, in index points. The rule
+        // places the stop on the signal candle's other side, and a stop
+        // sitting exactly on a candle's extreme is the one a wick takes out
+        // on its way to being right. 5 points on NIFTY; set it per instrument
+        // (BANKNIFTY moves roughly three times as far for the same event), and
+        // 0 puts the stop back on the candle itself.
+        //
+        // It applies to every stop the rule places — the one it enters on AND
+        // each step of the trail — because they are the same placement: the
+        // far side of a candle.
+        ofSigStopPad: 5,
         ofSigBars: 5,            // bars the level stays armed for after the signal
         ofSigConfirm: true,      // cumulative delta must agree at the break
         ofSigRR: 2,              // fallback target in R when no opposite level is in front
@@ -190,6 +217,13 @@ window.MineOrderFlow = (function () {
 
     const CELL_OPTIONS = [
         ['bidask', 'Sell × Buy'], ['delta', 'Delta'], ['volume', 'Volume'],
+    ];
+
+    // The two entry logics, and running both.
+    const SIG_MODE_OPTIONS = [
+        ['both', 'Both'],
+        ['dx', 'Unusual Max/Min Delta'],
+        ['spike', 'Single-candle delta spike'],
     ];
 
     const CANDLE_OPTIONS = [
@@ -763,6 +797,13 @@ window.MineOrderFlow = (function () {
     // 15:15 price. The rule carries nothing past the cut-off and nothing
     // overnight; see the session-end branch, which does the same thing for a
     // day that ends before this.
+    // Nothing is armed before this either (asked for 2026-10-02): the opening
+    // minutes are the day's widest and thinnest trade at once, and a rule
+    // calibrated on the rest of the session reads them as unusual when they
+    // are only the open. The bars still feed the judging WINDOW — they are
+    // real trade and they are what the rest of the day is unusual against —
+    // they just cannot be signals or levels themselves.
+    const SIG_START_MIN = 9 * 60 + 30;          // 09:30 IST
     const SIG_CUTOFF_MIN = 15 * 60 + 15;        // 15:15 IST
     // Bars sit on the app's fake-IST grid (IST wall clock stored as UTC
     // seconds), so the UTC getters ARE the IST clock here — same convention
@@ -822,6 +863,11 @@ window.MineOrderFlow = (function () {
         const life = Math.max(1, g('ofSigBars') | 0);
         const confirm = g('ofSigConfirm') !== false;
         const flip = g('ofSigFlip') !== false;
+        const mode = g('ofSigMode') || 'both';
+        const useDx = mode === 'dx' || mode === 'both';
+        const useSpike = mode === 'spike' || mode === 'both';
+        const spikeMult = Math.max(2, +g('ofSpikeMult') || 10);
+        const pad = Math.max(0, +g('ofSigStopPad') || 0);
         const voidOnOther = g('ofSigVoid') === true;
         const trail = g('ofSigTrail') !== false;
         const trailMult = Math.max(0.5, +g('ofSigTrailMult') || 1);
@@ -940,7 +986,15 @@ window.MineOrderFlow = (function () {
                 continue;
             }
 
-            // 2. Is this bar unusual? Worked out FIRST, because a trade
+            // 2. Before the start time nothing is looked at but the window.
+            //    No trade can be running yet either — nothing was armed.
+            if (minOfDay(b.time) < SIG_START_MIN) {
+                win.push({ up: Math.max(0, b.maxDelta), dn: Math.max(0, -b.minDelta) });
+                if (win.length > look) win.shift();
+                continue;
+            }
+
+            // 3. Is this bar unusual? Worked out FIRST, because a trade
             //    already running has to be able to read it: an unusual
             //    extreme the OTHER way is what ends it.
             const up = Math.max(0, b.maxDelta);
@@ -960,10 +1014,19 @@ window.MineOrderFlow = (function () {
             const trailFloor = b.volume * volPct / 2;
             const trailUp = ready && up >= unusualThreshold(win.map(x => x.up), trailMult) && up >= trailFloor;
             const trailDn = ready && dn >= unusualThreshold(win.map(x => x.dn), trailMult) && dn >= trailFloor;
+
+            // The spike test. Not 'unusual against the spread of recent bars'
+            // but 'this many times the MEDIAN bar', which is what catches a
+            // single candle that is in a different league — and the same
+            // volume-share floor, so a thin bar cannot spike on nothing.
+            const dom = Math.max(up, dn);
+            const spikeHit = useSpike && ready
+                && dom >= spikeMult * Math.max(1, median(win.map(x => Math.max(x.up, x.dn))))
+                && dom >= b.volume * volPct;
             win.push({ up, dn });
             if (win.length > look) win.shift();
 
-            // 3. This bar against whatever is already in progress, BEFORE it
+            // 4. This bar against whatever is already in progress, BEFORE it
             //    is allowed to start anything of its own — a signal bar can
             //    never trigger its own entry.
             for (const d of ['1', '-1']) {
@@ -986,7 +1049,15 @@ window.MineOrderFlow = (function () {
                     // back through it is not a fresh entry at the same price —
                     // treating it as one buys the level long after the market
                     // left it.
-                    if (confirm && (dir > 0 ? b.cumDelta < sg.cumAt : b.cumDelta > sg.cumAt)) {
+                    // …and only for a 'dx' signal. A spike of this size IS the
+                    // flow event: its own bar drags the session's cumulative
+                    // delta to a trough, so asking the breaking bar to be
+                    // below that trough is asking for a SECOND spike, and it
+                    // vetoed the 30 Sep 12:50 short (−196,040) on the very
+                    // next bar. The spike rule is literal — the candle breaks,
+                    // the trade is on.
+                    if (confirm && sg.rule === 'dx'
+                        && (dir > 0 ? b.cumDelta < sg.cumAt : b.cumDelta > sg.cumAt)) {
                         sg.why = 'cum delta'; settle(sg, 'void', b, null); continue;
                     }
                     sg.state = 'live';
@@ -1017,7 +1088,7 @@ window.MineOrderFlow = (function () {
                     // stop, so a later opposing bar further away leaves it be.
                     const against = sg.dir > 0 ? (b.c < b.o && trailDn) : (b.c > b.o && trailUp);
                     if (against) {
-                        const to = sg.dir > 0 ? b.l : b.h;
+                        const to = sg.dir > 0 ? b.l - pad : b.h + pad;
                         if (sg.dir > 0 ? to > sg.stop : to < sg.stop) {
                             sg.stop = to;
                             (sg.trail = sg.trail || []).push({ x: b.x, time: b.time, price: to });
@@ -1043,21 +1114,28 @@ window.MineOrderFlow = (function () {
                 }
             }
 
-            // 4. What this bar is in its own right. One bar can be unusual
+            // 5. What this bar is in its own right. One bar can be unusual
             //    both ways — a violent two-sided bar. It
             // is not a long and a short at once, so the bigger extreme owns
             // it; a dead heat is no signal at all.
-            let dir = 0;
-            if (upHit && dnHit) dir = up > dn ? 1 : dn > up ? -1 : 0;
-            else if (upHit) dir = 1;
-            else if (dnHit) dir = -1;
+            //    A spike is offered first when both logics are on: it is the
+            //    stronger reading of the same bar, and it is the one the user
+            //    would name if asked what just happened.
+            let dir = 0, rule = null;
+            if (spikeHit && up !== dn) { dir = up > dn ? 1 : -1; rule = 'spike'; }
+            else if (useDx) {
+                if (upHit && dnHit) dir = up > dn ? 1 : dn > up ? -1 : 0;
+                else if (upHit) dir = 1;
+                else if (dnHit) dir = -1;
+                if (dir) rule = 'dx';
+            }
             if (!dir) continue;
 
             // Whatever it turns out to be, it is a level the other side's
             // targets can be read off.
             levels.push({ dir, h: b.h, l: b.l });
 
-            // 5. The side is already spoken for: this bar joins that signal.
+            // 6. The side is already spoken for: this bar joins that signal.
             const owner = active[String(dir)];
             if (owner) {
                 owner.repeats = (owner.repeats || 0) + 1;
@@ -1068,18 +1146,22 @@ window.MineOrderFlow = (function () {
                 continue;
             }
 
-            // 6. A new signal. Where the bar closed in its own range decides
+            // 7. A new signal. Where the bar closed in its own range decides
             //    whether that extreme was initiative or absorbed.
             const range = b.h - b.l;
             const pos = range > 0 ? (b.c - b.l) / range : 0.5;
             const absorbed = dir > 0 ? pos <= 0.34 : pos >= 0.66;
-            if (absorbed && dropAbsorb) continue;          // a level, not a trade
+            // The absorption filter is a reading of an ORDINARY extreme —
+            // whether the close denied it. A spike of this size is the event
+            // itself and the rule for it is literal: trade the break of that
+            // candle. So the filter only ever applies to a 'dx' signal.
+            if (absorbed && dropAbsorb && rule === 'dx') continue;   // a level, not a trade
 
             const sig = {
-                x: b.x, time: b.time, dir, absorbed,
+                x: b.x, time: b.time, dir, absorbed, rule,
                 extreme: dir > 0 ? up : -dn, volume: b.volume, cumAt: b.cumDelta,
                 level: dir > 0 ? b.h : b.l,                // the break that enters
-                stop: dir > 0 ? b.l : b.h,                 // the candle's other side
+                stop: dir > 0 ? b.l - pad : b.h + pad,     // the candle's other side, plus the buffer
                 armUntil: i + life,
                 repeats: 0,
                 state: 'armed',
@@ -2106,11 +2188,14 @@ window.MineOrderFlow = (function () {
         // engine — the two numbers it reads are the ones the footprint
         // computes — so it is rendered with it, under it, on all three pages.
         { title: 'Delta Extreme Breakout (ΔX)', gate: 'showOf', gateLabel: 'intraday', items: [
-            { key: 'ofSig', label: 'Unusual Max/Min Delta breakout', color: COLORS.sig },
+            { key: 'ofSig', label: 'Delta Extreme Breakout signals', color: COLORS.sig },
+            { key: 'ofSigMode', type: 'select', label: 'Entry logic', options: SIG_MODE_OPTIONS, sub: true },
+            { key: 'ofSpikeMult', type: 'number', label: 'Spike = \u00d7 the median bar\u2019s extreme', min: 2, max: 50, sub: 2 },
             { key: 'ofSigLook', type: 'number', label: 'Judge against the last N bars', min: 10, max: 200, sub: true },
             { key: 'ofSigMult', type: 'number', label: 'Unusual at × deviation over median', min: 1, max: 10, step: 0.5, sub: true },
             { key: 'ofSigVolPct', type: 'number', label: '…and ≥ this % of the bar’s volume', min: 0, max: 100, sub: true },
             { key: 'ofSigAbsorb', label: 'Drop absorbed bars (close denies the extreme)', sub: true },
+            { key: 'ofSigStopPad', type: 'number', label: 'Stop buffer beyond the candle (points)', min: 0, max: 100, step: 0.5, sub: true },
             { key: 'ofSigBars', type: 'number', label: 'Bars the level stays armed', min: 1, max: 30, sub: true },
             { key: 'ofSigConfirm', label: 'Cumulative delta must agree at the break', sub: true },
             { key: 'ofSigVoid', label: 'Cancel if the candle\u2019s other side breaks first', sub: true },

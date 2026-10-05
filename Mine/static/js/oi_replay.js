@@ -981,7 +981,14 @@ let oipDxLast = { signals: [], bars: [], on: false };
  * that is already priced. The cache is dropped when the strike target
  * changes, because that is a different contract. */
 const oipDxOpt = { by: new Map(), premium: 200, busy: false, error: null, lot: null };
-const oipDxOptKey = r => `${oipDxDate(r.time)}|${r.side}|${oipDxTime(r.entryTime)}|${oipDxTime(r.exitTime)}`;
+// The key carries the SYMBOL, SOURCE and TIMEFRAME as well as the trade.
+// Without them a leg priced on the Spot chart was handed straight back for the
+// Fut chart's trade of the same name: same date, same side, same two minutes —
+// but a different entry level, so a different strike and a different premium.
+// The footprint's own cache is cleared on that switch (oipClearMineCpr, inside
+// oipLoadCandles); this one is not, so it has to key itself out of the clash.
+const oipDxOptKey = r => `${oipSymbol}|${oipChartSource}|${oipInterval}|`
+    + `${oipDxDate(r.time)}|${r.side}|${oipDxTime(r.entryTime)}|${oipDxTime(r.exitTime)}`;
 
 // The session date a bar time belongs to, as the API wants it.
 const oipDxDate = t => {
@@ -1131,7 +1138,7 @@ function oipDxRows(signals, bars) {
         return {
             n: i + 1,
             time: s.time, side: s.dir > 0 ? 'BUY' : 'SELL',
-            state: s.sessionEnd ? 'close' : s.state, open,
+            state: s.sessionEnd ? 'close' : s.state, open, rule: s.rule || 'dx',
             entryTime: s.trigTime, entry: taken ? s.entry : null,
             exitTime: s.outTime, exit,
             stop0, stopNow: s.stop,
@@ -1283,6 +1290,14 @@ function oipDxGrid(rows) {
             { key: 'time', label: 'Signal', format: oipDxStamp, strong: true },
             { key: 'side', label: 'Side', strong: true,
               tone: v => v === 'BUY' ? 'pos' : 'neg' },
+            // Which of the two entry logics found it, so the two can be told
+            // apart (and judged apart) when both are running.
+            { key: 'rule', label: 'Rule',
+              format: v => v === 'spike' ? 'Spike' : '\u0394X',
+              tone: v => v === 'spike' ? 'warn' : 'muted',
+              thTitle: '\u0394X — an extreme that is unusual for this session.\n'
+                     + 'Spike — one candle whose delta dwarfs the median bar\n'
+                     + '(\u00d710 by default). Pick one or both in the Indicators popup.' },
             { key: 'entryTime', label: 'In', format: oipDxTime },
             { key: 'entry', label: 'Entry', align: 'right', format: price },
             { key: 'exitTime', label: 'Out', format: oipDxTime },
@@ -1709,6 +1724,21 @@ function oipDxInit() {
     const btn = document.getElementById('oipDxTradesBtn');
     const popup = document.getElementById('oipDxTradesPopup');
     if (!btn || !popup) return;
+    // Whether the gesture STARTED inside the panel, recorded at pointerdown in
+    // the capture phase — which is the only moment it can be known.
+    //
+    // The dismissal used to ask `popup.contains(e.target)` on the document's
+    // click. But every control in here re-renders the panel (a period tab, the
+    // price button, the strike select all call oipDxRender, which replaces the
+    // body's innerHTML), so by the time the click bubbled up to document the
+    // element that was clicked had been DETACHED — `contains` said false and
+    // the panel shut itself on its own button. Capture-phase pointerdown runs
+    // before any of that, while the DOM is still the one that was clicked.
+    let fromInside = false;
+    document.addEventListener('pointerdown', e => {
+        fromInside = popup.contains(e.target) || btn.contains(e.target);
+    }, true);
+
     btn.addEventListener('click', e => {
         e.stopPropagation();
         popup.classList.toggle('hidden');
@@ -1727,8 +1757,8 @@ function oipDxInit() {
         }
     });
     // Same dismissal as the Indicators popup: anywhere outside it.
-    document.addEventListener('click', e => {
-        if (!popup.contains(e.target) && !btn.contains(e.target)) popup.classList.add('hidden');
+    document.addEventListener('click', () => {
+        if (!fromInside) popup.classList.add('hidden');
     });
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape') popup.classList.add('hidden');

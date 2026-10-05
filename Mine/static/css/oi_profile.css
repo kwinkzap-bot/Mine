@@ -2474,6 +2474,15 @@ html.oip-bare .navigation-bar {
        it would run off the window and pins it to the viewport when flipping
        is not enough. A hard `right: 0` here fought it. */
     padding: 8px 0 10px;
+    /* ONE scrollbar, and it belongs to the trade list. .oip-ind-popup scrolls
+       itself (a column of checkboxes has nothing to pin), which here put a
+       second scrollbar around a panel that already had one — and scrolling
+       over the cards moved a different thing from scrolling over the rows.
+       The panel is a column instead: the header, cards, toolbar and both
+       charts hold their place and the list takes whatever height is left. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 .oip-dx-meta {
     float: right;
@@ -2482,7 +2491,15 @@ html.oip-bare .navigation-bar {
     letter-spacing: 0;
     color: var(--oip-metric-lbl);
 }
-.oip-dx-body { padding: 8px 10px 0; }
+.oip-dx-body {
+    padding: 8px 10px 0;
+    /* min-height:0 is what lets a flex child shrink below its content and so
+       lets the list inside it scroll instead of pushing the panel taller. */
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
 
 .oip-dx-pill {
     display: inline-block;
@@ -2558,8 +2575,10 @@ html.oip-bare .navigation-bar {
     font-size: 11px;
     color: var(--oip-metric-lbl);
 }
-/* The list scrolls inside the panel; the cards above it stay put. */
-.oip-dx-list { max-height: 44vh; overflow: auto; }
+/* The list is the one thing that scrolls, and it takes the height the rest of
+   the panel leaves it — never less than a few rows, or a tall set of charts on
+   a short window would squeeze it to nothing. */
+.oip-dx-list { flex: 1 1 auto; min-height: 132px; overflow: auto; }
 
 /* The ΔX panel's own little toolbar: strike target, the button that prices
    the option legs, and whatever the last pass had to say. */
