@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "MFSL",
+    "direction": "BUY",
+    "qty": 367,
+    "entry_price": 1360.3,
+    "exit_price": 1345.7,
+    "sl_price": 1345.7,
+    "target_price": 1380.4,
+    "pnl": -5358.2,
+    "reason": "SL Hit",
+    "entry_time": "2026-10-05T12:26:15.601114",
+    "exit_time": "2026-10-05T14:50:39.200439",
+    "broker_idx": 0,
+    "entry_order_id": "PAPER",
+    "sl_order_id": null,
+    "target_order_id": null,
+    "mode": "paper",
+    "date": "2026-10-05"
+  },
+  {
     "symbol": "TORNTPHARM",
     "direction": "SELL",
     "qty": 104,
