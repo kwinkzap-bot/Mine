@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "BANDHANBNK",
+    "direction": "SELL",
+    "mode": "paper",
+    "qty": 3600,
+    "lot_size": 3600,
+    "entry_price": 172.83,
+    "exit_price": 166.25,
+    "spot_entry_price": 172.63,
+    "spot_exit_price": 165.7,
+    "sl_price": 180.93,
+    "target_price": 165.72,
+    "pnl": 23688.0,
+    "reason": "TARGET",
+    "signal_date": "2026-10-01",
+    "entry_time": "2026-10-05T09:27:45.498580",
+    "exit_time": "2026-10-06T13:23:52.588958",
+    "date": "2026-10-06"
+  },
+  {
     "symbol": "JINDALSTEL",
     "direction": "BUY",
     "mode": "paper",

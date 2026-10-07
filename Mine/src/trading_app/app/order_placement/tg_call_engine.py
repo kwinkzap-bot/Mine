@@ -3,18 +3,32 @@
 The listener (``tg_calls_listener``) hands in a parsed tip; everything from
 there to flat happens here, per broker:
 
-    ONE stop-limit BUY for both legs rests  →  it fills  →  the fill is split
-    into a T1 leg and a T3 leg, each with an SL-M SELL of its own and its own
-    watched target  →  each leg's stop fires, or its target is touched and
-    that leg alone is sold at market  →  flat.
+    ONE stop-limit BUY for every leg rests  →  it fills  →  the fill is split
+    into one leg per target in the plan, each with an SL-M SELL of its own
+    and its own watched target  →  each leg's stop fires, or its target is
+    touched and that leg alone is sold at market  →  flat.
 
-**One order in, two legs out.** The entry is a single order for
-``BROKER_N_TG_LOTS × 2`` — one line at the broker and one row on the strip,
-not two orders competing for the same strike. Only once it has filled does
-it become two legs: ``brokers["1"]`` is broker 1's T1 leg and
-``brokers["1:T3"]`` its T3 leg, sharing that one ``entry_record_id`` and
-holding ``BROKER_N_TG_LOTS`` each. A part fill fills the T1 leg first. A
-call listing a single target places one leg and one lot's worth as before.
+**One order in, N legs out.** The entry is a single order for
+``BROKER_N_TG_LOTS × legs`` — one line at the broker and one row on the
+strip, not N orders competing for the same strike. Only once it has filled
+does it become legs: ``brokers["1"]`` is broker 1's first leg and
+``brokers["1:T3"]`` a later one, sharing that one ``entry_record_id`` and
+holding ``BROKER_N_TG_LOTS`` each. A part fill fills them in the plan's
+order, nearest target first, so the near legs go on the board whole rather
+than every one of them short.
+
+**How many legs, and where they get out, is the Legs dropdown on the page**
+— ``TG_LEG_PLAN``, one of ``single`` / ``1-2`` / ``1-3`` / ``1-2-3``, read
+at the moment a call is taken rather than cached, so it needs no restart.
+``resolve_leg_plan`` settles the choice against the call that actually
+arrived; see its docstring for the two rules that do that. A call already on
+the board keeps the plan it was taken under: its legs are orders at a
+broker, and a dropdown does not place or un-place one.
+
+**Target 1 paying lifts every other leg to its own entry.** Once the nearest
+leg has banked, the trade has paid for itself, and a leg that then runs back
+through the entry is giving back a win rather than taking the loss the call
+planned for. See ``_arm_breakeven`` and ``slot_stop``.
 
 Because the two legs share an entry record, that record's quantity is the
 pair's, not the leg's — so a leg's exit is capped at what the leg itself
@@ -38,6 +52,20 @@ touches it the leg's stop is cancelled and the leg is sold at market — the
 other leg, its stop and its target are untouched. That needs the app alive,
 which the LaunchAgent sees to. The stops do not.
 
+**A target is watched on the session high, not only on the last price.** A
+last price is a point sample: a level watched with it alone is seen only if
+the premium is still there when a poll lands, so a spike through a target
+between two polls leaves no trace at all. NIFTY 22800 PE on 2026-10-06 is
+the proof — T1 at 196 was wicked through, the polls all read below it, and
+both legs rode down to the 167 stop. The session high is monotone, so a
+level once traded through stays visible; a high STRICTLY ABOVE the one
+recorded at the fill is proof of a trade since the fill at that price
+(``touched_above``, and ``touched_below`` on the low for the stop-breach
+guard). The high-water witness can only ever fire late, never falsely — so
+near a target the loop drops to a one-second poll and stops paying for the
+order sweep (``TG_TARGET_NEAR_PCT``, default 2 %), and the gap between the
+touch and the market order that answers it is a second rather than ten.
+
 **A call that cannot rest is skipped, not chased.** The entry is a stop BUY,
 which must sit above the market. If the premium has already run past the
 tip's price by the time the message lands, nothing is placed and an alert
@@ -56,7 +84,7 @@ from datetime import date, datetime
 from trading_app.app.order_placement import op_signal_engine as _ops
 from trading_app.app.order_placement.op_signal_engine import (
     _cancel_leg, _exit_cutoff_mins, _is_resting, _now_mins, _place_stop_leg,
-    _record, _session, exit_side, lot_chunks, reached, remember_session,
+    _record, _session, lot_chunks, reached, remember_session,
     signal_records)
 from trading_app.app.order_placement.op_signal_store import (
     BROKER_DONE_STAGES, DONE_PHASES, STAGE_DEAD, STAGE_FLAT, STAGE_LIVE,
@@ -65,6 +93,10 @@ from trading_app.app.order_placement.tg_call_store import TgCallStore, TgTradeHi
 from trading_app.app.utils.logger import logger
 
 _POLL_SECS = 3
+# Within TG_TARGET_NEAR_PCT of a watched target the loop tightens to this and
+# skips the order sweep: nothing about a resting stop can change in a second,
+# but the premium crossing the target can.
+_POLL_NEAR_SECS = 1
 _PARTIAL_SETTLE_SECS = 20
 # A market exit fills in seconds. A slot still without its exit fill this
 # long after going flat is booked on what is known and flagged, rather than
@@ -74,6 +106,7 @@ _HARD_STOP_MIN = 15 * 60 + 29
 _OPEN_MIN = 9 * 60 + 15
 
 _DEFAULT_LIMIT_PCT = 1.0
+_DEFAULT_NEAR_PCT = 2.0
 _STOPPABLE = ('zerodha', 'kite', 'fyers')
 
 _thread = None
@@ -179,12 +212,81 @@ def tg_targets(username) -> list:
 LEG_T1 = 'T1'
 LEG_T3 = 'T3'
 
+# What the dropdown on /orderplacement offers, and the target each choice
+# rides to. The numbers are the call's targets COUNTING FROM ONE, so '1-3' is
+# "a leg out at target 1 and a leg out at target 3".
+LEG_PLANS = {
+    'single': [1],
+    '1-2': [1, 2],
+    '1-3': [1, 3],
+    '1-2-3': [1, 2, 3],
+}
+LEG_PLAN_LABELS = {
+    'single': 'Single',
+    '1-2': 'Double 1 2',
+    '1-3': 'Double 1 3',
+    '1-2-3': 'Thrice',
+}
+# The shape every call before the dropdown existed traded: one leg out at T1
+# and one riding to the call's last target.
+_DEFAULT_LEG_PLAN = '1-3'
+
+
+def leg_plan_name(username) -> str:
+    raw = str(_uvar(username, 'TG_LEG_PLAN', _DEFAULT_LEG_PLAN)).strip().lower()
+    return raw if raw in LEG_PLANS else _DEFAULT_LEG_PLAN
+
+
+def resolve_leg_plan(targets, plan_name=_DEFAULT_LEG_PLAN) -> list:
+    """The legs a call actually runs: ``[{'leg': 'T1', 'target': 95.0}, ...]``.
+
+    Two things the raw dropdown choice cannot decide on its own, because they
+    depend on the call that arrived:
+
+    * **An index past the end rides to the last target the call lists.** The
+      channel usually posts three, but not always, and '1-3' on a two-target
+      call means "out at 1, ride the rest to the end" — which is exactly what
+      every call traded before the dropdown existed.
+    * **Two indices that land on the same level are one leg.** A one-target
+      call under 'Thrice' is one leg, not three identical ones stacked on the
+      same strike at three times the size.
+
+    The label is the target's real position in the call, so a '1-3' leg on a
+    two-target call is labelled T2 — what it is, not what was asked for.
+    """
+    levels = [float(t) for t in (targets or [])]
+    if not levels:
+        return []
+    out, seen = [], set()
+    for want in LEG_PLANS.get(plan_name) or LEG_PLANS[_DEFAULT_LEG_PLAN]:
+        n = min(int(want), len(levels))
+        level = levels[n - 1]
+        if level in seen:
+            continue
+        seen.add(level)
+        out.append({'leg': f'T{n}', 'target': level})
+    return out
+
+
+def call_legs(call) -> list:
+    """A stored call's leg plan. Calls taken before the dropdown existed carry
+    ``target``/``target_far`` instead, so those are read back into the same
+    shape — an in-flight call survives the restart that deploys this."""
+    plan = call.get('leg_plan')
+    if plan:
+        return [{'leg': l['leg'], 'target': float(l['target'])} for l in plan]
+    legs = [{'leg': LEG_T1, 'target': float(call.get('target') or 0)}]
+    if call.get('target_far') is not None:
+        legs.append({'leg': call.get('far_label') or LEG_T3,
+                     'target': float(call['target_far'])})
+    return legs
+
 
 def far_target(targets) -> tuple:
-    """``(label, level)`` of the leg that rides past T1: the last target the
-    call lists — T3 on the channel's usual three, T2 if it lists two — or
-    ``(None, None)`` when the call has one target and there is nothing
-    further to ride to."""
+    """``(label, level)`` of the last target a call lists, or ``(None, None)``
+    when it lists one and there is nothing further to ride to. Still written
+    onto every call for the P&L ledger and for anything reading a call taken
+    before the leg plan existed."""
     levels = [float(t) for t in (targets or [])]
     if len(levels) < 2:
         return None, None
@@ -204,38 +306,97 @@ def _key(slot) -> str:
 
 def slot_target(call, slot) -> float:
     """The level this leg is watched against: a level set by hand on the
-    card wins, else the call's T1, or its far target for the T3 leg. Read
-    fresh every tick, so a channel edit or a hand edit moves it at once."""
+    card wins, else the leg plan's own level for this leg. Read fresh every
+    tick, so a channel edit or a hand edit moves it at once."""
     manual = slot.get('target_level')
     if manual:
         return float(manual)
-    if (slot.get('leg') or LEG_T1) == LEG_T3:
-        return float(call.get('target_far') or call['target'])
-    return float(call['target'])
+    me = slot.get('leg') or LEG_T1
+    for l in call_legs(call):
+        if l['leg'] == me:
+            return float(l['target'])
+    return float(call.get('target') or 0)
+
+
+def touched_above(level, last_price, day_high, high_at_fill):
+    """Proof that the premium traded AT OR ABOVE ``level`` since the fill, or
+    ``None``. The number returned is the price that proves it.
+
+    Two independent witnesses, because one of them is not enough:
+
+    * **The last price.** Only true while the premium is still at the level
+      when a poll happens to land. The engine polls every few seconds, and a
+      quote can take ten more when the provider is loaded, so a spike through
+      the level between two polls leaves no trace in it at all. That is how
+      NIFTY 22800 PE's T1 at 196 was missed on 2026-10-06: the premium wicked
+      through it and was back below long before the next sample, and the leg
+      rode on down to its 167 stop.
+    * **The session high.** Monotone, so a level once traded through stays
+      visible for the rest of the day however brief the trade was.
+
+    The session high alone would be a liar: it may have been set long before
+    this leg was filled — bought at 183 into a contract that opened at 250,
+    every target below 250 would read as touched the instant the stop was
+    armed. So it only counts as a witness when it is STRICTLY ABOVE the high
+    at the moment of the fill, which is proof of a trade after the fill at
+    that price. With no such baseline the high is not consulted at all, and
+    the last price is left to do the watching on its own.
+    """
+    if last_price is not None and last_price >= level:
+        return float(last_price)
+    if (day_high is not None and high_at_fill is not None
+            and day_high >= level and day_high > float(high_at_fill)):
+        return float(day_high)
+    return None
+
+
+def touched_below(level, last_price, day_low, low_at_fill):
+    """The mirror of :func:`touched_above` for a level under the market — the
+    stop-breach guard, which only runs when nothing is resting at the broker
+    to catch it. Same reasoning, same baseline rule."""
+    if last_price is not None and last_price <= level:
+        return float(last_price)
+    if (day_low is not None and low_at_fill is not None
+            and day_low <= level and day_low < float(low_at_fill)):
+        return float(day_low)
+    return None
+
+
+def near_pct(username) -> float:
+    """How close to a watched target counts as "approaching", as a percentage
+    of the level. Inside it the loop drops to ``_POLL_NEAR_SECS`` and stops
+    paying for the order sweep, so the gap between the touch and the market
+    order that answers it is a second rather than ten."""
+    try:
+        v = float(_uvar(username, 'TG_TARGET_NEAR_PCT', _DEFAULT_NEAR_PCT))
+    except (TypeError, ValueError):
+        return _DEFAULT_NEAR_PCT
+    return v if v > 0 else _DEFAULT_NEAR_PCT
 
 
 def leg_share(call, slot, filled_lots: int) -> int:
     """This leg's cut of one entry order that bought for every leg.
 
-    The legs are filled in order — T1 first, then T3 — so a part fill puts
-    the nearer target's leg on the board whole rather than leaving both
-    half-sized. Each takes at most the account's own ``lots``.
+    The legs are filled in the plan's order — nearest target first — so a
+    part fill puts the nearer legs on the board whole rather than leaving
+    every one of them short. Each takes at most the account's own ``lots``.
     """
     want = int(slot.get('lots') or 0)
     if want <= 0 or filled_lots <= 0:
         return 0
-    if (slot.get('leg') or LEG_T1) == LEG_T1:
+    me = slot.get('leg') or LEG_T1
+    order = [l['leg'] for l in call_legs(call)]
+    if me not in order:
         return min(filled_lots, want)
-    # Everything the nearer leg did not take, capped at this leg's size.
-    t1 = next((sl for sl in (call.get('brokers') or {}).values()
-               if int(sl.get('instance') or 0) == int(slot['instance'])
-               and (sl.get('leg') or LEG_T1) == LEG_T1), None)
-    taken = int(t1.get('lots') or 0) if t1 else 0
+    siblings = {(sl.get('leg') or LEG_T1): sl for sl in (call.get('brokers') or {}).values()
+                if int(sl.get('instance') or 0) == int(slot['instance'])}
+    taken = sum(int((siblings.get(name) or {}).get('lots') or 0)
+                for name in order[:order.index(me)])
     return max(min(filled_lots - taken, want), 0)
 
 
 def _leg_label(call, slot) -> str:
-    return (call.get('far_label') or LEG_T3) if (slot.get('leg') or LEG_T1) == LEG_T3 else LEG_T1
+    return slot.get('leg') or LEG_T1
 
 
 def entry_limit(trigger: float, pct: float) -> float:
@@ -459,10 +620,13 @@ def take_call(username, plan, meta=None) -> dict:
         return skipped('no broker has BROKER_N_TG_ACTIVE=true with BROKER_N_TG_LOTS set',
                        once_key='no-brokers')
 
-    # The legs this call runs at each account: T1 always, T3 as well when
-    # the call has somewhere further to ride to. Both are the account's own
-    # size, and they are bought in ONE order — the split happens on the fill.
-    leg_names = [LEG_T1] + ([LEG_T3] if target_far is not None else [])
+    # The legs this call runs at each account, from the plan chosen on the
+    # page (Single / Double 1 2 / Double 1 3 / Thrice) resolved against the
+    # targets this call actually lists. Each is the account's own size, and
+    # they are bought in ONE order — the split happens on the fill.
+    plan_name = leg_plan_name(username)
+    legs = resolve_leg_plan(plan['targets'], plan_name)
+    leg_names = [l['leg'] for l in legs]
 
     session_data = _session(username)
     call = TgCallStore.create({
@@ -470,6 +634,7 @@ def take_call(username, plan, meta=None) -> dict:
         'symbol': symbol, 'strike': strike, 'option_type': option_type,
         'action': 'BUY', 'entry': entry, 'stop': stop, 'targets': [float(t) for t in plan['targets']],
         'target': target, 'target_far': target_far, 'far_label': far_label, 'limit': limit,
+        'leg_plan': legs, 'leg_plan_name': plan_name,
         'expiry': str(plan.get('expiry') or '') or None,
         'lot_size': lot_size, 'ltp_at_call': ltp,
         'phase': 'ARMED',
@@ -561,12 +726,14 @@ def take_call(username, plan, meta=None) -> dict:
     TgCallStore.update(call_id, {'phase': 'ENTRY_PENDING'})
     brokers = ', '.join(f"{r['name']} x{r['total_lots']} ({'+'.join(r['legs'])})"
                         for r in accepted)
-    far = f' · {far_label} {target_far}' if target_far is not None else ''
+    ladder = ' · '.join(f"{l['leg']} {l['target']}" for l in legs)
     _alert(username, 'tg_call_taken', f'Telegram call taken — {label}',
-           f'SL-L BUY trigger {entry} limit {limit} · SL {stop} · T1 {target}{far} · {brokers}',
-           {'call_id': call_id, 'plan': plan, 'limit': limit, 'summary': summary})
+           f'SL-L BUY trigger {entry} limit {limit} · SL {stop} · {ladder} '
+           f'({LEG_PLAN_LABELS.get(plan_name, plan_name)}) · {brokers}',
+           {'call_id': call_id, 'plan': plan, 'limit': limit, 'summary': summary,
+            'leg_plan': legs, 'leg_plan_name': plan_name})
     logger.info(f"[TgCall] {call_id} armed {label} trigger={entry} limit={limit} sl={stop} "
-                f"t1={target} {far_label or 'far'}={target_far} → {len(accepted)}/{len(summary)} "
+                f"plan={plan_name} ({ladder}) → {len(accepted)}/{len(summary)} "
                 f"account(s), {'+'.join(leg_names)} in one order each, in "
                 f"{_time.time() - t_start:.2f}s from receipt")
     ensure_running(username, source='call')
@@ -647,14 +814,27 @@ def _settle_entry(call, slot, username, session_data, books) -> None:
 def _arm_stop(call, slot, filled_lots, filled_qty, entry_fill, username, session_data) -> None:
     """The SL-M for everything that filled. Stage LIVE either way: a refused
     stop is retried every tick, and the price guard covers the gap."""
+    from trading_app.app.routes.order_placement_api import option_quote
+
     call_id, instance = call['id'], slot['instance']
     sl_id = _place_stop_leg(call, instance, filled_lots, slot_stop(call, slot),
                             username, session_data, source='telegram',
                             extra={'tg_leg': slot.get('leg') or LEG_T1})
+    # The session's range AT THE FILL. Everything the leg's targets and its
+    # stop-breach guard know about a spike they did not see live is measured
+    # against this: a session high strictly above it is proof of a trade
+    # after the fill. Taken here and not on the first tick because the first
+    # tick is already seconds late, and a wick is not seconds long. If the
+    # quote cannot answer, the baseline is taken on the first tick that can
+    # (see _check_live) and until then only the last price watches.
+    q = option_quote(call['symbol'], call['strike'], call['option_type'])
     TgCallStore.update_broker(call_id, _key(slot), {
         'stage': STAGE_LIVE, 'open_qty': filled_qty, 'open_lots': filled_lots,
         'entry_qty': filled_qty, 'entry_lots': filled_lots,
         'entry_fill': entry_fill, 'filled_at': _time.time(),
+        'high_at_fill': q.get('high'), 'low_at_fill': q.get('low'),
+        'target_watch': {'level': slot_target(call, slot), 'base': q.get('high')},
+        'stop_watch': {'level': slot_stop(call, slot), 'base': q.get('low')},
         'legs': {'SL': sl_id} if sl_id else {},
     })
     if not sl_id:
@@ -734,7 +914,72 @@ def _flatten(call, slot, username, session_data, reason) -> None:
     logger.info(f"[TgCall] {call_id} {_key(slot)}: FLAT ({reason})")
 
 
-def _check_live(call, slot, ltp, username, session_data) -> None:
+def _watch_base(call, slot, field, level, extreme):
+    """The session extreme that proves a trade through ``level`` happened
+    while ``level`` was the level being watched.
+
+    A session high or low is only evidence once it is measured against where
+    the range stood when the level was set. ``field`` remembers both on the
+    slot (``{'level': …, 'base': …}``) and is re-based the moment the level
+    moves — by a channel edit, by the strip's price box, or by breakeven
+    lifting the stop. Returns None while nothing can be read, which leaves
+    the last price watching on its own.
+    """
+    watch = slot.get(field) or {}
+    try:
+        same = abs(float(watch.get('level')) - float(level)) < 0.005
+    except (TypeError, ValueError):
+        same = False
+    base = watch.get('base') if same else None
+    if base is not None:
+        return float(base)
+    # No usable baseline for this level: take one now if the range can be
+    # read, and otherwise just remember the level, so that when a range does
+    # arrive it is measured against THIS level and not the one before it.
+    fresh = {'level': float(level), 'base': None if extreme is None else float(extreme)}
+    if not same or fresh['base'] is not None:
+        TgCallStore.update_broker(call['id'], _key(slot), {field: fresh})
+        slot[field] = fresh
+    return fresh['base']
+
+
+def _arm_breakeven(call, slot, username) -> None:
+    """Target 1 is banked, so every leg still in the trade stops out at its
+    own entry instead of the call's stop.
+
+    Armed on the CALL, not on the leg: the level each leg moves to is its own
+    account's fill (``slot_stop``), but the event that arms it — the nearest
+    target paying — is the whole call's. Only the plan's first leg arms it;
+    a later leg reaching its own target has nothing left to protect behind
+    it. No order is sent here: the tick reconciles every resting stop against
+    ``slot_stop`` already, with its retry and its breach guard.
+    """
+    if not breakeven_on(username) or call.get('breakeven_at'):
+        return
+    legs = call_legs(call)
+    if not legs or (slot.get('leg') or LEG_T1) != legs[0]['leg']:
+        return
+    others = [s for s in (call.get('brokers') or {}).values()
+              if s.get('stage') == STAGE_LIVE and _key(s) != _key(slot)]
+    TgCallStore.update(call['id'], {'breakeven_at': _time.time()})
+    # And on the dict this tick is holding, so the legs still to be walked in
+    # THIS pass already read the lifted stop out of slot_stop. Without it the
+    # move waits for the next tick, with the premium running.
+    call['breakeven_at'] = _time.time()
+    if not others:
+        return
+    levels = ', '.join(f"{s.get('name')} {s.get('leg') or LEG_T1} → {s.get('entry_fill')}"
+                       for s in others if s.get('entry_fill'))
+    logger.info(f"[TgCall] {call['id']}: {legs[0]['leg']} banked — {len(others)} leg(s) "
+                f"to breakeven ({levels})")
+    _alert(username, 'tg_call_exit',
+           f"Telegram call at breakeven — {call['symbol']} {call['strike']} {call['option_type']}",
+           f"{legs[0]['leg']} paid, so the remaining leg(s) stop out at their own entry: {levels}",
+           {'call_id': call['id'], 'legs': [_key(s) for s in others]})
+
+
+def _check_live(call, slot, ltp, username, session_data,
+                day_high=None, day_low=None) -> None:
     """One broker's live position: the stop first, then the watched target,
     then the guard for a position nothing is protecting."""
     call_id, instance = call['id'], slot['instance']
@@ -752,12 +997,25 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
         _flatten(call, slot, username, session_data, 'nothing held')
         return
 
+    # The session extreme a level is read against, re-based whenever the
+    # level itself moves. It has to be: the range since the FILL says
+    # nothing about a level set later. A stop lifted to breakeven, or raised
+    # by a channel edit, is almost always above a low the premium already
+    # made — read against the fill's baseline it would look breached the
+    # instant it was set, and the leg would be sold at market for nothing.
+    base_high = _watch_base(call, slot, 'target_watch', slot_target(call, slot), day_high)
+    base_low = _watch_base(call, slot, 'stop_watch', slot_stop(call, slot), day_low)
+
     target = slot_target(call, slot)
-    if reached('BUY', ltp, target):
+    at = touched_above(target, ltp, day_high, base_high)
+    if at is not None:
+        how = ('at the last price' if (ltp is not None and ltp >= target)
+               else f'on the session high (last price {ltp})')
         logger.info(f"[TgCall] {call_id} {_key(slot)}: target {target} touched "
-                    f"at {ltp} — cancelling the stop and exiting")
+                    f"at {at} {how} — cancelling the stop and exiting")
         _cancel_leg(sl, username, session_data)
         _flatten(call, slot, username, session_data, f'{_leg_label(call, slot)} hit')
+        _arm_breakeven(call, slot, username)
         return
 
     if not _is_resting(sl) and not (sl and sl.get('status') == 'CANCELLED'):
@@ -780,8 +1038,9 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
     # it is cancelled and the position sold at market.
     want = slot_stop(call, slot)
     if _is_resting(sl) and abs(float(sl.get('trigger_price') or 0) - want) >= 0.05:
-        if ltp is not None and reached(exit_side('BUY'), ltp, want):
-            logger.error(f"[TgCall] {call_id} {_key(slot)}: premium {ltp} is through the "
+        through = touched_below(want, ltp, day_low, base_low)
+        if through is not None:
+            logger.error(f"[TgCall] {call_id} {_key(slot)}: premium {through} is through the "
                          f"edited stop {want} while the old one rests at {sl.get('trigger_price')} "
                          f"— exiting at market")
             _cancel_leg(sl, username, session_data)
@@ -795,10 +1054,12 @@ def _check_live(call, slot, ltp, username, session_data) -> None:
             MineOrderStore.update_order(sl['id'], {'price': want, 'trigger_price': want})
             logger.info(f"[TgCall] {call_id} {_key(slot)}: stop moved to {want}")
 
-    if ltp is not None and reached(exit_side('BUY'), ltp, want) and not _is_resting(sl):
-        logger.error(f"[TgCall] {call_id} {_key(slot)}: premium {ltp} is through the "
-                     f"{want} stop with nothing resting — exiting at market")
-        _flatten(call, slot, username, session_data, 'stop breached, no order resting')
+    if not _is_resting(sl):
+        through = touched_below(want, ltp, day_low, base_low)
+        if through is not None:
+            logger.error(f"[TgCall] {call_id} {_key(slot)}: premium {through} is through the "
+                         f"{want} stop with nothing resting — exiting at market")
+            _flatten(call, slot, username, session_data, 'stop breached, no order resting')
 
 
 def _handle_eod(call, username, session_data) -> None:
@@ -945,10 +1206,37 @@ def call_records(call_id: str) -> list:
 
 # ── the user changed their mind ───────────────────────────────────────────
 
+def breakeven_on(username) -> bool:
+    """Whether target 1 being hit lifts every remaining leg's stop to its own
+    entry. On by default: once the first leg has banked its target the trade
+    has paid for itself, and a leg that then runs back past the entry is
+    giving back a win rather than taking the loss the call planned for."""
+    return _flag(username, 'TG_BREAKEVEN_AFTER_T1', 'true')
+
+
 def slot_stop(call, slot) -> float:
-    """The level this account's stop is meant to rest at: a hand-set level
-    on the slot wins over the call's plan."""
-    return float(slot.get('stop_level') or call['stop'])
+    """The level this account's stop is meant to rest at, in order:
+
+    1. a level set by hand on the strip — that was a decision, and nothing
+       here moves an order back off it;
+    2. this leg's own entry fill, once the call's first leg has banked its
+       target and breakeven is armed — never DOWN, so a call whose stop is
+       already above the entry keeps the better level;
+    3. the call's plan.
+
+    Nothing places this: the tick already reconciles a resting stop that is
+    not at ``slot_stop``, with the retry and the breach guard that come with
+    it, so breakeven rides on the path that was already tested.
+    """
+    manual = slot.get('stop_level')
+    if manual:
+        return float(manual)
+    want = float(call['stop'])
+    if call.get('breakeven_at'):
+        fill = slot.get('entry_fill')
+        if fill:
+            want = max(want, float(fill))
+    return want
 
 
 def note_manual_edit(order, new_price, new_limit=None) -> dict:
@@ -1241,17 +1529,22 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
             changes.append(f'stop {old_stop} → {stop}')
 
     # ── targets ───────────────────────────────────────────────────────
-    # Both watched levels move; neither is at a broker. A far target edited
-    # away (the call now lists one target) leaves a T3 leg already placed
-    # watching the level it had — a leg is not un-placed by an edit.
-    old_target = float(call.get('target') or 0)
-    old_far = call.get('target_far')
-    if target != old_target or (target_far is not None and target_far != old_far):
-        updates = {'target': target,
-                   'targets': [float(t) for t in plan.get('targets') or [target]]}
-        if target_far is not None:
-            updates.update({'target_far': target_far, 'far_label': far_label})
-        TgCallStore.update(call_id, updates)
+    # Every watched level moves; none of them is at a broker. The plan is
+    # re-resolved against the edited targets, but only for the legs that are
+    # already on the board — an edit does not place a leg or un-place one,
+    # so a leg whose index the edit removed keeps watching the last level
+    # the call still lists.
+    old_legs = {l['leg']: l['target'] for l in call_legs(call)}
+    new_levels = {l['leg']: l['target'] for l in
+                  resolve_leg_plan(plan.get('targets') or [target],
+                                   call.get('leg_plan_name') or leg_plan_name(username))}
+    fallback = float((plan.get('targets') or [target])[-1])
+    merged = [{'leg': name, 'target': new_levels.get(name, fallback)} for name in old_legs]
+    if any(abs(l['target'] - old_legs[l['leg']]) >= 0.005 for l in merged):
+        TgCallStore.update(call_id, {
+            'target': target, 'target_far': target_far, 'far_label': far_label,
+            'targets': [float(t) for t in plan.get('targets') or [target]],
+            'leg_plan': merged})
         # The channel spoke later than the hand, so its numbers win — the
         # same rule the stop override follows.
         for slot in slots:
@@ -1259,10 +1552,9 @@ def amend_call(username, call_id, plan, meta=None) -> dict:
                 TgCallStore.update_broker(call_id, _key(slot),
                                           {'target_level': None, 'target_source': 'channel'})
                 changes.append(f"{slot.get('name')} {_leg_label(call, slot)}: hand-set target cleared")
-        if target != old_target:
-            changes.append(f'T1 {old_target} → {target}')
-        if target_far is not None and target_far != old_far:
-            changes.append(f'{far_label} {old_far} → {target_far}')
+        for l in merged:
+            if abs(l['target'] - old_legs[l['leg']]) >= 0.005:
+                changes.append(f"{l['leg']} {old_legs[l['leg']]} → {l['target']}")
 
     TgCallStore.update(call_id, {'edited_at': int(_time.time() * 1000),
                                  'source_text': (plan.get('source_text') or (meta or {}).get('text') or '')[:2000]})
@@ -1374,27 +1666,40 @@ def history(days: int = 0) -> list:
 
 # ── the loop ──────────────────────────────────────────────────────────────
 
-def tick(username, session_data=None) -> None:
+def tick(username, session_data=None, light=False) -> bool:
+    """One pass over every live call. Returns True when some leg is close
+    enough to its target that the loop should come back in a second.
+
+    ``light`` skips the order sweep. The sweep is the expensive half of a
+    tick — four brokers' order books, often seconds of it — and it answers
+    only "has the stop filled", which the exchange will still be able to tell
+    us one second later. The premium crossing a target will not wait, and it
+    is the only thing this engine watches that has no exchange-side order
+    behind it, so near a target the price is read and the sweep is not.
+    """
     from trading_app.app.routes.api import _reconcile_open_orders
-    from trading_app.app.routes.order_placement_api import option_ltp
+    from trading_app.app.routes.order_placement_api import option_quote
 
     session_data = session_data if session_data is not None else _session(username)
     calls = TgCallStore.get_active()
     if not calls and not TgCallStore.get_unbooked():
-        return
+        return False
 
     # One status sweep for every leg of every call. Forced, because the
     # engine cannot wait out the 8-second throttle while a position is
     # unprotected — and the sweep stamps the throttle, so the page's own
     # polls ride on it.
-    try:
-        _reconcile_open_orders(username, session_data, force=True)
-    except Exception as e:
-        logger.warning(f"[TgCall] status sweep failed: {e}")
+    if not light:
+        try:
+            _reconcile_open_orders(username, session_data, force=True)
+        except Exception as e:
+            logger.warning(f"[TgCall] status sweep failed: {e}")
 
     cutoff = _exit_cutoff_mins(username)
     now_mins = _now_mins()
     books = {}
+    band = near_pct(username) / 100.0
+    approaching = False
 
     for call in calls:
         try:
@@ -1403,10 +1708,11 @@ def tick(username, session_data=None) -> None:
                 continue
 
             slots = list((call.get('brokers') or {}).values())
-            ltp = None
+            ltp = day_high = day_low = None
             if any(s.get('stage') == STAGE_LIVE for s in slots):
-                ltp = option_ltp(call['symbol'], call['strike'], call['option_type'])
-                if ltp is None:
+                q = option_quote(call['symbol'], call['strike'], call['option_type'])
+                ltp, day_high, day_low = q.get('last_price'), q.get('high'), q.get('low')
+                if ltp is None and day_high is None:
                     # Blind: the stop still rests at the exchange, but the
                     # target is watched here and cannot be seen. Say so
                     # loudly, once, so the position is managed by hand.
@@ -1427,30 +1733,46 @@ def tick(username, session_data=None) -> None:
                 if stage == STAGE_PENDING_ENTRY:
                     _settle_entry(call, slot, username, session_data, books)
                 else:
-                    _check_live(call, slot, ltp, username, session_data)
+                    if ltp is not None:
+                        level = slot_target(call, slot)
+                        approaching = approaching or ltp >= level * (1 - band)
+                    _check_live(call, slot, ltp, username, session_data,
+                                day_high=day_high, day_low=day_low)
 
             TgCallStore.finish_if_all_brokers_done(call['id'])
         except Exception as e:
             logger.error(f"[TgCall] tick for {call.get('id')} failed: {e}", exc_info=True)
 
-    # After the sweep above has read the exit fills back.
-    _book_pending(username)
+    # After the sweep above has read the exit fills back. A light tick did no
+    # sweep, so there is no new fill to book on it.
+    if not light:
+        _book_pending(username)
+    return approaching
 
 
 def _loop(username) -> None:
     logger.info('[TgCall] engine thread started')
+    near = False
+    swept = 0.0
     while not _stop_event.is_set():
         try:
             if _now_mins() >= _HARD_STOP_MIN:
                 logger.info('[TgCall] past the hard stop — engine standing down')
                 break
-            tick(username)
+            # Near a target the price is read every second and the order
+            # sweep is skipped — but not skipped forever: a stop that filled
+            # while the premium hovered under its target has to be seen, so a
+            # full tick still runs at the ordinary cadence underneath.
+            light = near and (_time.time() - swept) < _POLL_SECS
+            if not light:
+                swept = _time.time()
+            near = tick(username, light=light)
             if not TgCallStore.get_active() and not TgCallStore.get_unbooked():
                 logger.info('[TgCall] no live calls — engine standing down')
                 break
         except Exception as e:
             logger.error(f"[TgCall] loop error: {e}", exc_info=True)
-        _stop_event.wait(_POLL_SECS)
+        _stop_event.wait(_POLL_NEAR_SECS if near else _POLL_SECS)
     logger.info('[TgCall] engine thread stopped')
 
 
@@ -1486,5 +1808,6 @@ __all__ = ['take_call', 'validate_call', 'tg_targets', 'entry_limit', 'tick',
            'ensure_running', 'is_running', 'stop', 'stop_all_calls', 'call_records',
            'remember_session', 'is_active', 'history', 'retract_call', 'amend_call', 'prewarm',
            'note_manual_edit', 'note_manual_target', 'slot_stop', 'slot_target', 'leg_share',
+           'touched_above', 'touched_below', 'near_pct',
            'slot_key', 'far_target',
            'LEG_T1', 'LEG_T3']

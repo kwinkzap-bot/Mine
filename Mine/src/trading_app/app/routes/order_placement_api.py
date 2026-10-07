@@ -32,6 +32,7 @@ reaches the other panel's positions, and neither is an account-wide
 liquidation.
 """
 
+import inspect
 import math
 import time as _time
 
@@ -379,12 +380,23 @@ def stop_direction_error(action, trigger, last_price):
     return None
 
 
-def option_ltp(symbol: str, strike: int, option_type: str):
-    """The contract's last traded premium, or None if nothing can answer.
+def option_quote(symbol: str, strike: int, option_type: str) -> dict:
+    """The contract's live mark AND the session's range so far.
 
-    None is a real answer here, not a failure: every caller treats "no quote"
-    as "no check" rather than as a reason to refuse an order.
+    ``{'last_price': float|None, 'high': float|None, 'low': float|None}`` —
+    every field independently None when nothing can answer, which every
+    caller treats as "no check" rather than as a reason to refuse an order.
+
+    The high and low matter because a last price is a *point sample*. A level
+    watched by polling the last price is only ever seen if the premium is
+    still at it when the next poll lands, so a spike through a target between
+    two polls is invisible — that is exactly how a touched T1 was missed on
+    2026-10-06. The day's high and low are monotone, so a level that was
+    traded through stays visible for the rest of the session however brief
+    the trade was. They cost nothing extra: ``ltp()`` is implemented on top
+    of ``quote()`` in every adapter and simply throws the range away.
     """
+    out = {'last_price': None, 'high': None, 'low': None}
     try:
         from trading_app.app.routes.api import _get_cached_strike_token, get_data_provider, get_kite
         from trading_app.service.fyers_data_service import FyersDataServiceAdapter
@@ -393,7 +405,7 @@ def option_ltp(symbol: str, strike: int, option_type: str):
         provider = get_data_provider()
         effective = provider or get_kite(instance=1)
         if not effective:
-            return None
+            return out
         is_fyers = isinstance(provider, FyersDataServiceAdapter)
         service = KiteService(kite_instance=effective)
         _token, opt_sym = _get_cached_strike_token(service, provider, is_fyers,
@@ -401,13 +413,36 @@ def option_ltp(symbol: str, strike: int, option_type: str):
         if not opt_sym:
             logger.warning(f"[OrderPlacement API] {symbol} {strike}{option_type}: no tradingsymbol "
                            f"from the {'Fyers' if is_fyers else 'Kite'} master — no quote")
-            return None
+            return out
         key = opt_sym if is_fyers else f'NFO:{opt_sym}'
-        quote = (provider if is_fyers else effective).ltp([key]) or {}
-        return float(quote.get(key, {}).get('last_price') or 0) or None
+        # Same request the old ltp() made, and in the same rate-limiter lane:
+        # the adapters' ltp() is quote(priority=PRIORITY_CHART) with the range
+        # dropped, and promoting every caller of this into the CRITICAL lane
+        # would put the price watch in front of the order path. KiteConnect's
+        # own quote() takes no priority, hence the check.
+        source = provider if is_fyers else effective
+        try:
+            takes_priority = 'priority' in inspect.signature(source.quote).parameters
+        except (TypeError, ValueError):
+            takes_priority = False
+        raw = source.quote([key], priority=1) if takes_priority else source.quote([key])
+        quote = (raw or {}).get(key) or {}
+        ohlc = quote.get('ohlc') or {}
+        out['last_price'] = float(quote.get('last_price') or 0) or None
+        out['high'] = float(ohlc.get('high') or 0) or None
+        out['low'] = float(ohlc.get('low') or 0) or None
     except Exception as e:
-        logger.warning(f"[OrderPlacement API] {symbol} {strike}{option_type} LTP unavailable: {e}")
-        return None
+        logger.warning(f"[OrderPlacement API] {symbol} {strike}{option_type} quote unavailable: {e}")
+    return out
+
+
+def option_ltp(symbol: str, strike: int, option_type: str):
+    """The contract's last traded premium, or None if nothing can answer.
+
+    None is a real answer here, not a failure: every caller treats "no quote"
+    as "no check" rather than as a reason to refuse an order.
+    """
+    return option_quote(symbol, strike, option_type).get('last_price')
 
 
 def _place_stop(user, targets, symbol, strike, option_type, action, trigger_price):
@@ -822,9 +857,51 @@ def tg_calls_status():
                         'listener': listener.status(),
                         'engine_running': eng.is_running(),
                         'targets': eng.tg_targets(_user()),
+                        'leg_plan': eng.leg_plan_name(_user()),
+                        'leg_plans': [{'value': k, 'label': v}
+                                      for k, v in eng.LEG_PLAN_LABELS.items()],
+                        'breakeven': eng.breakeven_on(_user()),
                         'calls': calls})
     except Exception as e:
         return _fail(e, 'tg_calls_status')
+
+
+@order_placement_bp.route('/tg-calls/leg-plan', methods=['POST'])
+@require_user_auth
+def tg_calls_set_leg_plan():
+    """How many legs the next Telegram call runs, and which target each one
+    rides to. Body: ``{"plan": "single" | "1-2" | "1-3" | "1-2-3"}``, and
+    optionally ``{"breakeven": true|false}``.
+
+    Saved to the env file as ``TG_LEG_PLAN``, and read at the moment a call
+    is taken rather than cached — so this takes effect on the next call with
+    no restart. A call already on the board keeps the plan it was taken
+    under: its legs are orders at a broker, and a dropdown does not place or
+    un-place one.
+    """
+    from trading_app.app.order_placement import tg_call_engine as eng
+    from trading_app.app.utils.user_env import UserEnvManager
+
+    try:
+        data = request.get_json(silent=True) or {}
+        plan = str(data.get('plan') or '').strip().lower()
+        if plan not in eng.LEG_PLANS:
+            return jsonify({'success': False,
+                            'error': f"plan must be one of {', '.join(eng.LEG_PLANS)}"}), 400
+        user = _user()
+        if not UserEnvManager.save_user_var(user, 'TG_LEG_PLAN', plan):
+            return jsonify({'success': False, 'error': 'Failed to save the leg plan'}), 500
+        if 'breakeven' in data:
+            be = 'true' if data.get('breakeven') else 'false'
+            if not UserEnvManager.save_user_var(user, 'TG_BREAKEVEN_AFTER_T1', be):
+                return jsonify({'success': False, 'error': 'Failed to save the breakeven flag'}), 500
+        logger.warning(f"[OrderPlacement API] {user} set the Telegram leg plan to "
+                       f"{plan} ({eng.LEG_PLAN_LABELS.get(plan)})")
+        return jsonify({'success': True, 'leg_plan': plan,
+                        'label': eng.LEG_PLAN_LABELS.get(plan),
+                        'breakeven': eng.breakeven_on(user)})
+    except Exception as e:
+        return _fail(e, 'tg_calls_set_leg_plan')
 
 
 @order_placement_bp.route('/tg-calls/<call_id>/target', methods=['PUT'])

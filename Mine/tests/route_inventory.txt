@@ -147,6 +147,7 @@
 /api/order-placement/tg-calls	order_placement.tg_calls_status	GET,HEAD,OPTIONS	True
 /api/order-placement/tg-calls/<call_id>/target	order_placement.tg_call_set_target	OPTIONS,PUT	True
 /api/order-placement/tg-calls/history	order_placement.tg_calls_history	GET,HEAD,OPTIONS	True
+/api/order-placement/tg-calls/leg-plan	order_placement.tg_calls_set_leg_plan	OPTIONS,POST	True
 /api/order/exit-all	api.exit_all_orders	OPTIONS,POST	True
 /api/order/place-sl	api.place_sl_order	OPTIONS,POST	True
 /api/orders	api.list_all_orders	GET,HEAD,OPTIONS	True

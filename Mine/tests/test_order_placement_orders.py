@@ -1019,3 +1019,43 @@ def test_a_leg_the_order_book_cannot_answer_for_is_absent_not_gone(monkeypatch):
     a live stop on a half-fetched book."""
     out = _fills(monkeypatch, {}, ['a', 'b'])
     assert out == {}
+
+
+# ── the Telegram leg plan ────────────────────────────────────────────────
+# How many legs the NEXT call runs, and the target each one rides to. Saved to
+# the env file, read when a call is taken — no restart, and a call already on
+# the board keeps the plan it was taken under.
+
+@pytest.fixture
+def saved_vars(monkeypatch):
+    """What the route wrote to the env file. Nothing touches a real one."""
+    written = {}
+    monkeypatch.setattr('trading_app.app.utils.user_env.UserEnvManager.save_user_var',
+                        staticmethod(lambda u, k, v: written.__setitem__(k, v) or True))
+    return written
+
+
+@pytest.mark.parametrize('plan', ['single', '1-2', '1-3', '1-2-3'])
+def test_the_leg_plan_is_saved(client, env, saved_vars, plan):
+    r = client.post('/api/order-placement/tg-calls/leg-plan', json={'plan': plan})
+    assert r.status_code == 200 and r.get_json()['success']
+    assert saved_vars == {'TG_LEG_PLAN': plan}
+
+
+def test_a_plan_that_is_not_one_of_the_four_is_refused(client, env, saved_vars):
+    r = client.post('/api/order-placement/tg-calls/leg-plan', json={'plan': '1-4'})
+    assert r.status_code == 400 and not r.get_json()['success']
+    assert saved_vars == {}                       # nothing written on a refusal
+
+
+def test_the_breakeven_flag_rides_along_when_sent(client, env, saved_vars):
+    client.post('/api/order-placement/tg-calls/leg-plan',
+                json={'plan': '1-3', 'breakeven': False})
+    assert saved_vars == {'TG_LEG_PLAN': '1-3', 'TG_BREAKEVEN_AFTER_T1': 'false'}
+
+
+def test_a_failed_save_is_reported_not_swallowed(client, env, monkeypatch):
+    monkeypatch.setattr('trading_app.app.utils.user_env.UserEnvManager.save_user_var',
+                        staticmethod(lambda *a, **k: False))
+    r = client.post('/api/order-placement/tg-calls/leg-plan', json={'plan': 'single'})
+    assert r.status_code == 500 and not r.get_json()['success']

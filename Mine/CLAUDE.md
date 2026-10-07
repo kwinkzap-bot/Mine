@@ -116,6 +116,9 @@ TG_CALLS_ACTIVE=true            # master switch; read per call, never cached
 TG_API_ID / TG_API_HASH         # my.telegram.org
 TG_CALLS_CHANNEL_ID=3942647299  # the number after '#-' on web.telegram.org/k
 TG_ENTRY_LIMIT_PCT=1            # entry limit = trigger × (1 + pct/100), up to the tick
+TG_TARGET_NEAR_PCT=2            # inside this % of a target the tick polls 1s and skips the sweep
+TG_LEG_PLAN=1-3                 # single | 1-2 | 1-3 | 1-2-3 — the Legs dropdown on the page
+TG_BREAKEVEN_AFTER_T1=true      # T1 banked → every other leg's stop lifts to its own entry fill
 BROKER_N_TG_ACTIVE=true         # per slot, with BROKER_N_ACTIVE; zerodha/fyers ONLY
 BROKER_N_TG_LOTS=1              # per slot, the size of EACH leg — the entry order is twice this
 ```
@@ -127,19 +130,37 @@ leaves `env/tg_calls.session` — a credential, gitignored, **back it up with
 
 A message that `parse_signal` reads as a call (`NIFTY 23150 CE / BUY : 81 /
 SL : 65 / Target : 95,101,110`) becomes, per broker, **one order that
-becomes two legs** (two legs since 2026-09-20, one order since 2026-09-23):
-a single **stop-limit BUY** for `BROKER_N_TG_LOTS × 2` (trigger = BUY price,
-limit = +1 %) → on fill it is **split into a T1 leg and a T3 leg of
-`BROKER_N_TG_LOTS` each**, and each gets an **SL-M SELL for its own qty**
-and **its own target watched on LTP**; touching it cancels that leg's stop
-and sells that leg alone at market. One line at the broker and one row on
-the strip, not two orders competing for the same strike — only the
-exchange's 27-lot freeze limit splits it further. The T1 leg exits at target
-1; the T3 leg rides through T1 and exits at the call's **last** target (T3,
-or T2 on a two-target call; a one-target call places one leg and one lot's
-worth). Slots are `brokers["N"]` (T1) and `brokers["N:T3"]`, sharing one
-`entry_record_id`; the SL/EXIT records carry `tg_leg`, the shared entry
-carries `T1+T3`. Five things are load-bearing:
+becomes N legs** (legs since 2026-09-20, one order since 2026-09-23, the
+count chosen on the page since 2026-10-06): a single **stop-limit BUY** for
+`BROKER_N_TG_LOTS × legs` (trigger = BUY price, limit = +1 %) → on fill it
+is **split into one leg of `BROKER_N_TG_LOTS` per plan entry**, and each
+gets an **SL-M SELL for its own qty** and **its own target watched**;
+touching it cancels that leg's stop and sells that leg alone at market. One
+line at the broker and one row on the strip, not N orders competing for the
+same strike — only the exchange's 27-lot freeze limit splits it further.
+
+**The Legs dropdown** on /orderplacement (`TG_LEG_PLAN`, saved by
+`POST /api/order-placement/tg-calls/leg-plan`, read at the moment a call is
+taken so it needs no restart) picks the shape:
+
+| Dropdown | `TG_LEG_PLAN` | Legs | Exits at |
+|---|---|---|---|
+| Single | `single` | 1 | T1 |
+| Double 1 2 | `1-2` | 2 | T1, T2 |
+| Double 1 3 | `1-3` (default) | 2 | T1, T3 |
+| Thrice | `1-2-3` | 3 | T1, T2, T3 |
+
+`resolve_leg_plan` settles it against the call that actually arrived: an
+index **past the end rides to the last target the call lists** (so `1-3` on a
+two-target call is T1+T2 — exactly what every call traded before the
+dropdown existed), and **two indices landing on one level are one leg**, so a
+one-target call is one leg under any plan rather than the same leg stacked at
+three times the size. The label is the target's real position, so that far leg
+is named `T2`, not `T3`. Slots are `brokers["N"]` (the first leg) and
+`brokers["N:T2"]` / `brokers["N:T3"]`, sharing one `entry_record_id`; the
+SL/EXIT records carry `tg_leg`, the shared entry carries `T1+T2+T3`. A call
+already on the board keeps the plan it was taken under — a dropdown does not
+place or un-place an order. Six things are load-bearing:
 
 * **A leg's exit is capped at what that leg still owns.** The shared entry
   record's quantity is the *pair's*, so the net it produces is too big by
@@ -156,6 +177,23 @@ carries `T1+T3`. Five things are load-bearing:
   do not. Two legs at one broker are two stops, never one for the sum: one
   stop for the pair would have to be re-sized the moment either leg exits,
   and a stop being modified is a stop that is briefly not there.
+* **A target is watched on the session high, not only on the last price.**
+  Until 2026-10-06 the tick compared one LTP sample against the level every
+  ~3 s (longer when the quote path was loaded), so a spike through a target
+  between two polls was invisible. NIFTY 22800 PE that day wicked through
+  its 196 T1, every poll read below it, and both legs rode to the 167 stop.
+  `option_quote` now carries the session high and low beside the last price
+  — free, since every adapter's `ltp()` is `quote()` with the range thrown
+  away — and `touched_above` takes a high **strictly above** the high
+  recorded at the fill (`high_at_fill`) as proof of a trade since the fill.
+  Strictly above, because the day's high may predate the entry. With no
+  baseline the high is not consulted at all. `touched_below` is the mirror,
+  on the low, for the stop-breach guard that runs when nothing is resting.
+  Because that witness can only fire *late*, never falsely, the exit is at
+  market as soon as it fires — so within `TG_TARGET_NEAR_PCT` (default 2 %)
+  of a watched level the loop polls every second and skips the order sweep
+  (`tick(light=True)`), with a full tick still running at the ordinary
+  cadence underneath so a filled stop is still seen.
 * **A new message is the only way in; edits and deletions follow a call
   already taken.** `NewMessage` takes a call; every id is written to
   `tg_calls.json` (`TgCallStore.mark_seen`) before it is acted on, and
@@ -184,6 +222,18 @@ carries `T1+T3`. Five things are load-bearing:
   channel edit clears both overrides. Editing the resting ENTRY row moves
   the call's entry/limit the same way — and there is one such row per
   account, covering both legs, so a channel edit modifies it once.
+* **T1 banked lifts every other leg to its own entry.**
+  (`TG_BREAKEVEN_AFTER_T1`, default on.) Only the plan's *first* leg arms it
+  — a later leg paying has nothing left behind it to protect — and it is
+  armed on the CALL while the level each leg moves to is its own account's
+  `entry_fill`, since fills differ per broker. `slot_stop` returns
+  `max(call stop, entry_fill)`, so it is a floor and never moves a stop
+  DOWN, and a level set by hand on the strip still outranks it. No order is
+  sent by the breakeven path itself: the tick already reconciles a resting
+  stop that is not at `slot_stop`, so the lift is a **modify**, not a cancel
+  and re-place — a stop being replaced is a stop that is briefly not there.
+  It is armed on the in-memory call too, so the legs still to be walked in
+  that same tick move at once rather than waiting for the next one.
 * **A call the market has run past is skipped, not chased.** A stop BUY
   must sit above the LTP; if it does not, nothing is placed and a
   `tg_call_skipped` alert says why. Same for SELL calls, non-index

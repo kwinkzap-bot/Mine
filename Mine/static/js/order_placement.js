@@ -501,22 +501,27 @@
     function callCard(c) {
         const slots = Object.entries(c.brokers || {}).map(([key, b]) => ({ ...b, key }));
         const live = slots.filter(b => !['FLAT', 'NO_FILL', 'DEAD'].includes(b.stage));
-        // Two legs per broker — T1 and T3 — each its own entry, stop and
-        // watched level; the row says which one it is.
-        const legName = b => (b.leg === 'T3' ? (c.far_label || 'T3') : (b.leg || 'T1'));
+        // One row per leg per broker — the call's leg plan decides how many —
+        // each with its own entry, stop and watched level.
+        const plan = c.leg_plan || [];
+        const legName = b => b.leg || 'T1';
         // Mirrors the engine's slot_target: a level set by hand on this leg
-        // wins over the call's own.
+        // wins over the plan's own level for it.
         const legTarget = b => b.target_level
-            || (b.leg === 'T3' ? (c.target_far ?? c.target) : c.target);
+            ?? (plan.find(l => l.leg === (b.leg || 'T1')) || {}).target
+            ?? (b.leg && b.leg !== 'T1' ? (c.target_far ?? c.target) : c.target);
         const rows = slots.map(b => {
             const stage = (b.stage === 'FLAT' && b.exit_reason) ? `out · ${b.exit_reason}`
                 : b.stage === 'LIVE' ? `in — stop working, ${legName(b)} ₹${money(legTarget(b))} watched`
                 : STAGE_TEXT[b.stage] || String(b.stage || '').toLowerCase();
             const fill = b.entry_fill ? ` · in at ₹${money(b.entry_fill)}` : '';
             const held = b.open_qty ? ` · ${esc(b.open_qty)} held` : '';
-            // A stop moved by hand on the strip is this account's own level.
-            const stop = b.stop_level && b.stage === 'LIVE'
-                ? ` · stop ₹${money(b.stop_level)} (manual)` : '';
+            // A stop moved by hand on the strip is this account's own level;
+            // breakeven moves it to this leg's own entry fill.
+            const stop = b.stage !== 'LIVE' ? ''
+                : b.stop_level ? ` · stop ₹${money(b.stop_level)} (manual)`
+                : (c.breakeven_at && b.entry_fill) ? ` · stop ₹${money(b.entry_fill)} (breakeven)`
+                : '';
             const pnl = b.booked && b.pnl != null
                 ? ` · <b class="${b.pnl >= 0 ? 'op-buy' : 'op-sell'}">${esc(DataGrid.inr(b.pnl))}</b>`
                   + ` (${esc(DataGrid.inr(b.pnl_per_lot))}/lot)` : '';
@@ -544,8 +549,11 @@
             + `<span class="op-sig-contract"><span class="op-sig-src">TG</span> `
             + `${esc(c.action)} ${esc(c.symbol)} ${esc(c.strike)}${esc(c.option_type)}</span>`
             + `<span class="op-sig-ladder">trigger ₹${money(c.entry)} · limit ₹${money(c.limit)} · `
-            + `SL ₹${money(c.stop)} · T1 ₹${money(c.target)}`
-            + (c.target_far != null ? ` · ${esc(c.far_label || 'T3')} ₹${money(c.target_far)}` : '')
+            + `SL ₹${money(c.stop)}${c.breakeven_at ? ' → entry (T1 banked)' : ''} · `
+            + (plan.length
+                ? plan.map(l => `${esc(l.leg)} ₹${money(l.target)}`).join(' · ')
+                : `T1 ₹${money(c.target)}`
+                  + (c.target_far != null ? ` · ${esc(c.far_label || 'T3')} ₹${money(c.target_far)}` : ''))
             + ` (watched)</span>`
             + `<span class="op-sig-phase">${esc(String(c.phase).toLowerCase())}</span>`
             + `</header>${rows}`
@@ -579,14 +587,15 @@
             .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
         const [tgText, tgClass] = tgBadge(tg);
         // Same redraw guard as the book: a card rebuilt under a press eats it.
-        const sig = JSON.stringify([tg.engine_running, tgText, calls.map(c =>
-            [c.id, c.phase, c.target, c.target_far, Object.values(c.brokers || {}).map(
+        const sig = JSON.stringify([tg.engine_running, tgText, tg.leg_plan, calls.map(c =>
+            [c.id, c.phase, c.leg_plan, c.breakeven_at, Object.values(c.brokers || {}).map(
                 b => [b.stage, b.open_qty, b.booked, b.target_level, b.stop_level])])]);
         if (sig === state.signalSig) return;
         state.signalSig = sig;
 
         $('opSignalsWrap').hidden = !(calls.length || tgText);
         $('opSignalCount').textContent = calls.length;
+        fillLegPlan(tg);
         const running = tg.engine_running;
         $('opEngine').textContent = running ? 'watching' : '';
         $('opEngine').className = 'op-engine' + (running ? ' is-on' : '');
@@ -596,6 +605,49 @@
         $('opTg').title = l.last_error ? l.last_error
             : l.channel_title ? `Listening to ${l.channel_title}` : 'Telegram calls';
         $('opSignals').innerHTML = calls.map(callCard).join('');
+    }
+
+    // The leg plan for the NEXT call: how many legs it runs and which target
+    // each one exits at. Only ever repainted when the select is not focused —
+    // the poll runs every few seconds and would otherwise reset a choice
+    // mid-change, before it has been saved.
+    function fillLegPlan(tg) {
+        const sel = $('opLegPlan');
+        if (!sel || !tg.leg_plans) return;
+        if (document.activeElement === sel) return;
+        const want = JSON.stringify(tg.leg_plans);
+        if (sel.dataset.opts !== want) {
+            sel.dataset.opts = want;
+            sel.innerHTML = tg.leg_plans
+                .map(p => `<option value="${esc(p.value)}">${esc(p.label)}</option>`).join('');
+        }
+        if (!sel.dataset.dirty) sel.value = tg.leg_plan || '1-3';
+    }
+
+    async function saveLegPlan() {
+        const sel = $('opLegPlan');
+        const btn = $('opLegPlanSave');
+        if (!sel || !sel.value) return;
+        btn.disabled = true;
+        try {
+            const res = await fetch(`${API}/tg-calls/leg-plan`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf() },
+                body: JSON.stringify({ plan: sel.value }),
+            });
+            const r = await res.json();
+            if (r.success) {
+                delete sel.dataset.dirty;
+                state.signalSig = null;
+                toast(`Next call: ${r.label}`, 'success');
+            } else {
+                toast(r.error || 'Could not save the leg plan', 'error');
+            }
+        } catch (_) {
+            toast('Could not save the leg plan', 'error');
+        } finally {
+            btn.disabled = false;
+        }
     }
 
     // Moving one leg's watched target. The stop is an order and goes
@@ -1080,6 +1132,14 @@
             e.preventDefault();
             e.target.blur();
             submitRow(e.target.closest('.op-po'), false);
+        });
+        // The leg plan lives in the section header, not in the cards, so it is
+        // bound directly rather than through the card delegation below.
+        $('opLegPlanSave').addEventListener('click', saveLegPlan);
+        $('opLegPlan').addEventListener('change', (e) => {
+            // Held against the poll until Save: the dropdown is a choice, not
+            // a setting, until it has been written to the env file.
+            e.currentTarget.dataset.dirty = '1';
         });
         $('opSignals').addEventListener('click', (e) => {
             const box = e.target.closest('.op-sig-tgt');

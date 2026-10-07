@@ -788,6 +788,37 @@
   opacity: .5;
 }
 
+/* The leg plan for the next call, in the Telegram section header. The
+   engine badges before it carry `margin-left: auto`, so this rides at the
+   right-hand end with them. */
+.op-legplan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+.op-legplan label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--color-text-2);
+}
+.op-legplan select {
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text);
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border-sub);
+  border-radius: 6px;
+}
+.op-legplan select:focus-visible {
+  outline: 2px solid var(--color-primary, #2563eb);
+  outline-offset: 1px;
+}
+
 .op-engine.is-on {
   opacity: 1;
   color: var(--color-success, #16a34a);

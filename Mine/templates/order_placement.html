@@ -184,6 +184,15 @@
           <span class="op-count" id="opSignalCount">0</span>
           <span class="op-engine" id="opEngine" title="The engine watching these calls"></span>
           <span class="op-engine op-tg" id="opTg" title="Telegram calls"></span>
+          <!-- How many legs the NEXT call runs, and the target each rides to.
+               Saved to the env file and read when a call is taken, so it needs
+               no restart; a call already on the board keeps its own plan. -->
+          <span class="op-legplan">
+            <label for="opLegPlan">Legs</label>
+            <select id="opLegPlan" title="How many legs each Telegram call runs, and the target each one exits at"></select>
+            <button class="op-btn op-btn-sm" id="opLegPlanSave" type="button"
+                    title="Save this for the next call">Save</button>
+          </span>
         </header>
         <div class="op-signals" id="opSignals"></div>
       </div>

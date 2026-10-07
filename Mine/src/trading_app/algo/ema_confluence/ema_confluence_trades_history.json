@@ -1,21 +1,21 @@
 [
   {
-    "symbol": "JINDALSTEL",
-    "direction": "BUY",
+    "symbol": "BANDHANBNK",
+    "direction": "SELL",
     "mode": "paper",
-    "qty": 625,
-    "lot_size": 625,
-    "entry_price": 1172.3,
-    "exit_price": 1110.1,
-    "spot_entry_price": 1137.2,
-    "spot_exit_price": 1104.0,
-    "sl_price": 1104.1,
-    "target_price": 1307.78,
-    "pnl": -38875.0,
-    "reason": "SL",
-    "signal_date": "2026-09-17",
-    "entry_time": "2026-09-24T12:00:02.629683",
-    "exit_time": "2026-10-01T12:28:53.063245",
-    "date": "2026-10-01"
+    "qty": 3600,
+    "lot_size": 3600,
+    "entry_price": 172.83,
+    "exit_price": 166.25,
+    "spot_entry_price": 172.63,
+    "spot_exit_price": 165.7,
+    "sl_price": 180.93,
+    "target_price": 165.72,
+    "pnl": 23688.0,
+    "reason": "TARGET",
+    "signal_date": "2026-10-01",
+    "entry_time": "2026-10-05T09:27:45.498580",
+    "exit_time": "2026-10-06T13:23:52.588958",
+    "date": "2026-10-06"
   }
 ]

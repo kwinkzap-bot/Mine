@@ -197,6 +197,8 @@ def env(monkeypatch, tmp_path, alerts):
     monkeypatch.setattr(tg_store, '_HISTORY_FILE', str(tmp_path / 'tg_trades_history.json'))
     monkeypatch.setattr(op, '_chain_meta', lambda s: {'step': 50, 'lot_size': LOT, 'expiry': None})
     monkeypatch.setattr(op, 'option_ltp', lambda *a, **k: 70.0)
+    monkeypatch.setattr(op, 'option_quote',
+                        lambda *a, **k: {'last_price': 70.0, 'high': None, 'low': None})
     monkeypatch.setattr(engine, 'ensure_running', lambda *a, **k: False)
     monkeypatch.setattr(engine, '_in_hours', lambda u: True)
     monkeypatch.setattr(engine, '_now_mins', lambda: 11 * 60)
@@ -227,10 +229,18 @@ def leg(rows_, call_id, name, instance=1, tg_leg='T1'):
                 None)
 
 
-def tick(ltp=None):
-    if ltp is not None:
-        op.option_ltp = lambda *a, **k: ltp
-    engine.tick(USER, {})
+def set_quote(last=None, high=None, low=None):
+    """What the engine sees this tick. ``high``/``low`` are the SESSION range,
+    the second witness a target is watched with — left None by default, which
+    is the old last-price-only behaviour."""
+    op.option_quote = lambda *a, **k: {'last_price': last, 'high': high, 'low': low}
+    op.option_ltp = lambda *a, **k: last
+
+
+def tick(ltp=None, high=None, low=None, light=False):
+    if ltp is not None or high is not None or low is not None:
+        set_quote(ltp, high, low)
+    return engine.tick(USER, {}, light=light)
 
 
 def taken(broker, rows_):
@@ -297,7 +307,7 @@ def test_a_mis_flagged_dhan_slot_and_an_unsized_slot_are_skipped_with_one_alert_
 
 
 def test_a_premium_already_through_the_entry_is_skipped_not_chased(broker, rows, env, alerts):
-    op.option_ltp = lambda *a, **k: 84.0
+    set_quote(84.0)
     result = take()
     assert result['skipped'] and 'ABOVE the market' in result['error']
     assert broker.calls == []
@@ -443,7 +453,8 @@ def test_a_part_fill_of_three_lots_splits_two_and_one(broker, rows, env, monkeyp
 
 
 def test_leg_share():
-    c = {'brokers': {'1': {'instance': 1, 'leg': 'T1', 'lots': 2}}}
+    c = {'leg_plan': [{'leg': 'T1', 'target': 95.0}, {'leg': 'T3', 'target': 110.0}],
+         'brokers': {'1': {'instance': 1, 'leg': 'T1', 'lots': 2}}}
     t1 = c['brokers']['1']
     t3 = {'instance': 1, 'leg': 'T3', 'lots': 2}
     assert [engine.leg_share(c, t1, n) for n in (0, 1, 2, 3, 4)] == [0, 1, 2, 2, 2]
@@ -514,15 +525,166 @@ def test_a_call_with_one_target_places_only_the_t1_leg(broker, rows, env):
 
 
 def test_a_call_with_two_targets_rides_the_far_leg_to_t2(broker, rows, env):
+    """The default plan is 1-3, but the call lists two targets, so the far
+    leg rides to target 2 — and is NAMED T2, which is the target it is on."""
     cid = take(targets=[95.0, 101.0])['call_id']
-    assert set(call(cid)['brokers']) == {'1', '1:T3'}
+    assert set(call(cid)['brokers']) == {'1', '1:T2'}
     assert call(cid)['target_far'] == 101.0 and call(cid)['far_label'] == 'T2'
     broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
     broker.broker_held = 4 * LOT
     tick()
     tick(ltp=101.0)
     assert slot(cid)['exit_reason'] == 'T1 hit'
-    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T2 hit'
+    assert slot(cid, tg_leg='T2')['exit_reason'] == 'T2 hit'
+
+
+# ── the leg plan (the dropdown on /orderplacement) ───────────────────────
+
+@pytest.mark.parametrize('plan,targets,want', [
+    ('single', [95, 101, 110], [('T1', 95.0)]),
+    ('1-2',    [95, 101, 110], [('T1', 95.0), ('T2', 101.0)]),
+    ('1-3',    [95, 101, 110], [('T1', 95.0), ('T3', 110.0)]),
+    ('1-2-3',  [95, 101, 110], [('T1', 95.0), ('T2', 101.0), ('T3', 110.0)]),
+    # An index past the end rides to the last target the call lists, and is
+    # labelled by where it actually landed.
+    ('1-3',    [95, 101],      [('T1', 95.0), ('T2', 101.0)]),
+    ('1-2-3',  [95, 101],      [('T1', 95.0), ('T2', 101.0)]),
+    # Two indices on one level are one leg, not the same leg at twice the size.
+    ('1-2-3',  [95],           [('T1', 95.0)]),
+    ('single', [],             []),
+])
+def test_resolve_leg_plan(plan, targets, want):
+    assert [(l['leg'], l['target']) for l in engine.resolve_leg_plan(targets, plan)] == want
+
+
+def test_an_unknown_plan_name_falls_back_to_the_old_shape(env):
+    env['TG_LEG_PLAN'] = 'nonsense'
+    assert engine.leg_plan_name(USER) == '1-3'
+
+
+@pytest.mark.parametrize('plan,legs', [
+    ('single', ['T1']),
+    ('1-2', ['T1', 'T2']),
+    ('1-3', ['T1', 'T3']),
+    ('1-2-3', ['T1', 'T2', 'T3']),
+])
+def test_the_plan_decides_how_many_legs_a_call_runs(broker, rows, env, plan, legs):
+    env['TG_LEG_PLAN'] = plan
+    r = take()
+    cid = r['call_id']
+    assert [l['leg'] for l in call(cid)['leg_plan']] == legs
+    assert set(call(cid)['brokers']) == {engine.slot_key(1, n) for n in legs}
+    # One entry order for the whole account, sized for every leg it runs.
+    assert r['summary'][0]['total_lots'] == 2 * len(legs)
+    assert leg(rows, cid, 'ENTRY')['tg_leg'] == '+'.join(legs)
+
+
+def test_three_legs_split_the_fill_and_exit_at_their_own_targets(broker, rows, env):
+    env['TG_LEG_PLAN'] = '1-2-3'
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 6 * LOT)
+    broker.broker_held = 6 * LOT
+    set_quote(70.0, 82.0, 80.0)
+    tick()
+    assert [slot(cid, tg_leg=n)['open_qty'] for n in ('T1', 'T2', 'T3')] == [2 * LOT] * 3
+    tick(ltp=95.0, high=95.0, low=80.0)
+    assert slot(cid, tg_leg='T1')['exit_reason'] == 'T1 hit'
+    assert slot(cid, tg_leg='T2')['stage'] == slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    tick(ltp=101.0, high=101.0, low=80.0)
+    assert slot(cid, tg_leg='T2')['exit_reason'] == 'T2 hit'
+    tick(ltp=110.0, high=110.0, low=80.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T3 hit'
+    assert call(cid)['phase'] == 'DONE'
+
+
+def test_a_part_fill_gives_the_nearest_legs_their_whole_size(broker, rows, env):
+    """Three legs of 2 lots want 6; 3 filled. The plan's order decides: T1
+    whole, T2 what is left, T3 nothing — not three half-sized legs."""
+    env['TG_LEG_PLAN'] = '1-2-3'
+    cid = take()['call_id']
+    c = call(cid)
+    shares = [engine.leg_share(c, slot(cid, tg_leg=n), 3) for n in ('T1', 'T2', 'T3')]
+    assert shares == [2, 1, 0]
+
+
+# ── breakeven once target 1 is banked ────────────────────────────────────
+
+def test_t1_hit_lifts_every_other_leg_to_its_own_entry(broker, rows, env):
+    env['TG_LEG_PLAN'] = '1-2-3'
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 6 * LOT)
+    broker.broker_held = 6 * LOT
+    set_quote(70.0, 82.0, 80.0)
+    tick()
+    assert [s['trigger'] for s in broker.of('stop')[-3:]] == [65.0, 65.0, 65.0]
+    before = len(broker.calls)
+    tick(ltp=95.0, high=95.0, low=80.0)
+    assert call(cid)['breakeven_at']
+    # Both survivors moved to the fill, and neither was cancelled and re-placed:
+    # a stop being replaced is a stop that is briefly not there.
+    assert [m['trigger'] for m in broker.of('modify')[-2:]] == [81.5, 81.5]
+    # One cancel only, and it is the exiting leg's own stop: a survivor's stop
+    # is MODIFIED up, never cancelled and re-placed. A stop being replaced is
+    # a stop that is briefly not there.
+    assert broker.kinds()[before:].count('cancel') == 1
+    for n in ('T2', 'T3'):
+        assert engine.slot_stop(call(cid), slot(cid, tg_leg=n)) == 81.5
+
+
+def test_breakeven_never_moves_a_stop_down(broker, rows, env):
+    """A stop already above the entry — the channel trailed it — keeps the
+    better level; breakeven is a floor, not a reset."""
+    env['TG_LEG_PLAN'] = '1-3'
+    cid = taken(broker, rows)
+    TgCallStore.update(cid, {'stop': 90.0, 'breakeven_at': 1.0})
+    assert engine.slot_stop(call(cid), slot(cid, tg_leg='T3')) == 90.0
+
+
+def test_a_hand_set_stop_outranks_breakeven(broker, rows, env):
+    cid = taken(broker, rows)
+    TgCallStore.update_broker(cid, '1:T3', {'stop_level': 70.0})
+    TgCallStore.update(cid, {'breakeven_at': 1.0})
+    assert engine.slot_stop(call(cid), slot(cid, tg_leg='T3')) == 70.0
+
+
+def test_breakeven_can_be_turned_off(broker, rows, env):
+    env['TG_BREAKEVEN_AFTER_T1'] = 'false'
+    cid = taken(broker, rows)
+    before = len(broker.calls)
+    tick(ltp=95.0, high=95.0, low=80.0)
+    assert not call(cid).get('breakeven_at')
+    assert 'modify' not in broker.kinds()[before:]
+    assert engine.slot_stop(call(cid), slot(cid, tg_leg='T3')) == 65.0
+
+
+def test_only_the_first_leg_arms_breakeven(broker, rows, env):
+    """T3 paying has nothing left behind it to protect."""
+    env['TG_LEG_PLAN'] = '1-3'
+    cid = taken(broker, rows)
+    TgCallStore.update_broker(cid, '1', {'stage': 'FLAT', 'exit_reason': 'SL hit'})
+    tick(ltp=110.0, high=110.0, low=80.0)
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T3 hit'
+    assert not call(cid).get('breakeven_at')
+
+
+def test_a_stop_lifted_to_breakeven_is_not_read_as_already_breached(broker, rows, env):
+    """The session low since the FILL is almost always under the entry — the
+    premium dipped before it ran. Measured against that baseline the new
+    breakeven level would look breached the instant it was set, and the leg
+    would be dumped at market for nothing."""
+    env['TG_LEG_PLAN'] = '1-3'
+    cid = take()['call_id']
+    broker.entry_fills[1] = ('EXECUTED', 81.5, 4 * LOT)
+    broker.broker_held = 4 * LOT
+    set_quote(70.0, 82.0, 81.0)
+    tick()
+    tick(ltp=78.0, high=90.0, low=78.0)                  # a dip below the entry, then
+    tick(ltp=95.0, high=95.0, low=78.0)                  # the run to T1
+    far = slot(cid, tg_leg='T3')
+    assert call(cid)['breakeven_at'] and far['stage'] == 'LIVE'
+    assert far['exit_reason'] is None if 'exit_reason' in far else True
+    tick(ltp=85.0, high=95.0, low=78.0)                  # still above the new stop
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'
 
 
 def test_far_target():
@@ -536,6 +698,9 @@ def test_the_t3_leg_rides_through_t1_and_exits_at_t3(broker, rows, env):
     cid = taken(broker, rows)
     tick(ltp=95.0)                                     # T1 out, T3 still in
     assert slot(cid)['stage'] == 'FLAT' and slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    # T1 banked, so the T3 leg's stop was lifted to its own entry on that
+    # same tick — the move does not wait for the next one.
+    assert broker.of('modify')[-1]['trigger'] == 81.5
     before = len(broker.calls)
     tick(ltp=109.95)
     assert broker.kinds()[before:] == ['sweep']         # below T3: nothing
@@ -712,6 +877,97 @@ def test_below_the_target_nothing_happens(broker, rows, env):
     assert slot(cid)['stage'] == 'LIVE'
 
 
+# ── a target the poll never saw ──────────────────────────────────────────
+#
+# NIFTY 22800 PE, 2026-10-06: entry 183, T1 196, SL 167. The premium wicked
+# through 196 and was back below it before the next poll, so the last price —
+# the only thing the target was watched with — never once read at or above
+# the level, and both legs rode down to the 167 stop. The session high is the
+# witness that cannot blink.
+
+def taken_with_range(broker, rows, high=82.0, low=80.0):
+    """``taken`` with a session range on the quote, so the fill records a
+    baseline and the high-water witness is live."""
+    set_quote(70.0, high, low)
+    cid = taken(broker, rows)
+    assert slot(cid)['high_at_fill'] == high and slot(cid)['low_at_fill'] == low
+    return cid
+
+
+def test_a_wick_through_the_target_between_polls_still_exits(broker, rows, env):
+    cid = taken_with_range(broker, rows)
+    tick(ltp=90.0, high=96.0, low=80.0)       # last price never at 95; the high was
+    assert slot(cid)['stage'] == 'FLAT' and slot(cid)['exit_reason'] == 'T1 hit'
+    assert slot(cid, tg_leg='T3')['stage'] == 'LIVE'      # its own 110 was not touched
+
+
+def test_a_session_high_set_before_the_fill_is_not_a_touch(broker, rows, env):
+    """Bought at 81.5 into a contract that had already traded at 120 earlier
+    in the day. Every target is under that high and none of them was hit."""
+    cid = taken_with_range(broker, rows, high=120.0)
+    before = len(broker.calls)
+    tick(ltp=90.0, high=120.0, low=80.0)
+    assert broker.kinds()[before:] == ['sweep']
+    assert slot(cid)['stage'] == 'LIVE' and slot(cid, tg_leg='T3')['stage'] == 'LIVE'
+    tick(ltp=90.0, high=120.5, low=80.0)     # a NEW high, above both targets
+    assert slot(cid)['exit_reason'] == 'T1 hit'
+    assert slot(cid, tg_leg='T3')['exit_reason'] == 'T3 hit'
+
+
+def test_with_no_baseline_the_first_tick_only_takes_one(broker, rows, env):
+    """The fill could not read a range, so the first tick that can is the
+    baseline — it cannot say whether that high predates the fill."""
+    cid = taken(broker, rows)                            # env quote carries no range
+    assert slot(cid)['high_at_fill'] is None
+    tick(ltp=90.0, high=96.0, low=80.0)
+    assert slot(cid)['stage'] == 'LIVE' and slot(cid)['target_watch']['base'] == 96.0
+    tick(ltp=90.0, high=96.0, low=80.0)                  # same high — still no proof
+    assert slot(cid)['stage'] == 'LIVE'
+    tick(ltp=90.0, high=96.5, low=80.0)                  # a trade after the fill
+    assert slot(cid)['exit_reason'] == 'T1 hit'
+
+
+def test_a_wick_through_the_stop_with_nothing_resting_exits(broker, rows, env):
+    cid = taken_with_range(broker, rows)
+    leg(rows, cid, 'SL')['status'] = 'CANCELLED'          # by hand on the strip
+    tick(ltp=80.0, high=82.0, low=64.0)                   # last price never at 65
+    assert slot(cid)['exit_reason'] == 'stop breached, no order resting'
+
+
+@pytest.mark.parametrize('last,high,base,want', [
+    (95.0, None, None, 95.0),        # the last price alone, as before
+    (90.0, 96.0, 82.0, 96.0),        # a new high through the level
+    (90.0, 96.0, None, None),        # no baseline — the high is not consulted
+    (90.0, 96.0, 96.0, None),        # the high predates the fill
+    (90.0, 94.0, 82.0, None),        # a new high, but short of the level
+])
+def test_touched_above(last, high, base, want):
+    assert engine.touched_above(95.0, last, high, base) == want
+
+
+@pytest.mark.parametrize('last,low,base,want', [
+    (65.0, None, None, 65.0),
+    (80.0, 64.0, 80.0, 64.0),
+    (80.0, 64.0, None, None),
+    (80.0, 64.0, 64.0, None),
+    (80.0, 66.0, 80.0, None),
+])
+def test_touched_below(last, low, base, want):
+    assert engine.touched_below(65.0, last, low, base) == want
+
+
+def test_near_a_target_the_tick_says_so_and_a_light_tick_skips_the_sweep(broker, rows, env):
+    cid = taken_with_range(broker, rows)
+    assert tick(ltp=90.0, high=90.0, low=80.0) is False      # 90 is under 95 × 0.98
+    assert tick(ltp=94.0, high=94.0, low=80.0) is True
+    before = len(broker.calls)
+    tick(ltp=94.0, high=94.0, low=80.0, light=True)
+    assert broker.kinds()[before:] == []                     # no order sweep paid for
+    assert slot(cid)['stage'] == 'LIVE'
+    tick(ltp=96.0, high=96.0, low=80.0, light=True)          # still exits on a light tick
+    assert slot(cid)['exit_reason'] == 'T1 hit'
+
+
 def test_a_breached_stop_with_nothing_resting_exits_at_market(broker, rows, env):
     cid = taken(broker, rows)
     leg(rows, cid, 'SL')['status'] = 'CANCELLED'           # by hand on the strip
@@ -810,7 +1066,7 @@ def test_the_t3_legs_target_moves_on_its_own(broker, rows, env):
 
 def test_a_target_the_market_is_already_through_is_refused(broker, rows, env):
     cid = taken(broker, rows)
-    op.option_ltp = lambda *a, **k: 92.0
+    set_quote(92.0)
     r = engine.note_manual_target(USER, cid, '1', 91.0)
     assert not r['success'] and 'already at 92.0' in r['error']
     assert slot(cid).get('target_level') is None       # nothing written
@@ -1194,7 +1450,7 @@ def test_an_alert_carrying_the_parsed_expiry_date_still_rings(broker, rows, env,
     """The plan's expiry is a date; the bell stores JSON. The first live call
     lost its bell alert to exactly this."""
     import datetime as dt
-    op.option_ltp = lambda *a, **k: 90.0                # above the entry → skipped + alerted
+    set_quote(90.0)                # above the entry → skipped + alerted
     take(expiry=dt.date(2026, 9, 22))
     assert alerts and alerts[-1]['data']['plan']['expiry'] == '2026-09-22'
 
@@ -1243,7 +1499,7 @@ def test_a_live_position_with_no_quote_is_alerted_once_and_kept(broker, rows, en
     """SENSEX 74200PE on 2026-09-16: the quote was blank all day and the
     target watch silently never fired. Now it says so."""
     cid = taken(broker, rows)
-    op.option_ltp = lambda *a, **k: None
+    set_quote(None)
     tick(); tick()
     noquote = [a for a in alerts if 'NO QUOTE' in a['title']]
     assert len(noquote) == 1 and 'T1' not in noquote[0]['title']
