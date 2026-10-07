@@ -83,7 +83,7 @@ def test_leg_prices_entry_and_the_level_that_closed_it_and_estimates_the_other()
     assert leg['exit_time'] == '09:50' and leg['exit'] == 65.0 and leg['target'] == 65.0
     assert leg['delta'] == pytest.approx(0.5)
     assert leg['sl'] == pytest.approx(55 + 0.5 * (100 - 110)) and leg['estimated'] == ['sl']
-    assert leg['pnl'] == 10.0 and leg['pnl_lot'] == 650.0
+    assert leg['pnl'] == 10.0 and leg['pnl_lot'] == 550.0
 
 
 def test_leg_books_the_stop_at_its_minute():
@@ -132,7 +132,7 @@ def test_legs_for_keys_by_date_and_tallies(monkeypatch):
     assert seen == [(100, 'CE', '2026-09-22', date(2026, 9, 17)), (100, 'CE', '2026-09-22', date(2026, 9, 16))]
     assert out['legs']['2026-09-17'][0]['pnl'] == 10.0
     assert out['legs']['2026-09-16'][0]['error'] == 'no option bars'
-    assert out['summary'] == {'pnl': 10.0, 'pnl_lot': 650.0, 'lot': 65, 'trades': 1, 'wins': 1, 'missing': 1}
+    assert out['summary'] == {'pnl': 10.0, 'pnl_lot': 550.0, 'lot': 65, 'trades': 1, 'wins': 1, 'missing': 1}
 
 
 # ── picking a strike by premium ───────────────────────────────────────────

@@ -129,7 +129,7 @@ function showCprStrategies() {
     document.getElementById('tdCprStrategyTotals').innerHTML =
         tile('Trades', total, `${list.length} setups`) +
         tile('Win / loss', `<span class="dg-pos">${wins}</span> / <span class="dg-neg">${losses}</span>`, wins + losses ? `${Math.round(100 * wins / (wins + losses))}% win rate` : '') +
-        tile('Option P&L', ready ? `<span class="${cls(optPnl)}">${_tdNum(optPnl, 0)}</span> pts` : 'reading…', ready && lot ? `₹${_tdNum(optPnl * lot, 0)} per lot` : '') +
+        tile('Option P&L', ready ? `<span class="${cls(optPnl)}">${_tdNum(optPnl, 0)}</span> pts` : 'reading…', ready && lot ? `₹${_tdNum(optPnl * lot - CPR_BROKERAGE * list.reduce((a, s) => a + s.opt_n, 0), 0)} per lot after ₹${CPR_BROKERAGE}/trade` : '') +
         tile('Index P&L', `<span class="${cls(idxPnl)}">${_tdNum(idxPnl, 0)}</span> pts`, 'the sheet\'s figure') +
         tile('Best setup', best ? _tdEsc(best.name) : '—', best ? `<span class="${cls(best.opt_pnl)}">${_tdNum(best.opt_pnl, 0)}</span> option pts` : '');
 
@@ -163,7 +163,7 @@ function renderCprStrategyCards() {
                 ${stat('Used', s.trades, s.last ? `last ${s.last}` : '')}
                 ${stat('Win / loss', `<span class="dg-pos">${s.wins}</span> / <span class="dg-neg">${s.losses}</span>`, s.flat ? `${s.flat} flat` : '')}
                 ${stat('Win rate', s.win_pct == null ? '—' : `${_tdNum(s.win_pct, 0)}%`, `T ${s.targets} · SL ${s.stops} · EOD ${s.eod}`)}
-                ${stat('Option P&L', opt(s, s.opt_pnl, x => _tdNum(x, 0)), ready && lot && s.opt_n ? `₹${_tdNum(s.opt_pnl * lot, 0)}/lot` : '')}
+                ${stat('Option P&L', opt(s, s.opt_pnl, x => _tdNum(x, 0)), ready && lot && s.opt_n ? `₹${_tdNum(s.opt_pnl * lot - CPR_BROKERAGE * s.opt_n, 0)}/lot` : '')}
                 ${stat('Per trade', opt(s, s.opt_avg, x => _tdNum(x, 1)), 'option pts')}
                 ${stat('Index', `<span class="${cls(s.pnl)}">${_tdNum(s.pnl, 0)}</span>`, 'pts')}
                 <div class="td-strat-chev">▶</div>
@@ -194,7 +194,7 @@ function _tdCprStrategyDays(s, ready, lot) {
     const res = r => r === 'Target' ? 'dg-pos' : r === 'SL' ? 'dg-neg' : '';
     const rows = s.days.map(({ date, m, c, leg }) => {
         const opt = !ready ? '<span class="td-cpr-opt-wait">reading…</span>'
-                  : leg && leg.pnl != null ? `<span class="${cls(leg.pnl)}">${_tdNum(leg.pnl, 2)}</span><small>₹${_tdNum(leg.pnl * (lot || 0), 0)}</small>`
+                  : leg && leg.pnl != null ? `<span class="${cls(leg.pnl)}">${_tdNum(leg.pnl, 2)}</span><small>₹${_tdNum(leg.pnl * (lot || 0) - CPR_BROKERAGE, 0)}</small>`
                   : '<span class="dg-muted">—</span>';
         const contract = leg && leg.strike ? `${leg.strike} ${leg.option_type}` : '';
         const when = c && c.entry_time ? `${c.entry_time}${c.exit_time ? ' → ' + c.exit_time : ''}` : '';
@@ -535,7 +535,7 @@ function renderCprBacktest(d) {
               if (legs.every(l => !l || l.pnl == null)) return '<span class="dg-muted">—</span>';
               const pnl = legs.reduce((a, l) => a + (l && l.pnl || 0), 0);
               const lot = _tdCprState.options.summary.lot;
-              return _tdCprOptPnl(pnl, lot, r.trades.length > 1 ? 'net' : '');
+              return _tdCprOptPnl(pnl, lot, r.trades.length > 1 ? 'net' : '', legs.filter(l => l && l.pnl != null).length);
           } },
         { key: 'result', label: 'Result', sortable: true,
           sortValue: r => r.trades.map(t => t.manual.result || '').join(','),
@@ -674,9 +674,11 @@ function _tdCprOptionCell(leg) {
     return `<div class="td-cpr-group">${head}${lines}${eod}</div>`;
 }
 
-function _tdCprOptPnl(pnl, lot, tag) {
+const CPR_BROKERAGE = 100;     // ₹ per trade, deducted from every ₹/lot figure (points stay gross)
+
+function _tdCprOptPnl(pnl, lot, tag, trades = 1) {
     const cls = x => x > 0 ? 'dg-pos' : x < 0 ? 'dg-neg' : '';
-    const rs = lot ? `₹${_tdNum(pnl * lot, 0)}/lot` : '';
+    const rs = lot ? `₹${_tdNum(pnl * lot - CPR_BROKERAGE * trades, 0)}/lot` : '';
     return `<div class="td-cpr-cell" style="align-items:flex-end">
         <span class="td-cpr-manual ${cls(pnl)}">${_tdNum(pnl, 2)}</span>
         <span class="td-cpr-why">${[rs, tag].filter(Boolean).join(' · ')}</span></div>`;

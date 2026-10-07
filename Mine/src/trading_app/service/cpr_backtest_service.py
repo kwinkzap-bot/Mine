@@ -280,6 +280,8 @@ def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Opti
     if setup_time:
         start = next((i + 1 for i, b in enumerate(bars) if b['time'] >= setup_time), len(bars))
     for i, b in enumerate(bars[start:], start=start):
+        if b['time'] >= SQUARE_OFF:
+            break                                   # nothing fills, hits or exits after 15:15
         if filled_at is None:
             # The entry is a stop order: it fills when the bar trades through
             # the level, and at the bar's open when the bar opened already
@@ -1086,11 +1088,53 @@ def backfill(symbol: str, since: date) -> Dict[str, Any]:
                        for r in added if r['trade']]}
 
 
+def _save_manual(symbol: str, doc: Dict[str, Any]) -> None:
+    doc['extended_at'] = datetime.now(IST).strftime('%Y-%m-%d %H:%M')
+    path = manual_path(symbol)
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as fh:
+        json.dump(doc, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def refresh_results(symbol: str) -> List[Dict[str, Any]]:
+    """Re-read every stored trade against the session's bars and rewrite the
+    result / P&L of any the replay now settles differently — the rows written
+    before the 15:15 cut-off held a trade to a 15:25 target. Returns the
+    changes; the sheet is only written when there are some."""
+    doc = load_manual(symbol)
+    rows = [r for r in doc.get('rows') or [] if r.get('trade') and r.get('entry') is not None]
+    if not rows:
+        return []
+    first = min(date.fromisoformat(r['date']) for r in rows)
+    last = max(date.fromisoformat(r['date']) for r in rows)
+    _daily, intraday = fetch_bars(symbol, first, last)
+    changed = []
+    for r in rows:
+        bars = intraday.get(r['date']) or []
+        if not bars:
+            continue
+        sim = simulate_trade(bars, r['trade'], r['entry'], r['target'], r['sl'], r.get('setup_time'))
+        if sim['result'] in (None, 'No fill', 'Both') or sim['pnl'] is None:
+            continue
+        if sim['exit_time'] and sim['exit_time'] <= SQUARE_OFF and sim['result'] != 'EOD':
+            continue                                    # settled before the cut-off — untouched
+        if r.get('result') != sim['result'] or r.get('pnl') != sim['pnl']:
+            changed.append({'date': r['date'], 'was': [r.get('result'), r.get('pnl')],
+                            'now': [sim['result'], sim['pnl']]})
+            r['result'], r['pnl'] = sim['result'], sim['pnl']
+    if changed:
+        _save_manual(symbol, doc)
+    logger.info(f"[CPR backtest] {symbol.upper()}: {len(changed)} stored results refreshed to the 15:15 cut-off")
+    return changed
+
+
 def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
     """Append every complete session after the sheet's last date to
     Backtest/cpr_manual/<SYMBOL>.json, read the way the scripts would have
     written it into the workbook. Returns what was added; nothing is
     written when there is nothing to add."""
+    refreshed = refresh_results(symbol)
     doc = load_manual(symbol)
     rows = doc.get('rows') or []
     if not rows:
@@ -1099,7 +1143,7 @@ def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
     upto = upto or last_complete_session()
     first = last_have + timedelta(days=1)
     if first > upto:
-        return {'success': True, 'symbol': symbol.upper(), 'added': [], 'last': last_have.isoformat()}
+        return {'success': True, 'symbol': symbol.upper(), 'added': [], 'last': last_have.isoformat(), 'refreshed': refreshed}
 
     daily, intraday = fetch_bars(symbol, first, upto, fresh=True)
     sessions = sorted(ds for ds in intraday if first <= date.fromisoformat(ds) <= upto)
@@ -1123,7 +1167,7 @@ def extend(symbol: str, upto: Optional[date] = None) -> Dict[str, Any]:
     logger.info(f"[CPR backtest] {symbol.upper()}: extended {last_have} -> {upto}, "
                 f"{len(added)} sessions added, {len(skipped)} skipped")
     return {'success': True, 'symbol': symbol.upper(), 'last': last_have.isoformat(),
-            'upto': upto.isoformat(), 'added': list(dict.fromkeys(r['date'] for r in added)), 'skipped': skipped,
+            'upto': upto.isoformat(), 'refreshed': refreshed, 'added': list(dict.fromkeys(r['date'] for r in added)), 'skipped': skipped,
             'trades': [{'date': r['date'], 'trade': r['trade'], 'entry': r['entry'],
                         'target': r['target'], 'sl': r['sl'], 'result': r['result'], 'pnl': r['pnl']}
                        for r in added if r['trade']]}

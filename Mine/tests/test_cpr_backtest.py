@@ -564,3 +564,19 @@ def test_every_strategy_has_a_description():
         {'manual': {'reason': '10:05 cross candle came back to TC', 'pnl': -38.0, 'result': 'SL'}, 'chart': None, 'match': None}]}]
     st = svc.summarise(rows)['strategies'][0]
     assert st['name'] == 'Inside CPR → cross candle' and st['how']['setup'].startswith('09:15 closes inside the daily CPR')
+
+
+def _bar(t, o, h, l, c):
+    return {'time': t, 'open': o, 'high': h, 'low': l, 'close': c}
+
+
+def test_square_off_is_final_at_1515():
+    from trading_app.service import cpr_backtest_service as svc
+    bars = [_bar('09:15', 100, 101, 99, 100), _bar('10:00', 100, 101, 99, 100),
+            _bar('15:10', 101, 102, 100, 101), _bar('15:15', 102, 103, 101, 102),
+            _bar('15:25', 103, 110, 102, 109)]
+    sim = svc.simulate_trade(bars, 'BUY', 100.5, 108, 95)
+    assert sim['result'] == 'EOD' and sim['exit_time'] == '15:15' and sim['pnl'] == 1.5
+    # an entry that only trades after the cut-off never fills
+    late = [_bar('09:15', 100, 101, 99, 100), _bar('15:15', 100, 120, 99, 118)]
+    assert svc.simulate_trade(late, 'BUY', 110, 115, 95)['result'] == 'No fill'

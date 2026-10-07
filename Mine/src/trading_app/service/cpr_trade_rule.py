@@ -1506,6 +1506,8 @@ def simulate(bars, trade):
     entry, sl, target = sim.get('fill') or trade['entry'], trade['sl'], ext['level']
     base = {'entry_time': sim['entry_time'], 'fill': entry}
     for x in bars[k + 1:]:
+        if x['time'] >= svc.SQUARE_OFF:
+            break                                   # squared off at 15:15, not carried past it
         hit_t = x['high'] >= target if is_buy else x['low'] <= target
         hit_s = x['low'] <= sl if is_buy else x['high'] >= sl
         if hit_t and hit_s:

@@ -45,6 +45,7 @@ from trading_app.service import cpr_backtest_service as cpr_bt
 from trading_app.service.expiry_calendar import expiry_on_or_after
 
 STRIKE_STEP = {'NIFTY': 50, 'BANKNIFTY': 100, 'FINNIFTY': 50, 'MIDCPNIFTY': 25, 'SENSEX': 100}
+BROKERAGE = 100.0   # ₹ per trade, taken off every ₹/lot figure; `pnl` in points stays gross
 LOT_SIZE = {'NIFTY': 65, 'BANKNIFTY': 30, 'FINNIFTY': 65, 'MIDCPNIFTY': 120, 'SENSEX': 20}
 EXPIRY_CADENCE = {'NIFTY': 'weekly', 'SENSEX': 'weekly'}      # the rest are monthly-only
 OPTION_EXCHANGE = {'SENSEX': 'BFO'}
@@ -240,7 +241,7 @@ def option_leg(tm: Dict[str, Any], con: Dict[str, Any], spot: List[Dict[str, Any
 
     if exit_px is not None:
         leg['pnl'] = round(exit_px - entry_px, 2)          # always a long option
-        leg['pnl_lot'] = round(leg['pnl'] * lot, 2)
+        leg['pnl_lot'] = round(leg['pnl'] * lot - BROKERAGE, 2)
     return leg
 
 
@@ -332,7 +333,7 @@ def legs_for(symbol: str, rows: List[Dict[str, Any]], trading_days: List[date],
                 missing += 1
         by_date[r['date']] = legs
     return {'legs': by_date, 'premium': premium,
-            'summary': {'pnl': round(pnl, 2), 'pnl_lot': round(pnl * lot, 2), 'lot': lot,
+            'summary': {'pnl': round(pnl, 2), 'pnl_lot': round(pnl * lot - BROKERAGE * booked, 2), 'lot': lot,
                         'trades': booked, 'wins': wins, 'missing': missing}}
 
 
@@ -515,7 +516,7 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
                 # Long premium on both sides: a CALL for a BUY, a PUT for a
                 # SELL. Exit minus entry is the move either way.
                 leg['pnl'] = round(leg['exit'] - leg['entry'], 2)
-                leg['pnl_inr'] = round(leg['pnl'] * lot, 2)
+                leg['pnl_inr'] = round(leg['pnl'] * lot - BROKERAGE, 2)
                 priced += 1
             elif not bars:
                 leg['error'] = 'no candles for that contract'
