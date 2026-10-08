@@ -1691,6 +1691,29 @@ def box_retracement(chart, bars):
     else:
         return None
 
+    # The quick read first: the SECOND candle (09:20) is small and against the
+    # big one's rejection — red after a rejection from the top, green after
+    # one from the bottom. Enter under its low (over its high), stop over its
+    # high (under its low), the same target as the retracement below.
+    if len(bars) > 1 and bars[1]['time'] == '09:20':
+        b = bars[1]
+        rng = b['high'] - b['low']
+        if 0 < rng <= small:
+            if side == 'sell' and b['close'] < b['open']:
+                entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
+                why = (f"narrow CPR, small box; 09:15 candle rejected from PDH/R1 {hi_box[0]:,.0f}-{hi_box[1]:,.0f} "
+                       f"(high {c1['high']:,.0f}, closed {c1['close']:,.0f} under it) on a {c1['high'] - c1['low']:.0f}-pt candle — "
+                       f"too big to enter under; {b['time']} is a small red candle ({rng:.0f} pts) -> SELL under it; "
+                       f"SL over its high; target the lower box (PDL/S1 {lo_box[0]:,.0f})")
+                return {'trade': 'SELL', 'entry': float(entry), 'target': float(round(lo_box[0])), 'sl': float(sl)}, why, 1
+            if side == 'buy' and b['close'] > b['open']:
+                entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
+                why = (f"narrow CPR, small box; 09:15 candle rejected from PDL/S1 {lo_box[0]:,.0f}-{lo_box[1]:,.0f} "
+                       f"(low {c1['low']:,.0f}, closed {c1['close']:,.0f} over it) on a {c1['high'] - c1['low']:.0f}-pt candle — "
+                       f"too big to enter over; {b['time']} is a small green candle ({rng:.0f} pts) -> BUY over it; "
+                       f"SL under its low; target the upper box (PDH/R1 {hi_box[1]:,.0f})")
+                return {'trade': 'BUY', 'entry': float(entry), 'target': float(round(hi_box[1])), 'sl': float(sl)}, why, 1
+
     touched, touch_hi, touch_lo = False, 0.0, float('inf')
     for i, b in enumerate(bars[1:], start=1):
         if b['time'] > SETUP_UNTIL:

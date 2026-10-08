@@ -3494,8 +3494,26 @@
       "reason": null,
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 71.5 pts (0.314%), 09:15 candle O 22690.45 H 22692.95 L 22600.45 C 22622.7 | Trade by rule: 09:15 candle opened at 22,690 and closed at PDL/S1 22,562-22,633 (22,623) \u2014 a 92-pt candle, too big to enter under, and 09:20 green \u2014 no sell; price never lost PDL/S1 first, so no break to retest by 14:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-10-08",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Dec",
+      "first_candle": "Strong candle red near S1",
+      "boxes": "Small",
+      "trade": "SELL",
+      "entry": 22458.0,
+      "target": 22368.0,
+      "sl": 22503.0,
+      "result": "Target",
+      "pnl": 90.0,
+      "reason": "the CPRs and the box interlink into one zone 22,498-22,649 around the open \u2014 only a break out of it is traded; 09:40 candle closed under the zone at 22,472 -> SELL under it; SL over its high; target 1:2",
+      "setup_time": "09:40",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 19.3 pts (0.085%), 09:15 candle O 22599.05 H 22599.05 L 22521.1 C 22528.5 | Trade by rule: the CPRs and the box interlink into one zone 22,498-22,649 around the open \u2014 only a break out of it is traded; 09:40 candle closed under the zone at 22,472 -> SELL under it; SL over its high; target 1:2; chart replay Target 09:45 -> 11:25"
     }
   ],
-  "extended_at": "2026-10-07 19:58",
+  "extended_at": "2026-10-08 18:21",
   "backfilled_from": "2025-01-01"
 }

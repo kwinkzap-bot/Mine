@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "UNIONBANK",
+    "direction": "SELL",
+    "qty": 2889,
+    "entry_price": 172.87797507788164,
+    "exit_price": 171.5950501903773,
+    "sl_price": 174.56,
+    "target_price": 171.28,
+    "pnl": 3706.37,
+    "reason": "Time Exit",
+    "entry_time": "2026-10-08T11:14:52.324477",
+    "exit_time": "2026-10-08T15:05:03.620556",
+    "broker_idx": 1,
+    "entry_order_id": "2108071106295816192",
+    "sl_order_id": "2108071129842638848",
+    "target_order_id": "2108071130320789504",
+    "mode": "live",
+    "date": "2026-10-08"
+  },
+  {
     "symbol": "PGEL",
     "direction": "SELL",
     "qty": 952,

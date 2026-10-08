@@ -1152,3 +1152,22 @@ def test_the_retracement_is_only_a_narrow_cpr_small_box_day():
     from trading_app.service.cpr_trade_rule import box_retracement
     chart = _chart_22(); chart['cpr_type'] = 'Wide'
     assert box_retracement(chart, BARS_22 + _session()[-25:]) is None
+
+
+# ── a big (under 80 pts) 09:15 rejection, the small red 09:20 is the entry ──
+
+def _chart_29may():
+    chart = _chart_22()
+    chart['levels'] = dict(chart['levels'], pdh=23974.0, r1=23983.0, pdl=23849.0, s1=23860.0)
+    return chart
+
+
+def test_sells_under_a_small_red_second_candle():
+    from trading_app.service.cpr_trade_rule import box_retracement
+    bars = [{'time': '09:15', 'open': 23902.0, 'high': 23980.0, 'low': 23910.0, 'close': 23963.0},
+            {'time': '09:20', 'open': 23960.0, 'high': 23972.0, 'low': 23946.0, 'close': 23950.0}] + _session()[-25:]
+    p, why, i = box_retracement(_chart_29may(), bars)
+    assert p == {'trade': 'SELL', 'entry': 23945.0, 'target': 23849.0, 'sl': 23974.0} and i == 1
+    assert 'small red candle' in why
+    green = [bars[0], dict(bars[1], close=23968.0)] + bars[2:]                  # a green 09:20 is no entry
+    assert (box_retracement(_chart_29may(), green) or (None, None, None))[2] != 1
