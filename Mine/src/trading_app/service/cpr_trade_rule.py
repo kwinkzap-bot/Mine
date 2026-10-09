@@ -359,6 +359,7 @@ SIGNAL_MAX_PCT = 0.15    # a rejection candle bigger than this % of price is too
 BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 09:20 candle, not its own extreme (31 Aug 2026: 90 pts, 19 Aug: 70)
 BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
+CHOP_CLOSES = 6          # between the CPRs: this many closes inside the daily CPR before the break is chop, not a break (9 Jun 2026)
 MAX_RISK = 100.0         # a stop further than this from the entry is halved (28 Jan 2026: 154 pts -> 77)
 VWAP_STOP_PCT = 0.1      # a VWAP within this % under the rejection candle's low is where its stop goes (6 Apr 2026)
 VWAP_GAP_PCT = 0.02      # ... and one nearer than this to the setup candle's extreme is not in the trigger's way at all (~5 pts)
@@ -457,6 +458,10 @@ def propose(chart, bars):
                 and small2 and c2['close'] < dn_box[0] and c2['high'] <= dn_box[1] + tol):
             entry = math.floor(c2['low'] - 1)
             sl = math.ceil(c2['high'] + 1.5)
+            if chart.get('cpr_type') == 'Wide' and 0 <= entry - lv['tc'] < sl - entry:
+                return None, (f"09:15 candle opened at {c1['open']:,.0f} over {'PDL/S1' if dn_box is lo_wall else 'PDH/R1'} and closed under it, "
+                              f"{c2['time']} small red candle -> SELL under it at {entry:,.0f}, but the daily CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} "
+                              f"is only {entry - lv['tc']:.0f} pts under the entry, inside the {sl - entry:.0f}-pt risk — no room — no trade"), None
             target = entry - TREND_RR * (sl - entry)
             twhy = f'1:{TREND_RR:g}'
             if y.get('virgin') and target < y['tc'] < entry:
@@ -476,6 +481,14 @@ def propose(chart, bars):
                 and small2 and c2['close'] > up_box[1] and c2['low'] >= up_box[0] - tol):
             entry = math.ceil(c2['high'] + 1)
             sl = math.floor(c2['low'] - 1.5)
+            # The daily CPR sitting over the entry, nearer than the risk, is
+            # the wall in the way — no room, on a WIDE CPR only (a 5-pt CPR is
+            # no wall: 20 Jan 2025 sold through one) (21 Jan 2026: BUY 25,242, BC
+            # 25,281 only 39 pts up against a 58-pt stop — stopped at 09:25).
+            if chart.get('cpr_type') == 'Wide' and 0 <= lv['bc'] - entry < entry - sl:
+                return None, (f"09:15 candle opened at {c1['open']:,.0f} under {'PDH/R1' if up_box is hi_wall else 'PDL/S1'} and closed above it, "
+                              f"{c2['time']} small green candle -> BUY over it at {entry:,.0f}, but the daily CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} "
+                              f"is only {lv['bc'] - entry:.0f} pts over the entry, inside the {entry - sl:.0f}-pt risk — no room — no trade"), None
             target = entry + TREND_RR * (entry - sl)
             twhy = f'1:{TREND_RR:g}'
             if y.get('virgin') and entry < y['bc'] < target:
@@ -708,11 +721,12 @@ def propose(chart, bars):
             return ('Cam R3 (inside the PDH/R1 box)', lv['cr3'])
         return level
 
-    def build(side, entry, sl, level, why):
+    def build(side, entry, sl, level, why, far_rr=1.0):
         """The trade. Its natural target is the next level — unless that
         level is nearer than the risk (then 1:2: "the CPR is very close
         to the entry, so 1:2") or further than FAR_TARGET_X x the risk
-        (then 1:1: "245 points is very long, keep 1:1")."""
+        (then 1:1: "245 points is very long, keep 1:1" — `far_rr` 2 for the
+        inside-the-CPR break, where a stop under the candle is tight: 1:2)."""
         risk = abs(entry - sl)
         is_buy = side == 'BUY'
         level = through_the_box(level)
@@ -723,8 +737,8 @@ def propose(chart, bars):
         elif reward is not None and reward <= FAR_TARGET_X * risk:
             target, twhy = level[1], f'{level[0]} {level[1]:,.0f}'
         else:
-            target = entry + risk if is_buy else entry - risk
-            twhy = '1:1' + (f' ({level[0]} {level[1]:,.0f} is {abs(level[1] - entry):.0f} pts away)' if level else '')
+            target = entry + far_rr * risk if is_buy else entry - far_rr * risk
+            twhy = f'1:{far_rr:g}' + (f' ({level[0]} {level[1]:,.0f} is {abs(level[1] - entry):.0f} pts away)' if level else '')
         return ({'trade': side, 'entry': float(round(entry)), 'target': float(round(target)),
                  'sl': float(round(sl))}, f'{why}; target {twhy}')
 
@@ -1014,11 +1028,20 @@ def propose(chart, bars):
                 tight = px * TREND_SL_PCT / 100
                 entry = math.ceil(b['high'] + 1) if is_buy else math.floor(b['low'] - 1)
                 sl = math.floor(b['low'] - tight) if is_buy else math.ceil(b['high'] + tight)
+                # A candle that OPENED on the near side of the wall and closed
+                # through it: the box is the line it broke, so the stop goes
+                # just past the box when that is the smaller risk (10 Feb 2026:
+                # 09:30 opened 25,918 under PDH/R1 25,922-25,933, closed 25,944).
+                box_sl = False
+                if wall and ((is_buy and b['open'] < wall[0]) or (not is_buy and b['open'] > wall[1])):
+                    cand = math.floor(wall[0] - tight) if is_buy else math.ceil(wall[1] + tight)
+                    if (is_buy and cand > sl) or (not is_buy and cand < sl):
+                        sl, box_sl = cand, True
                 risk = abs(entry - sl)
                 target = entry + TREND_RR * risk if is_buy else entry - TREND_RR * risk
                 why = (f"{head}; {b['time']} strong {'bull' if is_buy else 'bear'} candle"
                        + (f" through PDH/R1 {wall[0]:,.0f}-{wall[1]:,.0f}" if wall and is_buy else f" through PDL/S1 {wall[0]:,.0f}-{wall[1]:,.0f}" if wall else '')
-                       + f" -> {'BUY over' if is_buy else 'SELL under'} it; SL {'under' if is_buy else 'over'} it; target 1:{TREND_RR:g}")
+                       + f" -> {'BUY over' if is_buy else 'SELL under'} it; SL {'under' if is_buy else 'over'} {'the box' if box_sl else 'it'}; target 1:{TREND_RR:g}")
                 return ({'trade': 'BUY' if is_buy else 'SELL', 'entry': float(entry),
                          'target': float(round(target)), 'sl': float(sl)}, why, i)
             return None, (f"{head} — no strong {'bull' if is_buy else 'bear'} candle"
@@ -1217,6 +1240,13 @@ def propose(chart, bars):
             if i == 0:
                 continue
             in_lo, in_hi = (lv['bc'], lv['tc']) if lv['bc'] <= c1['close'] <= lv['tc'] else (band_lo, band_hi)
+            def chopped(k):
+                """Price has sat inside the CPR for CHOP_CLOSES candles before bar k: the
+                way out is noise, not a break (7 Apr, 4 Jun, 9 Jul 2026: all stopped). Counted on the
+                daily CPR itself — the merged band is too wide for a close inside it to mean anything."""
+                n = sum(1 for x in bars[:k] if lv['bc'] <= x['close'] <= lv['tc'])
+                return (f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {bars[k]['time']} candle came out of it, but {n} candles "
+                        f"had already closed inside the daily CPR — chop, not a break — no trade") if n >= CHOP_CLOSES else None
             if rng1 > px * BIG_CANDLE_PCT / 100:
                 # A big 09:15 candle: its far end is no stop, so the break is
                 # not entered on the breakout candle. Any close out of the
@@ -1229,6 +1259,8 @@ def propose(chart, bars):
                     if b['close'] < in_hi - tol:
                         in_break = None
                     elif b['low'] <= in_hi + tol:
+                        if chopped(i):
+                            return None, chopped(i), None
                         entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
                         boxed = no_room(entry, sl, True)
                         if boxed:
@@ -1243,6 +1275,8 @@ def propose(chart, bars):
                     if b['close'] > in_lo + tol:
                         in_break = None
                     elif b['high'] >= in_lo - tol:
+                        if chopped(i):
+                            return None, chopped(i), None
                         entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
                         boxed = no_room(entry, sl, False)
                         if boxed:
@@ -1259,27 +1293,34 @@ def propose(chart, bars):
                     elif b['close'] < in_lo:
                         in_break, break_t, break_px = 'down', b['time'], b['close']
                 continue
-            if strong and green and b['close'] > in_hi:
-                entry, sl = math.ceil(b['high'] + 1), math.floor(c1['low'])
+            if b['close'] > b['open'] and b['close'] > in_hi:
+                if chopped(i):
+                    return None, chopped(i), None
+                entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
                 boxed = no_room(entry, sl, True)
                 if boxed:
                     return None, f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed above it — {boxed}", None
                 made = build('BUY', entry, sl, next_level(entry, True, resistances[:2]) or next_level(entry, True, resistances),
-                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed above it at {b['close']:,.0f} -> BUY over it; SL at the 09:15 low")
+                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed above it at {b['close']:,.0f} -> BUY over it; SL under its low", far_rr=TREND_RR)
                 if made:
                     return (*made, i)
-            if strong and red and b['close'] < in_lo:
-                entry, sl = math.floor(b['low'] - 1), math.ceil(c1['high'])
+            if b['close'] < b['open'] and b['close'] < in_lo:
+                if chopped(i):
+                    return None, chopped(i), None
+                entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
                 boxed = no_room(entry, sl, False)
                 if boxed:
                     return None, f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed below it — {boxed}", None
                 made = build('SELL', entry, sl, next_level(entry, False, supports[:2]) or next_level(entry, False, supports),
-                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed below it at {b['close']:,.0f} -> SELL under it; SL at the 09:15 high")
+                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed below it at {b['close']:,.0f} -> SELL under it; SL over its high", far_rr=TREND_RR)
                 if made:
                     return (*made, i)
             continue
         if side_open == 'between-up':
             if green and b['close'] > lv['tc']:
+                chop = sum(1 for x in bars[:i] if lv['bc'] <= x['close'] <= lv['tc'])
+                if chop >= CHOP_CLOSES:
+                    return None, (f"above the weekly CPR, under the daily one; {b['time']} candle closed above the daily CPR, but {chop} candles had already closed inside it — chop, not a break — no trade"), None
                 entry, sl = b['high'] + buf, min(lv['bc'], b['low']) - buf
                 made = build('BUY', entry, sl, next_level(entry, True, resistances),
                              f"above the weekly CPR, under the daily one; {b['time']} candle closed above the daily CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} at {b['close']:,.0f}")
@@ -1288,6 +1329,9 @@ def propose(chart, bars):
             continue
         if side_open == 'between-down':
             if red and b['close'] < lv['bc']:
+                chop = sum(1 for x in bars[:i] if lv['bc'] <= x['close'] <= lv['tc'])
+                if chop >= CHOP_CLOSES:
+                    return None, (f"below the weekly CPR, above the daily one; {b['time']} candle closed below the daily CPR, but {chop} candles had already closed inside it — chop, not a break — no trade"), None
                 entry, sl = b['low'] - buf, max(lv['tc'], b['high']) + buf
                 made = build('SELL', entry, sl, next_level(entry, False, supports),
                              f"below the weekly CPR, above the daily one; {b['time']} candle closed below the daily CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} at {b['close']:,.0f}")
@@ -1336,7 +1380,7 @@ def propose(chart, bars):
                 if rng > px * SIGNAL_MAX_PCT / 100:
                     big_reject = b                       # not entered off this candle: wait for the small retest
                     continue
-                entry = b['low'] - buf
+                entry = math.floor(b['low'] - 1)
                 sl = pivot_above(b['high']) + buf
                 made = build('SELL', entry, sl, next_level(entry, False, supports),
                              f"{b['time']} candle rejected from the CPR (high {b['high']:,.0f} into {band_lo:,.0f}-{band_hi:,.0f}, closed {b['close']:,.0f})")
@@ -1392,7 +1436,7 @@ def propose(chart, bars):
                 if rng > px * SIGNAL_MAX_PCT / 100:
                     big_reject = b
                     continue
-                entry = b['high'] + buf
+                entry = math.ceil(b['high'] + 1)
                 sl = pivot_below(b['low']) - buf
                 made = build('BUY', entry, sl, next_level(entry, True, resistances),
                              f"{b['time']} candle rejected from the CPR (low {b['low']:,.0f} into {band_lo:,.0f}-{band_hi:,.0f}, closed {b['close']:,.0f})")
@@ -1618,22 +1662,26 @@ def zone_breakout(chart, bars, zone):
     SL under its low) or under its bottom (SELL under its low, SL over
     its high) — target the next level beyond, or 1:2 (6 Mar 2025: zone
     22,212-22,466; 13:05 closed 22,477 over R1 -> BUY 22,479, SL 22,456).
+    The close must clear the zone by TREND_SL_PCT of price (~6 pts): a
+    2-pt close under a 207-pt zone is noise (28 Apr 2026: SELL 13:30, SL
+    five minutes later; 27 Aug: 4.7 pts, SL) — such a candle is skipped.
     (trade, why, index) or None."""
     lv = chart['levels']
     px = bars[0]['close']
+    clear = px * TREND_SL_PCT / 100
     for i, b in enumerate(bars[1:], start=1):
         if b['time'] > RETEST_UNTIL:
             break
         rng = b['high'] - b['low']
         if rng <= 0:
             continue
-        if b['close'] > zone[1]:
+        if b['close'] > zone[1] + clear:
             entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
             target, twhy = _next_or_rr(entry, sl, True, [('R2', lv['r2']), ('R3', lv['r3'])])
             why = (f"the CPRs and PDH/R1 interlink into one zone {zone[0]:,.0f}-{zone[1]:,.0f} around the open — only a break out of it "
                    f"is traded; {b['time']} candle closed over the zone at {b['close']:,.0f} -> BUY over it; SL under its low; target {twhy}")
             return {'trade': 'BUY', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, i
-        if b['close'] < zone[0]:
+        if b['close'] < zone[0] - clear:
             entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
             target, twhy = _next_or_rr(entry, sl, False, [('S2', lv['s2']), ('S3', lv['s3'])])
             why = (f"the CPRs and the box interlink into one zone {zone[0]:,.0f}-{zone[1]:,.0f} around the open — only a break out of it "

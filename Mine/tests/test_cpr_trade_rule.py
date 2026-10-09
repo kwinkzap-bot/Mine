@@ -558,7 +558,7 @@ def test_a_small_0915_inside_the_cpr_still_enters_on_the_breakout_candle():
     c1 = dict(BARS_7[0], low=22800.0, high=22843.95, close=22820.0)                    # 44 pts
     bars = [c1] + BARS_7[1:]
     p, why, i = propose(_chart_7(c1), bars + _session()[-25:])
-    assert p['trade'] == 'BUY' and 'cross candle' not in why and 'SL at the 09:15 low' in why
+    assert p['trade'] == 'BUY' and 'cross candle' not in why and 'SL under its low' in why
 
 
 def test_a_close_back_inside_the_cpr_voids_the_break():
@@ -1171,3 +1171,102 @@ def test_sells_under_a_small_red_second_candle():
     assert 'small red candle' in why
     green = [bars[0], dict(bars[1], close=23968.0)] + bars[2:]                  # a green 09:20 is no entry
     assert (box_retracement(_chart_29may(), green) or (None, None, None))[2] != 1
+
+
+# ── 29 Apr 2026: the first close over the weekly CPR is the setup, however modest its body ──
+
+def test_29_apr_2026_a_plain_green_close_out_of_the_cpr_is_the_setup_candle():
+    c1 = {'time': '09:15', 'open': 24096.9, 'high': 24123.55, 'low': 24070.35, 'close': 24090.8}
+    chart = _chart(c1, (24181.8, 23957.05, 23995.7), (24601.7, 23813.65, 23897.95))
+    assert chart['weekly']['bc'] < c1['close'] < chart['weekly']['tc']               # inside the weekly band
+    bars = [c1,
+            {'time': '10:00', 'open': 24174.6, 'high': 24211.5, 'low': 24174.6, 'close': 24201.3},    # still inside
+            {'time': '10:05', 'open': 24202.7, 'high': 24217.55, 'low': 24196.65, 'close': 24211.75},  # 43% body, closes over TC
+            {'time': '10:10', 'open': 24212.7, 'high': 24236.8, 'low': 24210.5, 'close': 24233.8}] + _session()[-25:]
+    p, why, i = propose(chart, bars)
+    assert bars[i]['time'] == '10:05' and p['trade'] == 'BUY' and p['entry'] == 24219.0 and p['sl'] == 24195.0 and p['target'] == 24267.0
+    assert '10:05 candle closed above it' in why
+
+
+# ── 9 Jun 2026: between the CPRs, a close under the daily CPR after 45 minutes spent in it is chop ──
+
+def _between_down_chart(closes_inside):
+    c1 = {'time': '09:15', 'open': 23225.0, 'high': 23240.0, 'low': 23205.0, 'close': 23215.0}
+    chart = _chart(c1, (23267.3, 23070.15, 23123.98), (23600.0, 23300.0, 23420.0))
+    lv = chart['levels']
+    mid = (lv['bc'] + lv['tc']) / 2
+    inside = [{'time': f'{9 + (15 + 5 * k) // 60:02d}:{(15 + 5 * k) % 60:02d}', 'open': mid - 1, 'high': mid + 3, 'low': mid - 3, 'close': mid}
+              for k in range(1, closes_inside + 1)]
+    t = f'{9 + (15 + 5 * (closes_inside + 1)) // 60:02d}:{(15 + 5 * (closes_inside + 1)) % 60:02d}'
+    brk = {'time': t, 'open': lv['bc'] + 10, 'high': lv['bc'] + 11, 'low': lv['bc'] - 8, 'close': lv['bc'] - 7}
+    return chart, [c1] + inside + [brk] + _session()[-20:]
+
+
+def test_9_jun_2026_a_break_after_a_long_stay_in_the_daily_cpr_is_no_trade():
+    chart, bars = _between_down_chart(7)
+    p, why, _ = propose(chart, bars)
+    assert p is None and 'chop' in why
+
+
+def test_a_quick_break_between_the_cprs_is_still_a_trade():
+    chart, bars = _between_down_chart(3)
+    p, why, _ = propose(chart, bars)
+    assert p and p['trade'] == 'SELL'
+
+
+def test_a_cross_candle_entry_after_a_long_stay_in_the_daily_cpr_is_no_trade():
+    lv = _chart_7()['levels']
+    mid = (lv['bc'] + lv['tc']) / 2
+    stay = [{'time': f'09:{35 + 3 * k:02d}', 'open': mid - 1, 'high': mid + 3, 'low': mid - 3, 'close': mid} for k in range(7)]
+    bars = BARS_7[:4] + stay + BARS_7[4:]
+    stay_times = sorted(b['time'] for b in bars[:11])
+    assert stay_times == [b['time'] for b in bars[:11]]                       # still in time order
+    p, why, _ = propose(_chart_7(), bars + _session()[-25:])
+    assert p is None and 'chop' in why
+
+
+# ── 28 Apr 2026: a 2-pt close under a one-zone day's zone is not a break ──
+
+def test_a_marginal_close_out_of_the_one_zone_is_skipped():
+    from trading_app.service.cpr_trade_rule import zone_breakout
+    chart = {'levels': {'r2': 24247.7, 'r3': 24364.7, 's2': 23858.7, 's3': 23781.2}}
+    zone = (24001.0, 24208.0)
+    mk = lambda t, lo, c: {'time': t, 'open': c + 5, 'high': c + 8, 'low': lo, 'close': c}
+    bars = [{'time': '09:15', 'open': 24050.0, 'high': 24097.0, 'low': 23999.0, 'close': 24094.0},
+            mk('13:30', 23985.0, 23999.0)]                                   # 2 pts under: noise
+    assert zone_breakout(chart, bars, zone) is None
+    bars.append(mk('13:35', 23975.0, 23990.0))                               # 11 pts under: the break
+    p, why, i = zone_breakout(chart, bars, zone)
+    assert p['trade'] == 'SELL' and bars[i]['time'] == '13:35'
+
+
+# ── 21 Jan 2026: the 09:20 BUY after a big break has the daily CPR 39 pts over it, inside the 58-pt risk ──
+
+BARS_21J = [
+    {'time': '09:15', 'open': 25141.0, 'high': 25277.75, 'low': 25130.15, 'close': 25242.4},    # 148 pts, over PDL/S1
+    {'time': '09:20', 'open': 25239.2, 'high': 25240.2, 'low': 25185.95, 'close': 25221.4},
+]
+
+
+def test_21_jan_2026_no_buy_with_the_daily_cpr_inside_the_risk():
+    chart = _chart(BARS_21J[0], (25585.0, 25171.35, 25232.51), (25800.0, 25600.0, 25700.0))
+    chart['cpr_type'] = 'Wide'
+    p, why, _ = propose(chart, BARS_21J + _session()[-25:])
+    assert p is None and 'no room' in why and '39 pts' in why
+
+
+# ── 10 Feb 2026: the strong candle opened under PDH/R1 and closed over it — the stop goes under the box ──
+
+BARS_10F = [
+    {'time': '09:15', 'open': 25922.65, 'high': 25934.95, 'low': 25870.45, 'close': 25918.05},   # long lower wick
+    {'time': '09:20', 'open': 25918.1, 'high': 25922.1, 'low': 25894.15, 'close': 25915.55},
+    {'time': '09:25', 'open': 25914.9, 'high': 25924.75, 'low': 25907.7, 'close': 25917.6},
+    {'time': '09:30', 'open': 25918.2, 'high': 25943.75, 'low': 25909.65, 'close': 25943.75},    # opens under the box, closes over it
+]
+
+
+def test_10_feb_2026_stop_goes_under_the_box_the_candle_broke():
+    chart = _chart(BARS_10F[0], (25922.25, 25780.9, 25867.31), (25800.0, 25300.0, 25613.29))
+    p, why, i = propose(chart, BARS_10F + _session()[-25:])
+    assert BARS_10F[i]['time'] == '09:30' and p['trade'] == 'BUY' and p['entry'] == 25945.0
+    assert p['sl'] == 25915.0 and p['target'] == 25945.0 + 2 * 30 and 'SL under the box' in why
