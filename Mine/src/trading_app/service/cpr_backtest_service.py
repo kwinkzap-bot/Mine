@@ -578,6 +578,7 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
             # supports/resistances a trade's target stops at (30 Apr 2026:
             # 15 Apr's 23,732-23,806 under a SELL from 23,929).
             'virgin_cprs': virgin_cprs(daily, idx),
+            'virgin_weekly': virgin_weekly(daily, idx, weeks, week_keys),
             'prev_session': {'date': prev['date'].isoformat(), 'high': _r(prev['high']),
                              'low': _r(prev['low']), 'close': _r(prev['close'])},
             'day': {'open': _r(daily[idx]['open']), 'high': _r(daily[idx]['high']),
@@ -618,6 +619,31 @@ def virgin_cprs(daily: List[Dict[str, Any]], idx: int) -> List[Dict[str, Any]]:
             continue
         out.append({'date': daily[j]['date'].isoformat(), 'bc': _r(lv['bc']), 'tc': _r(lv['tc'])})
     return sorted(out, key=lambda v: v['bc'])
+
+
+WEEKLY_BANDS_BACK = 8       # the Pine indicator draws this many weeks of weekly CPR bands
+
+
+def virgin_weekly(daily: List[Dict[str, Any]], idx: int, weeks: Dict[tuple, Dict[str, float]],
+                  week_keys: List[tuple]) -> List[Dict[str, Any]]:
+    """The weekly CPR bands of the last WEEKLY_BANDS_BACK weeks before the
+    session's own that no session has traded through since the band's week
+    began — the untouched (virgin) weekly CPRs still on the chart. A week's
+    band is the CPR of the week before it."""
+    tk = _week_key(daily[idx]['date'])
+    out = []
+    for k in [k for k in week_keys if k < tk][-WEEKLY_BANDS_BACK:]:
+        i = week_keys.index(k)
+        if i == 0:
+            continue
+        w = weeks[week_keys[i - 1]]
+        lv = levels(w['high'], w['low'], w['close'])
+        lo, hi = min(lv['bc'], lv['tc']), max(lv['bc'], lv['tc'])
+        start = next(j for j, b in enumerate(daily) if _week_key(b['date']) == k)
+        if any(b['low'] <= hi and b['high'] >= lo for b in daily[start:idx]):
+            continue
+        out.append({'week': f'{k[0]}-W{k[1]:02d}', 'bc': _r(lo), 'tc': _r(hi)})
+    return out
 
 
 def _eq(a: Optional[str], b: Optional[str]) -> Optional[bool]:
@@ -841,6 +867,10 @@ _NO_TRADE = (
      'No trade · CPR or box in the way',
      _nt("The daily CPR (or the next box) lies between the entry and the target, nearer than the risk: nowhere to go.",
          "21 Jan 2026: BUY 25,242 with the CPR 39 pts up against a 58-pt stop.")),
+    (lambda r: 'untouched weekly cpr' in r,
+     'No trade · inside an untouched weekly CPR',
+     _nt("An opening setup whose candle is trading inside a virgin (untouched) weekly CPR: price has just arrived at a magnet and a break of its edge is unproven.",
+         "28 Aug 2025: SELL under the 09:20 candle inside the virgin 24,525–24,596 band.")),
     (lambda r: 'on a wide cpr' in r and 'not traded' in r,
      'No trade · Wide-CPR zone break',
      _nt("The CPRs and a box interlink into one zone on a Wide CPR: so wide a zone is not traded when it breaks — 0 of 5 such breaks worked.",

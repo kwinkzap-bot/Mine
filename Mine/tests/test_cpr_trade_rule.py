@@ -1442,3 +1442,39 @@ def test_a_big_early_counter_gap_setup_is_no_trade(monkeypatch):
     assert p is None and 'against the gap' in why
     p, why, *_ = fake(22980, 22940)                                 # a 40-pt stop is left alone
     assert p is not None
+
+
+# ── 28 Aug 2025: an opening setup inside an untouched weekly CPR is no trade ──
+
+def test_an_opening_setup_inside_a_virgin_weekly_cpr_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    bars = BARS_7 + _session()[-25:]
+    chart = _chart_7()
+    entry = 22930.0
+    monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': entry, 'target': entry + 70, 'sl': entry - 35}, 'x', 5))
+    setup = bars[5]
+    chart['virgin_weekly'] = [{'week': '2025-W34', 'bc': setup['low'] - 5, 'tc': setup['high'] + 5}]      # the setup candle sits inside it
+    monkeypatch.setattr(rule, 'VIRGIN_WEEKLY_UNTIL', '23:59')
+    out = rule.propose_all(chart, bars)
+    assert out[0][0] is None and 'untouched weekly CPR' in out[0][1]
+    monkeypatch.setattr(rule, 'VIRGIN_WEEKLY_UNTIL', '00:00')                                              # past the opening window: taken
+    assert rule.propose_all(chart, bars)[0][0] is not None
+    chart['virgin_weekly'] = [{'week': '2025-W34', 'bc': setup['high'] + 50, 'tc': setup['high'] + 90}]      # a virgin band the candle never reached
+    monkeypatch.setattr(rule, 'VIRGIN_WEEKLY_UNTIL', '23:59')
+    assert rule.propose_all(chart, bars)[0][0] is not None
+
+
+def test_virgin_weekly_bands_are_the_untouched_ones_of_the_last_eight_weeks():
+    from datetime import date, timedelta
+    from trading_app.service.cpr_backtest_service import virgin_weekly, weekly_bars
+    base = date(2025, 6, 2)                                   # a Monday
+    daily = []
+    for w in range(6):
+        for d in range(5):
+            lo = 24000 + 100 * w
+            daily.append({'date': base + timedelta(weeks=w, days=d), 'open': lo + 50, 'high': lo + 80, 'low': lo, 'close': lo + 60})
+    weeks = weekly_bars(daily)
+    keys = sorted(weeks)
+    out = virgin_weekly(daily, len(daily) - 1, weeks, keys)
+    assert out and all('week' in b and b['bc'] <= b['tc'] for b in out)
+    assert len(out) <= 8

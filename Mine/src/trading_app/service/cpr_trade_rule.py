@@ -360,6 +360,7 @@ BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 
 BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
 MIN_STOP = 15.0          # a stop closer than this is noise: 0 of 7 such trades survived (Mar-Sep 2026) — no trade
+VIRGIN_WEEKLY_UNTIL = '09:30'   # an opening setup whose candle trades inside an untouched weekly CPR is no trade (28 Aug 2025: SELL 24,519, then the reversal)
 EARLY_UNTIL = '09:30'     # an early setup with a big stop (EARLY_MIN_RISK+), against the gap AND under/over the previous close, is no trade
 EARLY_MIN_RISK = 70.0     # ... 1 Apr and 24 Apr 2025: -75 and -78; smaller stops (40-55) cost 2026 winners, so they are left alone
 ZONE_LULL = ('10:00', '10:30')   # a one-zone break first closing in this window is no trade: 3 of 3 stopped (11 Nov, 24 Nov, 16 Dec); the winners broke at 09:40 and 12:50
@@ -1921,6 +1922,16 @@ def propose_all(chart, bars):
         # An entry INSIDE the daily CPR is a trade in the middle of the line the
         # day is deciding — 7 of 7 such trades were stopped (17 Dec, 23 Dec 2025,
         # 16 Feb, 13 May, 27 May, 24 Jun, 25 Sep 2026).
+        # An opening setup whose own candle is trading INSIDE an untouched (virgin)
+        # weekly CPR: price has just arrived at a magnet, and a break of its edge
+        # on the second or third candle is unproven (28 Aug 2025: the 09:20 candle
+        # sat in the virgin 24,525-24,596 band, the SELL under it was stopped for
+        # -63 and its reversal for -44).
+        if bars[i]['time'] <= VIRGIN_WEEKLY_UNTIL:
+            for vb_ in chart.get('virgin_weekly') or []:
+                if bars[i]['low'] <= vb_['tc'] and bars[i]['high'] >= vb_['bc']:
+                    return [(None, f"{why} — the {bars[i]['time']} candle is trading inside the untouched weekly CPR {vb_['bc']:,.0f}-{vb_['tc']:,.0f} "
+                                   f"({vb_['week']}) — no trade", None, None)]
         # An early setup against the day's gap on both counts — the open on the wrong
         # side of yesterday's close AND the entry too — with a stop of EARLY_MIN_RISK
         # points or more is a big counter-gap bet into the opening noise (1 Apr and
