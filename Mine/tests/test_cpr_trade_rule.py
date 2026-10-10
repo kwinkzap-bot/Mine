@@ -1184,7 +1184,7 @@ def test_29_apr_2026_a_plain_green_close_out_of_the_cpr_is_the_setup_candle():
             {'time': '10:05', 'open': 24202.7, 'high': 24217.55, 'low': 24196.65, 'close': 24211.75},  # 43% body, closes over TC
             {'time': '10:10', 'open': 24212.7, 'high': 24236.8, 'low': 24210.5, 'close': 24233.8}] + _session()[-25:]
     p, why, i = propose(chart, bars)
-    assert bars[i]['time'] == '10:05' and p['trade'] == 'BUY' and p['entry'] == 24219.0 and p['sl'] == 24195.0 and p['target'] == 24267.0
+    assert bars[i]['time'] == '10:05' and p['trade'] == 'BUY' and p['entry'] == 24219.0 and p['sl'] == 24185.0 and p['target'] == 24270.0
     assert '10:05 candle closed above it' in why
 
 
@@ -1434,6 +1434,7 @@ def test_a_big_early_counter_gap_setup_is_no_trade(monkeypatch):
     bars = BARS_7 + _session()[-25:]
     bars = [dict(bars[0], open=22900.0)] + bars[1:]
     chart = _chart_7()
+    chart['levels'] = dict(chart['levels'], pdh=24500.0, r1=24520.0)    # no PDH/R1 just ahead
     chart['prev_session'] = {'close': 23000.0}                      # the open gapped DOWN; a BUY goes against it
     def fake(entry, sl):
         monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': float(entry), 'target': float(entry + 150), 'sl': float(sl)}, 'x', 1))
@@ -1478,3 +1479,57 @@ def test_virgin_weekly_bands_are_the_untouched_ones_of_the_last_eight_weeks():
     out = virgin_weekly(daily, len(daily) - 1, weeks, keys)
     assert out and all('week' in b and b['bc'] <= b['tc'] for b in out)
     assert len(out) <= 8
+
+
+BARS_24S = [
+    {'time': '09:15', 'open': 25108.75, 'high': 25149.85, 'low': 25087.75, 'close': 25092.3},
+    {'time': '09:20', 'open': 25092.5, 'high': 25092.5, 'low': 25063.05, 'close': 25083.95},
+    {'time': '09:25', 'open': 25081.9, 'high': 25084.45, 'low': 25061.5, 'close': 25072.6},
+    {'time': '09:30', 'open': 25072.3, 'high': 25083.8, 'low': 25053.8, 'close': 25069.1},
+    {'time': '09:35', 'open': 25069.0, 'high': 25077.65, 'low': 25062.15, 'close': 25073.6},
+    {'time': '09:40', 'open': 25071.8, 'high': 25071.8, 'low': 25049.45, 'close': 25060.5},
+    {'time': '09:45', 'open': 25059.7, 'high': 25078.6, 'low': 25051.45, 'close': 25077.7},
+    {'time': '09:50', 'open': 25076.65, 'high': 25082.4, 'low': 25069.25, 'close': 25077.2},
+    {'time': '09:55', 'open': 25076.05, 'high': 25092.9, 'low': 25074.0, 'close': 25091.95},     # the bottom-wick rejection of S1
+]
+
+
+def test_24_sep_2025_a_far_fade_back_to_the_cpr_is_no_trade():
+    chart = _chart(BARS_24S[0], (25261.9, 25084.65, 25169.5), (25448.55, 25048.75, 25327.05))
+    p, why, _ = propose(chart, BARS_24S + _session()[-25:])
+    assert p is None and 'not a quick fade' in why and '77 pts away' in why
+    near = [dict(b) for b in BARS_24S]
+    chart2 = dict(chart, levels=dict(chart['levels'], bc=25125.0, tc=25127.0))              # the CPR only 33 pts up: a quick fade
+    p, why, _ = propose(chart2, near + _session()[-25:])
+    assert not (p is None and 'not a quick fade' in (why or ''))
+
+
+def test_26_mar_2025_the_inside_cpr_stop_carries_a_10_pt_buffer():
+    from trading_app.service.cpr_trade_rule import INSIDE_SL_BUFFER
+    assert INSIDE_SL_BUFFER == 10.0
+    bars = [{'time': '09:15', 'open': 23701.0, 'high': 23711.0, 'low': 23663.0, 'close': 23702.0},
+            {'time': '09:20', 'open': 23702.0, 'high': 23730.0, 'low': 23701.0, 'close': 23723.0},
+            {'time': '09:25', 'open': 23723.0, 'high': 23736.0, 'low': 23689.0, 'close': 23700.0},
+            {'time': '09:30', 'open': 23700.0, 'high': 23715.0, 'low': 23675.0, 'close': 23684.0}]    # closes under the CPR 23,691-23,736
+    chart = _chart(bars[0], (23869.6, 23601.4, 23668.65), (23100.0, 22800.0, 23000.0))
+    chart['cpr_type'] = 'Medium'
+    p, why, i = propose(chart, bars + _session()[-25:])
+    assert p['trade'] == 'SELL' and p['entry'] == 23674.0 and p['sl'] == 23727.0           # candle high 23,715 + 1.5 + 10
+    assert '10-pt buffer' in why
+
+
+def test_16_apr_2025_an_opening_buy_with_pdh_just_ahead_after_a_big_candle_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    big = {'time': '09:15', 'open': 23344.0, 'high': 23354.0, 'low': 23277.0, 'close': 23285.0}       # 77 pts
+    bars = [big] + BARS_7[1:5] + _session()[-25:]
+    chart = _chart_7(big)
+    chart['levels'] = dict(chart['levels'], pdh=23368.0, r1=23396.0, bc=23288.0, tc=23315.0)
+    def buy(entry, sl):
+        monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': float(entry), 'target': float(entry + 150), 'sl': float(sl)}, 'x', 2))
+        return rule.propose_all(chart, bars)[0]
+    p, why, *_ = buy(23351, 23276)                       # PDH 17 pts ahead of a 75-pt stop
+    assert p is None and 'the way is shut' in why
+    p, why, *_ = buy(23351, 23320)                       # a 31-pt stop: 17 is over a third of it, so it is taken
+    assert p is not None
+    p, why, *_ = buy(23340, 23265)                       # PDH 28 pts ahead, 75-pt stop: over a third, taken
+    assert p is not None

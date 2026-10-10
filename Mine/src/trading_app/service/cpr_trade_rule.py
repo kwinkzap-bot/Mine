@@ -360,9 +360,12 @@ BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 
 BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
 MIN_STOP = 15.0          # a stop closer than this is noise: 0 of 7 such trades survived (Mar-Sep 2026) — no trade
+BOX_NEAR_X = 0.35          # an opening BUY on a big 09:15 candle with PDH/R1 closer than this x the stop ahead of it is no trade (16 Apr 2025: 17 pts for a 75-pt stop)
+INSIDE_SL_BUFFER = 10.0     # the stop of an inside-the-CPR break sits this many pts past the candle's extreme: 26 Mar 2025's SELL was stopped by a 3-pt wick, then fell 270 pts
+FADE_MAX_X = 1.5           # a wall-rejection fade back to the CPR is taken only when the CPR is within this x the stop (24 Sep, 31 Jan 2025: 77 and 70 pts for 47 and 24 — both stopped)
 VIRGIN_WEEKLY_UNTIL = '09:30'   # an opening setup whose candle trades inside an untouched weekly CPR is no trade (28 Aug 2025: SELL 24,519, then the reversal)
 EARLY_UNTIL = '09:30'     # an early setup with a big stop (EARLY_MIN_RISK+), against the gap AND under/over the previous close, is no trade
-EARLY_MIN_RISK = 70.0     # ... 1 Apr and 24 Apr 2025: -75 and -78; smaller stops (40-55) cost 2026 winners, so they are left alone
+EARLY_MIN_RISK = 75.0     # ... 1 Apr and 24 Apr 2025: -75 and -78; smaller stops (40-70) cost winners (6 Jan 2025's 70-pt stop is the 60-pt one plus INSIDE_SL_BUFFER), so they are left alone
 ZONE_LULL = ('10:00', '10:30')   # a one-zone break first closing in this window is no trade: 3 of 3 stopped (11 Nov, 24 Nov, 16 Dec); the winners broke at 09:40 and 12:50
 QUIET_FROM, QUIET_TO = '10:30', '11:30'   # no new setup in this window: 2 wins, 8 stops (Jan-Aug 2026)
 GRAZE_PCT = 0.01         # a gap-day reversal must close this far (~2 pts) clear of the box: 1 pt over it is a graze, not a reclaim — no trade that day (21 May 2026)
@@ -1014,6 +1017,9 @@ def propose(chart, bars):
                         sl = math.ceil(max(extreme, wall[1]) + 1.5)
                         line = svc.first_cpr_line(entry, False, named)
                         target = round(line[1]) if line else entry - (sl - entry)
+                        if abs(entry - target) > FADE_MAX_X * abs(sl - entry):
+                            return None, (f"{head}, still under PDH/R1 {wall[0]:,.0f}-{wall[1]:,.0f}; {b['time']} candle rejected from it — but the CPR it would fade back to "
+                                          f"is {abs(entry - target):.0f} pts away for a {abs(sl - entry):.0f}-pt stop (over {FADE_MAX_X:g}x): not a quick fade, it fights the trend — no trade"), None
                         why = (f"{head}, still under PDH/R1 {wall[0]:,.0f}-{wall[1]:,.0f}; {b['time']} candle rejected from it "
                                f"(high {b['high']:,.0f}, top wick, closed {b['close']:,.0f}) -> SELL under it; SL over the high; "
                                f"target {'the CPR ' + line[0] if line else '1:1'}")
@@ -1023,6 +1029,9 @@ def propose(chart, bars):
                         sl = math.floor(min(extreme, wall[0]) - 1.5)
                         line = svc.first_cpr_line(entry, True, named)
                         target = round(line[1]) if line else entry + (entry - sl)
+                        if abs(entry - target) > FADE_MAX_X * abs(entry - sl):
+                            return None, (f"{head}, still over PDL/S1 {wall[0]:,.0f}-{wall[1]:,.0f}; {b['time']} candle rejected from it — but the CPR it would fade back to "
+                                          f"is {abs(entry - target):.0f} pts away for a {abs(entry - sl):.0f}-pt stop (over {FADE_MAX_X:g}x): not a quick fade, it fights the trend — no trade"), None
                         why = (f"{head}, still over PDL/S1 {wall[0]:,.0f}-{wall[1]:,.0f}; {b['time']} candle rejected from it "
                                f"(low {b['low']:,.0f}, bottom wick, closed {b['close']:,.0f}) -> BUY over it; SL under the low; "
                                f"target {'the CPR ' + line[0] if line else '1:1'}")
@@ -1310,23 +1319,23 @@ def propose(chart, bars):
             if b['close'] > b['open'] and b['close'] > in_hi:
                 if chopped(i):
                     return None, chopped(i), None
-                entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
+                entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5 - INSIDE_SL_BUFFER)
                 boxed = no_room(entry, sl, True)
                 if boxed:
                     return None, f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed above it — {boxed}", None
                 made = build('BUY', entry, sl, next_level(entry, True, resistances[:2]) or next_level(entry, True, resistances),
-                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed above it at {b['close']:,.0f} -> BUY over it; SL under its low", far_rr=TREND_RR)
+                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed above it at {b['close']:,.0f} -> BUY over it; SL under its low with a {INSIDE_SL_BUFFER:.0f}-pt buffer", far_rr=TREND_RR)
                 if made:
                     return (*made, i)
             if b['close'] < b['open'] and b['close'] < in_lo:
                 if chopped(i):
                     return None, chopped(i), None
-                entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
+                entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5 + INSIDE_SL_BUFFER)
                 boxed = no_room(entry, sl, False)
                 if boxed:
                     return None, f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed below it — {boxed}", None
                 made = build('SELL', entry, sl, next_level(entry, False, supports[:2]) or next_level(entry, False, supports),
-                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed below it at {b['close']:,.0f} -> SELL under it; SL over its high", far_rr=TREND_RR)
+                             f"09:15 closed inside the CPR {in_lo:,.0f}-{in_hi:,.0f}; {b['time']} candle closed below it at {b['close']:,.0f} -> SELL under it; SL over its high with a {INSIDE_SL_BUFFER:.0f}-pt buffer", far_rr=TREND_RR)
                 if made:
                     return (*made, i)
             continue
@@ -1922,6 +1931,16 @@ def propose_all(chart, bars):
         # An entry INSIDE the daily CPR is a trade in the middle of the line the
         # day is deciding — 7 of 7 such trades were stopped (17 Dec, 23 Dec 2025,
         # 16 Feb, 13 May, 27 May, 24 Jun, 25 Sep 2026).
+        # An opening BUY after a BIG 09:15 candle whose way is shut by PDH/R1 a few points
+        # ahead — the stop is the CPR's far edge, the resistance is nearer than a third of
+        # it (16 Apr 2025: BUY 23,351, PDH/R1 23,368, stop 23,276, stopped for -75).
+        if (p['trade'] == 'BUY' and bars[i]['time'] <= EARLY_UNTIL
+                and (bars[0]['high'] - bars[0]['low']) > bars[0]['close'] * BIG_CANDLE_PCT / 100):
+            lvb_ = chart['levels']
+            ahead_ = min(lvb_['pdh'], lvb_['r1']) - p['entry']
+            if 0 <= ahead_ < BOX_NEAR_X * abs(p['entry'] - p['sl']):
+                return [(None, f"{why} — a {bars[0]['high'] - bars[0]['low']:.0f}-pt 09:15 candle and PDH/R1 only {ahead_:.0f} pts over the {p['entry']:,.0f} entry "
+                               f"for a {abs(p['entry'] - p['sl']):.0f}-pt stop: the way is shut — no trade", None, None)]
         # An opening setup whose own candle is trading INSIDE an untouched (virgin)
         # weekly CPR: price has just arrived at a magnet, and a break of its edge
         # on the second or third candle is unproven (28 Aug 2025: the 09:20 candle

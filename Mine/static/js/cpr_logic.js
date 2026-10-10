@@ -18,11 +18,10 @@ document.addEventListener('DOMContentLoaded', () => {
     tdElems.cprUpdate  = document.getElementById('tdCprUpdate');
     tdElems.cprStrike  = document.getElementById('tdCprStrike');
     tdElems.year        = document.getElementById('tdCprYear');
-    tdElems.year.addEventListener('change', () => {
-        _tdCprState.year = tdElems.year.value;
-        try { localStorage.setItem('cpr-logic-year', _tdCprState.year); } catch (e) { /* no storage */ }
-        if (_tdCprState.data) renderCprBacktest(_tdCprState.data);
-    });
+    tdElems.strategyYear = document.getElementById('tdCprStrategyYear');
+    tdElems.perfYear    = document.getElementById('tdCprPerfYear');
+    // One year choice for the page and both popups: picking it anywhere re-draws all of them.
+    [tdElems.year, tdElems.strategyYear, tdElems.perfYear].forEach(sel => sel.addEventListener('change', () => _tdCprYearChanged(sel.value)));
     try { _tdCprState.year = localStorage.getItem('cpr-logic-year') || ''; } catch (e) { /* no storage */ }
     tdElems.filterBtn   = document.getElementById('tdCprStrategyFilterBtn');
     tdElems.filterPanel = document.getElementById('tdCprStrategyFilterPanel');
@@ -107,21 +106,57 @@ const _tdStratOpen = new Set();                 // cards left open across re-ren
 
 function _tdCprStrategyRows() {
     const d = _tdCprState.data;
-    const list = ((d.summary && d.summary.strategies) || []).map(s => Object.assign({}, s, { opt_pnl: 0, opt_n: 0 }));
     const o = _tdCprState.options;
     const ready = o && o.status === 'ready';
-    const byName = Object.fromEntries(list.map(s => [s.name, s]));
-    for (const s of list) s.days = [];
-    // Every trade of every setup, with its option leg when the legs are in.
-    for (const r of d.rows) r.trades.forEach((t, i) => {
-        const s = byName[t.strategy];
-        if (!s) return;
-        const leg = ready ? _tdCprLeg(r.date, i) : null;
-        if (leg && leg.pnl != null) { s.opt_pnl += leg.pnl; s.opt_n += 1; }
-        s.days.push({ date: r.date, i, m: t.manual, c: t.chart, leg });
-    });
-    for (const s of list) { s.opt_avg = s.opt_n ? s.opt_pnl / s.opt_n : 0; s.days.sort((a, b) => b.date.localeCompare(a.date)); }
+    // The setups' words come from the sheet's summary; every count is re-taken from the
+    // trades of the chosen year, so the list follows the year dropdown.
+    const how = Object.fromEntries(((d.summary && d.summary.strategies) || []).map(s => [s.name, s.how]));
+    const byName = {};
+    for (const r of d.rows) {
+        if (!_tdCprYearMatches(r)) continue;
+        r.trades.forEach((t, i) => {
+            const s = byName[t.strategy] || (byName[t.strategy] = {
+                name: t.strategy, how: how[t.strategy], trades: 0, wins: 0, losses: 0, flat: 0, pnl: 0, last: null,
+                targets: 0, stops: 0, eod: 0, opt_pnl: 0, opt_n: 0, days: [] });
+            const m = t.manual, pnl = m.pnl;
+            s.trades += 1;
+            s.last = s.last && s.last > r.date ? s.last : r.date;
+            if (pnl == null || pnl === 0) s.flat += 1; else if (pnl > 0) s.wins += 1; else s.losses += 1;
+            s.pnl += pnl || 0;
+            if (m.result === 'Target') s.targets += 1; else if (m.result === 'SL') s.stops += 1; else if (m.result === 'EOD') s.eod += 1;
+            const leg = ready ? _tdCprLeg(r.date, i) : null;
+            if (leg && leg.pnl != null) { s.opt_pnl += leg.pnl; s.opt_n += 1; }
+            s.days.push({ date: r.date, i, m, c: t.chart, leg });
+        });
+    }
+    const list = Object.values(byName);
+    for (const s of list) {
+        s.win_pct = s.wins + s.losses ? 100 * s.wins / (s.wins + s.losses) : null;
+        s.opt_avg = s.opt_n ? s.opt_pnl / s.opt_n : 0;
+        s.days.sort((a, b) => b.date.localeCompare(a.date));
+    }
+    list.sort((a, b) => b.trades - a.trades || a.name.localeCompare(b.name));
     return { list, ready, lot: ready ? o.summary.lot : null, rule: ready ? (o.premium ? `≈${o.premium} strike` : 'ATM') : null };
+}
+
+// The no-trade groups of the chosen year: the days the rule passed, by reason.
+function _tdCprNoTradeGroups() {
+    const d = _tdCprState.data;
+    const how = Object.fromEntries((((d && d.summary && d.summary.no_trade) || [])).map(g => [g.name, g.how]));
+    const by = {};
+    let sessions = 0;
+    for (const r of (d ? d.rows : [])) {
+        if (!_tdCprYearMatches(r)) continue;
+        sessions += 1;
+        if (!r.no_trade_strategy) continue;
+        const g = by[r.no_trade_strategy] || (by[r.no_trade_strategy] = { name: r.no_trade_strategy, how: how[r.no_trade_strategy], days: 0, last: null, items: [] });
+        g.days += 1;
+        g.last = g.last && g.last > r.date ? g.last : r.date;
+        g.items.push({ date: r.date, reason: r.manual.no_trade_reason });
+    }
+    const groups = Object.values(by).sort((a, b) => b.days - a.days || a.name.localeCompare(b.name));
+    for (const g of groups) g.items.sort((a, b) => b.date.localeCompare(a.date));
+    return { groups, days: groups.reduce((a, g) => a + g.days, 0), sessions };
 }
 
 function showCprStrategies() {
@@ -129,8 +164,9 @@ function showCprStrategies() {
     if (!d) return;
     const { list, ready, lot, rule } = _tdCprStrategyRows();
     const total = list.reduce((a, s) => a + s.trades, 0);
-    const noTradeDays = (d.summary && d.summary.no_trade_days) || 0;
-    tdElems.strategyMeta.textContent = `${d.symbol} · ${list.length} strategies · ${total} trades · ${noTradeDays} no-trade days` + (rule ? ` · option P&L at ${rule}` : '');
+    const nt = _tdCprNoTradeGroups();
+    const noTradeDays = nt.days;
+    tdElems.strategyMeta.textContent = `${d.symbol}${_tdCprState.year ? ' · ' + _tdCprState.year : ''} · ${list.length} strategies · ${total} trades · ${noTradeDays} no-trade days` + (rule ? ` · option P&L at ${rule}` : '');
 
     // Totals strip
     const wins = list.reduce((a, s) => a + s.wins, 0), losses = list.reduce((a, s) => a + s.losses, 0);
@@ -146,7 +182,7 @@ function showCprStrategies() {
         tile('Index P&L', `<span class="${cls(idxPnl)}">${_tdNum(idxPnl, 0)}</span> pts`, 'the sheet\'s figure') +
         tile('Brokerage', ready && lot ? `<span class="dg-neg">₹${_tdNum(CPR_BROKERAGE * optTrades, 0)}</span>` : 'reading…',
              ready && lot ? `₹${CPR_BROKERAGE} × ${optTrades} trades · gross ₹${_tdNum(optPnl * lot, 0)}` : '') +
-        tile('No-trade days', noTradeDays, `${((d.summary && d.summary.no_trade) || []).length} reasons · ${d.summary ? d.summary.sessions : 0} sessions`) +
+        tile('No-trade days', noTradeDays, `${nt.groups.length} reasons · ${nt.sessions} sessions`) +
         tile('Best setup', best ? _tdEsc(best.name) : '—', best ? `<span class="${cls(best.opt_pnl)}">${_tdNum(best.opt_pnl, 0)}</span> option pts` : '');
 
     renderCprStrategyCards();
@@ -207,10 +243,11 @@ function renderCprStrategyCards() {
 // and the days with each day's own reason. Searched and opened like a setup.
 function _tdCprNoTradeCards(q) {
     const d = _tdCprState.data;
-    const groups = ((d && d.summary && d.summary.no_trade) || [])
+    const all = _tdCprNoTradeGroups();
+    const groups = all.groups
         .filter(g => !q || [g.name, g.how && g.how.setup, g.how && g.how.example, ...g.items.map(i => i.reason)].join(' ').toLowerCase().includes(q));
     if (!groups.length) return '';
-    const sessions = d.summary.sessions || 1;
+    const sessions = all.sessions || 1;
     const row = (k, label, v, extra = '') => `<div class="td-strat-row ${extra}"><span class="k ${k}">${label}</span><span>${_tdEsc(v || '—')}</span></div>`;
     return groups.map(g => {
         const how = g.how || {};
@@ -312,15 +349,28 @@ function renderCprYearFilter() {
     if (!d) return;
     const years = [...new Set(d.rows.map(r => r.date.slice(0, 4)))].sort().reverse();
     if (_tdCprState.year && !years.includes(_tdCprState.year)) _tdCprState.year = '';
-    tdElems.year.innerHTML = `<option value="">All years</option>` + years.map(y => {
+    const html = `<option value="">All years</option>` + years.map(y => {
         const n = d.rows.filter(r => r.date.startsWith(y)).length;
         return `<option value="${y}"${y === _tdCprState.year ? ' selected' : ''}>${y} (${n})</option>`;
     }).join('');
-    tdElems.year.classList.toggle('td-msel-on', !!_tdCprState.year);
+    for (const sel of [tdElems.year, tdElems.strategyYear, tdElems.perfYear]) {
+        if (!sel) continue;
+        sel.innerHTML = html;
+        sel.classList.toggle('td-msel-on', !!_tdCprState.year);
+    }
 }
 
 function _tdCprYearMatches(r) {
     return !_tdCprState.year || r.date.startsWith(_tdCprState.year);
+}
+
+function _tdCprYearChanged(year) {
+    _tdCprState.year = year;
+    try { localStorage.setItem('cpr-logic-year', year); } catch (e) { /* no storage */ }
+    renderCprYearFilter();                                         // keeps the three dropdowns in step
+    if (_tdCprState.data) renderCprBacktest(_tdCprState.data);
+    if (tdElems.strategyModal && !tdElems.strategyModal.classList.contains('hidden')) showCprStrategies();
+    if (tdElems.perfModal && !tdElems.perfModal.classList.contains('hidden')) renderCprPerformance();
 }
 
 // ---- Strategy filter ----
@@ -847,6 +897,7 @@ function _tdPerfTrades() {
     const lot = o.summary.lot || 0;
     const out = [];
     for (const r of d.rows) r.trades.forEach((t, i) => {
+        if (!_tdCprYearMatches(r)) return;
         const leg = _tdCprLeg(r.date, i);
         if (!leg || leg.pnl == null) return;
         const gross = leg.pnl * lot;
@@ -895,7 +946,7 @@ function renderCprPerformance() {
     const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
     const rs = (v, sign) => (v < 0 ? '−' : (sign && v > 0 ? '+' : '')) + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const tile = (l, v, c = '') => `<div class="td-perf-tile"><div class="l">${l}</div><div class="v ${c}">${v}</div></div>`;
-    meta.textContent = `${d.symbol} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}`;
+    meta.textContent = `${d.symbol}${_tdCprState.year ? ' · ' + _tdCprState.year : ''} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}`;
     tiles.innerHTML =
         tile('Total trades', trades.length) + tile('Wins', winsT.length, 'dg-pos') + tile('Losses', lossT.length, 'dg-neg') +
         tile('Win rate', (100 * winsT.length / trades.length).toFixed(1) + '%') +

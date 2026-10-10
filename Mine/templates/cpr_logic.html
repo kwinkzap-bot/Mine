@@ -83,6 +83,7 @@
                 <h2>Performance</h2>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
                     <div class="td-card-hdr-meta" id="tdCprPerfMeta"></div>
+                    <select class="td-select" id="tdCprPerfYear" title="Show one year of the sheet"><option value="">All years</option></select>
                     <button type="button" class="td-btn" id="tdCprPerfClose" title="Close (Esc)">✕</button>
                 </div>
             </div>
@@ -116,6 +117,8 @@
                 <h2>Strategy list</h2>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
                     <div class="td-card-hdr-meta" id="tdCprStrategyMeta"></div>
+                    <!-- The same year choice as the page's own dropdown: one year of the sheet, or all -->
+                    <select class="td-select" id="tdCprStrategyYear" title="Show one year of the sheet"><option value="">All years</option></select>
                     <input type="search" class="td-select td-strat-search" id="tdCprStrategySearch" placeholder="Search a setup…" title="Filter by name or words in the setup">
                     <select class="td-select" id="tdCprStrategySort" title="Sort the cards">
                         <option value="trades">Most used</option>

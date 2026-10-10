@@ -68,12 +68,12 @@
       "trade": "SELL",
       "entry": 24013.0,
       "target": 23944.0,
-      "sl": 24073.0,
+      "sl": 24083.0,
       "result": "Target",
       "pnl": 69.0,
-      "reason": "09:15 closed inside the CPR 24,032-24,086; 09:30 candle closed below it at 24,026 -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 23,944",
+      "reason": "09:15 closed inside the CPR 24,032-24,086; 09:30 candle closed below it at 24,026 -> SELL under it; SL over its high with a 10-pt buffer; target Cam S3 (inside the PDL/S1 box) 23,944",
       "setup_time": "09:30",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 54.3 pts (0.226%), 09:15 candle O 24045.8 H 24054.35 L 24018.15 C 24034.05 | Trade by rule: 09:15 closed inside the CPR 24,032-24,086; 09:30 candle closed below it at 24,026 -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 23,944; chart replay Target 09:35 -> 09:45"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 54.3 pts (0.226%), 09:15 candle O 24045.8 H 24054.35 L 24018.15 C 24034.05 | Trade by rule: 09:15 closed inside the CPR 24,032-24,086; 09:30 candle closed below it at 24,026 -> SELL under it; SL over its high with a 10-pt buffer; target Cam S3 (inside the PDL/S1 box) 23,944; chart replay Target 09:35 -> 09:45"
     },
     {
       "date": "2025-01-07",
@@ -139,13 +139,13 @@
       "boxes": "Medium",
       "trade": "SELL",
       "entry": 23514.0,
-      "target": 23475.0,
-      "sl": 23577.0,
+      "target": 23368.0,
+      "sl": 23587.0,
       "result": "Target",
-      "pnl": 39.0,
-      "reason": "09:15 closed inside the CPR 23,550-23,596; 09:25 candle closed below it at 23,519 -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 23,475",
+      "pnl": 146.0,
+      "reason": "09:15 closed inside the CPR 23,550-23,596; 09:25 candle closed below it at 23,519 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 23,475 is only 39 pts away, inside the 73-pt risk)",
       "setup_time": "09:25",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 46.5 pts (0.198%), 09:15 candle O 23551.9 H 23587.4 L 23537.95 C 23561.05 | Trade by rule: 09:15 closed inside the CPR 23,550-23,596; 09:25 candle closed below it at 23,519 -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 23,475; chart replay Target 09:30 -> 09:30"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 46.5 pts (0.198%), 09:15 candle O 23551.9 H 23587.4 L 23537.95 C 23561.05 | Trade by rule: 09:15 closed inside the CPR 23,550-23,596; 09:25 candle closed below it at 23,519 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 23,475 is only 39 pts away, inside the 73-pt risk); chart replay Target 09:30 -> 09:55"
     },
     {
       "date": "2025-01-13",
@@ -301,13 +301,13 @@
       "boxes": "Big",
       "trade": "SELL",
       "entry": 23073.0,
-      "target": 22959.0,
-      "sl": 23130.0,
+      "target": 22939.0,
+      "sl": 23140.0,
       "result": "SL",
-      "pnl": -57.0,
-      "reason": "09:15 closed inside the CPR 23,084-23,202; 09:20 candle closed below it at 23,081 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 22,901 is 172 pts away)",
+      "pnl": -67.0,
+      "reason": "09:15 closed inside the CPR 23,084-23,202; 09:20 candle closed below it at 23,081 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 22,901 is 172 pts away)",
       "setup_time": "09:20",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 118.0 pts (0.512%), 09:15 candle O 23099.15 H 23119.4 L 23070.0 C 23109.2 | Trade by rule: 09:15 closed inside the CPR 23,084-23,202; 09:20 candle closed below it at 23,081 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 22,901 is 172 pts away); chart replay SL 09:25 -> 10:45"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 118.0 pts (0.512%), 09:15 candle O 23099.15 H 23119.4 L 23070.0 C 23109.2 | Trade by rule: 09:15 closed inside the CPR 23,084-23,202; 09:20 candle closed below it at 23,081 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 22,901 is 172 pts away); chart replay SL 09:25 -> 10:45"
     },
     {
       "date": "2025-01-23",
@@ -425,15 +425,15 @@
       "cpr_direction": "Asc",
       "first_candle": "In decision candle(doji) near R3(cam)",
       "boxes": "Small",
-      "trade": "SELL",
-      "entry": 23313.0,
-      "target": 23243.0,
-      "sl": 23337.0,
-      "result": "SL",
-      "pnl": -24.0,
-      "reason": "narrow CPR (12.6 pts), open above both CPRs \u2014 trend day expected; 09:15 candle rejected the downside (wick 19 pts), still under PDH/R1 23,322-23,335; 09:30 candle rejected from it (high 23,330, top wick, closed 23,319) -> SELL under it; SL over the high; target the CPR TC",
-      "setup_time": "09:30",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 12.6 pts (0.054%), 09:15 candle O 23296.75 H 23315.25 L 23277.4 C 23301.25 | Trade by rule: narrow CPR (12.6 pts), open above both CPRs \u2014 trend day expected; 09:15 candle rejected the downside (wick 19 pts), still under PDH/R1 23,322-23,335; 09:30 candle rejected from it (high 23,330, top wick, closed 23,319) -> SELL under it; SL over the high; target the CPR TC; chart replay SL 09:35 -> 09:40"
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Narrow CPR (12.6 pts), open above both CPRs \u2014 trend day expected; 09:15 candle rejected the downside (wick 19 pts), still under PDH/R1 23,322-23,335; 09:30 candle rejected from it \u2014 but the CPR it would fade back to is 70 pts away for a 24-pt stop (over 1.5x): not a quick fade, it fights the trend \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 12.6 pts (0.054%), 09:15 candle O 23296.75 H 23315.25 L 23277.4 C 23301.25 | Trade by rule: narrow CPR (12.6 pts), open above both CPRs \u2014 trend day expected; 09:15 candle rejected the downside (wick 19 pts), still under PDH/R1 23,322-23,335; 09:30 candle rejected from it \u2014 but the CPR it would fade back to is 70 pts away for a 24-pt stop (over 1.5x): not a quick fade, it fights the trend \u2014 no trade"
     },
     {
       "date": "2025-02-01",
@@ -1129,13 +1129,13 @@
       "boxes": "Medium",
       "trade": "SELL",
       "entry": 23674.0,
-      "target": 23588.0,
-      "sl": 23717.0,
-      "result": "SL",
-      "pnl": -43.0,
-      "reason": "09:15 closed inside the CPR 23,691-23,736; 09:30 candle closed below it at 23,684 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 23,595 is 79 pts away)",
+      "target": 23595.0,
+      "sl": 23727.0,
+      "result": "Target",
+      "pnl": 79.0,
+      "reason": "09:15 closed inside the CPR 23,691-23,736; 09:30 candle closed below it at 23,684 -> SELL under it; SL over its high with a 10-pt buffer; target Cam S3 (inside the PDL/S1 box) 23,595",
       "setup_time": "09:30",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 44.6 pts (0.188%), 09:15 candle O 23700.95 H 23711.4 L 23663.4 C 23701.8 | Trade by rule: 09:15 closed inside the CPR 23,691-23,736; 09:30 candle closed below it at 23,684 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 23,595 is 79 pts away); chart replay SL 09:35 -> 10:35"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 44.6 pts (0.188%), 09:15 candle O 23700.95 H 23711.4 L 23663.4 C 23701.8 | Trade by rule: 09:15 closed inside the CPR 23,691-23,736; 09:30 candle closed below it at 23,684 -> SELL under it; SL over its high with a 10-pt buffer; target Cam S3 (inside the PDL/S1 box) 23,595; chart replay Target 09:35 -> 11:55"
     },
     {
       "date": "2025-03-27",
@@ -1343,15 +1343,15 @@
       "cpr_direction": "Asc",
       "first_candle": "Strong candle red near S3(cam)",
       "boxes": "Small",
-      "trade": "BUY",
-      "entry": 23351.0,
-      "target": 23502.0,
-      "sl": 23276.0,
-      "result": "SL",
-      "pnl": -75.0,
-      "reason": "above the weekly CPR, under the daily one; 09:25 candle closed above the daily CPR 23,288-23,315 at 23,334; target 1:2 (Cam R3 (inside the PDH/R1 box) 23,373 is only 21 pts away, inside the 75-pt risk)",
-      "setup_time": "09:25",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 27.2 pts (0.117%), 09:15 candle O 23344.1 H 23353.65 L 23277.0 C 23284.85 | Trade by rule: above the weekly CPR, under the daily one; 09:25 candle closed above the daily CPR 23,288-23,315 at 23,334; target 1:2 (Cam R3 (inside the PDH/R1 box) 23,373 is only 21 pts away, inside the 75-pt risk); chart replay SL 09:35 -> 11:00"
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Above the weekly CPR, under the daily one; 09:25 candle closed above the daily CPR 23,288-23,315 at 23,334; target 1:2 (Cam R3 (inside the PDH/R1 box) 23,373 is only 21 pts away, inside the 75-pt risk) \u2014 a 77-pt 09:15 candle and PDH/R1 only 17 pts over the 23,351 entry for a 75-pt stop: the way is shut \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 27.2 pts (0.117%), 09:15 candle O 23344.1 H 23353.65 L 23277.0 C 23284.85 | Trade by rule: above the weekly CPR, under the daily one; 09:25 candle closed above the daily CPR 23,288-23,315 at 23,334; target 1:2 (Cam R3 (inside the PDH/R1 box) 23,373 is only 21 pts away, inside the 75-pt risk) \u2014 a 77-pt 09:15 candle and PDH/R1 only 17 pts over the 23,351 entry for a 75-pt stop: the way is shut \u2014 no trade"
     },
     {
       "date": "2025-04-17",
@@ -1741,13 +1741,13 @@
       "boxes": "Small",
       "trade": "SELL",
       "entry": 24935.0,
-      "target": 24831.0,
-      "sl": 24987.0,
+      "target": 24811.0,
+      "sl": 24997.0,
       "result": "Target",
-      "pnl": 104.0,
-      "reason": "09:15 closed inside the CPR 24,960-24,990; 09:20 candle closed below it at 24,960 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,905 is only 30 pts away, inside the 52-pt risk)",
+      "pnl": 124.0,
+      "reason": "09:15 closed inside the CPR 24,960-24,990; 09:20 candle closed below it at 24,960 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,905 is only 30 pts away, inside the 62-pt risk)",
       "setup_time": "09:20",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 29.6 pts (0.119%), 09:15 candle O 24996.2 H 25010.35 L 24968.0 C 24976.15 | Trade by rule: 09:15 closed inside the CPR 24,960-24,990; 09:20 candle closed below it at 24,960 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,905 is only 30 pts away, inside the 52-pt risk); chart replay Target 09:25 -> 12:45"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 29.6 pts (0.119%), 09:15 candle O 24996.2 H 25010.35 L 24968.0 C 24976.15 | Trade by rule: 09:15 closed inside the CPR 24,960-24,990; 09:20 candle closed below it at 24,960 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,905 is only 30 pts away, inside the 62-pt risk); chart replay Target 09:25 -> 12:50"
     },
     {
       "date": "2025-05-21",
@@ -2282,12 +2282,12 @@
       "trade": "BUY",
       "entry": 25581.0,
       "target": 25633.0,
-      "sl": 25555.0,
+      "sl": 25545.0,
       "result": "SL",
-      "pnl": -26.0,
-      "reason": "09:15 closed inside the CPR 25,535-25,571; 09:25 candle closed above it at 25,574 -> BUY over it; SL under its low; target 1:2 (R1 25,633 is 52 pts away)",
+      "pnl": -36.0,
+      "reason": "09:15 closed inside the CPR 25,535-25,571; 09:25 candle closed above it at 25,574 -> BUY over it; SL under its low with a 10-pt buffer; target R1 25,633",
       "setup_time": "09:25",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 36.2 pts (0.142%), 09:15 candle O 25551.35 H 25568.25 L 25513.8 C 25538.15 | Trade by rule: 09:15 closed inside the CPR 25,535-25,571; 09:25 candle closed above it at 25,574 -> BUY over it; SL under its low; target 1:2 (R1 25,633 is 52 pts away); chart replay SL 09:30 -> 09:55"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 36.2 pts (0.142%), 09:15 candle O 25551.35 H 25568.25 L 25513.8 C 25538.15 | Trade by rule: 09:15 closed inside the CPR 25,535-25,571; 09:25 candle closed above it at 25,574 -> BUY over it; SL under its low with a 10-pt buffer; target R1 25,633; chart replay SL 09:30 -> 10:00"
     },
     {
       "date": "2025-07-02",
@@ -2515,13 +2515,13 @@
       "boxes": "Small",
       "trade": "SELL",
       "entry": 25181.0,
-      "target": 25151.0,
-      "sl": 25196.0,
+      "target": 25131.0,
+      "sl": 25206.0,
       "result": "SL",
-      "pnl": -15.0,
-      "reason": "09:15 closed inside the CPR 25,188-25,339; 09:45 candle closed below it at 25,184 -> SELL under it; SL over its high; target 1:2 (S1 25,137 is 44 pts away)",
+      "pnl": -25.0,
+      "reason": "09:15 closed inside the CPR 25,188-25,339; 09:45 candle closed below it at 25,184 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (S1 25,137 is 44 pts away)",
       "setup_time": "09:45",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 15.9 pts (0.063%), 09:15 candle O 25230.75 H 25238.35 L 25202.75 C 25217.6 | Trade by rule: 09:15 closed inside the CPR 25,188-25,339; 09:45 candle closed below it at 25,184 -> SELL under it; SL over its high; target 1:2 (S1 25,137 is 44 pts away); chart replay SL 09:50 -> 09:50"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 15.9 pts (0.063%), 09:15 candle O 25230.75 H 25238.35 L 25202.75 C 25217.6 | Trade by rule: 09:15 closed inside the CPR 25,188-25,339; 09:45 candle closed below it at 25,184 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (S1 25,137 is 44 pts away); chart replay SL 09:50 -> 12:40"
     },
     {
       "date": "2025-07-18",
@@ -2911,13 +2911,13 @@
       "boxes": "Medium",
       "trade": "SELL",
       "entry": 24888.0,
-      "target": 24842.0,
-      "sl": 24911.0,
+      "target": 24822.0,
+      "sl": 24921.0,
       "result": "SL",
-      "pnl": -23.0,
-      "reason": "09:15 closed inside the CPR 24,897-24,937; 09:35 candle closed below it at 24,892 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,830 is 58 pts away)",
+      "pnl": -33.0,
+      "reason": "09:15 closed inside the CPR 24,897-24,937; 09:35 candle closed below it at 24,892 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,830 is 58 pts away)",
       "setup_time": "09:35",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 40.3 pts (0.162%), 09:15 candle O 24891.35 H 24930.35 L 24886.95 C 24905.95 | Trade by rule: 09:15 closed inside the CPR 24,897-24,937; 09:35 candle closed below it at 24,892 -> SELL under it; SL over its high; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,830 is 58 pts away); chart replay SL 09:40 -> 09:50"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 40.3 pts (0.162%), 09:15 candle O 24891.35 H 24930.35 L 24886.95 C 24905.95 | Trade by rule: 09:15 closed inside the CPR 24,897-24,937; 09:35 candle closed below it at 24,892 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (Cam S3 (inside the PDL/S1 box) 24,830 is 58 pts away); chart replay SL 09:40 -> 10:10"
     },
     {
       "date": "2025-08-20",
@@ -3359,33 +3359,15 @@
       "cpr_direction": "Dec",
       "first_candle": "Candle red near Prev Low",
       "boxes": "Small",
-      "trade": "BUY",
-      "entry": 25094.0,
-      "target": 25171.0,
-      "sl": 25047.0,
-      "result": "SL",
-      "pnl": -47.0,
-      "reason": "narrow CPR (2.5 pts), open below both CPRs \u2014 trend day expected; 09:15 candle rejected the upside (wick 41 pts), still over PDL/S1 25,082-25,085; 09:55 candle rejected from it (low 25,074, bottom wick, closed 25,092) -> BUY over it; SL under the low; target the CPR BC",
-      "setup_time": "09:55",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 2.5 pts (0.01%), 09:15 candle O 25108.75 H 25149.85 L 25087.75 C 25092.3 | Trade by rule: narrow CPR (2.5 pts), open below both CPRs \u2014 trend day expected; 09:15 candle rejected the upside (wick 41 pts), still over PDL/S1 25,082-25,085; 09:55 candle rejected from it (low 25,074, bottom wick, closed 25,092) -> BUY over it; SL under the low; target the CPR BC; chart replay SL 10:00 -> 11:00"
-    },
-    {
-      "date": "2025-09-24",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Dec",
-      "first_candle": "Candle red near Prev Low",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 25044.0,
-      "target": 25000.0,
-      "sl": 25080.0,
-      "result": "SL",
-      "pnl": -36.0,
-      "reason": "the first trade was stopped by the 11:00 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 24,989-25,000 (2025-09-12, untouched since) at 25,000",
-      "setup_time": "11:00",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 11:00 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 24,989-25,000 (2025-09-12, untouched since) at 25,000; chart replay SL 11:05 -> 11:45"
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Narrow CPR (2.5 pts), open below both CPRs \u2014 trend day expected; 09:15 candle rejected the upside (wick 41 pts), still over PDL/S1 25,082-25,085; 09:55 candle rejected from it \u2014 but the CPR it would fade back to is 77 pts away for a 47-pt stop (over 1.5x): not a quick fade, it fights the trend \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 2.5 pts (0.01%), 09:15 candle O 25108.75 H 25149.85 L 25087.75 C 25092.3 | Trade by rule: narrow CPR (2.5 pts), open below both CPRs \u2014 trend day expected; 09:15 candle rejected the upside (wick 41 pts), still over PDL/S1 25,082-25,085; 09:55 candle rejected from it \u2014 but the CPR it would fade back to is 77 pts away for a 47-pt stop (over 1.5x): not a quick fade, it fights the trend \u2014 no trade"
     },
     {
       "date": "2025-09-25",
@@ -3827,15 +3809,15 @@
       "cpr_direction": "Dec",
       "first_candle": "In decision candle(doji) near Prev Low",
       "boxes": "Medium",
-      "trade": "BUY",
-      "entry": 25950.0,
-      "target": 25992.0,
-      "sl": 25912.0,
-      "result": "SL",
-      "pnl": -38.0,
-      "reason": "09:15 closed inside the CPR 25,834-25,939; 09:30 candle closed above it at 25,947 -> BUY over it; SL under its low; target R1 25,992",
-      "setup_time": "09:30",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 40.5 pts (0.157%), 09:15 candle O 25863.8 H 25885.2 L 25822.1 C 25862.85 | Trade by rule: 09:15 closed inside the CPR 25,834-25,939; 09:30 candle closed above it at 25,947 -> BUY over it; SL under its low; target R1 25,992; chart replay SL 09:35 -> 09:50"
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "The CPRs and a box interlink into one zone on a Wide CPR (0.157% of price) \u2014 a break out of so wide a zone is not traded \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 40.5 pts (0.157%), 09:15 candle O 25863.8 H 25885.2 L 25822.1 C 25862.85 | Trade by rule: the CPRs and a box interlink into one zone on a Wide CPR (0.157% of price) \u2014 a break out of so wide a zone is not traded \u2014 no trade"
     },
     {
       "date": "2025-11-03",
@@ -4658,12 +4640,12 @@
       "trade": "SELL",
       "entry": 26105.0,
       "target": 26043.0,
-      "sl": 26153.0,
+      "sl": 26163.0,
       "result": "SL",
-      "pnl": -48.0,
-      "reason": "09:15 closed inside the CPR 26,109-26,255; 09:40 candle closed below it at 26,108 -> SELL under it; SL over its high; target S2 26,043",
+      "pnl": -58.0,
+      "reason": "09:15 closed inside the CPR 26,109-26,255; 09:40 candle closed below it at 26,108 -> SELL under it; SL over its high with a 10-pt buffer; target S2 26,043",
       "setup_time": "09:40",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 13.8 pts (0.053%), 09:15 candle O 26143.1 H 26166.0 L 26104.3 C 26125.65 | Trade by rule: 09:15 closed inside the CPR 26,109-26,255; 09:40 candle closed below it at 26,108 -> SELL under it; SL over its high; target S2 26,043; chart replay SL 09:45 -> 10:00"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 13.8 pts (0.053%), 09:15 candle O 26143.1 H 26166.0 L 26104.3 C 26125.65 | Trade by rule: 09:15 closed inside the CPR 26,109-26,255; 09:40 candle closed below it at 26,108 -> SELL under it; SL over its high with a 10-pt buffer; target S2 26,043; chart replay SL 09:45 -> 10:05"
     },
     {
       "date": "2026-01-08",
@@ -4675,13 +4657,13 @@
       "boxes": "Small",
       "trade": "SELL",
       "entry": 26089.0,
-      "target": 26023.0,
-      "sl": 26122.0,
+      "target": 26003.0,
+      "sl": 26132.0,
       "result": "Target",
-      "pnl": 66.0,
-      "reason": "09:15 closed inside the CPR 26,109-26,255; 09:20 candle closed below it at 26,097 -> SELL under it; SL over its high; target 1:2 (S1 26,077 is only 12 pts away, inside the 33-pt risk)",
+      "pnl": 86.0,
+      "reason": "09:15 closed inside the CPR 26,109-26,255; 09:20 candle closed below it at 26,097 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (S1 26,077 is only 12 pts away, inside the 43-pt risk)",
       "setup_time": "09:20",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 8.8 pts (0.034%), 09:15 candle O 26106.5 H 26133.2 L 26074.85 C 26123.25 | Trade by rule: 09:15 closed inside the CPR 26,109-26,255; 09:20 candle closed below it at 26,097 -> SELL under it; SL over its high; target 1:2 (S1 26,077 is only 12 pts away, inside the 33-pt risk); chart replay Target 09:25 -> 10:50"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 8.8 pts (0.034%), 09:15 candle O 26106.5 H 26133.2 L 26074.85 C 26123.25 | Trade by rule: 09:15 closed inside the CPR 26,109-26,255; 09:20 candle closed below it at 26,097 -> SELL under it; SL over its high with a 10-pt buffer; target 1:2 (S1 26,077 is only 12 pts away, inside the 43-pt risk); chart replay Target 09:25 -> 11:10"
     },
     {
       "date": "2026-01-09",
@@ -5288,12 +5270,12 @@
       "trade": "SELL",
       "entry": 25487.0,
       "target": 25421.0,
-      "sl": 25545.0,
+      "sl": 25555.0,
       "result": "Target",
       "pnl": 66.0,
-      "reason": "09:15 closed inside the CPR 25,502-25,540; 09:20 candle closed below it at 25,498 -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 25,421",
+      "reason": "09:15 closed inside the CPR 25,502-25,540; 09:20 candle closed below it at 25,498 -> SELL under it; SL over its high with a 10-pt buffer; target Cam S3 (inside the PDL/S1 box) 25,421",
       "setup_time": "09:20",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 38.6 pts (0.151%), 09:15 candle O 25556.3 H 25567.6 L 25524.25 C 25535.1 | Trade by rule: 09:15 closed inside the CPR 25,502-25,540; 09:20 candle closed below it at 25,498 -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 25,421; chart replay Target 11:40 -> 12:20"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 38.6 pts (0.151%), 09:15 candle O 25556.3 H 25567.6 L 25524.25 C 25535.1 | Trade by rule: 09:15 closed inside the CPR 25,502-25,540; 09:20 candle closed below it at 25,498 -> SELL under it; SL over its high with a 10-pt buffer; target Cam S3 (inside the PDL/S1 box) 25,421; chart replay Target 11:40 -> 12:20"
     },
     {
       "date": "2026-02-27",
@@ -6007,13 +5989,13 @@
       "boxes": "Medium",
       "trade": "BUY",
       "entry": 24219.0,
-      "target": 24267.0,
-      "sl": 24195.0,
+      "target": 24270.0,
+      "sl": 24185.0,
       "result": "Target",
-      "pnl": 48.0,
-      "reason": "09:15 closed inside the CPR 24,001-24,208; 10:05 candle closed above it at 24,212 -> BUY over it; SL under its low; target 1:2 (R2 24,270 is 51 pts away)",
+      "pnl": 51.0,
+      "reason": "09:15 closed inside the CPR 24,001-24,208; 10:05 candle closed above it at 24,212 -> BUY over it; SL under its low with a 10-pt buffer; target R2 24,270",
       "setup_time": "10:05",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 49.1 pts (0.205%), 09:15 candle O 24096.9 H 24123.55 L 24070.35 C 24090.8 | Trade by rule: 09:15 closed inside the CPR 24,001-24,208; 10:05 candle closed above it at 24,212 -> BUY over it; SL under its low; target 1:2 (R2 24,270 is 51 pts away); chart replay Target 10:10 -> 10:20"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 49.1 pts (0.205%), 09:15 candle O 24096.9 H 24123.55 L 24070.35 C 24090.8 | Trade by rule: 09:15 closed inside the CPR 24,001-24,208; 10:05 candle closed above it at 24,212 -> BUY over it; SL under its low with a 10-pt buffer; target R2 24,270; chart replay Target 10:10 -> 10:20"
     },
     {
       "date": "2026-04-30",
@@ -6296,12 +6278,12 @@
       "trade": "BUY",
       "entry": 23758.0,
       "target": 23811.0,
-      "sl": 23691.0,
+      "sl": 23681.0,
       "result": "Target",
       "pnl": 53.0,
-      "reason": "09:15 closed inside the CPR 23,679-23,728; 09:20 candle closed above it at 23,753 -> BUY over it; SL under its low; target R1 23,811",
+      "reason": "09:15 closed inside the CPR 23,679-23,728; 09:20 candle closed above it at 23,753 -> BUY over it; SL under its low with a 10-pt buffer; target R1 23,811",
       "setup_time": "09:20",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 49.0 pts (0.207%), 09:15 candle O 23671.2 H 23710.8 L 23671.0 C 23693.5 | Trade by rule: 09:15 closed inside the CPR 23,679-23,728; 09:20 candle closed above it at 23,753 -> BUY over it; SL under its low; target R1 23,811; chart replay Target 09:30 -> 11:45"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 49.0 pts (0.207%), 09:15 candle O 23671.2 H 23710.8 L 23671.0 C 23693.5 | Trade by rule: 09:15 closed inside the CPR 23,679-23,728; 09:20 candle closed above it at 23,753 -> BUY over it; SL under its low with a 10-pt buffer; target R1 23,811; chart replay Target 09:30 -> 11:45"
     },
     {
       "date": "2026-05-25",
@@ -6764,12 +6746,12 @@
       "trade": "BUY",
       "entry": 23947.0,
       "target": 23991.0,
-      "sl": 23915.0,
+      "sl": 23905.0,
       "result": "Target",
       "pnl": 44.0,
-      "reason": "09:15 closed inside the CPR 23,888-23,932; 09:35 candle closed above it at 23,940 -> BUY over it; SL under its low; target R1 23,991",
+      "reason": "09:15 closed inside the CPR 23,888-23,932; 09:35 candle closed above it at 23,940 -> BUY over it; SL under its low with a 10-pt buffer; target R1 23,991",
       "setup_time": "09:35",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 44.4 pts (0.186%), 09:15 candle O 23897.65 H 23934.9 L 23895.1 C 23918.0 | Trade by rule: 09:15 closed inside the CPR 23,888-23,932; 09:35 candle closed above it at 23,940 -> BUY over it; SL under its low; target R1 23,991; chart replay Target 09:40 -> 10:00"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 44.4 pts (0.186%), 09:15 candle O 23897.65 H 23934.9 L 23895.1 C 23918.0 | Trade by rule: 09:15 closed inside the CPR 23,888-23,932; 09:35 candle closed above it at 23,940 -> BUY over it; SL under its low with a 10-pt buffer; target R1 23,991; chart replay Target 09:40 -> 10:00"
     },
     {
       "date": "2026-07-02",
