@@ -478,6 +478,8 @@ def sessions_from(manual_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             by_date[ds] = {'date': ds, **{k: m.get(k) for k in _ANALYSIS_KEYS}, 'trades': []}
         if m.get('trade'):
             by_date[ds]['trades'].append({k: m.get(k) for k in _TRADE_KEYS})
+        elif m.get('reason') and not by_date[ds].get('no_trade_reason'):
+            by_date[ds]['no_trade_reason'] = m['reason']          # why the day was passed, from the sheet's Reason column
     return [by_date[d] for d in order]
 
 
@@ -506,6 +508,8 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
         trades = [{'manual': t, 'chart': None, 'match': None, 'strategy': strategy_of(t.get('reason'))} for t in m['trades']]
         row: Dict[str, Any] = {'manual': m, 'date': m['date'], 'chart': None,
                                'match': {}, 'trades': trades}
+        if not trades and m.get('no_trade_reason'):
+            row['no_trade_strategy'] = no_trade_of(m['no_trade_reason'])      # which group of passed days this one is in
         out_rows.append(row)
         idx = by_date.get(m['date'])
         if idx is None or idx < 2:
@@ -810,6 +814,113 @@ _OTHER_HOW = _how("A trade written by hand or by an earlier wording of the rule,
                   "Open the row on the CPR Logic grid for the full reason, entry, stop and target.")
 
 
+# ── no-trade days ─────────────────────────────────────────────────────────
+# A day the rule passed says why in its Reason; the same sentence sorts it into
+# one of these groups so the Strategy list and the grid's filter can show the
+# days the rule stayed out of beside the setups it took. Tested in order on the
+# lower-cased reason, most specific first.
+
+def _nt(setup, example):
+    return _how(setup, "None — the day is passed.", "—", "—", example)
+
+
+_NO_TRADE = (
+    (lambda r: ' lull' in r,
+     'No trade · 10:30–11:30 lull',
+     _nt("A setup whose candle closes between 10:30 and 11:30: 8 of the 9 trades taken there were stopped.",
+         "5 Jan 2026: SELL 11:20 on a PDH rejection, passed for the lull.")),
+    (lambda r: 'the stop is only' in r,
+     'No trade · stop under 15 pts',
+     _nt("A setup whose stop sits under 15 points from the entry — noise; none of 7 such trades survived.",
+         "18 Mar 2026: SELL under R1 with a 10-pt stop.")),
+    (lambda r: 'is inside the daily cpr' in r,
+     'No trade · entry inside the daily CPR',
+     _nt("The entry would sit inside the daily CPR, the middle of the line the day is deciding — 7 of 7 such trades were stopped.",
+         "23 Dec 2025: SELL 26,144 inside the 26,114–26,153 CPR.")),
+    (lambda r: 'no room' in r,
+     'No trade · CPR or box in the way',
+     _nt("The daily CPR (or the next box) lies between the entry and the target, nearer than the risk: nowhere to go.",
+         "21 Jan 2026: BUY 25,242 with the CPR 39 pts up against a 58-pt stop.")),
+    (lambda r: 'on a wide cpr' in r and 'not traded' in r,
+     'No trade · Wide-CPR zone break',
+     _nt("The CPRs and a box interlink into one zone on a Wide CPR: so wide a zone is not traded when it breaks — 0 of 5 such breaks worked.",
+         "7 Jan 2025: 0.578% CPR, SELL on the zone break.")),
+    (lambda r: 'against the gap' in r,
+     'No trade · early counter-gap, big stop',
+     _nt("A setup by 09:30 against the gap — the open and the entry both on the wrong side of yesterday's close — with a stop of 70+ points.",
+         "24 Apr 2025: BUY 24,321 under yesterday's close 24,329, SL −78.")),
+    (lambda r: 'interlink into one zone' in r and 'entry sits inside it' in r,
+     'No trade · entry inside the interlinked zone',
+     _nt("The CPRs and a box overlap into one zone and the entry would sit inside it: no level to trade against, only a break out of the zone is traded.",
+         "16 Dec 2025: SELL under the CPR, entry inside the 25,905–26,010 zone.")),
+    (lambda r: 'vwap' in r and 'would have to cross' in r,
+     'No trade · VWAP in the way',
+     _nt("The session VWAP sits between the signal candle and the entry, so the trigger would have to cross it first.",
+         "20 May 2026: gap-down reversal with VWAP 23,487 under the candle.")),
+    (lambda r: 'chop' in r,
+     'No trade · chop inside the CPR',
+     _nt("Six or more candles had already closed inside the daily CPR before the break: acceptance, not a break.",
+         "9 Jun 2026: 10:45 close under the CPR after 7 closes inside it.")),
+    (lambda r: 'graze' in r,
+     'No trade · graze of a level',
+     _nt("The candle closed only a point or two past the box / CPR edge, which a reclaim or rejection has to clear.",
+         "21 May 2026: gap-up reversal closing 1 pt over R1/PDH.")),
+    (lambda r: 'entry was never reached' in r,
+     'No trade · entry never reached',
+     _nt("The rule set an entry but price never traded through it.",
+         "16 Apr 2026: gap-up reversal, 24,345 entry never reached.")),
+    (lambda r: 'never reached by' in r,
+     'No trade · gap never reached the box',
+     _nt("A gap day where price never came back to PDH/R1 (PDL/S1) by 11:00, so there is no reversal to take.",
+         "3 Mar 2026: gap-down 24,659, S1/PDL never reached.")),
+    (lambda r: 'too thin to trade against' in r,
+     'No trade · thin CPR, far boxes',
+     _nt("A very narrow CPR with both boxes far away: nothing to trade against until a box breaks.",
+         "14 Jan 2026: 13-pt CPR, boxes 135 pts away.")),
+    (lambda r: 'too big to enter' in r and ('retest' in r or 'no break' in r),
+     'No trade · big 09:15 candle, no retest',
+     _nt("A 09:15 candle too big to enter off, closing at the box, and no later retest set up by 14:00.",
+         "6 Jul 2026: 72-pt candle at PDH/R1, no retest.")),
+    (lambda r: 'weekly cpr' in r and ('never closed' in r or 'but below the daily' in r or 'but above the daily' in r),
+     'No trade · between the CPRs, no break',
+     _nt("Open between the weekly and daily CPRs and price never closed beyond the daily CPR by 11:00.",
+         "14 Nov 2025: never closed above the 25,889–25,910 CPR.")),
+    (lambda r: 'trend day expected' in r or 'no strong' in r,
+     'No trade · trend day, no break',
+     _nt("A narrow-CPR trend day where no strong candle broke the wall and none rejected from it by 11:00.",
+         "28 Nov 2025: no strong bull candle through PDH/R1.")),
+    (lambda r: 'entry only on a strong close out of it' in r,
+     'No trade · inside the CPR, no strong break',
+     _nt("The 09:15 candle closed inside the CPR and no strong candle closed out of it by 11:00.",
+         "6 Jan 2026: 09:15 inside 26,109–26,292, no strong close out.")),
+    (lambda r: 'neither box was closed through' in r,
+     'No trade · wicked both ways, box undecided',
+     _nt("The 09:15 candle wicked out of the CPR both ways and neither box was closed through and decided by 11:00.",
+         "5 Feb 2026: wicks both ways, no box decided.")),
+    (lambda r: 'no candle rejected' in r or 'no rejection' in r or 'never lost' in r,
+     'No trade · no rejection / no break',
+     _nt("Nothing the rule trades happened by 11:00: no rejection from the CPR or a level, no break of a box.",
+         "7 Nov 2025: no candle rejected from the CPR or a level.")),
+)
+
+_NO_TRADE_OTHER = 'No trade · other'
+_NO_TRADE_OTHER_HOW = _nt("The day was passed for a reason none of the groups above names; the reason is in the list below.",
+                          "See the day's Reason on the grid.")
+
+
+def no_trade_of(reason: Optional[str]) -> str:
+    r = (reason or '').lower()
+    for test, name, _how_ in _NO_TRADE:
+        if test(r):
+            return name
+    return _NO_TRADE_OTHER
+
+
+def no_trade_how(name: str) -> Dict[str, str]:
+    return next((how for _t, n, how in _NO_TRADE if n == name), _NO_TRADE_OTHER_HOW)
+
+
+
 def strategy_of(reason: Optional[str]) -> str:
     r = reason or ''
     for test, name, _how in _STRATEGIES:
@@ -831,7 +942,13 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     manual_pnl = chart_pnl = 0.0
     wins = trades = chart_wins = chart_trades = 0
     strategies: Dict[str, Dict[str, Any]] = {}
+    passed: Dict[str, Dict[str, Any]] = {}
     for r in rows:
+        if r.get('no_trade_strategy'):
+            g = passed.setdefault(r['no_trade_strategy'], {'days': 0, 'last': None, 'items': []})
+            g['days'] += 1
+            g['last'] = max(g['last'] or '', r['date'])
+            g['items'].append({'date': r['date'], 'reason': r['manual'].get('no_trade_reason')})
         for k, v in r['match'].items():
             if v is None:
                 continue
@@ -881,6 +998,12 @@ def summarise(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                   win_pct=_r(100 * v['wins'] / (v['wins'] + v['losses']), 0) if v['wins'] + v['losses'] else None)
              for k, v in strategies.items()],
             key=lambda v: (-v['trades'], v['name'])),
+        # The days the rule stayed out of, grouped by why — the Strategy list's "no trade" cards.
+        'no_trade': sorted(
+            [dict(v, name=k, how=no_trade_how(k), items=sorted(v['items'], key=lambda x: x['date'], reverse=True))
+             for k, v in passed.items()],
+            key=lambda v: (-v['days'], v['name'])),
+        'no_trade_days': sum(v['days'] for v in passed.values()),
     }
 
 
@@ -1033,6 +1156,14 @@ def chart_rows(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> List[Dict[str, 
             row.update(trade=p['trade'], entry=p['entry'], target=p['target'], sl=p['sl'],
                        result=sim['result'], pnl=sim['pnl'], reason=why,
                        setup_time=bars[setup_i]['time'])
+        else:
+            # A day with no trade says why in the Reason column: the rule's own
+            # refusal, or the entry it set that price never reached.
+            text = (f"{why}; the {p['entry']:,.0f} entry was never reached — no trade" if p
+                    else why or 'No setup by the rule — no trade')
+            if 'no trade' not in text:
+                text += ' — no trade'
+            row['reason'] = text[0].upper() + text[1:]
         row['note'] = (analysis + ' | ' if k == 0 else '') + rule_note(why, sim if p else None, second=k > 0)
         rows.append(row)
     return rows

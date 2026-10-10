@@ -123,3 +123,27 @@ body.td-modal-open { overflow: hidden; }
 .td-msel-hd .td-btn { padding: 2px 8px; font-size: 10.5px; }
 .td-msel-btn.td-msel-on, .td-select.td-msel-on { border-color: var(--td-accent); color: var(--td-accent); }
 .td-cpr-chip-filter { border-color: var(--td-accent); color: var(--td-text); }
+
+
+/* Performance popup */
+.td-perf-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+.td-perf-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+@media (max-width: 900px) { .td-perf-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.td-perf-tile { background: var(--td-bg); border: 1px solid var(--td-border); border-radius: 8px; padding: 7px 8px; text-align: center; }
+.td-perf-tile .l { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; color: var(--td-muted); }
+.td-perf-tile .v { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.td-perf-sec { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 4px; font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--td-muted); }
+.td-perf-sec b { font-size: 11px; letter-spacing: 0; text-transform: none; }
+.td-perf-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.td-perf-tabs .td-btn { font-size: 10.5px; padding: 3px 9px; }
+.td-perf-tabs .td-btn.active { background: var(--td-accent); border-color: var(--td-accent); color: #fff; }
+.td-perf-chart { position: relative; height: 240px; }
+.td-perf-chart-sm { height: 220px; }
+.td-perf-empty { padding: 30px 10px; text-align: center; font-size: 12px; color: var(--td-muted); }
+
+.td-perf-warn { color: #d97706; }
+
+/* No-trade cards in the Strategy list: the same card, fewer stats, a reason column */
+.td-strat-nt .td-strat-head { grid-template-columns: minmax(220px, 1.4fr) repeat(2, minmax(90px, .5fr)) 24px; }
+.td-strat-nt .td-strat-name { color: var(--td-muted); }
+.td-strat-tbl td.why { white-space: normal; font-size: 10.5px; line-height: 1.35; color: var(--td-text); }

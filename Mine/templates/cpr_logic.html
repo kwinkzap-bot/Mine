@@ -65,6 +65,8 @@
                 <div class="td-card-hdr-meta" id="tdCprMeta"></div>
                 <!-- Every setup the rule takes: how often it was used and how it did -->
                 <button type="button" class="td-btn" id="tdCprStrategies" title="The strategies behind the sheet's trades: uses, wins, losses, P&amp;L">Strategy list</button>
+                <!-- The sheet's trades as an equity curve and a P&L breakdown, in rupees per lot after brokerage -->
+                <button type="button" class="td-btn" id="tdCprPerf" title="Performance: stats, equity curve and P&amp;L breakdown of the sheet's option trades">Performance</button>
                 <!-- Appends every complete session after the sheet's last date, read from the chart -->
                 <button type="button" class="td-btn" id="tdCprUpdate" title="Add the sessions the sheet has not reached yet, read from the chart">Update</button>
             </div>
@@ -72,6 +74,39 @@
         <div class="td-cpr-sum" id="tdCprSummary"></div>
         <div id="tdCprBacktest"><span style="font-size:11px;color:var(--td-muted)">Loading the CPR sheet…</span></div>
         <div class="td-cpr-note" id="tdCprNote"></div>
+    </div>
+
+    <!-- Performance popup -->
+    <div class="td-modal hidden" id="tdCprPerfModal">
+        <div class="td-modal-card">
+            <div class="td-card-hdr">
+                <h2>Performance</h2>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+                    <div class="td-card-hdr-meta" id="tdCprPerfMeta"></div>
+                    <button type="button" class="td-btn" id="tdCprPerfClose" title="Close (Esc)">✕</button>
+                </div>
+            </div>
+            <div class="td-perf-body">
+                <div class="td-perf-tiles" id="tdCprPerfTiles"></div>
+                <div class="td-perf-sec"><span>Equity curve</span><b id="tdCprPerfEquityMeta"></b></div>
+                <div class="td-perf-chart"><canvas id="tdCprPerfEquity"></canvas></div>
+                <div class="td-perf-sec">
+                    <span>P&amp;L breakdown</span>
+                    <div class="td-perf-tabs" id="tdCprPerfTabs">
+                        <button type="button" class="td-btn active" data-period="monthly">Monthly</button>
+                        <button type="button" class="td-btn" data-period="weekly">Weekly</button>
+                        <button type="button" class="td-btn" data-period="daily">Daily</button>
+                        <button type="button" class="td-btn" data-period="quarterly">3 Months</button>
+                        <button type="button" class="td-btn" data-period="halfyearly">6 Months</button>
+                        <button type="button" class="td-btn" data-period="yearly">Yearly</button>
+                    </div>
+                </div>
+                <div class="td-perf-chart td-perf-chart-sm"><canvas id="tdCprPerfBreakdown"></canvas></div>
+            </div>
+            <div class="td-cpr-note">Every sheet trade that has an option leg, at the strike rule picked in the dropdown: <b>P&amp;L</b> is the premium
+                move × lot size <b>after ₹100 brokerage per trade</b> (gross and charges are shown apart). Win / loss by that net rupee sign;
+                target / SL / time exit by how the index trade ended. The curve starts at ₹1,00,000.</div>
+        </div>
     </div>
 
     <!-- Strategy list popup -->
@@ -109,6 +144,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="{{ url_for('static', filename='js/cpr_logic.js') }}?v={{ sv('js/cpr_logic.js') }}"></script>
 <script>
     (function () {

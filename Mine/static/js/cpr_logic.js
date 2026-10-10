@@ -39,7 +39,18 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('tdCprStrategySort').addEventListener('change', renderCprStrategyCards);
     document.getElementById('tdCprStrategySearch').addEventListener('input', renderCprStrategyCards);
     tdElems.strategyModal.addEventListener('click', e => { if (e.target === tdElems.strategyModal) hideCprStrategies(); });
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') hideCprStrategies(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { hideCprStrategies(); hideCprPerformance(); } });
+    tdElems.perfModal = document.getElementById('tdCprPerfModal');
+    document.getElementById('tdCprPerf').addEventListener('click', showCprPerformance);
+    document.getElementById('tdCprPerfClose').addEventListener('click', hideCprPerformance);
+    tdElems.perfModal.addEventListener('click', e => { if (e.target === tdElems.perfModal) hideCprPerformance(); });
+    document.getElementById('tdCprPerfTabs').addEventListener('click', e => {
+        const b = e.target.closest('button[data-period]');
+        if (!b) return;
+        _tdPerf.period = b.dataset.period;
+        document.querySelectorAll('#tdCprPerfTabs button').forEach(x => x.classList.toggle('active', x === b));
+        _tdPerfBreakdown(_tdPerfTrades());
+    });
     tdElems.cprUpdate.addEventListener('click', updateCprBacktest);
     tdElems.symbol.addEventListener('change', loadCprBacktest);
     // A new strike choice only re-reads the option legs; the sheet stays.
@@ -118,12 +129,14 @@ function showCprStrategies() {
     if (!d) return;
     const { list, ready, lot, rule } = _tdCprStrategyRows();
     const total = list.reduce((a, s) => a + s.trades, 0);
-    tdElems.strategyMeta.textContent = `${d.symbol} · ${list.length} strategies · ${total} trades` + (rule ? ` · option P&L at ${rule}` : '');
+    const noTradeDays = (d.summary && d.summary.no_trade_days) || 0;
+    tdElems.strategyMeta.textContent = `${d.symbol} · ${list.length} strategies · ${total} trades · ${noTradeDays} no-trade days` + (rule ? ` · option P&L at ${rule}` : '');
 
     // Totals strip
     const wins = list.reduce((a, s) => a + s.wins, 0), losses = list.reduce((a, s) => a + s.losses, 0);
     const optPnl = list.reduce((a, s) => a + s.opt_pnl, 0), idxPnl = list.reduce((a, s) => a + s.pnl, 0);
     const best = list.filter(s => s.opt_n).sort((a, b) => b.opt_pnl - a.opt_pnl)[0];
+    const optTrades = list.reduce((a, s) => a + s.opt_n, 0);     // trades with an option leg priced — the ones brokerage is taken on
     const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
     const tile = (l, v, s = '') => `<div class="td-strat-total"><div class="l">${l}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
     document.getElementById('tdCprStrategyTotals').innerHTML =
@@ -131,6 +144,9 @@ function showCprStrategies() {
         tile('Win / loss', `<span class="dg-pos">${wins}</span> / <span class="dg-neg">${losses}</span>`, wins + losses ? `${Math.round(100 * wins / (wins + losses))}% win rate` : '') +
         tile('Option P&L', ready ? `<span class="${cls(optPnl)}">${_tdNum(optPnl, 0)}</span> pts` : 'reading…', ready && lot ? `₹${_tdNum(optPnl * lot - CPR_BROKERAGE * list.reduce((a, s) => a + s.opt_n, 0), 0)} per lot after ₹${CPR_BROKERAGE}/trade` : '') +
         tile('Index P&L', `<span class="${cls(idxPnl)}">${_tdNum(idxPnl, 0)}</span> pts`, 'the sheet\'s figure') +
+        tile('Brokerage', ready && lot ? `<span class="dg-neg">₹${_tdNum(CPR_BROKERAGE * optTrades, 0)}</span>` : 'reading…',
+             ready && lot ? `₹${CPR_BROKERAGE} × ${optTrades} trades · gross ₹${_tdNum(optPnl * lot, 0)}` : '') +
+        tile('No-trade days', noTradeDays, `${((d.summary && d.summary.no_trade) || []).length} reasons · ${d.summary ? d.summary.sessions : 0} sessions`) +
         tile('Best setup', best ? _tdEsc(best.name) : '—', best ? `<span class="${cls(best.opt_pnl)}">${_tdNum(best.opt_pnl, 0)}</span> option pts` : '');
 
     renderCprStrategyCards();
@@ -178,12 +194,44 @@ function renderCprStrategyCards() {
             </div>
         </div>`;
     }).join('');
-    tdElems.strategyGrid.innerHTML = html || `<div class="td-strat-empty">No setup matches “${_tdEsc(q)}”</div>`;
+    const noTradeHtml = _tdCprNoTradeCards(q);
+    tdElems.strategyGrid.innerHTML = (html + noTradeHtml) || `<div class="td-strat-empty">No setup matches “${_tdEsc(q)}”</div>`;
     tdElems.strategyGrid.querySelectorAll('.td-strat-head').forEach(h => h.addEventListener('click', () => {
         const card = h.parentElement, name = card.dataset.name;
         card.classList.toggle('open');
         if (card.classList.contains('open')) _tdStratOpen.add(name); else _tdStratOpen.delete(name);
     }));
+}
+
+// The days the rule stayed out of, one card per reason group: why it passes,
+// and the days with each day's own reason. Searched and opened like a setup.
+function _tdCprNoTradeCards(q) {
+    const d = _tdCprState.data;
+    const groups = ((d && d.summary && d.summary.no_trade) || [])
+        .filter(g => !q || [g.name, g.how && g.how.setup, g.how && g.how.example, ...g.items.map(i => i.reason)].join(' ').toLowerCase().includes(q));
+    if (!groups.length) return '';
+    const sessions = d.summary.sessions || 1;
+    const row = (k, label, v, extra = '') => `<div class="td-strat-row ${extra}"><span class="k ${k}">${label}</span><span>${_tdEsc(v || '—')}</span></div>`;
+    return groups.map(g => {
+        const how = g.how || {};
+        const days = g.items.map(i => `<tr><td class="d">${i.date}</td><td class="why">${_tdEsc(i.reason || '')}</td></tr>`).join('');
+        return `<div class="td-strat-card td-strat-nt${_tdStratOpen.has(g.name) ? ' open' : ''}" data-name="${_tdEsc(g.name)}">
+            <div class="td-strat-head">
+                <div class="td-strat-name">${_tdEsc(g.name)}<small>${_tdEsc((how.setup || '').split(/\.\s|\s—\s/)[0])}</small></div>
+                <div class="td-strat-stat"><span class="l">Days passed</span><span class="v">${g.days}</span><span class="s">last ${g.last || '—'}</span></div>
+                <div class="td-strat-stat"><span class="l">Of sessions</span><span class="v">${_tdNum(100 * g.days / sessions, 0)}%</span><span class="s">${g.days} of ${sessions}</span></div>
+                <div class="td-strat-chev">▶</div>
+            </div>
+            <div class="td-strat-body">
+                ${row('setup', 'Why', how.setup, 'setup')}
+                ${how.example ? row('example', 'Example', how.example, 'example') : ''}
+                <div class="td-strat-days">
+                    <div class="td-strat-days-hd">Days passed <span>${g.days} · newest first</span></div>
+                    <table class="td-strat-tbl"><thead><tr><th>Date</th><th>Reason</th></tr></thead><tbody>${days}</tbody></table>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
 }
 
 // The days a setup traded, newest first: the index trade and its result,
@@ -284,20 +332,27 @@ function _tdCprFilterActive() {
 }
 
 function _tdCprRowMatches(r) {
-    return !_tdCprFilterActive() || r.trades.some(t => _tdCprState.filter.has(t.strategy));
+    if (!_tdCprFilterActive()) return true;
+    // A traded session matches by its setups; a passed one by its no-trade group.
+    return r.trades.length ? r.trades.some(t => _tdCprState.filter.has(t.strategy))
+                           : !!r.no_trade_strategy && _tdCprState.filter.has(r.no_trade_strategy);
 }
 
 function renderCprStrategyFilter() {
     const d = _tdCprState.data;
     if (!d) return;
     const list = ((d.summary && d.summary.strategies) || []).slice().sort((a, b) => b.trades - a.trades);
+    // The days the rule passed, one entry per reason group, after the setups it took.
+    const passed = ((d.summary && d.summary.no_trade) || []).map(g => ({ name: g.name, trades: g.days, pnl: null, noTrade: true }));
+    list.push(...passed);
     const names = new Set(list.map(s => s.name));
     for (const n of [..._tdCprState.filter]) if (!names.has(n)) _tdCprState.filter.delete(n);   // a setup no longer on the sheet
     const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : 'dg-muted';
     tdElems.filterPanel.innerHTML =
         `<div class="td-msel-hd"><button type="button" class="td-btn" data-act="all">All</button><button type="button" class="td-btn" data-act="none">None</button></div>` +
         list.map(s => `<label class="td-msel-row"><input type="checkbox" value="${_tdEsc(s.name)}"${_tdCprState.filter.has(s.name) ? ' checked' : ''}>`
-            + `<span>${_tdEsc(s.name)}</span><span class="n">${s.trades}</span><span class="pnl ${cls(s.pnl)}">${_tdNum(s.pnl, 0)}</span></label>`).join('');
+            + `<span>${_tdEsc(s.name)}</span><span class="n">${s.trades}${s.noTrade ? ' d' : ''}</span>`
+            + (s.noTrade ? `<span class="pnl dg-muted" title="days passed">—</span>` : `<span class="pnl ${cls(s.pnl)}">${_tdNum(s.pnl, 0)}</span>`) + `</label>`).join('');
     tdElems.filterPanel.querySelectorAll('input').forEach(cb => cb.addEventListener('change', () => {
         if (cb.checked) _tdCprState.filter.add(cb.value); else _tdCprState.filter.delete(cb.value);
         _tdCprFilterChanged();
@@ -341,6 +396,7 @@ async function loadCprOptions(symbol) {
         _tdCprState.options = { status: 'error', error: err.message };
     }
     renderCprBacktest(_tdCprState.data);
+    if (tdElems.perfModal && !tdElems.perfModal.classList.contains('hidden')) renderCprPerformance();
 }
 
 // The option leg of trade `i` on `date`, or null before the legs arrive.
@@ -563,7 +619,10 @@ function renderCprBacktest(d) {
           render: (v, r) => {
               const t = one(r);
               if (t) return _tdCprReason(t);
-              return r.trades.length ? `<span class="td-cpr-multi">see trades ▾</span>` : '';
+              if (r.trades.length) return `<span class="td-cpr-multi">see trades ▾</span>`;
+              // A day the rule passed: say why, in the same cell a trade's reason sits in.
+              return r.manual.no_trade_reason
+                  ? `<div class="td-cpr-cell td-cpr-reason"><span class="td-cpr-manual"><b>No trade</b> — ${_tdEsc(r.manual.no_trade_reason)}</span></div>` : '';
           } },
     ];
 
@@ -770,3 +829,208 @@ function _tdCprTradesGrid(r) {
     }) + `</div>`;
 }
 
+
+
+// ---- Performance popup ----
+// The sheet's option trades as a performance report: stat tiles, an equity
+// curve and a P&L breakdown by period. Every figure is rupees per lot at the
+// strike rule picked in the dropdown, after CPR_BROKERAGE per trade — the
+// same net the Strategy list shows. A trade with no priced option leg is
+// left out (the tile row says how many trades that is).
+const _tdPerf = { period: 'monthly', equity: null, breakdown: null };
+const CPR_PERF_START = 100000;      // ₹ the equity curve starts from
+
+// Every priced trade, oldest first: { date, time, gross, charge, net, result }.
+function _tdPerfTrades() {
+    const d = _tdCprState.data, o = _tdCprState.options;
+    if (!d || !o || o.status !== 'ready') return [];
+    const lot = o.summary.lot || 0;
+    const out = [];
+    for (const r of d.rows) r.trades.forEach((t, i) => {
+        const leg = _tdCprLeg(r.date, i);
+        if (!leg || leg.pnl == null) return;
+        const gross = leg.pnl * lot;
+        out.push({ date: r.date, time: (t.manual && t.manual.setup_time) || '', gross, charge: CPR_BROKERAGE,
+                   net: gross - CPR_BROKERAGE, result: (t.manual && t.manual.result) || '' });
+    });
+    out.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    return out;
+}
+
+function showCprPerformance() {
+    tdElems.perfModal.classList.remove('hidden');
+    document.body.classList.add('td-modal-open');
+    renderCprPerformance();
+}
+
+function hideCprPerformance() {
+    if (!tdElems.perfModal || tdElems.perfModal.classList.contains('hidden')) return;
+    tdElems.perfModal.classList.add('hidden');
+    document.body.classList.remove('td-modal-open');
+}
+
+function renderCprPerformance() {
+    const d = _tdCprState.data, o = _tdCprState.options;
+    const tiles = document.getElementById('tdCprPerfTiles');
+    const meta = document.getElementById('tdCprPerfMeta');
+    const trades = _tdPerfTrades();
+    if (!d) { tiles.innerHTML = '<div class="td-perf-empty">The sheet is still loading…</div>'; return; }
+    if (!o || o.status !== 'ready' || !trades.length) {
+        meta.textContent = '';
+        tiles.innerHTML = `<div class="td-perf-empty" style="grid-column:1/-1">${
+            !o || o.status === 'loading' ? 'Reading the option legs…' :
+            o.status === 'error' ? _tdEsc(o.icici ? 'ICICI login needed for the option legs' : o.error) : 'No trade has an option leg yet.'}</div>`;
+        _tdPerfDestroy();
+        return;
+    }
+    const net = trades.reduce((a, t) => a + t.net, 0), gross = trades.reduce((a, t) => a + t.gross, 0);
+    const charges = trades.reduce((a, t) => a + t.charge, 0);
+    const winsT = trades.filter(t => t.net > 0), lossT = trades.filter(t => t.net <= 0);
+    const winSum = winsT.reduce((a, t) => a + t.net, 0), lossSum = lossT.reduce((a, t) => a + t.net, 0);
+    const days = new Set(trades.map(t => t.date)).size;
+    let eq = CPR_PERF_START, peak = eq, maxDd = 0;
+    for (const t of trades) { eq += t.net; peak = Math.max(peak, eq); maxDd = Math.min(maxDd, eq - peak); }
+    const cnt = k => trades.filter(t => t.result === k).length;
+    const nets = trades.map(t => t.net);
+    const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
+    const rs = (v, sign) => (v < 0 ? '−' : (sign && v > 0 ? '+' : '')) + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const tile = (l, v, c = '') => `<div class="td-perf-tile"><div class="l">${l}</div><div class="v ${c}">${v}</div></div>`;
+    meta.textContent = `${d.symbol} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}`;
+    tiles.innerHTML =
+        tile('Total trades', trades.length) + tile('Wins', winsT.length, 'dg-pos') + tile('Losses', lossT.length, 'dg-neg') +
+        tile('Win rate', (100 * winsT.length / trades.length).toFixed(1) + '%') +
+        tile('Net P&L (₹)', rs(net, true), cls(net)) + tile('Gross P&L (₹)', rs(gross, true), cls(gross)) +
+        tile('Charges (₹)', rs(-charges), 'dg-neg') +
+        tile('Profit factor', lossSum < 0 ? (winSum / -lossSum).toFixed(2) : '∞') +
+        tile('Avg win (₹)', winsT.length ? rs(winSum / winsT.length, true) : '—', 'dg-pos') +
+        tile('Avg loss (₹)', lossT.length ? rs(lossSum / lossT.length) : '—', 'dg-neg') +
+        tile('Best trade', rs(Math.max(...nets), true), cls(Math.max(...nets))) +
+        tile('Worst trade', rs(Math.min(...nets)), cls(Math.min(...nets))) +
+        tile('Max drawdown', rs(maxDd), maxDd < 0 ? 'dg-neg' : '') + tile('Trading days', days) +
+        tile('Avg / day (₹)', rs(net / days, true), cls(net)) +
+        tile('Target hit', cnt('Target'), 'dg-pos') + tile('SL hit', cnt('SL'), 'dg-neg') +
+        tile('Time exit', cnt('EOD'), 'td-perf-warn');
+    _tdPerfEquity(trades);
+    _tdPerfBreakdown(trades);
+}
+
+function _tdPerfDestroy() {
+    for (const k of ['equity', 'breakdown']) if (_tdPerf[k]) { _tdPerf[k].destroy(); _tdPerf[k] = null; }
+}
+
+function _tdPerfColours() {
+    const cs = getComputedStyle(document.documentElement);
+    const muted = (cs.getPropertyValue('--td-muted') || '#64748b').trim();
+    return { tick: muted, grid: 'rgba(148,163,184,.15)', zero: 'rgba(148,163,184,.55)' };
+}
+
+function _tdPerfFmtY(v) {
+    const a = Math.abs(v), s = v < 0 ? '−' : '';
+    return a >= 100000 ? s + '₹' + (a / 100000).toFixed(a % 100000 ? 1 : 0) + 'L' : a >= 1000 ? s + '₹' + (a / 1000).toFixed(0) + 'K' : s + '₹' + a;
+}
+
+function _tdPerfEquity(trades) {
+    if (typeof Chart === 'undefined') return;
+    const col = _tdPerfColours();
+    const labels = ['Start'], data = [CPR_PERF_START], dots = [''];
+    let eq = CPR_PERF_START;
+    trades.forEach((t, i) => { eq += t.net; labels.push('T' + (i + 1)); data.push(Math.round(eq)); dots.push(`${t.date} ${t.time}`); });
+    const diff = eq - CPR_PERF_START, up = diff >= 0;
+    const m = document.getElementById('tdCprPerfEquityMeta');
+    m.textContent = `${up ? '+' : '−'}₹${Math.abs(Math.round(diff)).toLocaleString('en-IN')} (${up ? '+' : ''}${(100 * diff / CPR_PERF_START).toFixed(1)}%)`;
+    m.className = up ? 'dg-pos' : 'dg-neg';
+    if (_tdPerf.equity) _tdPerf.equity.destroy();
+    _tdPerf.equity = new Chart(document.getElementById('tdCprPerfEquity'), {
+        type: 'line',
+        data: { labels, datasets: [{ data, borderColor: up ? '#2962ff' : '#ff1744', backgroundColor: up ? 'rgba(41,98,255,.08)' : 'rgba(255,23,68,.07)',
+                                     fill: true, tension: .25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 }] },
+        options: {
+            responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { display: false }, tooltip: { displayColors: false, padding: 10, callbacks: {
+                title: c => c[0].label, afterTitle: c => dots[c[0].dataIndex],
+                label: c => ' ₹' + c.parsed.y.toLocaleString('en-IN') } } },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: col.tick, font: { size: 9 }, maxTicksLimit: 14 } },
+                y: { grid: { color: col.grid }, ticks: { color: col.tick, font: { size: 9 }, callback: _tdPerfFmtY } },
+            },
+        },
+    });
+}
+
+// Net ₹ per period, with wins / losses, keyed so the keys sort in time order.
+function _tdPerfGroups(trades, period) {
+    const g = {};
+    for (const t of trades) {
+        const [y, mo, da] = t.date.split('-').map(Number);
+        let k;
+        if (period === 'daily') k = t.date;
+        else if (period === 'weekly') {
+            const dt = new Date(Date.UTC(y, mo - 1, da)), dow = (dt.getUTCDay() + 6) % 7;
+            dt.setUTCDate(dt.getUTCDate() - dow + 3);                                  // the week's Thursday
+            const wk = Math.floor((dt - Date.UTC(dt.getUTCFullYear(), 0, 4)) / 604800000) + 1;
+            k = `${dt.getUTCFullYear()}-W${String(wk).padStart(2, '0')}`;
+        }
+        else if (period === 'monthly') k = `${y}-${String(mo).padStart(2, '0')}`;
+        else if (period === 'quarterly') k = `${y}-Q${Math.floor((mo - 1) / 3) + 1}`;
+        else if (period === 'halfyearly') k = `${y}-H${mo <= 6 ? 1 : 2}`;
+        else k = String(y);
+        const x = g[k] || (g[k] = { pnl: 0, wins: 0, losses: 0 });
+        x.pnl += t.net;
+        if (t.net > 0) x.wins++; else x.losses++;
+    }
+    return g;
+}
+
+const _tdPerfBarLabels = {
+    id: 'tdPerfBarLabels',
+    afterDatasetsDraw(chart) {
+        const { ctx, data } = chart;
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        chart.getDatasetMeta(0).data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            const a = Math.abs(v), txt = (v >= 0 ? '+' : '−') + '₹' + (a >= 100000 ? (a / 100000).toFixed(1) + 'L' : a >= 1000 ? (a / 1000).toFixed(1) + 'K' : a);
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            ctx.textBaseline = v >= 0 ? 'bottom' : 'top';
+            ctx.fillText(txt, bar.x, v >= 0 ? bar.y - 3 : bar.y + 3);
+        });
+        ctx.restore();
+    },
+};
+
+function _tdPerfBreakdown(trades) {
+    if (typeof Chart === 'undefined' || !trades.length) return;
+    const col = _tdPerfColours(), period = _tdPerf.period;
+    const g = _tdPerfGroups(trades, period), keys = Object.keys(g).sort();
+    const labels = keys.map(k => {
+        if (period === 'monthly') { const [y, m] = k.split('-'); return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' }); }
+        if (period === 'weekly') return 'W ' + k.slice(5);
+        if (period === 'daily') return k.slice(5);
+        if (period === 'quarterly' || period === 'halfyearly') { const [y, p] = k.split('-'); return `${p} '${y.slice(2)}`; }
+        return k;
+    });
+    const values = keys.map(k => Math.round(g[k].pnl));
+    if (_tdPerf.breakdown) _tdPerf.breakdown.destroy();
+    _tdPerf.breakdown = new Chart(document.getElementById('tdCprPerfBreakdown'), {
+        type: 'bar', plugins: [_tdPerfBarLabels],
+        data: { labels, datasets: [{ data: values,
+                                     backgroundColor: values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)'),
+                                     borderColor: values.map(v => v >= 0 ? 'rgba(34,197,94,.9)' : 'rgba(239,68,68,.9)'),
+                                     borderWidth: 1.5, borderRadius: 4, borderSkipped: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false, layout: { padding: { top: 18, bottom: 4 } },
+            plugins: { legend: { display: false }, tooltip: { displayColors: false, padding: 10, callbacks: {
+                title: c => labels[c[0].dataIndex],
+                label: c => { const x = g[keys[c.dataIndex]], n = x.wins + x.losses, v = values[c.dataIndex];
+                    return [` P&L: ${v >= 0 ? '+' : '−'}₹${Math.abs(v).toLocaleString('en-IN')}`, ` Trades: ${n}  (${x.wins}W / ${x.losses}L)`,
+                            ` Win rate: ${Math.round(100 * x.wins / n)}%`]; } } } },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: col.tick, font: { size: 9, weight: '500' } } },
+                y: { grid: { color: c => c.tick.value === 0 ? col.zero : col.grid, lineWidth: c => c.tick.value === 0 ? 1.5 : 1 },
+                     ticks: { color: col.tick, font: { size: 9 }, callback: v => v === 0 ? '0' : _tdPerfFmtY(v) } },
+            },
+        },
+    });
+}

@@ -1270,3 +1270,175 @@ def test_10_feb_2026_stop_goes_under_the_box_the_candle_broke():
     p, why, i = propose(chart, BARS_10F + _session()[-25:])
     assert BARS_10F[i]['time'] == '09:30' and p['trade'] == 'BUY' and p['entry'] == 25945.0
     assert p['sl'] == 25915.0 and p['target'] == 25945.0 + 2 * 30 and 'SL under the box' in why
+
+
+def test_an_interlinked_cpr_rejection_waits_for_the_opening_hour_to_pass():
+    prev = (25246.65, 24932.55, 25175.4)
+    lv = svc.levels(*prev)
+    c1 = {'time': '09:15', 'open': 25258.85, 'high': 25340.0, 'low': 25225.7, 'close': 25336.0}
+    chart = _chart(c1, prev, (25286.55, 25127.95, 25207.25))
+    chart['weekly'] = {'pp': 25207.25, 'bc': 25127.95, 'tc': 25286.55}
+    touch = lambda t: {'time': t, 'open': lv['tc'] + 22, 'high': lv['tc'] + 40, 'low': lv['tc'] + 5, 'close': 25300.0}
+    early, early_why, _ = propose(chart, _session(c1, touch('09:45')))
+    late, why, _ = propose(chart, _session(c1, touch('10:15')))
+    assert not (early and 'interlinked' in early_why)
+    assert late and 'interlinked CPRs' in why
+
+
+# ── 21 May 2026: a gap-up reversal that closes 1 pt over the PDH/R1 box is a graze — no trade ──
+
+BARS_21M = [
+    {'time': '09:15', 'open': 23830.05, 'high': 23859.9, 'low': 23765.1, 'close': 23768.45},
+    {'time': '09:20', 'open': 23768.0, 'high': 23787.3, 'low': 23752.05, 'close': 23775.05},
+    {'time': '09:25', 'open': 23776.8, 'high': 23780.85, 'low': 23750.85, 'close': 23758.1},
+    {'time': '09:30', 'open': 23760.15, 'high': 23774.7, 'low': 23728.05, 'close': 23738.3},
+    {'time': '09:35', 'open': 23740.4, 'high': 23773.2, 'low': 23731.3, 'close': 23768.95},     # closes 1.5 pts over R1 23,767.5
+]
+
+
+def test_21_may_2026_a_graze_of_the_box_is_not_a_gap_reversal():
+    chart = _chart(BARS_21M[0], (23690.9, 23397.3, 23659.0), (23700.0, 23500.0, 23634.0))
+    chart['weekly'] = {'pp': 23634.5, 'bc': 23630.0, 'tc': 23639.0}
+    p, why, _ = propose(chart, BARS_21M + _session()[-25:])
+    assert p is None and 'graze' in why
+    clear = BARS_21M[:4] + [dict(BARS_21M[4], close=23775.0, high=23778.0)]                 # 7.5 pts clear: a real reclaim
+    p, why, _ = propose(chart, clear + _session()[-25:])
+    assert p and p['trade'] == 'BUY' and 'graze' not in why
+
+
+# ── the lull and the noise stop: no trade ──
+
+def test_a_setup_in_the_lull_or_with_a_noise_stop_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    bars = BARS_7 + _session()[-25:]
+    (p, why, i, sim), = rule.propose_all(_chart_7(), bars)[:1]
+    assert p and p['trade'] == 'BUY' and abs(p['entry'] - p['sl']) >= rule.MIN_STOP and bars[i]['time'] == '10:05'
+    monkeypatch.setattr(rule, 'QUIET_FROM', '10:00')                                  # the 10:05 setup now falls in the lull
+    monkeypatch.setattr(rule, 'QUIET_TO', '10:30')
+    out = rule.propose_all(_chart_7(), bars)
+    assert out[0][0] is None and 'lull' in out[0][1]
+    monkeypatch.setattr(rule, 'QUIET_FROM', '10:30')
+    monkeypatch.setattr(rule, 'QUIET_TO', '11:30')
+    monkeypatch.setattr(rule, 'MIN_STOP', 60.0)                                       # the 38-pt stop is now noise
+    out = rule.propose_all(_chart_7(), bars)
+    assert out[0][0] is None and 'noise' in out[0][1]
+
+
+def test_an_entry_inside_the_daily_cpr_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    bars = BARS_7 + _session()[-25:]
+    chart = _chart_7()
+    lv = chart['levels']
+    mid = round((lv['bc'] + lv['tc']) / 2)
+    over = round(lv['tc'] + 20)
+    for entry, taken in ((mid, False), (over, True)):
+        monkeypatch.setattr(rule, 'propose', lambda c, b, e=entry: ({'trade': 'BUY', 'entry': float(e), 'target': float(e + 60), 'sl': float(e - 30)}, 'x', 5))
+        out = rule.propose_all(chart, bars)
+        assert (out[0][0] is not None) == taken
+        if not taken:
+            assert 'inside the daily CPR' in out[0][1]
+
+
+def test_a_one_zone_break_first_closing_in_the_10_to_1030_lull_is_no_trade():
+    from trading_app.service.cpr_trade_rule import zone_breakout
+    chart = {'levels': {'r2': 26300.0, 'r3': 26400.0, 's2': 25700.0, 's3': 25600.0}}
+    zone = (26020.0, 26116.0)
+    bar = lambda t, c: {'time': t, 'open': c - 4, 'high': c + 3, 'low': c - 8, 'close': c}
+    first = {'time': '09:15', 'open': 26100.0, 'high': 26110.0, 'low': 26080.0, 'close': 26097.0}
+    assert zone_breakout(chart, [first, bar('10:10', 26128.0)], zone) is None            # the lull: no trade
+    p, why, i = zone_breakout(chart, [first, bar('09:40', 26128.0)], zone)               # the same break earlier is a trade
+    assert p["trade"] == "BUY" and i == 1
+
+
+# ── 14 Nov 2025: a 09:15 rejection that closes 3 pts clear of the box is a graze — no retracement trade ──
+
+def test_a_09_15_close_barely_over_the_box_is_no_retracement_trade():
+    from trading_app.service.cpr_trade_rule import box_retracement
+    chart = _chart_22(); chart['cpr_type'] = 'Narrow'; chart['boxes'] = 'Small'
+    lv = chart['levels']
+    lo_top = max(lv['pdl'], lv['s1'])
+    mk = lambda close: {'time': '09:15', 'open': lo_top + 30, 'high': lo_top + 36, 'low': lo_top - 70, 'close': close}
+    rest = _session()[-25:]
+    assert box_retracement(chart, [mk(lo_top + 3)] + rest) is None                 # 3 pts over the box: a graze
+
+
+# ── a no-trade day says why, in the Reason column ──
+
+def test_a_no_trade_day_carries_its_reason_into_the_session():
+    rows = [{'date': '2026-06-09', 'trade': None, 'reason': 'Below the weekly CPR — chop, not a break — no trade',
+             'price_vs_daily': 'Above', 'price_vs_hourly': 'Below', 'cpr_type': 'Narrow', 'cpr_direction': 'Dec',
+             'first_candle': 'x', 'boxes': 'Medium'},
+            {'date': '2026-06-10', 'trade': 'BUY', 'reason': 'a trade', 'entry': 1, 'target': 2, 'sl': 0, 'result': 'Target',
+             'pnl': 1, 'setup_time': '09:20', 'price_vs_daily': 'Above', 'price_vs_hourly': 'Above', 'cpr_type': 'Narrow',
+             'cpr_direction': 'Asc', 'first_candle': 'x', 'boxes': 'Small'}]
+    day, trade_day = svc.sessions_from(rows)
+    assert day['trades'] == [] and day['no_trade_reason'].endswith('no trade')
+    assert len(trade_day['trades']) == 1 and 'no_trade_reason' not in trade_day
+
+
+def test_chart_rows_gives_every_untraded_day_a_reason():
+    chart = _chart(C1, PREV, WEEK)
+    chart.update(price_vs_daily='Below', price_vs_hourly='Below', cpr_type='Narrow', cpr_direction='Dec', boxes='Small',
+                 width_pct=0.05, first_candle={'open': 1, 'high': 2, 'low': 0, 'close': 1, 'text': 'doji', 'colour': 'doji', 'size': 'Small', 'wick': None, 'relation': None})
+    out = svc.chart_rows({'date': '2026-01-02', 'chart': chart}, [C1])        # one bar: nothing to trade
+    assert out and not out[0]['trade'] and out[0]['reason'] and 'no trade' in out[0]['reason'].lower()
+
+
+# ── no-trade days as strategy-list groups ──
+
+def test_every_no_trade_reason_lands_in_a_named_group():
+    cases = {
+        'Set up at 10:45, in the 10:30-11:30 lull — no trade': 'No trade · 10:30–11:30 lull',
+        'x — the stop is only 11 pts, under 15: noise — no trade': 'No trade · stop under 15 pts',
+        'x — the 26,144 entry is inside the daily CPR 26,114-26,153 — no trade': 'No trade · entry inside the daily CPR',
+        'x — no room — no trade': 'No trade · CPR or box in the way',
+        'x but 7 candles had already closed inside it — chop, not a break — no trade': 'No trade · chop inside the CPR',
+        'x — a graze, the box is not reclaimed — no trade': 'No trade · graze of a level',
+        'gap-down open 23,198; S1/PDL 23,618-23,643 never reached by 11:00 — no trade': 'No trade · gap never reached the box',
+        'x; the 24,345 entry was never reached — no trade': 'No trade · entry never reached',
+        'something nobody has named — no trade': 'No trade · other',
+    }
+    for reason, group in cases.items():
+        assert svc.no_trade_of(reason) == group, reason
+    assert svc.no_trade_how('No trade · other')['entry'].startswith('None')
+
+
+def test_the_summary_counts_the_days_the_rule_passed():
+    rows = [{'date': d, 'manual': {'no_trade_reason': r}, 'match': {}, 'trades': [], 'no_trade_strategy': svc.no_trade_of(r)}
+            for d, r in (('2026-03-02', 'gap-down open 1; S1/PDL 2-3 never reached by 11:00 — no trade'),
+                         ('2026-03-04', 'gap-down open 1; S1/PDL 2-3 never reached by 11:00 — no trade'),
+                         ('2026-05-21', 'x — a graze, the box is not reclaimed — no trade'))]
+    s = svc.summarise(rows)
+    assert s['no_trade_days'] == 3
+    top = s['no_trade'][0]
+    assert top['name'] == 'No trade · gap never reached the box' and top['days'] == 2 and top['last'] == '2026-03-04'
+    assert [i['date'] for i in top['items']] == ['2026-03-04', '2026-03-02']          # newest first
+
+
+# ── 2025: Wide-CPR zone breaks and big early counter-gap setups are no trade ──
+
+def test_a_zone_break_on_a_wide_cpr_is_no_trade():
+    from trading_app.service.cpr_trade_rule import zone_breakout
+    chart = {'cpr_type': 'Wide', 'width_pct': 0.33, 'levels': {'r2': 26300.0, 'r3': 26400.0, 's2': 25700.0, 's3': 25600.0}}
+    zone = (26020.0, 26116.0)
+    first = {'time': '09:15', 'open': 26100.0, 'high': 26110.0, 'low': 26080.0, 'close': 26097.0}
+    brk = {'time': '09:45', 'open': 26124.0, 'high': 26131.0, 'low': 26120.0, 'close': 26128.0}
+    p, why, i = zone_breakout(chart, [first, brk], zone)
+    assert p is None and 'Wide CPR' in why
+    p, why, i = zone_breakout(dict(chart, cpr_type='Medium'), [first, brk], zone)
+    assert p and p['trade'] == 'BUY'
+
+
+def test_a_big_early_counter_gap_setup_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    bars = BARS_7 + _session()[-25:]
+    bars = [dict(bars[0], open=22900.0)] + bars[1:]
+    chart = _chart_7()
+    chart['prev_session'] = {'close': 23000.0}                      # the open gapped DOWN; a BUY goes against it
+    def fake(entry, sl):
+        monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': float(entry), 'target': float(entry + 150), 'sl': float(sl)}, 'x', 1))
+        return rule.propose_all(chart, bars)[0]
+    p, why, *_ = fake(22980, 22905)                                 # 75-pt stop, 09:20 candle, both under yesterday's close
+    assert p is None and 'against the gap' in why
+    p, why, *_ = fake(22980, 22940)                                 # a 40-pt stop is left alone
+    assert p is not None

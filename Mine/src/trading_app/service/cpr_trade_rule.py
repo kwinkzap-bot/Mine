@@ -359,6 +359,13 @@ SIGNAL_MAX_PCT = 0.15    # a rejection candle bigger than this % of price is too
 BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 09:20 candle, not its own extreme (31 Aug 2026: 90 pts, 19 Aug: 70)
 BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
+MIN_STOP = 15.0          # a stop closer than this is noise: 0 of 7 such trades survived (Mar-Sep 2026) — no trade
+EARLY_UNTIL = '09:30'     # an early setup with a big stop (EARLY_MIN_RISK+), against the gap AND under/over the previous close, is no trade
+EARLY_MIN_RISK = 70.0     # ... 1 Apr and 24 Apr 2025: -75 and -78; smaller stops (40-55) cost 2026 winners, so they are left alone
+ZONE_LULL = ('10:00', '10:30')   # a one-zone break first closing in this window is no trade: 3 of 3 stopped (11 Nov, 24 Nov, 16 Dec); the winners broke at 09:40 and 12:50
+QUIET_FROM, QUIET_TO = '10:30', '11:30'   # no new setup in this window: 2 wins, 8 stops (Jan-Aug 2026)
+GRAZE_PCT = 0.01         # a gap-day reversal must close this far (~2 pts) clear of the box: 1 pt over it is a graze, not a reclaim — no trade that day (21 May 2026)
+MERGED_FROM = '10:15'    # an interlinked-CPR rejection is not taken in the opening hour (5 Jan, 20 Feb, 28 Aug 2026: all stopped)
 CHOP_CLOSES = 6          # between the CPRs: this many closes inside the daily CPR before the break is chop, not a break (9 Jun 2026)
 MAX_RISK = 100.0         # a stop further than this from the entry is halved (28 Jan 2026: 154 pts -> 77)
 VWAP_STOP_PCT = 0.1      # a VWAP within this % under the rejection candle's low is where its stop goes (6 Apr 2026)
@@ -1189,7 +1196,10 @@ def propose(chart, bars):
                         return (*made, i)
                 continue
             reached = True
-            if green and b['close'] > zone[1]:
+            if green and zone[1] < b['close'] <= zone[1] + px * GRAZE_PCT / 100:
+                return None, (f"gap-up; {b['time']} candle came to R1/PDH {zone[0]:,.0f}-{zone[1]:,.0f} (low {b['low']:,.0f}) but closed only "
+                              f"{b['close'] - zone[1]:.0f} pt over it at {b['close']:,.0f} — a graze, the box is not reclaimed — no trade"), None
+            if green and b['close'] > zone[1] + px * GRAZE_PCT / 100:
                 # A BIG reversal candle with Cam R3 inside the box is not
                 # entered over its high: it is the breakout, and the trade
                 # is the retest to Cam R3 (10 Mar 2026).
@@ -1217,7 +1227,10 @@ def propose(chart, bars):
                         return (*made, i)
                 continue
             reached = True
-            if red and b['close'] < zone[0]:
+            if red and zone[0] - px * GRAZE_PCT / 100 <= b['close'] < zone[0]:
+                return None, (f"gap-down; {b['time']} candle came up to S1/PDL {zone[0]:,.0f}-{zone[1]:,.0f} (high {b['high']:,.0f}) but closed only "
+                              f"{zone[0] - b['close']:.0f} pt under it at {b['close']:,.0f} — a graze, the box is not lost — no trade"), None
+            if red and b['close'] < zone[0] - px * GRAZE_PCT / 100:
                 if rng > px * BIG_CANDLE_PCT / 100 and zone[0] <= lv['cs3'] <= zone[1]:
                     return cam_retest(i, b, False)
                 entry, sl = b['low'] - buf, max(zone[1], b['high']) + buf
@@ -1351,7 +1364,7 @@ def propose(chart, bars):
                 # Interlinked CPRs: a SMALL red candle up to the daily CPR
                 # (BC within TOUCH_PCT) closing back under the whole band;
                 # stop over its high, or over the VWAP just above it.
-                if red and rng <= px * SIGNAL_MAX_PCT / 100 and b['high'] >= lv['bc'] - tol and b['close'] < band_lo:
+                if b['time'] >= MERGED_FROM and red and rng <= px * SIGNAL_MAX_PCT / 100 and b['high'] >= lv['bc'] - tol and b['close'] < band_lo:
                     entry = math.floor(b['low'] - 1)
                     vw = vwap_at(bars, i)
                     on_vwap = vw is not None and b['high'] < vw <= b['high'] + px * VWAP_STOP_PCT / 100
@@ -1412,7 +1425,7 @@ def propose(chart, bars):
             if far_boxes:
                 pass                                       # the CPR rejection is off on a far-box day
             elif merged:
-                if green and rng <= px * SIGNAL_MAX_PCT / 100 and b['low'] <= lv['tc'] + tol and b['close'] > band_hi:
+                if b['time'] >= MERGED_FROM and green and rng <= px * SIGNAL_MAX_PCT / 100 and b['low'] <= lv['tc'] + tol and b['close'] > band_hi:
                     entry = math.ceil(b['high'] + 1)
                     vw = vwap_at(bars, i)
                     on_vwap = vw is not None and b['low'] - px * VWAP_STOP_PCT / 100 <= vw < b['low']
@@ -1479,7 +1492,7 @@ def propose(chart, bars):
     if far_boxes:
         return None, (f"narrow CPR ({cpr_h:.0f} pts) with the boxes {box_gap:.0f} pts away on both sides — too thin to trade "
                       f"against, entries only on a break of a box or a rejection from one — none by {SETUP_UNTIL} — no trade"), None
-    return None, f'no rejection candle by {SETUP_UNTIL}', None
+    return None, f'no candle rejected from the CPR or a PDH/PDL/R1/S1 level by {SETUP_UNTIL} — no trade', None
 
 
 def virgin_cpr_rejection(chart, bars, start=1):
@@ -1669,12 +1682,19 @@ def zone_breakout(chart, bars, zone):
     lv = chart['levels']
     px = bars[0]['close']
     clear = px * TREND_SL_PCT / 100
+    # On a WIDE CPR the zone is hundreds of points across and its break is not
+    # a trade: 0 of 5 such breaks worked (7 Jan, 6 Mar, 11 Aug, 13 Aug, 2 Sep 2025).
+    if chart.get('cpr_type') == 'Wide':
+        return None, ("the CPRs and a box interlink into one zone on a Wide CPR "
+                      f"({chart.get('width_pct')}% of price) — a break out of so wide a zone is not traded — no trade"), None
     for i, b in enumerate(bars[1:], start=1):
         if b['time'] > RETEST_UNTIL:
             break
         rng = b['high'] - b['low']
         if rng <= 0:
             continue
+        if (b['close'] > zone[1] + clear or b['close'] < zone[0] - clear) and ZONE_LULL[0] <= b['time'] < ZONE_LULL[1]:
+            return None
         if b['close'] > zone[1] + clear:
             entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
             target, twhy = _next_or_rr(entry, sl, True, [('R2', lv['r2']), ('R3', lv['r3'])])
@@ -1732,9 +1752,13 @@ def box_retracement(chart, bars):
     c1 = bars[0]
     if c1['high'] - c1['low'] <= small:
         return None
-    if c1['high'] >= hi_box[0] and c1['close'] < hi_box[0]:
+    # The close has to clear the box by TREND_SL_PCT of price: 3 pts over PDL/S1
+    # is a graze, not a rejection (14 Nov 2025: BUY 25,825 stopped, then the
+    # reversal SELL stopped too). The other four closed 11-26 pts clear.
+    clear = px * TREND_SL_PCT / 100
+    if c1['high'] >= hi_box[0] and c1['close'] < hi_box[0] - clear:
         side = 'sell'
-    elif c1['low'] <= lo_box[1] and c1['close'] > lo_box[1]:
+    elif c1['low'] <= lo_box[1] and c1['close'] > lo_box[1] + clear:
         side = 'buy'
     else:
         return None
@@ -1892,7 +1916,28 @@ def propose_all(chart, bars):
     if not p:
         return [(None, why, None, None)]
     if p:
+        if QUIET_FROM <= bars[i]['time'] < QUIET_TO:
+            return [(None, f"{why} — set up at {bars[i]['time']}, in the {QUIET_FROM}-{QUIET_TO} lull — no trade", None, None)]
+        # An entry INSIDE the daily CPR is a trade in the middle of the line the
+        # day is deciding — 7 of 7 such trades were stopped (17 Dec, 23 Dec 2025,
+        # 16 Feb, 13 May, 27 May, 24 Jun, 25 Sep 2026).
+        # An early setup against the day's gap on both counts — the open on the wrong
+        # side of yesterday's close AND the entry too — with a stop of EARLY_MIN_RISK
+        # points or more is a big counter-gap bet into the opening noise (1 Apr and
+        # 24 Apr 2025: stopped for -75 and -78).
+        ps_ = chart.get('prev_session')
+        if ps_ and bars[i]['time'] <= EARLY_UNTIL:
+            buy_ = p['trade'] == 'BUY'
+            if ((bars[0]['open'] > ps_['close']) != buy_ and (p['entry'] > ps_['close']) != buy_
+                    and abs(p['entry'] - p['sl']) >= EARLY_MIN_RISK):
+                return [(None, f"{why} — set up at {bars[i]['time']} against the gap (open {bars[0]['open']:,.0f} and the {p['entry']:,.0f} entry both "
+                               f"{'under' if buy_ else 'over'} yesterday's close {ps_['close']:,.0f}) — no trade", None, None)]
+        lv_ = chart['levels']
+        if lv_['bc'] <= p['entry'] <= lv_['tc']:
+            return [(None, f"{why} — the {p['entry']:,.0f} entry is inside the daily CPR {lv_['bc']:,.0f}-{lv_['tc']:,.0f} — no trade", None, None)]
         p, why = cap_risk(p, why)
+        if abs(p['entry'] - p['sl']) < MIN_STOP:
+            return [(None, f"{why} — the stop is only {abs(p['entry'] - p['sl']):.0f} pts, under {MIN_STOP:.0f}: noise — no trade", None, None)]
         p, why = virgin_target(p, why, chart)
         p, why = vwap_in_the_way(p, why, bars, i)
     if not p:
