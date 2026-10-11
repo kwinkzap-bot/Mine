@@ -1533,3 +1533,92 @@ def test_16_apr_2025_an_opening_buy_with_pdh_just_ahead_after_a_big_candle_is_no
     assert p is not None
     p, why, *_ = buy(23340, 23265)                       # PDH 28 pts ahead, 75-pt stop: over a third, taken
     assert p is not None
+
+
+# ── option legs are priced for one year at a time (Breeze's budget is shared with the live algos) ──
+
+def test_options_prices_only_the_requested_year(monkeypatch):
+    from trading_app.service import cpr_option_service as opt
+    monkeypatch.setattr(opt, '_legs_cache_path', lambda sym: '/nonexistent-dir-for-tests/legs.json')    # no legs file: every session is read
+    monkeypatch.setattr(opt, '_save_legs', lambda *a, **k: None)
+    rows = [{'date': '2024-03-05', 'trade': 'BUY', 'entry': 1.0, 'target': 2.0, 'sl': 0.5, 'result': 'Target', 'pnl': 1.0, 'setup_time': '09:20', 'reason': 'x'},
+            {'date': '2025-03-05', 'trade': 'SELL', 'entry': 1.0, 'target': 0.0, 'sl': 1.5, 'result': 'SL', 'pnl': -0.5, 'setup_time': '09:20', 'reason': 'x'},
+            {'date': '2025-03-06', 'trade': None, 'reason': 'passed'}]
+    monkeypatch.setattr(opt.cpr_bt, 'load_manual', lambda s: {'rows': rows})
+    monkeypatch.setattr(opt, '_option_minutes_fetcher', lambda s: (lambda con, day: []))
+    monkeypatch.setattr(opt, '_trading_days', lambda s, a, b: [])
+    monkeypatch.setattr(opt, '_spot_minutes', lambda s, a, b: {})
+    seen = {}
+    def fake_legs(symbol, rows_in, days, spot, fetch, premium):
+        seen['dates'] = [r['date'] for r in rows_in]
+        return {'legs': {}, 'premium': premium, 'summary': {'pnl': 0, 'pnl_lot': 0, 'lot': 65, 'trades': 0, 'wins': 0, 'missing': 0}}
+    monkeypatch.setattr(opt, 'legs_for', fake_legs)
+    out = opt.options('NIFTY', None, '2025')
+    assert seen['dates'] == ['2025-03-05'] and out['year'] == '2025'
+    opt.options('NIFTY', None)                                   # no year: every traded session
+    assert seen['dates'] == ['2024-03-05', '2025-03-05']
+    assert opt.options('NIFTY', None, '2019')['legs'] == {}      # a year with no trade prices nothing
+
+
+def test_a_settled_sessions_legs_are_read_once_and_kept_in_the_legs_file(monkeypatch, tmp_path):
+    from datetime import datetime
+    from trading_app.service import cpr_option_service as opt
+    rows = [{'date': '2025-03-05', 'trade': 'BUY', 'entry': 100.0, 'target': 150.0, 'sl': 80.0, 'result': 'Target', 'pnl': 50.0, 'setup_time': '09:20', 'reason': 'x'},
+            {'date': '2025-03-06', 'trade': 'SELL', 'entry': 100.0, 'target': 50.0, 'sl': 120.0, 'result': 'SL', 'pnl': -20.0, 'setup_time': '09:20', 'reason': 'x'}]
+    doc = {'rows': rows}
+    monkeypatch.setattr(opt.cpr_bt, 'load_manual', lambda s: doc)
+    monkeypatch.setattr(opt, '_legs_cache_path', lambda sym: str(tmp_path / f'legs_{sym}.json'))
+    logged_in = {'ok': True}
+    def fetcher(symbol):
+        if not logged_in['ok']:
+            raise opt.OptionDataUnavailable('no breeze')
+        return lambda con, day: []
+    monkeypatch.setattr(opt, '_option_minutes_fetcher', fetcher)
+    monkeypatch.setattr(opt, '_trading_days', lambda s, a, b: [])
+    monkeypatch.setattr(opt, '_spot_minutes', lambda s, a, b: {})
+    reads = []
+    def fake_legs(symbol, rows_in, days, spot, fetch, premium):
+        reads.append([r['date'] for r in rows_in])
+        return {'legs': {r['date']: [{'pnl': 10.0, 'result': 'Target', 'error': None} for _ in r['trades']] for r in rows_in},
+                'premium': premium, 'summary': {}}
+    monkeypatch.setattr(opt, 'legs_for', fake_legs)
+
+    first = opt.options('NIFTY', None)
+    assert reads == [['2025-03-05', '2025-03-06']] and first['summary']['trades'] == 2 and first['summary']['pnl'] == 20.0
+    logged_in['ok'] = False                                   # the second read needs neither Breeze nor the index history
+    second = opt.options('NIFTY', None)
+    assert reads == [['2025-03-05', '2025-03-06']] and second['legs'] == first['legs'] and second['summary'] == first['summary']
+    logged_in['ok'] = True
+    rows[1]['sl'] = 125.0                                     # a re-written trade is a new key: only that session is read again
+    opt.options('NIFTY', None)
+    assert reads[-1] == ['2025-03-06']
+    opt.options('NIFTY', 200.0)                               # another strike choice is its own set of legs
+    assert reads[-1] == ['2025-03-05', '2025-03-06']
+    # today's session is never saved
+    today = datetime.now(opt.cpr_bt.IST).date().isoformat()
+    rows.append({'date': today, 'trade': 'BUY', 'entry': 1.0, 'target': 2.0, 'sl': 0.5, 'result': 'Target', 'pnl': 1.0, 'setup_time': '09:20', 'reason': 'x'})
+    opt.options('NIFTY', None); n = len(reads)
+    opt.options('NIFTY', None)
+    assert reads[-1] == [today] and len(reads) == n + 1
+
+
+def test_a_leg_with_no_option_data_is_asked_for_again_only_after_a_week():
+    import time
+    from trading_app.service import cpr_option_service as opt
+    priced = {'leg': {'pnl': 5.0, 'error': None}, 'saved': 0}
+    assert opt._leg_is_fresh(priced)                                                    # a priced leg is for good
+    assert opt._leg_is_fresh({'leg': {'pnl': None, 'error': 'no contract'}, 'saved': 0})
+    gap = {'leg': {'pnl': None, 'error': 'no option bars', 'result': None}, 'saved': time.time()}
+    assert opt._leg_is_fresh(gap)                                                       # just looked: do not ask again
+    gap['saved'] = time.time() - 8 * 86400
+    assert not opt._leg_is_fresh(gap)                                                   # a week on: look again
+    assert not opt._leg_is_fresh(None)
+
+
+def test_spot_minutes_are_read_only_for_the_sessions_that_need_them(monkeypatch):
+    from datetime import date
+    from trading_app.service import cpr_option_service as opt
+    calls = []
+    monkeypatch.setattr(opt, '_spot_minutes', lambda s, a, b: (calls.append((a, b)) or {}))
+    opt._spot_minutes_for('NIFTY', [date(2025, 3, 5), date(2025, 3, 20), date(2025, 9, 1), date(2025, 9, 2)])
+    assert calls == [(date(2025, 3, 5), date(2025, 3, 20)), (date(2025, 9, 1), date(2025, 9, 2))]

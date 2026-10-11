@@ -214,18 +214,21 @@ def client():
 
 def test_options_route_serves_the_legs(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(svc, 'options', lambda symbol, premium=None: (calls.append(premium) or
+    monkeypatch.setattr(svc, 'options', lambda symbol, premium=None, year=None: (calls.append((premium, year)) or
                         {'success': True, 'symbol': symbol, 'legs': {}, 'premium': premium}))
     body = client.get('/api/trend/cpr-backtest/options?symbol=nifty').get_json()
     assert body['success'] and body['symbol'] == 'NIFTY' and body['premium'] is None
     body = client.get('/api/trend/cpr-backtest/options?symbol=nifty&premium=250').get_json()
-    assert body['premium'] == 250.0 and calls == [None, 250.0]
+    assert body['premium'] == 250.0 and calls == [(None, None), (250.0, None)]
+    client.get('/api/trend/cpr-backtest/options?symbol=nifty&year=2025')
+    assert calls[-1] == (None, '2025')                                      # the year on screen is the only one priced
+    assert client.get('/api/trend/cpr-backtest/options?year=25').status_code == 400
     assert client.get('/api/trend/cpr-backtest/options?premium=175').status_code == 400
     assert client.get('/api/trend/cpr-backtest/options?premium=abc').status_code == 400
 
 
 def test_options_route_401s_without_breeze(client, monkeypatch):
-    def boom(symbol, premium=None):
+    def boom(symbol, premium=None, year=None):
         raise svc.OptionDataUnavailable('login')
     monkeypatch.setattr(svc, 'options', boom)
     r = client.get('/api/trend/cpr-backtest/options')

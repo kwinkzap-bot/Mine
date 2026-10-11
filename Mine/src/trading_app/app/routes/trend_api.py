@@ -141,9 +141,12 @@ def cpr_backtest_options():
                             'error': f'premium must be one of {list(cpr_opt.PREMIUM_CHOICES)}'}), 400
     except ValueError:
         return jsonify({'success': False, 'error': f'bad premium {raw!r}'}), 400
+    year = (request.args.get('year') or '').strip()
+    if year and not (len(year) == 4 and year.isdigit()):
+        return jsonify({'success': False, 'error': f'bad year {year!r}'}), 400
     try:
         mc.resolve_symbol(symbol)
-        return jsonify(cpr_opt.options(symbol, premium))
+        return jsonify(cpr_opt.options(symbol, premium, year or None))
     except mc.BadRequest as e:
         return jsonify({'success': False, 'error': str(e)}), 400
     except cpr_bt.NoManualData as e:

@@ -37,6 +37,10 @@ sessions are disk-cached there, so the first read of a long sheet is the
 slow one (one Breeze request per trade at 1.5/s).
 """
 
+import json
+import os
+import threading
+import time
 from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
@@ -56,6 +60,11 @@ PICK_DELTA_GUESS = 0.6        # premium change per strike step, as a share of th
 PICK_MAX_STRIKES = 10         # strikes read per trade before the walk gives up
 DELTA_MIN_POINTS = 20         # minutes needed before a slope is trusted
 SETUP_BAR_MINUTES = 5         # the sheet's setup candle is a 5-minute bar
+
+
+LEGS_CACHE_VERSION = 1        # bump when how a leg is priced changes: every saved leg is then re-read
+LEG_RETRY_DAYS = 7            # a leg that found no option data is looked up again after this long
+_LEGS_LOCK = threading.Lock()
 
 
 class OptionDataUnavailable(Exception):
@@ -337,26 +346,138 @@ def legs_for(symbol: str, rows: List[Dict[str, Any]], trading_days: List[date],
                         'trades': booked, 'wins': wins, 'missing': missing}}
 
 
-def options(symbol: str, premium: Optional[float] = None) -> Dict[str, Any]:
+def options(symbol: str, premium: Optional[float] = None, year: Optional[str] = None) -> Dict[str, Any]:
     """The CPR Logic page's second call: the option leg behind every trade
     of the sheet, computed on the same rows /cpr-backtest serves. `premium`
-    picks strikes by entry premium instead of ATM."""
+    picks strikes by entry premium instead of ATM. `year` ('2025') prices only
+    that year's trades: the sheet now spans 2020 on, a trade costs Breeze
+    requests the first time, and that budget is shared with the live algos —
+    so the page asks for the year on screen, and for every year only when the
+    person picks "All years"."""
     doc = cpr_bt.load_manual(symbol)
     rows = doc.get('rows') or []
-    traded = [r for r in cpr_bt.sessions_from(rows) if r['trades']]
+    traded = [r for r in cpr_bt.sessions_from(rows) if r['trades'] and (not year or r['date'].startswith(year))]
     if not traded:
-        return {'success': True, 'symbol': symbol.upper(), 'legs': {}, 'premium': premium,
+        return {'success': True, 'symbol': symbol.upper(), 'legs': {}, 'premium': premium, 'year': year or None,
                 'summary': {'pnl': 0.0, 'pnl_lot': 0.0, 'lot': lot_size(symbol),
                             'trades': 0, 'wins': 0, 'missing': 0}}
-    fetch_option = _option_minutes_fetcher(symbol)     # fail before any fetch
-    dates = sorted(date.fromisoformat(r['date']) for r in traded)
-    trading_days = _trading_days(symbol, dates[0], dates[-1])
-    spot = _spot_minutes(symbol, dates[0], dates[-1])
-    rows_in = [{'date': r['date'], 'trades': [{'manual': t} for t in r['trades']]} for r in traded]
-    out = legs_for(symbol, rows_in, trading_days, spot, fetch_option, premium)
-    logger.info(f"[CPR options] {symbol.upper()} {'≈' + str(premium) if premium else 'ATM'}: "
-                f"{out['summary']['trades']} legs priced, {out['summary']['missing']} without data")
-    return {'success': True, 'symbol': symbol.upper(), **out}
+    today = datetime.now(cpr_bt.IST).date()
+    cache = _load_legs_cache(symbol)
+    by_date: Dict[str, List[Dict[str, Any]]] = {}
+    todo: List[Dict[str, Any]] = []
+    for r in traded:
+        keys = [_leg_key(premium, r['date'], i, t) for i, t in enumerate(r['trades'])]
+        saved = [cache['legs'].get(k) for k in keys]
+        # A settled session whose every leg was read before, for these very trade numbers, is
+        # taken from the file — no Breeze, no index history, no strike walk.
+        if date.fromisoformat(r['date']) < today and all(_leg_is_fresh(e) for e in saved):
+            by_date[r['date']] = [e['leg'] for e in saved]
+        else:
+            todo.append(r)
+    if todo:
+        fetch_option = _option_minutes_fetcher(symbol)     # fail before any fetch
+        todo_dates = sorted(date.fromisoformat(r['date']) for r in todo)
+        trading_days = _trading_days(symbol, todo_dates[0], todo_dates[-1])
+        spot = _spot_minutes_for(symbol, todo_dates)
+        rows_in = [{'date': r['date'], 'trades': [{'manual': t} for t in r['trades']]} for r in todo]
+        out = legs_for(symbol, rows_in, trading_days, spot, fetch_option, premium)
+        by_date.update(out['legs'])
+        _save_legs(symbol, cache, todo, out['legs'], premium, today)
+    lot = lot_size(symbol)
+    pnl = 0.0
+    wins = booked = missing = 0
+    for legs in by_date.values():
+        for leg in legs:
+            if leg.get('pnl') is not None:
+                pnl += leg['pnl']
+                booked += 1
+                wins += leg['pnl'] > 0
+            elif leg.get('error'):
+                missing += 1
+    logger.info(f"[CPR options] {symbol.upper()} {'≈' + str(premium) if premium else 'ATM'}{' ' + year if year else ''}: "
+                f"{len(traded) - len(todo)} sessions from the legs file, {len(todo)} read; {booked} legs priced, {missing} without data")
+    return {'success': True, 'symbol': symbol.upper(), 'year': year or None, 'legs': by_date, 'premium': premium,
+            'summary': {'pnl': round(pnl, 2), 'pnl_lot': round(pnl * lot - BROKERAGE * booked, 2), 'lot': lot,
+                        'trades': booked, 'wins': wins, 'missing': missing}}
+
+
+# ── The legs file ─────────────────────────────────────────────────────────
+# The option minute bars are already disk-cached, but the leg built on them was
+# not: every page open re-fetched the index's 1-minute history for the whole
+# range, re-walked the strike ladder and re-ran every replay. A priced leg of a
+# settled session never changes while its trade is the same, so it is kept in
+# .cache/cpr_option_legs_<SYMBOL>.json, keyed by premium choice + date + trade
+# number + the trade's own numbers (a re-written trade is a different key), and
+# a read of a year the file covers touches neither Breeze nor Fyers. Today's
+# session is never saved (its option is still moving). A leg that found no
+# option data is kept too, but only for LEG_RETRY_DAYS, so a contract Breeze
+# does not hold is not asked for on every page open.
+
+def _legs_cache_path(symbol: str) -> str:
+    from trading_app.service import icici_data_service as ids
+    return os.path.join(ids._SLICE_CACHE_DIR, f'cpr_option_legs_{symbol.upper()}.json')
+
+
+def _leg_key(premium: Optional[float], day: str, i: int, t: Dict[str, Any]) -> str:
+    return (f"{int(premium) if premium else 'ATM'}|{day}|{i}|{t.get('trade')}|{t.get('entry')}|{t.get('target')}|"
+            f"{t.get('sl')}|{t.get('setup_time')}")
+
+
+def _leg_is_fresh(e: Optional[Dict[str, Any]]) -> bool:
+    if not e or 'leg' not in e:
+        return False
+    leg = e['leg']
+    if leg.get('pnl') is not None or leg.get('error') == 'no contract' or leg.get('result') in (None, 'No fill') and not leg.get('error'):
+        return True
+    return time.time() - e.get('saved', 0) < LEG_RETRY_DAYS * 86400
+
+
+def _load_legs_cache(symbol: str) -> Dict[str, Any]:
+    with _LEGS_LOCK:
+        try:
+            with open(_legs_cache_path(symbol)) as fh:
+                data = json.load(fh)
+            if data.get('version') == LEGS_CACHE_VERSION and isinstance(data.get('legs'), dict):
+                return data
+        except (OSError, ValueError):
+            pass
+    return {'version': LEGS_CACHE_VERSION, 'legs': {}}
+
+
+def _save_legs(symbol: str, cache: Dict[str, Any], rows: List[Dict[str, Any]],
+               legs_by_date: Dict[str, List[Dict[str, Any]]], premium: Optional[float], today: date) -> None:
+    now = time.time()
+    for r in rows:
+        if date.fromisoformat(r['date']) >= today:
+            continue                                   # today's option is still moving
+        legs = legs_by_date.get(r['date']) or []
+        for i, t in enumerate(r['trades']):
+            if i < len(legs):
+                cache['legs'][_leg_key(premium, r['date'], i, t)] = {'leg': legs[i], 'saved': now}
+    path = _legs_cache_path(symbol)
+    with _LEGS_LOCK:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + '.tmp'
+            with open(tmp, 'w') as fh:
+                json.dump(cache, fh, separators=(',', ':'))
+            os.replace(tmp, path)
+        except OSError as exc:
+            logger.warning(f"[CPR options] legs file not written: {exc}")
+
+
+def _spot_minutes_for(symbol: str, days: List[date]) -> Dict[str, List[Dict[str, Any]]]:
+    """1-minute index bars for just the sessions asked for: nearby days are read
+    as one window (at most ~85 days across), far-apart ones as their own."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    days = sorted(days)
+    start = prev = days[0]
+    for d in days[1:] + [None]:
+        if d is None or (d - prev).days > 30 or (d - start).days > 85:
+            out.update(_spot_minutes(symbol, start, prev))
+            start = d
+        prev = d if d is not None else prev
+    return out
 
 
 # ── Pricing an arbitrary list of trades ──────────────────────────────────

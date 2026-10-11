@@ -368,6 +368,12 @@ function _tdCprYearChanged(year) {
     _tdCprState.year = year;
     try { localStorage.setItem('cpr-logic-year', year); } catch (e) { /* no storage */ }
     renderCprYearFilter();                                         // keeps the three dropdowns in step
+    // The option legs were priced for one year (or all of them): a year they do not cover is read now.
+    const o = _tdCprState.options;
+    if (_tdCprState.data && !(o && o.status === 'ready' && (o.scope === '' || o.scope === year))) {
+        _tdCprState.options = { status: 'loading' };
+        loadCprOptions(tdElems.symbol.value);
+    }
     if (_tdCprState.data) renderCprBacktest(_tdCprState.data);
     if (tdElems.strategyModal && !tdElems.strategyModal.classList.contains('hidden')) showCprStrategies();
     if (tdElems.perfModal && !tdElems.perfModal.classList.contains('hidden')) renderCprPerformance();
@@ -434,12 +440,17 @@ async function loadCprOptions(symbol) {
     try {
         const qs = new URLSearchParams({ symbol });
         if (premium) qs.set('premium', premium);
+        // Only the year on screen is priced (Breeze's budget is shared with the live algos);
+        // "All years" asks for the lot, once, when the person picks it.
+        const year = _tdCprState.year || '';
+        if (year) qs.set('year', year);
         const res = await fetch(`/api/trend/cpr-backtest/options?${qs}`);
         const data = await res.json();
-        // The symbol or the strike choice changed meanwhile: this answer is stale.
-        if (!_tdCprState.data || _tdCprState.data.symbol !== symbol.toUpperCase() || _tdCprPremium() !== premium) return;
+        // The symbol, the strike choice or the year changed meanwhile: this answer is stale.
+        if (!_tdCprState.data || _tdCprState.data.symbol !== symbol.toUpperCase() || _tdCprPremium() !== premium
+                || (_tdCprState.year || '') !== year) return;
         _tdCprState.options = data && data.success
-            ? { status: 'ready', legs: data.legs || {}, summary: data.summary || {}, premium: data.premium || null }
+            ? { status: 'ready', legs: data.legs || {}, summary: data.summary || {}, premium: data.premium || null, scope: year }
             : { status: 'error', error: (data && data.error) || `HTTP ${res.status}`,
                 icici: !!(data && data.icici_required) };
     } catch (err) {
