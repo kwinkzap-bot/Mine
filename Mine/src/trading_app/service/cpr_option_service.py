@@ -62,7 +62,7 @@ DELTA_MIN_POINTS = 20         # minutes needed before a slope is trusted
 SETUP_BAR_MINUTES = 5         # the sheet's setup candle is a 5-minute bar
 
 
-LEGS_CACHE_VERSION = 1        # bump when how a leg is priced changes: every saved leg is then re-read
+LEGS_CACHE_VERSION = 2        # bump when how a leg is priced changes: every saved leg is then re-read
 LEG_RETRY_DAYS = 7            # a leg that found no option data is looked up again after this long
 _LEGS_LOCK = threading.Lock()
 
@@ -256,13 +256,22 @@ def option_leg(tm: Dict[str, Any], con: Dict[str, Any], spot: List[Dict[str, Any
 
 def _trading_days(symbol: str, first: date, last: date) -> List[date]:
     """The sessions around the sheet, for the expiry calendar to snap
-    holidays against — a week either side is enough."""
+    holidays against — a week either side is enough. Read a year at a time:
+    one request over seven years comes back cut short, and every trade past
+    the cut then has no expiry to snap to ("no contract")."""
     from trading_app.service import multichart_service as mc
     adapter = mc.provider()
-    raw = adapter.historical_data(mc.resolve_symbol(symbol), (first - timedelta(days=7)).isoformat(),
-                                  min(last + timedelta(days=7), date.today()).isoformat(),
-                                  'day', use_cache=True, cache_ttl=3600.0)
-    return [b['date'] for b in cpr_bt._daily_rows(raw)]
+    fy = mc.resolve_symbol(symbol)
+    start, end = first - timedelta(days=7), min(last + timedelta(days=7), date.today())
+    days: Dict[date, None] = {}
+    while start <= end:
+        stop = min(start + timedelta(days=359), end)
+        raw = adapter.historical_data(fy, start.isoformat(), stop.isoformat(), 'day',
+                                      use_cache=True, cache_ttl=3600.0)
+        for d in (b['date'] for b in cpr_bt._daily_rows(raw)):
+            days[d] = None
+        start = stop + timedelta(days=1)
+    return sorted(days)
 
 
 def _spot_minutes(symbol: str, first: date, last: date) -> Dict[str, List[Dict[str, Any]]]:
@@ -427,7 +436,7 @@ def _leg_is_fresh(e: Optional[Dict[str, Any]]) -> bool:
     if not e or 'leg' not in e:
         return False
     leg = e['leg']
-    if leg.get('pnl') is not None or leg.get('error') == 'no contract' or leg.get('result') in (None, 'No fill') and not leg.get('error'):
+    if leg.get('pnl') is not None or (leg.get('result') in (None, 'No fill') and not leg.get('error')):
         return True
     return time.time() - e.get('saved', 0) < LEG_RETRY_DAYS * 86400
 
@@ -452,7 +461,9 @@ def _save_legs(symbol: str, cache: Dict[str, Any], rows: List[Dict[str, Any]],
             continue                                   # today's option is still moving
         legs = legs_by_date.get(r['date']) or []
         for i, t in enumerate(r['trades']):
-            if i < len(legs):
+            # "no contract" is not kept: it costs nothing to work out again, and a short
+            # trading-day list once made it look permanent for every trade past its end.
+            if i < len(legs) and legs[i].get('error') != 'no contract':
                 cache['legs'][_leg_key(premium, r['date'], i, t)] = {'leg': legs[i], 'saved': now}
     path = _legs_cache_path(symbol)
     with _LEGS_LOCK:

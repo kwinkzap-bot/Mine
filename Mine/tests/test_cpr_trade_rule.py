@@ -206,7 +206,9 @@ def _chart_01(virgin=True):
     return chart
 
 
-def test_1_sept_2026_second_trade_is_the_virgin_cpr_rejection_run_to_pdl():
+def test_1_sept_2026_second_trade_is_the_virgin_cpr_rejection_run_to_pdl(monkeypatch):
+    from trading_app.service import cpr_trade_rule as _rule
+    monkeypatch.setattr(_rule, 'MAX_TRADES_PER_DAY', 2)        # the second-trade logic itself, switched on
     chart = _chart_01()
     lv, y = chart['levels'], chart['prev_cpr']
     assert y['bc'] < lv['r1'] < y['tc']                       # the virgin CPR sits on PDH/R1
@@ -259,7 +261,9 @@ def test_wide_cpr_or_a_very_large_candle_is_excluded():
     assert late is None or bars[late[2]]['time'] != '11:30'
 
 
-def test_the_second_trade_also_follows_a_first_that_hit_its_target():
+def test_the_second_trade_also_follows_a_first_that_hit_its_target(monkeypatch):
+    from trading_app.service import cpr_trade_rule as _rule
+    monkeypatch.setattr(_rule, 'MAX_TRADES_PER_DAY', 2)        # the second-trade logic itself, switched on
     chart = _chart_01()
     bars = _bars_01()
     # Let the first trade reach S1 24,006 before the 11:30 rejection: the second is still taken.
@@ -1080,7 +1084,9 @@ def test_a_0915_that_does_not_close_over_the_box_is_not_the_rejection():
 
 # ── 20 Jan 2025: a big 09:15 down through the upper box, the small 09:20 sold, then the reversal bought ──
 
-def test_20_jan_2025_sells_the_small_0920_and_buys_the_reversal_to_the_virgin_cpr():
+def test_20_jan_2025_sells_the_small_0920_and_buys_the_reversal_to_the_virgin_cpr(monkeypatch):
+    from trading_app.service import cpr_trade_rule as _rule
+    monkeypatch.setattr(_rule, 'MAX_TRADES_PER_DAY', 2)        # the second-trade logic itself, switched on
     from trading_app.service.cpr_trade_rule import propose_all
     prev = (23292.1, 23100.35, 23203.2)            # 17 Jan 2025: CPR 23,196-23,201, PDH 23,292 / R1 23,297
     bars = [
@@ -1607,7 +1613,7 @@ def test_a_leg_with_no_option_data_is_asked_for_again_only_after_a_week():
     from trading_app.service import cpr_option_service as opt
     priced = {'leg': {'pnl': 5.0, 'error': None}, 'saved': 0}
     assert opt._leg_is_fresh(priced)                                                    # a priced leg is for good
-    assert opt._leg_is_fresh({'leg': {'pnl': None, 'error': 'no contract'}, 'saved': 0})
+    assert not opt._leg_is_fresh({'leg': {'pnl': None, 'error': 'no contract'}, 'saved': 0})     # worked out again every time
     gap = {'leg': {'pnl': None, 'error': 'no option bars', 'result': None}, 'saved': time.time()}
     assert opt._leg_is_fresh(gap)                                                       # just looked: do not ask again
     gap['saved'] = time.time() - 8 * 86400
@@ -1622,3 +1628,52 @@ def test_spot_minutes_are_read_only_for_the_sessions_that_need_them(monkeypatch)
     monkeypatch.setattr(opt, '_spot_minutes', lambda s, a, b: (calls.append((a, b)) or {}))
     opt._spot_minutes_for('NIFTY', [date(2025, 3, 5), date(2025, 3, 20), date(2025, 9, 1), date(2025, 9, 2)])
     assert calls == [(date(2025, 3, 5), date(2025, 3, 20)), (date(2025, 9, 1), date(2025, 9, 2))]
+
+
+def test_the_day_ends_with_the_first_trade_by_default(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    assert rule.MAX_TRADES_PER_DAY == 1
+    prev = (24982.05, 24813.7, 24853.4)
+    bars = [{'time': '09:15', 'open': 23290.4, 'high': 23308.35, 'low': 23219.35, 'close': 23227.6},
+            {'time': '09:20', 'open': 23226.95, 'high': 23231.0, 'low': 23210.85, 'close': 23214.25},
+            {'time': '09:25', 'open': 23211.1, 'high': 23220.75, 'low': 23189.7, 'close': 23209.25},
+            {'time': '09:30', 'open': 23208.9, 'high': 23228.55, 'low': 23185.95, 'close': 23186.7},
+            {'time': '09:55', 'open': 23205.3, 'high': 23236.1, 'low': 23205.3, 'close': 23226.65},
+            {'time': '10:05', 'open': 23223.65, 'high': 23240.0, 'low': 23211.45, 'close': 23214.65}]
+    monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'SELL', 'entry': 23209.0, 'target': 23150.0, 'sl': 23230.0}, 'x', 1))
+    chart = _chart(bars[0], (23292.1, 23100.35, 23203.2), (23400.0, 23050.0, 23210.0))
+    out = rule.propose_all(chart, bars + _session()[-25:])
+    assert len(out) == 1 and out[0][3]['result'] == 'SL'                       # stopped at 09:55 — and that is the day
+    monkeypatch.setattr(rule, 'MAX_TRADES_PER_DAY', 2)
+    assert len(rule.propose_all(chart, bars + _session()[-25:])) >= 1           # the switch still exists
+
+
+def test_trading_days_are_read_a_year_at_a_time(monkeypatch):
+    from datetime import date, timedelta
+    from trading_app.service import cpr_option_service as opt, multichart_service as mc
+    calls = []
+    class Adapter:
+        def historical_data(self, sym, a, b, tf, **kw):
+            a, b = date.fromisoformat(a), date.fromisoformat(b)
+            calls.append((a, b))
+            assert (b - a).days <= 365                        # a longer request comes back cut short in real life
+            return [{'time': int(__import__('datetime').datetime(d.year, d.month, d.day, 9, 15).timestamp()), 'open': 1, 'high': 1, 'low': 1, 'close': 1, 'volume': 0}
+                    for d in (a + timedelta(days=i) for i in range((b - a).days + 1)) if d.weekday() < 5]
+    monkeypatch.setattr(mc, 'provider', lambda: Adapter())
+    monkeypatch.setattr(opt.cpr_bt, '_daily_rows', lambda raw: [{'date': date.fromtimestamp(r['time'])} for r in raw])
+    days = opt._trading_days('NIFTY', date(2021, 1, 4), date(2024, 12, 31))
+    assert len(calls) >= 4 and days[0] <= date(2021, 1, 4) and days[-1] >= date(2024, 12, 31)
+    assert days == sorted(set(days))
+
+
+def test_a_leg_with_no_contract_is_not_kept(monkeypatch, tmp_path):
+    from trading_app.service import cpr_option_service as opt
+    from datetime import date
+    monkeypatch.setattr(opt, '_legs_cache_path', lambda sym: str(tmp_path / 'legs.json'))
+    rows = [{'date': '2025-03-05', 'trades': [{'trade': 'BUY', 'entry': 1.0, 'target': 2.0, 'sl': 0.5, 'setup_time': '09:20'},
+                                              {'trade': 'SELL', 'entry': 1.0, 'target': 0.0, 'sl': 1.5, 'setup_time': '10:00'}]}]
+    cache = {'version': opt.LEGS_CACHE_VERSION, 'legs': {}}
+    legs = {'2025-03-05': [{'pnl': 3.0, 'error': None}, {'pnl': None, 'error': 'no contract'}]}
+    opt._save_legs('NIFTY', cache, rows, legs, None, date(2026, 1, 1))
+    assert len(cache['legs']) == 1 and list(cache['legs'].values())[0]['leg']['pnl'] == 3.0
+    assert opt._load_legs_cache('NIFTY')['legs'] == cache['legs']

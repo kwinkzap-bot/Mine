@@ -360,6 +360,7 @@ BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 
 BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
 MIN_STOP = 15.0          # a stop closer than this is noise: 0 of 7 such trades survived (Mar-Sep 2026) — no trade
+MAX_TRADES_PER_DAY = 1     # a second trade after the first one closed (the reversal after a stop, the virgin-CPR rejection) is off: 2/14 targets 2020-24 against 40% for first trades (p=0.04)
 BOX_NEAR_X = 0.35          # an opening BUY on a big 09:15 candle with PDH/R1 closer than this x the stop ahead of it is no trade (16 Apr 2025: 17 pts for a 75-pt stop)
 INSIDE_SL_BUFFER = 10.0     # the stop of an inside-the-CPR break sits this many pts past the candle's extreme: 26 Mar 2025's SELL was stopped by a 3-pt wick, then fell 270 pts
 FADE_MAX_X = 1.5           # a wall-rejection fade back to the CPR is taken only when the CPR is within this x the stop (24 Sep, 31 Jan 2025: 77 and 70 pts for 47 and 24 — both stopped)
@@ -1987,6 +1988,8 @@ def propose_all(chart, bars):
         return [(None, why, None, None)]
     sim, used = simulate(bars[i:], p)
     out = [(used, why, i, sim)]
+    if sim['result'] in ('SL', 'Target') and MAX_TRADES_PER_DAY < 2:
+        return out                         # one trade a day: the day ends with the first trade's exit
     if sim['result'] in ('SL', 'Target', 'No fill'):
         after = sim['exit_time'] if sim['result'] in ('SL', 'Target') else bars[i]['time']
         start = next((k for k, b in enumerate(bars) if b['time'] > after), len(bars))

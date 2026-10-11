@@ -2776,24 +2776,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 9.3 pts (0.082%), 09:15 candle O 11289.0 H 11289.0 L 11245.4 C 11259.5 | Trade by rule: narrow CPR (9.3 pts), small box \u2014 big move expected; 09:15 strong red candle touched PDL/S1 11,290-11,299 and closed below it at 11,260 -> SELL under it; SL over its high; target 1:2; target moved to the virgin CPR 11,187-11,205 (2020-08-10, untouched since) at 11,205; chart replay SL 09:20 -> 11:05"
     },
     {
-      "date": "2020-08-12",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Strong candle red near S2",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 11305.0,
-      "target": 11336.0,
-      "sl": 11290.0,
-      "result": "SL",
-      "pnl": -15.0,
-      "reason": "virgin CPR 11,276-11,288 (yesterday's, untouched) under PDL/S1 11,290-11,299; 11:35 candle rejected from it (low 11,291, closed 11,301) -> BUY over it; SL under its low; target the CPR (TC 11,336), PDH 11,374 if a strong green candle breaks the CPR",
-      "setup_time": "11:35",
-      "note": "Trade by rule (2nd, after the first trade's SL): virgin CPR 11,276-11,288 (yesterday's, untouched) under PDL/S1 11,290-11,299; 11:35 candle rejected from it (low 11,291, closed 11,301) -> BUY over it; SL under its low; target the CPR (TC 11,336), PDH 11,374 if a strong green candle breaks the CPR; chart replay SL 11:50 -> 12:10"
-    },
-    {
       "date": "2020-08-13",
       "price_vs_daily": "Above",
       "price_vs_hourly": "Above",
@@ -7420,24 +7402,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 20.2 pts (0.121%), 09:15 candle O 16627.9 H 16642.2 L 16611.2 C 16618.2 | Trade by rule: above the weekly CPR, under the daily one; 09:45 candle closed above the daily CPR 16,645-16,665 at 16,667; target 1:2 (R1 16,692 is only 16 pts away, inside the 39-pt risk); chart replay SL 10:05 -> 12:25"
     },
     {
-      "date": "2021-08-26",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Medium",
-      "cpr_direction": "Asc",
-      "first_candle": "Small candle red near Prev Low",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 16636.0,
-      "target": 16665.0,
-      "sl": 16613.0,
-      "result": "SL",
-      "pnl": -23.0,
-      "reason": "virgin CPR 16,571-16,607 (yesterday's, untouched) under PDL/S1 16,597-16,618; 12:55 candle rejected from it (low 16,615, closed 16,632) -> BUY over it; SL under its low; target the CPR (TC 16,665), PDH 16,712 if a strong green candle breaks the CPR",
-      "setup_time": "12:55",
-      "note": "Trade by rule (2nd, after the first trade's SL): virgin CPR 16,571-16,607 (yesterday's, untouched) under PDL/S1 16,597-16,618; 12:55 candle rejected from it (low 16,615, closed 16,632) -> BUY over it; SL under its low; target the CPR (TC 16,665), PDH 16,712 if a strong green candle breaks the CPR; chart replay SL 13:00 -> 14:35"
-    },
-    {
       "date": "2021-08-27",
       "price_vs_daily": "Below",
       "price_vs_hourly": "Above",
@@ -7814,24 +7778,6 @@
       "reason": "09:25 candle rejected from R1 (high 17,930, closed 17,908) -> SELL under it; SL over R1 17,927; target CPR 17,884",
       "setup_time": "09:25",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 20.2 pts (0.113%), 09:15 candle O 17932.2 H 17933.2 L 17891.8 C 17910.2 | Trade by rule: 09:25 candle rejected from R1 (high 17,930, closed 17,908) -> SELL under it; SL over R1 17,927; target CPR 17,884; chart replay Target 09:55 -> 10:00"
-    },
-    {
-      "date": "2021-09-27",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Candle red near R1",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 17845.0,
-      "target": 17884.0,
-      "sl": 17821.0,
-      "result": "SL",
-      "pnl": -24.0,
-      "reason": "virgin CPR 17,745-17,797 (yesterday's, untouched) under PDL/S1 17,799-17,819; 10:45 candle rejected from it (low 17,822, closed 17,841) -> BUY over it; SL under its low; target the CPR (TC 17,884), PDH 17,948 if a strong green candle breaks the CPR",
-      "setup_time": "10:45",
-      "note": "Trade by rule (2nd, after the first trade's Target): virgin CPR 17,745-17,797 (yesterday's, untouched) under PDL/S1 17,799-17,819; 10:45 candle rejected from it (low 17,822, closed 17,841) -> BUY over it; SL under its low; target the CPR (TC 17,884), PDH 17,948 if a strong green candle breaks the CPR; chart replay SL 10:50 -> 11:35"
     },
     {
       "date": "2021-09-28",
@@ -9670,24 +9616,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 64.0 pts (0.374%), 09:15 candle O 17194.5 H 17210.6 L 17169.0 C 17184.1 | Trade by rule: weekly CPR 17,150-17,234 merged with PDH/R1 17,149-17,213, open inside that zone; 10:20 strong red candle rejected from PDH 17,149 (high 17,162, closed 17,141 under it) -> SELL under it; SL over its high; target 1:2; chart replay SL 10:30 -> 11:00"
     },
     {
-      "date": "2022-02-23",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Wide",
-      "cpr_direction": "Dec",
-      "first_candle": "Small candle red near R3(cam)",
-      "boxes": "Big",
-      "trade": "BUY",
-      "entry": 17166.0,
-      "target": 17208.0,
-      "sl": 17143.0,
-      "result": "SL",
-      "pnl": -23.0,
-      "reason": "the first trade was stopped by the 11:00 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,208-17,211 (2022-02-22, untouched since) at 17,208",
-      "setup_time": "11:00",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 11:00 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,208-17,211 (2022-02-22, untouched since) at 17,208; chart replay SL 11:05 -> 12:40"
-    },
-    {
       "date": "2022-02-24",
       "price_vs_daily": "Below",
       "price_vs_hourly": "Below",
@@ -10228,24 +10156,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 44.0 pts (0.249%), 09:15 candle O 17698.2 H 17723.6 L 17676.9 C 17691.2 | Trade by rule: 09:15 closed inside the CPR 17,662-17,706 on a 47-pt candle \u2014 no stop at its far end; 09:25 candle closed below the CPR at 17,652; 09:30 cross candle came back to BC (high 17,665) -> SELL under it; SL over its high; target Cam S3 (inside the PDL/S1 box) 17,595; chart replay SL 09:50 -> 09:55"
     },
     {
-      "date": "2022-04-08",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Medium",
-      "cpr_direction": "Dec",
-      "first_candle": "In decision candle(doji) near R3(cam)",
-      "boxes": "Big",
-      "trade": "BUY",
-      "entry": 17675.0,
-      "target": 17819.0,
-      "sl": 17613.0,
-      "result": "SL",
-      "pnl": -62.0,
-      "reason": "the first trade was stopped by the 09:55 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,819-17,840 (2022-04-07, untouched since) at 17,819; target moved to the virgin CPR 17,819-17,840 (2022-04-07, untouched since) at 17,819",
-      "setup_time": "09:55",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 09:55 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,819-17,840 (2022-04-07, untouched since) at 17,819; target moved to the virgin CPR 17,819-17,840 (2022-04-07, untouched since) at 17,819; chart replay SL 10:05 -> 10:15"
-    },
-    {
       "date": "2022-04-11",
       "price_vs_daily": "Below",
       "price_vs_hourly": "Below",
@@ -10496,24 +10406,6 @@
       "reason": "gap-down; 09:25 candle came up to S1/PDL 16,978-17,053 (high 16,988) and reversed down, closed 16,946; target S2 16,853; SL halved to 17,000 (125-pt stop is over 100)",
       "setup_time": "09:25",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 75.2 pts (0.44%), 09:15 candle O 16924.4 H 16987.2 L 16917.2 C 16985.3 | Trade by rule: gap-down; 09:25 candle came up to S1/PDL 16,978-17,053 (high 16,988) and reversed down, closed 16,946; target S2 16,853; SL halved to 17,000 (125-pt stop is over 100); chart replay SL 09:30 -> 09:40"
-    },
-    {
-      "date": "2022-05-02",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Wide",
-      "cpr_direction": "Dec",
-      "first_candle": "Strong candle green near S1",
-      "boxes": "Big",
-      "trade": "BUY",
-      "entry": 17014.0,
-      "target": 17035.0,
-      "sl": 16982.0,
-      "result": "SL",
-      "pnl": -32.0,
-      "reason": "the first trade was stopped by the 09:40 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,035-17,037 (2022-04-28, untouched since) at 17,035; target moved to the virgin CPR 17,035-17,037 (2022-04-28, untouched since) at 17,035",
-      "setup_time": "09:40",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 09:40 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,035-17,037 (2022-04-28, untouched since) at 17,035; target moved to the virgin CPR 17,035-17,037 (2022-04-28, untouched since) at 17,035; chart replay SL 09:45 -> 09:45"
     },
     {
       "date": "2022-05-04",
@@ -12278,24 +12170,6 @@
       "reason": "weekly CPR 17,619-17,797 merged with PDL/S1 17,734-17,744, open inside that zone; 10:05 strong green candle rejected from PDL 17,744 (low 17,739, closed 17,772 over it) -> BUY over it; SL under its low; target CPR BC 17,821",
       "setup_time": "10:05",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 10.4 pts (0.059%), 09:15 candle O 17766.3 H 17838.6 L 17761.2 C 17790.7 | Trade by rule: weekly CPR 17,619-17,797 merged with PDL/S1 17,734-17,744, open inside that zone; 10:05 strong green candle rejected from PDL 17,744 (low 17,739, closed 17,772 over it) -> BUY over it; SL under its low; target CPR BC 17,821; chart replay SL 10:10 -> 11:50"
-    },
-    {
-      "date": "2022-09-21",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Candle green near S3(cam)",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 17711.0,
-      "target": 17598.0,
-      "sl": 17758.0,
-      "result": "SL",
-      "pnl": -47.0,
-      "reason": "the first trade was stopped by the 11:50 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 17,548-17,598 (2022-09-20, untouched since) at 17,598",
-      "setup_time": "11:50",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 11:50 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 17,548-17,598 (2022-09-20, untouched since) at 17,598; chart replay SL 11:55 -> 13:40"
     },
     {
       "date": "2022-09-22",
@@ -14350,24 +14224,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 16.3 pts (0.092%), 09:15 candle O 17665.8 H 17670.2 L 17614.3 C 17623.2 | Trade by rule: narrow CPR (16.3 pts), small box \u2014 big move expected; 09:15 strong red candle touched PDL/S1 17,656-17,672 and closed below it at 17,623 -> SELL under it; SL over its high; target 1:2; target moved to the virgin CPR 17,536-17,575 (2023-03-06, untouched since) at 17,575; chart replay SL 09:20 -> 09:30"
     },
     {
-      "date": "2023-03-08",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Strong candle red near S1",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 17686.0,
-      "target": 17839.0,
-      "sl": 17611.0,
-      "result": "EOD",
-      "pnl": 70.2,
-      "reason": "the first trade was stopped by the 09:30 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,839-17,863 (2023-02-22, untouched since) at 17,839; target moved to the virgin CPR 17,839-17,863 (2023-02-22, untouched since) at 17,839",
-      "setup_time": "09:30",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 09:30 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 17,839-17,863 (2023-02-22, untouched since) at 17,839; target moved to the virgin CPR 17,839-17,863 (2023-02-22, untouched since) at 17,839; chart replay EOD 09:35 -> 15:15, squared off at 15:15, P&L +70"
-    },
-    {
       "date": "2023-03-09",
       "price_vs_daily": "Above",
       "price_vs_hourly": "Above",
@@ -14564,24 +14420,6 @@
       "reason": "narrow CPR (3.7 pts), open below both CPRs; 09:15 candle opened at 17,097 inside PDL/S1 17,104-17,108 and closed below it at 17,078; 09:20 bar broke the 09:15 low 17,061 -> SELL under it; SL over the 09:15 high; target S3 17,005",
       "setup_time": "09:15",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 3.7 pts (0.022%), 09:15 candle O 17097.4 H 17101.3 L 17061.2 C 17077.9 | Trade by rule: narrow CPR (3.7 pts), open below both CPRs; 09:15 candle opened at 17,097 inside PDL/S1 17,104-17,108 and closed below it at 17,078; 09:20 bar broke the 09:15 low 17,061 -> SELL under it; SL over the 09:15 high; target S3 17,005; chart replay SL 09:20 -> 09:45"
-    },
-    {
-      "date": "2023-03-23",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Candle red near S2",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 17127.0,
-      "target": 17158.0,
-      "sl": 17107.0,
-      "result": "Target",
-      "pnl": 31.0,
-      "reason": "virgin CPR 17,072-17,096 (yesterday's, untouched) under PDL/S1 17,104-17,108; 09:55 candle rejected from it (low 17,109, closed 17,125) -> BUY over it; SL under its low; target the CPR (TC 17,158), PDH 17,207 if a strong green candle breaks the CPR",
-      "setup_time": "09:55",
-      "note": "Trade by rule (2nd, after the first trade's SL): virgin CPR 17,072-17,096 (yesterday's, untouched) under PDL/S1 17,104-17,108; 09:55 candle rejected from it (low 17,109, closed 17,125) -> BUY over it; SL under its low; target the CPR (TC 17,158), PDH 17,207 if a strong green candle breaks the CPR; chart replay Target 10:00 -> 10:20"
     },
     {
       "date": "2023-03-24",
@@ -15898,24 +15736,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 14.2 pts (0.073%), 09:15 candle O 19497.4 H 19507.7 L 19464.6 C 19476.0 | Trade by rule: 09:55 candle rejected from the CPR (low 19,457 into 19,447-19,461, closed 19,479); target 1:2 (R1 19,501 is only 19 pts away, inside the 38-pt risk); chart replay SL 10:00 -> 10:15"
     },
     {
-      "date": "2023-07-12",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Candle red near R3(cam)",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 19436.0,
-      "target": 19381.0,
-      "sl": 19467.0,
-      "result": "SL",
-      "pnl": -31.0,
-      "reason": "the first trade was stopped by the 10:15 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 19,364-19,381 (2023-07-11, untouched since) at 19,381; target moved to the virgin CPR 19,364-19,381 (2023-07-11, untouched since) at 19,381",
-      "setup_time": "10:15",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 10:15 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 19,364-19,381 (2023-07-11, untouched since) at 19,381; target moved to the virgin CPR 19,364-19,381 (2023-07-11, untouched since) at 19,381; chart replay SL 10:20 -> 10:40"
-    },
-    {
       "date": "2023-07-13",
       "price_vs_daily": "Above",
       "price_vs_hourly": "Above",
@@ -17120,24 +16940,6 @@
       "reason": "above the weekly CPR, under the daily one; 09:40 candle closed above the daily CPR 19,812-19,813 at 19,816; target R1 19,849",
       "setup_time": "09:40",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 0.8 pts (0.004%), 09:15 candle O 19820.4 H 19824.4 L 19779.7 C 19787.5 | Trade by rule: above the weekly CPR, under the daily one; 09:40 candle closed above the daily CPR 19,812-19,813 at 19,816; target R1 19,849; chart replay SL 10:05 -> 10:40"
-    },
-    {
-      "date": "2023-10-18",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Strong candle red near S3(cam)",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 19786.0,
-      "target": 19737.0,
-      "sl": 19825.0,
-      "result": "Target",
-      "pnl": 49.0,
-      "reason": "the first trade was stopped by the 10:40 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 19,733-19,737 (2023-10-17, untouched since) at 19,737",
-      "setup_time": "10:40",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 10:40 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 19,733-19,737 (2023-10-17, untouched since) at 19,737; chart replay Target 10:45 -> 11:10"
     },
     {
       "date": "2023-10-19",
@@ -19552,24 +19354,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 42.0 pts (0.188%), 09:15 candle O 22231.2 H 22255.1 L 22185.6 C 22224.45 | Trade by rule: 09:55 candle rejected from PDL (low 22,220, closed 22,244) -> BUY over it; SL under PDL 22,232; target CPR 22,324; chart replay SL 10:00 -> 10:20"
     },
     {
-      "date": "2024-05-08",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Medium",
-      "cpr_direction": "Dec",
-      "first_candle": "In decision candle(doji) near S3(cam)",
-      "boxes": "Medium",
-      "trade": "SELL",
-      "entry": 22208.0,
-      "target": 22091.0,
-      "sl": 22276.0,
-      "result": "SL",
-      "pnl": -68.0,
-      "reason": "the first trade was stopped by the 10:20 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 21,979-22,091 (2024-04-22, untouched since) at 22,091",
-      "setup_time": "10:20",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 10:20 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 21,979-22,091 (2024-04-22, untouched since) at 22,091; chart replay SL 10:25 -> 11:15"
-    },
-    {
       "date": "2024-05-09",
       "price_vs_daily": "Above",
       "price_vs_hourly": "Below",
@@ -20434,24 +20218,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 7.6 pts (0.031%), 09:15 candle O 24543.8 H 24585.95 L 24536.4 C 24567.85 | Trade by rule: above the weekly CPR, under the daily one; 09:45 candle closed above the daily CPR 24,617-24,624 at 24,648; target 1:2 (R2 24,694 is only 33 pts away, inside the 93-pt risk); chart replay SL 10:10 -> 11:10"
     },
     {
-      "date": "2024-07-18",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Candle green near S1",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 24530.0,
-      "target": 24310.0,
-      "sl": 24608.0,
-      "result": "SL",
-      "pnl": -78.0,
-      "reason": "the first trade was stopped by the 11:10 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 24,298-24,310 (2024-07-12, untouched since) at 24,310; target moved to the virgin CPR 24,298-24,310 (2024-07-12, untouched since) at 24,310",
-      "setup_time": "11:10",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 11:10 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 24,298-24,310 (2024-07-12, untouched since) at 24,310; target moved to the virgin CPR 24,298-24,310 (2024-07-12, untouched since) at 24,310; chart replay SL 11:15 -> 12:10"
-    },
-    {
       "date": "2024-07-19",
       "price_vs_daily": "Above",
       "price_vs_hourly": "Above",
@@ -20882,24 +20648,6 @@
       "reason": "09:20 candle rejected from R1 (high 24,826, closed 24,810) -> SELL under it; SL over R1 24,821; target CPR 24,754",
       "setup_time": "09:20",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 32.7 pts (0.132%), 09:15 candle O 24863.4 H 24867.35 L 24821.95 C 24826.05 | Trade by rule: 09:20 candle rejected from R1 (high 24,826, closed 24,810) -> SELL under it; SL over R1 24,821; target CPR 24,754; chart replay SL 09:25 -> 09:25"
-    },
-    {
-      "date": "2024-08-22",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Strong candle red near R1",
-      "boxes": "Medium",
-      "trade": "BUY",
-      "entry": 24828.0,
-      "target": 24921.0,
-      "sl": 24797.0,
-      "result": "SL",
-      "pnl": -31.0,
-      "reason": "the first trade was stopped by the 09:25 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 24,921-24,941 (2024-08-01, untouched since) at 24,921; target moved to the virgin CPR 24,921-24,941 (2024-08-01, untouched since) at 24,921",
-      "setup_time": "09:25",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 09:25 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 24,921-24,941 (2024-08-01, untouched since) at 24,921; target moved to the virgin CPR 24,921-24,941 (2024-08-01, untouched since) at 24,921; chart replay SL 09:30 -> 09:45"
     },
     {
       "date": "2024-08-23",
@@ -22738,24 +22486,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 4.7 pts (0.02%), 09:15 candle O 23290.4 H 23308.35 L 23219.35 C 23227.6 | Trade by rule: 09:15 candle opened at 23,290 over PDH/R1 23,292-23,297 and closed below both at 23,228, but a 89-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDH/R1 (23,231-23,211) -> SELL under it; SL over its high; target 1:2; chart replay SL 09:25 -> 09:55"
     },
     {
-      "date": "2025-01-20",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Dec",
-      "first_candle": "Strong big candle red near R3(cam)",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 23238.0,
-      "target": 23318.0,
-      "sl": 23203.0,
-      "result": "Target",
-      "pnl": 80.0,
-      "reason": "the first trade was stopped by the 09:55 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 23,318-23,332 (2025-01-17, untouched since) at 23,318",
-      "setup_time": "09:55",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 09:55 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 23,318-23,332 (2025-01-17, untouched since) at 23,318; chart replay Target 10:05 -> 11:15"
-    },
-    {
       "date": "2025-01-21",
       "price_vs_daily": "Above",
       "price_vs_hourly": "Above",
@@ -23042,24 +22772,6 @@
       "reason": "09:50 candle rejected from PDL and S1 (low 23,422, closed 23,450) -> BUY over it; SL under S1 23,437; target CPR 23,515",
       "setup_time": "09:50",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 5.9 pts (0.025%), 09:15 candle O 23543.8 H 23568.6 L 23454.4 C 23468.7 | Trade by rule: 09:50 candle rejected from PDL and S1 (low 23,422, closed 23,450) -> BUY over it; SL under S1 23,437; target CPR 23,515; chart replay SL 09:55 -> 10:05"
-    },
-    {
-      "date": "2025-02-10",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Dec",
-      "first_candle": "Strong big candle red near S3(cam)",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 23387.0,
-      "target": 23341.0,
-      "sl": 23448.0,
-      "result": "Target",
-      "pnl": 46.0,
-      "reason": "the first trade was stopped by the 10:05 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 23,302-23,341 (2025-02-04, untouched since) at 23,341; target moved to the virgin CPR 23,302-23,341 (2025-02-04, untouched since) at 23,341",
-      "setup_time": "10:05",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 10:05 strong red candle \u2014 the reversal; SELL under it; SL over its high; target the virgin CPR 23,302-23,341 (2025-02-04, untouched since) at 23,341; target moved to the virgin CPR 23,302-23,341 (2025-02-04, untouched since) at 23,341; chart replay Target 10:10 -> 12:00"
     },
     {
       "date": "2025-02-11",
@@ -23510,24 +23222,6 @@
       "reason": "10:05 candle rejected from PDH (high 22,872, closed 22,846) -> SELL under it; SL over PDH 22,858; target CPR 22,799",
       "setup_time": "10:05",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 70.5 pts (0.309%), 09:15 candle O 22874.95 H 22888.3 L 22830.7 C 22877.3 | Trade by rule: 10:05 candle rejected from PDH (high 22,872, closed 22,846) -> SELL under it; SL over PDH 22,858; target CPR 22,799; chart replay SL 10:10 -> 10:10"
-    },
-    {
-      "date": "2025-03-19",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Wide",
-      "cpr_direction": "Asc",
-      "first_candle": "In decision candle(doji) near Prev High",
-      "boxes": "Big",
-      "trade": "BUY",
-      "entry": 22868.0,
-      "target": 22932.0,
-      "sl": 22838.0,
-      "result": "Target",
-      "pnl": 64.0,
-      "reason": "the first trade was stopped by the 10:10 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 22,932-22,933 (2025-02-20, untouched since) at 22,932",
-      "setup_time": "10:10",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 10:10 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 22,932-22,933 (2025-02-20, untouched since) at 22,932; chart replay Target 10:15 -> 12:45"
     },
     {
       "date": "2025-03-20",
@@ -24952,24 +24646,6 @@
       "note": "Analysis added from the chart (Fyers 5-min): CPR 3.9 pts (0.015%), 09:15 candle O 25089.5 H 25151.15 L 25088.45 C 25139.95 | Trade by rule: narrow CPR, small box; 09:15 candle rejected from PDH/R1 25,151-25,155 (high 25,151, closed 25,140 under it) on a 63-pt candle \u2014 too big to enter under; waited for the retracement: price came back to the box and 09:35 made a lower high (25,140) and closed under it at 25,124 -> SELL under it; SL over its high; target the lower box (PDL/S1 25,002); chart replay SL 09:40 -> 10:30"
     },
     {
-      "date": "2025-07-15",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Dec",
-      "first_candle": "Strong candle green near Prev High",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 25148.0,
-      "target": 25175.0,
-      "sl": 25126.0,
-      "result": "Target",
-      "pnl": 27.0,
-      "reason": "the first trade was stopped by the 10:30 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 25,175-25,226 (2025-07-14, untouched since) at 25,175",
-      "setup_time": "10:30",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 10:30 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 25,175-25,226 (2025-07-14, untouched since) at 25,175; chart replay Target 10:35 -> 10:50"
-    },
-    {
       "date": "2025-07-16",
       "price_vs_daily": "Below",
       "price_vs_hourly": "Below",
@@ -26012,24 +25688,6 @@
       "reason": "09:15 closed inside the CPR 25,122-25,149 on a 70-pt candle \u2014 no stop at its far end; 09:20 candle closed above the CPR at 25,175; 09:25 cross candle came back to TC (low 25,161) -> BUY over it; SL under its low; target 1:2 (R1 25,194 is only 13 pts away, inside the 22-pt risk)",
       "setup_time": "09:25",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 26.9 pts (0.107%), 09:15 candle O 25079.75 H 25147.6 L 25078.0 C 25146.05 | Trade by rule: 09:15 closed inside the CPR 25,122-25,149 on a 70-pt candle \u2014 no stop at its far end; 09:20 candle closed above the CPR at 25,175; 09:25 cross candle came back to TC (low 25,161) -> BUY over it; SL under its low; target 1:2 (R1 25,194 is only 13 pts away, inside the 22-pt risk); chart replay SL 09:30 -> 09:35"
-    },
-    {
-      "date": "2025-10-08",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Above",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Asc",
-      "first_candle": "Strong big candle green near R3(cam)",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 25087.0,
-      "target": 25149.0,
-      "sl": 25067.0,
-      "result": "SL",
-      "pnl": -20.0,
-      "reason": "virgin CPR 24,989-25,048 (yesterday's, untouched) under PDL/S1 25,049-25,076; 12:55 candle rejected from it (low 25,068, closed 25,086) -> BUY over it; SL under its low; target the CPR (TC 25,149), PDH 25,221 if a strong green candle breaks the CPR",
-      "setup_time": "12:55",
-      "note": "Trade by rule (2nd, after the first trade's SL): virgin CPR 24,989-25,048 (yesterday's, untouched) under PDL/S1 25,049-25,076; 12:55 candle rejected from it (low 25,068, closed 25,086) -> BUY over it; SL under its low; target the CPR (TC 25,149), PDH 25,221 if a strong green candle breaks the CPR; chart replay SL 13:00 -> 14:05"
     },
     {
       "date": "2025-10-09",
@@ -27829,25 +27487,7 @@
       "pnl": -39.0,
       "reason": "narrow CPR, small box; 09:15 candle rejected from PDH/R1 24,602-24,620 (high 24,652, closed 24,585 under it) on a 103-pt candle \u2014 too big to enter under; waited for the retracement: price came back to the box and 09:30 made a lower high (24,586) and closed under it at 24,564 -> SELL under it; SL over its high; target the lower box (PDL/S1 24,305)",
       "setup_time": "09:30",
-      "note": "Trade by rule: narrow CPR, small box; 09:15 candle rejected from PDH/R1 24,602-24,620 (high 24,652, closed 24,585 under it) on a 103-pt candle \u2014 too big to enter under; waited for the retracement: price came back to the box and 09:30 made a lower high (24,586) and closed under it at 24,564 -> SELL under it; SL over its high; target the lower box (PDL/S1 24,305); chart replay SL 09:35 -> 09:40"
-    },
-    {
-      "date": "2026-03-05",
-      "price_vs_daily": "Above",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Dec",
-      "first_candle": "Candle red near Prev High",
-      "boxes": "Small",
-      "trade": "BUY",
-      "entry": 24601.0,
-      "target": 24796.0,
-      "sl": 24528.0,
-      "result": "Target",
-      "pnl": 195.0,
-      "reason": "the first trade was stopped by the 09:40 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 24,796-24,843 (2026-03-04, untouched since) at 24,796",
-      "setup_time": "09:40",
-      "note": "Trade by rule (2nd, after the first trade's SL): the first trade was stopped by the 09:40 strong green candle \u2014 the reversal; BUY over it; SL under its low; target the virgin CPR 24,796-24,843 (2026-03-04, untouched since) at 24,796; chart replay Target 09:45 -> 14:50"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 17.7 pts (0.072%), 09:15 candle O 24615.95 H 24651.95 L 24549.1 C 24584.85 | Trade by rule: narrow CPR, small box; 09:15 candle rejected from PDH/R1 24,602-24,620 (high 24,652, closed 24,585 under it) on a 103-pt candle \u2014 too big to enter under; waited for the retracement: price came back to the box and 09:30 made a lower high (24,586) and closed under it at 24,564 -> SELL under it; SL over its high; target the lower box (PDL/S1 24,305); chart replay SL 09:35 -> 09:40"
     },
     {
       "date": "2026-03-06",
@@ -30025,25 +29665,7 @@
       "pnl": -22.0,
       "reason": "09:15 candle rejected from the CPR 24,061-24,074 on a 55-pt candle \u2014 too big to enter under; 09:30 small candle came back into the CPR (high 24,077, closed 24,066) -> SELL under it; SL over its high; target S1 24,006",
       "setup_time": "09:30",
-      "note": "Trade by rule: 09:15 candle rejected from the CPR 24,061-24,074 on a 55-pt candle \u2014 too big to enter under; 09:30 small candle came back into the CPR (high 24,077, closed 24,066) -> SELL under it; SL over its high; target S1 24,006; chart replay SL 09:35 -> 10:50"
-    },
-    {
-      "date": "2026-09-01",
-      "price_vs_daily": "Below",
-      "price_vs_hourly": "Below",
-      "cpr_type": "Narrow",
-      "cpr_direction": "Dec",
-      "first_candle": "Strong candle red near S3(cam)",
-      "boxes": "Small",
-      "trade": "SELL",
-      "entry": 24122.0,
-      "target": 23994.0,
-      "sl": 24145.0,
-      "result": "Target",
-      "pnl": 128.0,
-      "reason": "virgin CPR 24,133-24,161 (yesterday's, untouched) on PDH/R1 24,129-24,142; 11:30 candle rejected from it (high 24,143, closed 24,125) -> SELL under it; SL over its high; target the CPR (BC 24,061), PDL 23,994 if a strong red candle breaks the CPR",
-      "setup_time": "11:30",
-      "note": "Trade by rule (2nd, after the first trade's SL): virgin CPR 24,133-24,161 (yesterday's, untouched) on PDH/R1 24,129-24,142; 11:30 candle rejected from it (high 24,143, closed 24,125) -> SELL under it; SL over its high; target the CPR (BC 24,061), PDL 23,994 if a strong red candle breaks the CPR; chart replay Target 11:35 -> 13:50"
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 12.8 pts (0.053%), 09:15 candle O 24077.55 H 24082.6 L 24027.8 C 24041.15 | Trade by rule: 09:15 candle rejected from the CPR 24,061-24,074 on a 55-pt candle \u2014 too big to enter under; 09:30 small candle came back into the CPR (high 24,077, closed 24,066) -> SELL under it; SL over its high; target S1 24,006; chart replay SL 09:35 -> 10:50"
     },
     {
       "date": "2026-09-02",
