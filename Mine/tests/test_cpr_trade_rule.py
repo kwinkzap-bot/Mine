@@ -1746,3 +1746,16 @@ def test_the_fade_needs_more_than_40_points_to_the_other_box():
     near = [c1, rej(lo_top + 30)] + _session()[-25:]                  # entry ~29 pts over it: not worth it
     assert rule.squeeze_fade(chart, far)[0]['trade'] == 'SELL'
     assert rule.squeeze_fade(chart, near) is None
+
+
+# ── 19 Sep 2024: a 09:15 candle that OPENED past the box broke nothing ──
+
+def test_19_sep_2024_a_0915_that_opened_over_pdh_r1_is_not_the_strong_break():
+    c1 = {'time': '09:15', 'open': 25487.0, 'high': 25559.0, 'low': 25482.0, 'close': 25550.0}     # opened over PDH/R1 25,478-25,482
+    chart = _chart(c1, (25482.2, 25285.55, 25377.55), (25400.0, 24950.0, 25200.0))
+    p, why, _ = propose(chart, [c1] + _session()[-25:])
+    assert not (p and 'big move expected; 09:15 strong green candle touched' in why)
+    inside = dict(c1, open=25470.0, low=25465.0)                                                    # opened under the box and broke it
+    chart2 = _chart(inside, (25482.2, 25285.55, 25377.55), (25400.0, 24950.0, 25200.0))
+    p, why, _ = propose(chart2, [inside] + _session()[-25:])
+    assert p and p['trade'] == 'BUY' and 'big move expected; 09:15 strong green candle touched' in why

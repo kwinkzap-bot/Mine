@@ -631,8 +631,12 @@ def propose(chart, bars):
     # Narrow CPR and the 09:15 candle itself is the strong break through
     # PDL/S1 (or PDH/R1): the move has started — trade it off that candle,
     # whichever side of the CPRs price is on (12 Feb 2026).
+    # The candle has to START on the box or before it: one that opened already
+    # past the box (a gap through it) broke nothing — its touch is only the open,
+    # and all four such trades were stopped (11 Feb 2020, 12 Aug 2020, 10 Nov 2021,
+    # 19 Sep 2024: opened 25,487 over PDH/R1 25,478-25,482, BUY 25,561, SL −81).
     if narrow and rng1 > 0 and abs(c1['close'] - c1['open']) / rng1 >= STRONG_BODY:
-        if c1['close'] < c1['open'] and c1['open'] >= lo_wall[0] - tol and c1['close'] < lo_wall[0]:
+        if c1['close'] < c1['open'] and c1['open'] >= lo_wall[0] and c1['close'] < lo_wall[0]:
             step = [(n, y) for n, y in named if c1['low'] - px * TOUCH_PCT / 100 <= y < c1['low']]
             entry = math.floor(min(step, key=lambda t: t[1])[1]) if step else math.floor(c1['low'] - 1)
             sl = math.ceil(c1['high'] + 1.5)
@@ -641,7 +645,7 @@ def propose(chart, bars):
                    f"PDL/S1 {lo_wall[0]:,.0f}-{lo_wall[1]:,.0f} and closed below it at {c1['close']:,.0f} -> SELL under it"
                    + (f" (under {step[0][0]} {step[0][1]:,.0f})" if step else '') + "; SL over its high; target 1:2")
             return ({'trade': 'SELL', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, 0)
-        if c1['close'] > c1['open'] and c1['open'] <= hi_wall[1] + tol and c1['close'] > hi_wall[1]:
+        if c1['close'] > c1['open'] and c1['open'] <= hi_wall[1] and c1['close'] > hi_wall[1]:
             step = [(n, y) for n, y in named if c1['high'] < y <= c1['high'] + px * TOUCH_PCT / 100]
             entry = math.ceil(max(step, key=lambda t: t[1])[1]) if step else math.ceil(c1['high'] + 1)
             sl = math.floor(c1['low'] - 1.5)
