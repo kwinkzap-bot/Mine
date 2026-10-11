@@ -360,7 +360,9 @@ BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 
 BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
 MIN_STOP = 15.0          # a stop closer than this is noise: 0 of 7 such trades survived (Mar-Sep 2026) — no trade
-MAX_TRADES_PER_DAY = 1     # a second trade after the first one closed (the reversal after a stop, the virgin-CPR rejection) is off: 2/14 targets 2020-24 against 40% for first trades (p=0.04)
+FADE_MIN_REWARD = 40.0      # the box-to-box fade is taken only when the other box is more than this many points from the entry
+SQUEEZE_CAM_PCT = 0.25      # a narrow CPR, small box and Cam R3-S3 this close (% of price) is a squeezed day: a setup candle wider than the whole Cam band is no trade (2020-26: 3 wins in 10)
+MAX_TRADES_PER_DAY = 2     # 2 = a second trade after the first one closes (the reversal after a stop, the virgin-CPR rejection); 1 = one a day. 2020-24: 2/14 second trades hit target vs 40% for first trades. The sheet keeps the trades it was written with: re-run the sheet after changing this
 BOX_NEAR_X = 0.35          # an opening BUY on a big 09:15 candle with PDH/R1 closer than this x the stop ahead of it is no trade (16 Apr 2025: 17 pts for a 75-pt stop)
 INSIDE_SL_BUFFER = 10.0     # the stop of an inside-the-CPR break sits this many pts past the candle's extreme: 26 Mar 2025's SELL was stopped by a 3-pt wick, then fell 270 pts
 FADE_MAX_X = 1.5           # a wall-rejection fade back to the CPR is taken only when the CPR is within this x the stop (24 Sep, 31 Jan 2025: 77 and 70 pts for 47 and 24 — both stopped)
@@ -1897,7 +1899,64 @@ def reversal_after_stop(chart, bars, sim, first):
     return {'trade': 'BUY' if is_buy else 'SELL', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, k
 
 
+def squeezed(chart, bars):
+    """Narrow CPR, small box and Cam R3/S3 within SQUEEZE_CAM_PCT of price: the
+    levels are packed and the day tends to swing from one box to the other."""
+    lv = chart['levels']
+    band = lv['cr3'] - lv['cs3']
+    return (chart.get('cpr_type') == 'Narrow' and chart.get('boxes') == 'Small'
+            and 0 < band < bars[0]['close'] * SQUEEZE_CAM_PCT / 100)
+
+
+def squeeze_fade(chart, bars):
+    """The squeezed day's own trade: the first candle by SETUP_UNTIL that reaches
+    the PDH/R1 box and closes back under it is a SELL under its low, SL just over
+    the box, target the PDL/S1 box's near edge — mirror off PDL/S1. A stop under
+    MIN_STOP or a target already behind the entry is skipped and the next candle
+    looked at (2020-24, on squeezed days the rule did not trade: 19 trades, 68%).
+    (trade, why, index) or None."""
+    lv = chart['levels']
+    buf = bars[0]['close'] * TREND_SL_PCT / 100
+    hi = (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
+    lo = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1']))
+    head = f"squeezed day (narrow CPR, small box, Cam R3-S3 {lv['cr3'] - lv['cs3']:.0f} pts) — trade the swing from box to box"
+    for i, b in enumerate(bars[1:], start=1):
+        if b['time'] > SETUP_UNTIL:
+            break
+        if QUIET_FROM <= b['time'] < QUIET_TO:
+            continue                                   # the lull holds for the fade too
+        if b['high'] >= hi[0] and b['close'] < hi[0]:
+            entry, sl, target = math.floor(b['low'] - 1), math.ceil(hi[1] + buf), round(lo[1])
+            if entry - target > FADE_MIN_REWARD and sl - entry >= MIN_STOP:
+                return ({'trade': 'SELL', 'entry': float(entry), 'target': float(target), 'sl': float(sl)},
+                        f"{head}; {b['time']} candle reached PDH/R1 {hi[0]:,.0f}-{hi[1]:,.0f} (high {b['high']:,.0f}) and closed back under it at "
+                        f"{b['close']:,.0f} -> SELL under it; SL over the box; target the PDL/S1 box {lo[1]:,.0f}", i)
+        if b['low'] <= lo[1] and b['close'] > lo[1]:
+            entry, sl, target = math.ceil(b['high'] + 1), math.floor(lo[0] - buf), round(hi[0])
+            if target - entry > FADE_MIN_REWARD and entry - sl >= MIN_STOP:
+                return ({'trade': 'BUY', 'entry': float(entry), 'target': float(target), 'sl': float(sl)},
+                        f"{head}; {b['time']} candle reached PDL/S1 {lo[0]:,.0f}-{lo[1]:,.0f} (low {b['low']:,.0f}) and closed back over it at "
+                        f"{b['close']:,.0f} -> BUY over it; SL under the box; target the PDH/R1 box {hi[0]:,.0f}", i)
+    return None
+
+
 def propose_all(chart, bars):
+    """`_propose_all_core`'s trades — and, on a SQUEEZED day where it ends
+    with no trade for any reason, the box-to-box fade (`squeeze_fade`) as the
+    day's one trade, its reason after the refusal it replaces."""
+    out = _propose_all_core(chart, bars)
+    if any(p for p, *_ in out) or not squeezed(chart, bars):
+        return out
+    fade = squeeze_fade(chart, bars)
+    if not fade:
+        return out
+    p, why, i = fade
+    p, why = cap_risk(p, why)
+    sim, used = simulate(bars[i:], p)
+    return [(used, f"{out[0][1]} — instead: {why}" if out[0][1] else why, i, sim)]
+
+
+def _propose_all_core(chart, bars):
     """Every trade the rule takes in the session, replayed: a list of
     (trade, why, setup-bar index, sim). The first is `propose`'s — or,
     when that finds nothing, the virgin-CPR rejection. A first trade that
@@ -1916,6 +1975,7 @@ def propose_all(chart, bars):
         back = box_retracement(chart, bars)
         if back:
             p, why, i = back
+
     if p:
         p, why = zone_in_the_way(p, why, chart, bars)
     zone = one_zone(chart, bars)
@@ -1932,6 +1992,17 @@ def propose_all(chart, bars):
         # An entry INSIDE the daily CPR is a trade in the middle of the line the
         # day is deciding — 7 of 7 such trades were stopped (17 Dec, 23 Dec 2025,
         # 16 Feb, 13 May, 27 May, 24 Jun, 25 Sep 2026).
+        # A SQUEEZED day — narrow CPR, small box, and Cam R3/S3 packed around it —
+        # with a setup candle wider than the whole Cam band: the candle has already
+        # spent the day's range, and the entry over (under) it comes after the move
+        # (18 Jul 2024: Cam band 40 pts, the 09:45 candle 68 — BUY at PDH, stopped).
+        lvs_ = chart['levels']
+        band_ = lvs_['cr3'] - lvs_['cs3']
+        if (chart.get('cpr_type') == 'Narrow' and chart.get('boxes') == 'Small'
+                and 0 < band_ < bars[0]['close'] * SQUEEZE_CAM_PCT / 100
+                and bars[i]['high'] - bars[i]['low'] >= band_):
+            return [(None, f"{why} — a squeezed day (narrow CPR, small box, Cam R3-S3 only {band_:.0f} pts) and the {bars[i]['time']} candle "
+                           f"is {bars[i]['high'] - bars[i]['low']:.0f} pts, wider than the whole band: the move is already spent — no trade", None, None)]
         # An opening BUY after a BIG 09:15 candle whose way is shut by PDH/R1 a few points
         # ahead — the stop is the CPR's far edge, the resistance is nearer than a third of
         # it (16 Apr 2025: BUY 23,351, PDH/R1 23,368, stop 23,276, stopped for -75).

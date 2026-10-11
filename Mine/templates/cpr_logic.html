@@ -83,6 +83,11 @@
                 <h2>Performance</h2>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
                     <div class="td-card-hdr-meta" id="tdCprPerfMeta"></div>
+                    <!-- The same setup choice as the page's "All strategies" dropdown -->
+                    <div class="td-msel">
+                        <button type="button" class="td-select td-msel-btn" id="tdCprPerfFilterBtn" title="Show only the trades of these setups">All strategies ▾</button>
+                        <div class="td-msel-panel hidden" id="tdCprPerfFilterPanel"></div>
+                    </div>
                     <select class="td-select" id="tdCprPerfYear" title="Show one year of the sheet"><option value="">All years</option></select>
                     <button type="button" class="td-btn" id="tdCprPerfClose" title="Close (Esc)">✕</button>
                 </div>

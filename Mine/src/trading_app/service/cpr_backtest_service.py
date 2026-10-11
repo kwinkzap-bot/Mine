@@ -666,6 +666,14 @@ def _how(setup, entry, stop, target, example):
 
 
 _STRATEGIES = (
+    (lambda r: 'trade the swing from box to box' in r, 'Squeezed day → box-to-box fade', _how(
+        "A squeezed day: narrow CPR, small box and Cam R3/S3 within 0.25% of price, and the rule took nothing else. "
+        "The levels are packed, so the day tends to swing from one box to the other.",
+        "The first candle by 11:00 (outside the 10:30–11:30 lull) that reaches the PDH/R1 box and closes back under it → SELL under its low; "
+        "mirror off PDL/S1 → BUY over its high.",
+        "Just past the box: over PDH/R1 (under PDL/S1) by 0.025% of price; a stop under 15 pts is skipped.",
+        "The other box's near edge: PDL/S1 for the SELL, PDH/R1 for the BUY.",
+        "28 Aug 2024: squeezed day, 09:35 candle closed back over PDL/S1 → BUY, target the PDH/R1 box (+76).")),
     (lambda r: 'wicked out of it both ways' in r, 'Inside CPR, wicked both ways → the box decides', _how(
         "The 09:15 candle opens and closes inside the CPR but its high is over TC and its low under BC — both CPR lines are spent, "
         "so the day is decided at the box. The first close over the PDH/R1 box (under the PDL/S1 box) is the break candle.",
@@ -867,6 +875,10 @@ _NO_TRADE = (
      'No trade · CPR or box in the way',
      _nt("The daily CPR (or the next box) lies between the entry and the target, nearer than the risk: nowhere to go.",
          "21 Jan 2026: BUY 25,242 with the CPR 39 pts up against a 58-pt stop.")),
+    (lambda r: 'squeezed day' in r,
+     'No trade · squeezed day, setup candle too big',
+     _nt("A narrow CPR and small box with Cam R3/S3 packed within 0.25% of price, and a setup candle wider than the whole Cam band: the move is already spent.",
+         "18 Jul 2024: Cam band 40 pts, the 09:45 candle 68 pts; the BUY at PDH was stopped.")),
     (lambda r: 'untouched weekly cpr' in r,
      'No trade · inside an untouched weekly CPR',
      _nt("An opening setup whose candle is trading inside a virgin (untouched) weekly CPR: price has just arrived at a magnet and a break of its edge is unproven.",

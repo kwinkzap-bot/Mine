@@ -1632,7 +1632,7 @@ def test_spot_minutes_are_read_only_for_the_sessions_that_need_them(monkeypatch)
 
 def test_the_day_ends_with_the_first_trade_by_default(monkeypatch):
     from trading_app.service import cpr_trade_rule as rule
-    assert rule.MAX_TRADES_PER_DAY == 1
+    monkeypatch.setattr(rule, 'MAX_TRADES_PER_DAY', 1)                              # the one-a-day setting
     prev = (24982.05, 24813.7, 24853.4)
     bars = [{'time': '09:15', 'open': 23290.4, 'high': 23308.35, 'low': 23219.35, 'close': 23227.6},
             {'time': '09:20', 'open': 23226.95, 'high': 23231.0, 'low': 23210.85, 'close': 23214.25},
@@ -1677,3 +1677,72 @@ def test_a_leg_with_no_contract_is_not_kept(monkeypatch, tmp_path):
     opt._save_legs('NIFTY', cache, rows, legs, None, date(2026, 1, 1))
     assert len(cache['legs']) == 1 and list(cache['legs'].values())[0]['leg']['pnl'] == 3.0
     assert opt._load_legs_cache('NIFTY')['legs'] == cache['legs']
+
+
+def test_a_squeezed_day_with_a_setup_candle_wider_than_the_cam_band_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    c1 = {'time': '09:15', 'open': 24544.0, 'high': 24586.0, 'low': 24536.0, 'close': 24568.0}
+    big = {'time': '09:45', 'open': 24584.0, 'high': 24649.0, 'low': 24581.0, 'close': 24648.0}       # 68 pts
+    small = dict(big, open=24630.0, high=24645.0, low=24628.0, close=24643.0)                         # 17 pts, clear of the CPR
+    chart = _chart(c1, (24661.25, 24587.65, 24613.0), (24600.0, 24300.0, 24400.0))
+    chart.update(cpr_type='Narrow', boxes='Small')
+    assert chart['levels']['cr3'] - chart['levels']['cs3'] < 24568 * rule.SQUEEZE_CAM_PCT / 100     # a 40-pt Cam band
+    def take(setup):
+        bars = [c1] + [dict(setup, time=t) for t in ('09:20', '09:25', '09:30', '09:35')] + [setup] + _session()[-25:]
+        monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': setup['high'] + 1, 'target': setup['high'] + 150,
+                                                            'sl': setup['high'] - 60}, 'x', 5))
+        return rule._propose_all_core(chart, bars)[0]          # the refusal itself; the box fade may then take the day
+    p, why, *_ = take(big)
+    assert p is None and 'squeezed day' in why
+    assert take(small)[0] is not None
+    chart['cpr_type'] = 'Medium'                                    # not a narrow CPR: no squeeze
+    assert take(big)[0] is not None
+
+
+# ── a squeezed day the rule passes: the fade from one box to the other ──
+
+def _squeeze_chart():
+    c1 = {'time': '09:15', 'open': 24600.0, 'high': 24610.0, 'low': 24590.0, 'close': 24605.0}
+    chart = _chart(c1, (24661.25, 24587.65, 24613.0), (24600.0, 24300.0, 24400.0))
+    chart.update(cpr_type='Narrow', boxes='Small')
+    return c1, chart
+
+
+def test_squeeze_fade_sells_a_rejection_of_the_upper_box_to_the_lower_box():
+    from trading_app.service import cpr_trade_rule as rule
+    c1, chart = _squeeze_chart()
+    lv = chart['levels']
+    hi_lo, hi_top, lo_top = min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']), max(lv['pdl'], lv['s1'])
+    rej = {'time': '09:40', 'open': hi_lo - 5, 'high': hi_lo + 3, 'low': hi_lo - 20, 'close': hi_lo - 15}    # reaches the box, closes back under
+    bars = [c1, {'time': '09:20', 'open': 24605.0, 'high': 24615.0, 'low': 24600.0, 'close': 24610.0}, rej] + _session()[-25:]
+    assert rule.squeezed(chart, bars)
+    p, why, i = rule.squeeze_fade(chart, bars)
+    assert p['trade'] == 'SELL' and bars[i]['time'] == '09:40' and p['target'] == round(lo_top) and p['sl'] > hi_top
+    assert 'box to box' in why
+    lull = [c1, dict(rej, time='10:45')] + _session()[-25:]                                     # the lull holds for the fade too
+    assert rule.squeeze_fade(chart, lull) is None
+
+
+def test_the_fade_is_only_for_a_squeezed_day_with_nothing_else_taken(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    c1, chart = _squeeze_chart()
+    bars = [c1] + _session()[-25:]
+    monkeypatch.setattr(rule, '_propose_all_core', lambda c, b: [(None, 'no setup — no trade', None, None)])
+    monkeypatch.setattr(rule, 'squeeze_fade', lambda c, b: ({'trade': 'BUY', 'entry': 24640.0, 'target': 24700.0, 'sl': 24600.0}, 'fade', 1))
+    out = rule.propose_all(chart, bars)
+    assert out[0][0] and out[0][1].startswith('no setup — no trade — instead: fade')
+    chart['cpr_type'] = 'Medium'                                                                   # not squeezed: the day stays passed
+    assert rule.propose_all(chart, bars)[0][0] is None
+
+
+def test_the_fade_needs_more_than_40_points_to_the_other_box():
+    from trading_app.service import cpr_trade_rule as rule
+    c1, chart = _squeeze_chart()
+    lv = chart['levels']
+    hi_lo, lo_top = min(lv['pdh'], lv['r1']), max(lv['pdl'], lv['s1'])
+    def rej(low):                                   # reaches the upper box, closes back under; entry is 1 under its low
+        return {'time': '09:40', 'open': hi_lo - 5, 'high': hi_lo + 3, 'low': low, 'close': low + 2}
+    far = [c1, rej(lo_top + 50)] + _session()[-25:]                   # entry ~49 pts over the lower box
+    near = [c1, rej(lo_top + 30)] + _session()[-25:]                  # entry ~29 pts over it: not worth it
+    assert rule.squeeze_fade(chart, far)[0]['trade'] == 'SELL'
+    assert rule.squeeze_fade(chart, near) is None

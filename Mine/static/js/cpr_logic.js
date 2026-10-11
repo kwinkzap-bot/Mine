@@ -25,9 +25,13 @@ document.addEventListener('DOMContentLoaded', () => {
     try { _tdCprState.year = localStorage.getItem('cpr-logic-year') || ''; } catch (e) { /* no storage */ }
     tdElems.filterBtn   = document.getElementById('tdCprStrategyFilterBtn');
     tdElems.filterPanel = document.getElementById('tdCprStrategyFilterPanel');
-    tdElems.filterBtn.addEventListener('click', e => { e.stopPropagation(); tdElems.filterPanel.classList.toggle('hidden'); });
-    tdElems.filterPanel.addEventListener('click', e => e.stopPropagation());
-    document.addEventListener('click', () => tdElems.filterPanel.classList.add('hidden'));
+    tdElems.perfFilterBtn   = document.getElementById('tdCprPerfFilterBtn');
+    tdElems.perfFilterPanel = document.getElementById('tdCprPerfFilterPanel');
+    for (const [btn, panel] of [[tdElems.filterBtn, tdElems.filterPanel], [tdElems.perfFilterBtn, tdElems.perfFilterPanel]]) {
+        btn.addEventListener('click', e => { e.stopPropagation(); panel.classList.toggle('hidden'); });
+        panel.addEventListener('click', e => e.stopPropagation());
+        document.addEventListener('click', () => panel.classList.add('hidden'));
+    }
     try { _tdCprState.filter = new Set(JSON.parse(localStorage.getItem('cpr-logic-strategy-filter') || '[]')); } catch (e) { /* no storage */ }
     tdElems.strategyModal = document.getElementById('tdCprStrategyModal');
     tdElems.strategyGrid  = document.getElementById('tdCprStrategyGrid');
@@ -403,31 +407,39 @@ function renderCprStrategyFilter() {
     list.push(...passed);
     const names = new Set(list.map(s => s.name));
     for (const n of [..._tdCprState.filter]) if (!names.has(n)) _tdCprState.filter.delete(n);   // a setup no longer on the sheet
+    _tdRenderFilterPanel(tdElems.filterBtn, tdElems.filterPanel, list);
+    // The Performance popup's copy: the setups only (a passed day has no trade to chart),
+    // counted for the year on screen.
+    if (tdElems.perfFilterPanel) _tdRenderFilterPanel(tdElems.perfFilterBtn, tdElems.perfFilterPanel, _tdCprStrategyRows().list);
+}
+
+// One setup checklist, the page's or the Performance popup's; both tick the same set.
+function _tdRenderFilterPanel(btn, panel, list) {
     const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : 'dg-muted';
-    tdElems.filterPanel.innerHTML =
+    panel.innerHTML =
         `<div class="td-msel-hd"><button type="button" class="td-btn" data-act="all">All</button><button type="button" class="td-btn" data-act="none">None</button></div>` +
         list.map(s => `<label class="td-msel-row"><input type="checkbox" value="${_tdEsc(s.name)}"${_tdCprState.filter.has(s.name) ? ' checked' : ''}>`
             + `<span>${_tdEsc(s.name)}</span><span class="n">${s.trades}${s.noTrade ? ' d' : ''}</span>`
             + (s.noTrade ? `<span class="pnl dg-muted" title="days passed">—</span>` : `<span class="pnl ${cls(s.pnl)}">${_tdNum(s.pnl, 0)}</span>`) + `</label>`).join('');
-    tdElems.filterPanel.querySelectorAll('input').forEach(cb => cb.addEventListener('change', () => {
+    panel.querySelectorAll('input').forEach(cb => cb.addEventListener('change', () => {
         if (cb.checked) _tdCprState.filter.add(cb.value); else _tdCprState.filter.delete(cb.value);
         _tdCprFilterChanged();
     }));
-    tdElems.filterPanel.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
-        _tdCprState.filter = b.dataset.act === 'all' ? new Set(list.map(s => s.name)) : new Set();
-        renderCprStrategyFilter();
+    panel.querySelectorAll('[data-act]').forEach(b => b.addEventListener('click', () => {
+        // "All" / "None" act on this list's names only; the other list's ticks are kept.
+        for (const s of list) { if (b.dataset.act === 'all') _tdCprState.filter.add(s.name); else _tdCprState.filter.delete(s.name); }
         _tdCprFilterChanged();
     }));
-    const n = _tdCprState.filter.size;
-    tdElems.filterBtn.textContent = !n ? 'All strategies ▾'
-        : n === 1 ? `${[..._tdCprState.filter][0]} ▾` : `${n} strategies ▾`;
-    tdElems.filterBtn.classList.toggle('td-msel-on', n > 0);
+    const mine = list.filter(s => _tdCprState.filter.has(s.name)).map(s => s.name);
+    btn.textContent = !mine.length ? 'All strategies ▾' : mine.length === 1 ? `${mine[0]} ▾` : `${mine.length} strategies ▾`;
+    btn.classList.toggle('td-msel-on', mine.length > 0);
 }
 
 function _tdCprFilterChanged() {
     try { localStorage.setItem('cpr-logic-strategy-filter', JSON.stringify([..._tdCprState.filter])); } catch (e) { /* no storage */ }
     renderCprStrategyFilter();
     if (_tdCprState.data) renderCprBacktest(_tdCprState.data);
+    if (tdElems.perfModal && !tdElems.perfModal.classList.contains('hidden')) renderCprPerformance();
 }
 
 // The strike choice: '' for ATM, else the premium the strike is picked by.
@@ -907,8 +919,10 @@ function _tdPerfTrades() {
     if (!d || !o || o.status !== 'ready') return [];
     const lot = o.summary.lot || 0;
     const out = [];
+    const setups = new Set((((d.summary && d.summary.strategies) || [])).map(s => s.name).filter(n => _tdCprState.filter.has(n)));
     for (const r of d.rows) r.trades.forEach((t, i) => {
         if (!_tdCprYearMatches(r)) return;
+        if (setups.size && !setups.has(t.strategy)) return;
         const leg = _tdCprLeg(r.date, i);
         if (!leg || leg.pnl == null) return;
         const gross = leg.pnl * lot;
@@ -920,6 +934,7 @@ function _tdPerfTrades() {
 }
 
 function showCprPerformance() {
+    renderCprStrategyFilter();
     tdElems.perfModal.classList.remove('hidden');
     document.body.classList.add('td-modal-open');
     renderCprPerformance();
@@ -957,7 +972,8 @@ function renderCprPerformance() {
     const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
     const rs = (v, sign) => (v < 0 ? '−' : (sign && v > 0 ? '+' : '')) + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const tile = (l, v, c = '') => `<div class="td-perf-tile"><div class="l">${l}</div><div class="v ${c}">${v}</div></div>`;
-    meta.textContent = `${d.symbol}${_tdCprState.year ? ' · ' + _tdCprState.year : ''} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}`;
+    const nSel = (((d.summary && d.summary.strategies) || [])).filter(s => _tdCprState.filter.has(s.name)).length;
+    meta.textContent = `${d.symbol}${_tdCprState.year ? ' · ' + _tdCprState.year : ''}${nSel ? ` · ${nSel} setup${nSel === 1 ? '' : 's'}` : ''} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}`;
     tiles.innerHTML =
         tile('Total trades', trades.length) + tile('Wins', winsT.length, 'dg-pos') + tile('Losses', lossT.length, 'dg-neg') +
         tile('Win rate', (100 * winsT.length / trades.length).toFixed(1) + '%') +
