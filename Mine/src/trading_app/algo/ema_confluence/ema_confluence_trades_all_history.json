@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "LICHSGFIN",
+    "direction": "SELL",
+    "mode": "paper",
+    "qty": 1000,
+    "lot_size": 1000,
+    "entry_price": 532.05,
+    "exit_price": 564.9,
+    "spot_entry_price": 529.25,
+    "spot_exit_price": 568.0,
+    "sl_price": 565.0,
+    "target_price": 449.86,
+    "pnl": -32850.0,
+    "reason": "SL",
+    "signal_date": "2026-09-30",
+    "entry_time": "2026-10-01T09:15:31.917979",
+    "exit_time": "2026-10-12T15:29:39.013144",
+    "date": "2026-10-12"
+  },
+  {
     "symbol": "PAGEIND",
     "direction": "BUY",
     "mode": "paper",

@@ -170,7 +170,9 @@ function _tmfRenderStocks() {
             { key: 'exit_time', label: 'Exit Time',
               format: (v, r) => v ? _tmfFmtTime(v) : (r.phase === 'in_position' ? 'Open' : '—'),
               tone: (v, r) => r.phase === 'in_position' ? 'warn' : undefined },
-            { key: 'exit_reason', label: 'Reason', format: v => v || '—' },
+            // A margin-refused entry taken on paper says so until it exits.
+            { key: 'exit_reason', label: 'Reason',
+              format: (v, s) => v || (s && s.paper_fallback) || '—' },
         ],
     });
 }

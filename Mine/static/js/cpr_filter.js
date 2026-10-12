@@ -20,6 +20,8 @@ window.addEventListener('load', function () {
     cprElems.narrowCprRatio      = document.getElementById('narrowCprRatio');
     cprElems.narrowCprDate       = document.getElementById('narrowCprDateFilter');
     cprElems.narrowCprRefreshBtn = document.getElementById('narrowCprRefreshBtn');
+    cprElems.weeklyOpenDate       = document.getElementById('weeklyOpenDateFilter');
+    cprElems.weeklyOpenRefreshBtn = document.getElementById('weeklyOpenRefreshBtn');
 
     const scheduler = window.CPRFilterScheduler;
     const schedulerActive = scheduler && typeof scheduler.isActive === 'function' && scheduler.isActive();
@@ -58,7 +60,7 @@ window.addEventListener('load', function () {
     // Clicking a scanner symbol opens the shared candle popup rather than
     // leaving for TradingView. Delegated, because DataGrid rebuilds every
     // row on each sort and a per-row listener would not survive it.
-    ['narrowCpr', 'tpoSingles'].forEach((gridType) => {
+    ['narrowCpr', 'tpoSingles', 'weeklyOpen'].forEach((gridType) => {
         const grid = document.getElementById(`${gridType}Grid`);
         if (!grid) return;
         grid.addEventListener('click', (e) => {
@@ -98,6 +100,24 @@ window.addEventListener('load', function () {
             if (_narrowCprLoaded) loadNarrowCprData(_narrowCprTf(), false);
         });
     });
+
+    // Weekly CPR Open: defaults to today (local date, not UTC — before 05:30
+    // IST toISOString() would still say yesterday). Changing the date re-runs
+    // the scan; the server caches each date for 10 minutes.
+    if (cprElems.weeklyOpenDate) {
+        const d = new Date();
+        cprElems.weeklyOpenDate.value = `${d.getFullYear()}-`
+            + `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        cprElems.weeklyOpenDate.addEventListener('change', () => {
+            if (_weeklyOpenLoaded) loadWeeklyOpenData(false);
+        });
+    }
+    if (cprElems.weeklyOpenRefreshBtn) {
+        cprElems.weeklyOpenRefreshBtn.addEventListener('click', () => {
+            _weeklyOpenLoaded = true;
+            loadWeeklyOpenData(true);
+        });
+    }
 
     // Avoid double-triggering the API when the scheduler is already running during market hours
     if (schedulerActive && schedulerMarketOpen) {
@@ -182,13 +202,20 @@ async function loadHighIVData(selectedDate, refresh = false) {
 
 // The rows behind each popup-opening grid, kept so the popup's ‹ › can step
 // through what is on screen. Only the fields CandleModal reads.
-const _gridRows = { narrowCpr: [], tpoSingles: [] };
+const _gridRows = { narrowCpr: [], tpoSingles: [], weeklyOpen: [] };
 
 function _openCandleModal(symbol, gridType) {
     if (!window.CandleModal) return;
     const rows = _gridRows[gridType] || [];
+    // W CPR Open is read on one timeframe, so its popup is one 1-hour chart
+    // (weekly CPR on it) rather than the two-pane split. `single` is passed
+    // either way: it sticks across opens, and this page has both kinds.
+    if (gridType === 'weeklyOpen') {
+        window.CandleModal.open(symbol, { rows, interval: '1h', single: true, tpo: false });
+        return;
+    }
     if (gridType !== 'tpoSingles') {
-        window.CandleModal.open(symbol, { rows });
+        window.CandleModal.open(symbol, { rows, single: false });
         return;
     }
     // A single-print row is only meaningful next to the profile that drew
@@ -295,6 +322,97 @@ async function loadNarrowCprData(tf, refresh = false) {
         if (countSpan) countSpan.textContent = '(0)';
     } finally {
         if (refreshBtn) {
+            refreshBtn.classList.remove('loading');
+            refreshBtn.disabled = false;
+        }
+    }
+}
+
+// Weekly CPR Open loads on first open of its tab — it reads two Fyers series
+// per symbol, a couple of minutes inside the Fyers request budget.
+let _weeklyOpenLoaded = false;
+// Bumped per load, so a poll loop for a date no longer selected stops.
+let _weeklyOpenToken = 0;
+function initWeeklyOpenOnce() {
+    if (_weeklyOpenLoaded) return;
+    _weeklyOpenLoaded = true;
+    if (cprElems.weeklyOpenRefreshBtn) {
+        loadWeeklyOpenData(false);
+    } else {
+        window.addEventListener('load', () => loadWeeklyOpenData(false), { once: true });
+    }
+}
+
+/**
+ * Previous trading day closed inside the weekly CPR (or within 0.5% of it)
+ * AND the selected day opened inside it. The server does the matching; this
+ * only draws the rows.
+ */
+async function loadWeeklyOpenData(refresh = false) {
+    const grid      = document.getElementById('weeklyOpenGrid');
+    const container = document.getElementById('weeklyOpenResults');
+    const countSpan = document.getElementById('weeklyOpenCount');
+    const titleSpan = document.getElementById('weeklyOpenTitle');
+    const footnote  = document.getElementById('weeklyOpenFootnote');
+    if (!grid || !container) return;
+
+    const refreshBtn = cprElems.weeklyOpenRefreshBtn;
+    if (refreshBtn) {
+        refreshBtn.classList.add('loading');
+        refreshBtn.disabled = true;
+    }
+    container.classList.remove('results-hidden');
+    if (countSpan) countSpan.textContent = '(...)';
+    if (footnote) footnote.textContent = '';
+    grid.innerHTML = _gridLoadingHtml(
+        'Reading Fyers bars for every F&O stock and index '
+        + '(a couple of minutes the first time for a date)...');
+
+    const token = ++_weeklyOpenToken;
+    try {
+        const selectedDate = cprElems.weeklyOpenDate ? cprElems.weeklyOpenDate.value : null;
+        const base = '/api/cpr-filter/weekly-cpr-open?'
+            + (selectedDate ? `date=${selectedDate}` : '');
+
+        // The scan runs as a server-side job: the first call starts it (or
+        // joins the one already running), then this polls until it is done.
+        // Only the first call carries refresh, or every poll would restart it.
+        let response = await fetchJson(base + (refresh ? '&refresh=true' : ''), {}, 1);
+        while (response && response.success && response.status === 'running') {
+            if (token !== _weeklyOpenToken) return;      // a newer load took over
+            const p = response.progress || {};
+            grid.innerHTML = _gridLoadingHtml(p.total
+                ? `Reading Fyers bars: ${p.done} / ${p.total} symbols (started ${response.started_at})...`
+                : `Starting the Fyers scan (started ${response.started_at})...`);
+            await new Promise((r) => setTimeout(r, 3000));
+            response = await fetchJson(base, {}, 1);
+        }
+        if (token !== _weeklyOpenToken) return;
+
+        if (response && response.success) {
+            const rows = response.rows || [];
+            if (titleSpan) titleSpan.textContent =
+                `🎯 ${response.date} open inside Weekly CPR → 1H close outside, `
+                + `not within ${response.cam_near_pct}% of R3/S3`;
+            displayResults('weeklyOpen', rows);
+            if (footnote) {
+                footnote.textContent = `${rows.length} matched · ${response.opened_inside || 0} of `
+                    + `${response.read || 0} symbols opened inside the weekly CPR`
+                    + ` (Fyers, session ${response.date}, scanned ${response.generated_at})`
+                    + (response.pending ? ` · first hour not closed yet for ${response.pending} — `
+                        + 'refresh after 10:15' : '')
+                    + (response.skipped ? ` · ${response.skipped} skipped (no bar that day / no history)` : '');
+            }
+        } else {
+            grid.innerHTML = _gridErrorHtml((response && response.error) || 'Failed to load Weekly CPR Open data.');
+            if (countSpan) countSpan.textContent = '(0)';
+        }
+    } catch (error) {
+        console.error('Error fetching Weekly CPR Open data:', error);
+        grid.innerHTML = _gridErrorHtml('Error: ' + error.message);
+        if (countSpan) countSpan.textContent = '(0)';
+    } finally {
+        if (refreshBtn && token === _weeklyOpenToken) {
             refreshBtn.classList.remove('loading');
             refreshBtn.disabled = false;
         }
@@ -458,6 +576,41 @@ const _SCANNER_COLUMNS = {
           format: v => Number(v || 0).toFixed(2) },
         { key: 'periods', label: 'Periods', sortable: true, align: 'right' },
     ],
+    // Weekly CPR Open — the two prices the rule judged, where each sits
+    // against the band, then the band itself.
+    weeklyOpen: () => {
+        const px = v => Number(v || 0).toFixed(2);
+        const posTone = v => v === 'Inside' ? 'pos' : 'warn';
+        return [
+            _candleSymbolColumn(),
+            { key: 'open', label: 'Open', sortable: true, align: 'right', strong: true, format: px },
+            { key: 'open_position', label: 'Open vs CPR', sortable: true, badge: posTone },
+            { key: 'current_price', label: 'LTP / Close', sortable: true, align: 'right', format: px },
+            { key: 'day_change_pct', label: 'Day Chg %', sortable: true, align: 'right',
+              format: v => Number(v || 0).toFixed(2) + '%', cellClass: _upDownClass },
+            { key: 'fh_close', label: '1H Close', sortable: true, align: 'right', strong: true,
+              format: px,
+              title: (_v, row) => `09:15–10:15 · H ${px(row.fh_high)} · L ${px(row.fh_low)}` },
+            { key: 'fh_side', label: '1H vs CPR', sortable: true,
+              format: v => v === 'above' ? 'Above TC' : v === 'below' ? 'Below BC' : v,
+              badge: v => v === 'above' ? 'pos' : v === 'below' ? 'neg' : 'neutral' },
+            { key: 'fh_room_pct', label: 'Room to R3/S3', sortable: true, align: 'right',
+              format: v => v == null ? '—' : Number(v).toFixed(2) + '%',
+              title: (_v, row) => `R3 ${px(row.w_r3)} · S3 ${px(row.w_s3)}` },
+            { key: 'w_ratio', label: 'W ×avg', sortable: true, align: 'right',
+              format: v => v == null ? '—' : Number(v).toFixed(2) + '×',
+              title: (_v, row) => `${row.w_width_pct}% vs a 10-week average `
+                  + `${row.w_avg_width_pct == null ? 'n/a' : row.w_avg_width_pct + '%'}` },
+            { key: 'w_width_pct', label: 'W Width %', sortable: true, align: 'right',
+              format: v => v == null ? '—' : Number(v).toFixed(3) + '%' },
+            { key: 'w_s3', label: 'W S3', sortable: true, align: 'right', format: px },
+            { key: 'w_bc', label: 'W BC', sortable: true, align: 'right', format: px,
+              title: (_v, row) => `Weekly CPR from ${row.cpr_week}` },
+            { key: 'w_pp', label: 'W Pivot', sortable: true, align: 'right', format: px },
+            { key: 'w_tc', label: 'W TC', sortable: true, align: 'right', format: px },
+            { key: 'w_r3', label: 'W R3', sortable: true, align: 'right', format: px },
+        ];
+    },
     // Narrow CPR — both readings are on every row whatever the dropdown says,
     // so a row narrow on one timeframe still shows what the other is doing.
     narrowCpr: () => [
@@ -545,6 +698,7 @@ function displayResults(type, results) {
     const columns = type === 'highIv'     ? _SCANNER_COLUMNS.highIv()
         : type === 'narrowCpr'  ? _SCANNER_COLUMNS.narrowCpr()
         : type === 'tpoSingles' ? _SCANNER_COLUMNS.tpoSingles()
+        : type === 'weeklyOpen' ? _SCANNER_COLUMNS.weeklyOpen()
         : null;
     if (!columns) return;
 

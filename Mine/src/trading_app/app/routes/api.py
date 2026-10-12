@@ -2431,6 +2431,124 @@ def get_narrow_cpr_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'Narrow-CPR scanner error: {str(e)}'}), 500
 
 
+# Weekly CPR Open scans take minutes on Breeze, so they run as background jobs
+# keyed by session date: the endpoint answers at once with progress, the page
+# polls, and a second click joins the running scan instead of starting another.
+_weekly_open_jobs: dict = {}
+_weekly_open_jobs_lock = threading.Lock()
+
+
+def _weekly_open_cache_secs(session_date: str) -> int:
+    """How long a finished scan stays good. The rule reads the previous close,
+    the weekly CPR and Camarilla, the session's OPEN and its FIRST HOUR — all
+    fixed once 10:15 has passed — so a past date, or today after 10:20, holds
+    until midnight. Earlier than that today's first hour is still forming
+    (rows read `pending`): a minute."""
+    now = datetime.now()
+    if session_date == now.strftime('%Y-%m-%d') and (now.hour, now.minute) < (10, 20):
+        return 60
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(60, int((midnight - now).total_seconds()))
+
+
+@api_bp.route('/cpr-filter/weekly-cpr-open', methods=['GET'])
+@limiter.exempt
+def get_weekly_cpr_open_results() -> EndpointResponse:
+    """Scan futures stocks + indices for the session `date` (default today):
+    the day opened inside the weekly CPR, and its first 1-hour candle closed
+    outside the CPR without reaching
+    within 0.5 % of the weekly Camarilla R3 / S3 on that side.
+
+    Always read from Fyers, whatever DATA_PROVIDER is — ICICI's equity
+    candles carry stray highs/lows that move every CPR level (see the scanner
+    module). Two requests per symbol inside Fyers' 200-a-minute budget, so it
+    runs in the background: the first call returns
+    {'status': 'running', 'progress': {done, total}}; poll the same URL until
+    {'status': 'done'}. The scan is kept for the rest of the day (see
+    _weekly_open_cache_secs); refresh=true re-scans. See
+    filters/weekly_cpr_open_scanner.py."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    date_str = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    from trading_app.filters.weekly_cpr_open_scanner import (
+        CAM_NEAR_PCT, select_matches)
+
+    def _respond(scan: dict):
+        base = scan.get('rows', [])
+        rows = select_matches(base)
+        return jsonify({**scan, 'rows': rows,
+                        'opened_inside': sum(1 for r in base if r.get('open_ok')),
+                        'pending': sum(1 for r in base if r.get('fh_side') == 'pending'),
+                        'cam_near_pct': CAM_NEAR_PCT})
+
+    adapter = get_fyers_adapter()
+    if adapter is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+    from trading_app.app.utils.cache import cpr_filter_cache
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key = f"cpr_filter_weekly_open_v4:{cache_date}"
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+
+    with _weekly_open_jobs_lock:
+        job = _weekly_open_jobs.get(cache_date)
+        if job and job['status'] == 'running':
+            return jsonify({'success': True, 'status': 'running',
+                            'progress': job['progress'], 'started_at': job['started_at']})
+        if job and job['status'] == 'error':
+            _weekly_open_jobs.pop(cache_date, None)
+            if not refresh:
+                return jsonify({'success': False, 'status': 'error',
+                                'error': job.get('error', 'Scan failed')}), 500
+        if not refresh:
+            cached = cpr_filter_cache.get(cache_key)
+            if cached is not None:
+                return _respond(cached)
+        job = {'status': 'running', 'progress': {'done': 0, 'total': 0},
+               'started_at': datetime.now().strftime('%H:%M:%S')}
+        _weekly_open_jobs[cache_date] = job
+
+    def _run(adapter_ref, job_ref):
+        try:
+            from trading_app.filters.weekly_cpr_open_scanner import filter_weekly_cpr_open
+
+            def on_progress(done, total):
+                job_ref['progress'] = {'done': done, 'total': total}
+
+            results = filter_weekly_cpr_open(_get_cpr_service(adapter_ref),
+                                             root_date=target_date, progress_cb=on_progress)
+            payload = {'success': True, 'status': 'done', 'provider': 'fyers',
+                       'generated_at': datetime.now().strftime('%H:%M:%S'), **results}
+            cpr_filter_cache.set(cache_key, payload,
+                                 timeout=_weekly_open_cache_secs(results['date']))
+            job_ref['status'] = 'done'
+        except Exception as e:
+            logger.error(f"Weekly-CPR-open scan error: {type(e).__name__}: {e}", exc_info=True)
+            job_ref['error'] = f'Weekly CPR open scanner error: {e}'
+            job_ref['status'] = 'error'
+        finally:
+            # Drop a finished job so the cache is the one source of the answer;
+            # an errored one stays to be reported once.
+            with _weekly_open_jobs_lock:
+                if job_ref['status'] == 'done' and _weekly_open_jobs.get(cache_date) is job_ref:
+                    _weekly_open_jobs.pop(cache_date, None)
+
+    threading.Thread(target=_run, args=(adapter, job),
+                     name=f"weekly-cpr-open-{cache_date}", daemon=True).start()
+    return jsonify({'success': True, 'status': 'running',
+                    'progress': job['progress'], 'started_at': job['started_at']})
+
+
 @api_bp.route('/cpr-filter/tpo-singles', methods=['GET'])
 @limiter.exempt
 def get_tpo_single_print_results() -> EndpointResponse:

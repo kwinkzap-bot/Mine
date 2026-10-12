@@ -592,3 +592,49 @@ def test_a_live_leg_is_still_managed_at_the_broker_after_the_flip_to_paper(paper
     paper._square_off('VOLTAS', s)
     assert svc.cancelled == ['2', '3']
     assert svc.placed and svc.placed[0]['txn'] == 'BUY'
+
+
+# ── Margin-refused entry drops that one stock to paper ──────────────────────
+
+_MARGIN_ERROR = ('Insufficient funds. Margin required: 761579.00. Margin available: '
+                 '685325.44. Add 76253.56 to place this order.')
+
+
+def test_margin_refused_entry_is_taken_on_paper(algo, monkeypatch, tmp_path):
+    """2026-10-12: 360ONE, BDL and MAZDOCK were refused for margin and simply
+    dropped. That stock is now taken on paper at the crossing price, watched
+    on the LTP and booked in the paper book — TMF_MODE itself stays live."""
+    import json
+    svc = RejectingService(_MARGIN_ERROR)
+    algo._broker_list = [(1, svc)]
+    monkeypatch.setattr(algo, '_get_active_brokers', lambda: [(1, svc)])
+    monkeypatch.setattr(algo, '_compute_target', lambda *a, **k: 1050.0)
+
+    s = {'direction': 'short', 'trigger': 1058.4, 'sl_level': 1065.8, 'ltp': 1058.0}
+    algo._fire_entry('360ONE', s, capital_per_trade=100000, algo_active=True)
+
+    assert len(svc.placed) == 1, 'one live attempt, no retry'
+    assert s['mode'] == 'paper' and s['phase'] == 'pending_entry'
+    assert 'Insufficient funds' in s['paper_fallback']
+    leg = s['broker_positions'][0]
+    assert leg['paper'] is True and leg['broker_idx'] == 0 and leg['entry_price'] == 1058.0
+    assert algo._mode() == 'live'
+
+    algo._check_entry_fill(None, False, '360ONE', s, {}, now_mins=660, cutoff_mins=905)
+    assert s['phase'] == 'in_position'
+    algo._mark_to_market(s, 1049.0)
+    algo._check_position_exit('360ONE', s, {})
+    assert s['phase'] == 'done'
+    assert s['exit_reason'] == 'Target Hit (paper — margin)'
+    assert len(svc.placed) == 1, 'nothing reaches the broker after the fallback'
+
+    rec = json.load(open(tmp_path / 'hist.json'))
+    rec = rec[-1] if isinstance(rec, list) else rec
+    assert rec['mode'] == 'paper' and 'Insufficient funds' in rec['paper_fallback']
+
+
+def test_margin_errors_are_told_apart():
+    from trading_app.algo.thirty_min_fakeout.tmf_algo import _is_margin_error
+    assert _is_margin_error(_MARGIN_ERROR)
+    assert not _is_margin_error(_TICK_SIZE_ERROR)
+    assert not _is_margin_error(_KITE_AUTH_ERROR)

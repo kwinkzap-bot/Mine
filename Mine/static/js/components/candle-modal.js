@@ -67,6 +67,9 @@
         // TPO profile on the top pane. Off unless asked for — it is a lot of
         // ink, and it forces the pane onto 30-minute broker bars.
         tpoOn: false,
+        // One chart, no weekly pane under it — for a caller whose rows are
+        // read on one timeframe (the Weekly CPR Open scanner reads 1h).
+        single: false,
         // What a caller pinned for this open: `rowStep` is the row grid the
         // scanner measured its bands on, so the band in the grid is the band
         // on the chart. Per row, because each session sizes its own rows.
@@ -703,6 +706,7 @@
     async function loadCandles(symbol) {
         const interval = state.interval;
         const tpo = state.tpoOn;
+        const oneChart = tpo || state.single;
         $('cmBack').classList.add('cm-loading');
 
         // Both panes in flight together — they are two independent requests
@@ -711,8 +715,8 @@
         try {
             [top, weekly] = await Promise.all([
                 tpo ? fetchTpoCandles(symbol) : fetchCandles(symbol, interval),
-                // Not fetched in TPO mode: that pane is not drawn.
-                tpo ? Promise.resolve(null) : fetchCandles(symbol, WEEKLY),
+                // Not fetched in one-chart mode: that pane is not drawn.
+                oneChart ? Promise.resolve(null) : fetchCandles(symbol, WEEKLY),
             ]);
         } catch (e) {
             top = { success: false, error: e.message };
@@ -720,7 +724,7 @@
         }
         // Stepped away, or switched timeframe or mode, while this was loading.
         if (state.symbol !== symbol || state.interval !== interval
-            || state.tpoOn !== tpo) return;
+            || state.tpoOn !== tpo || (state.tpoOn || state.single) !== oneChart) return;
         // The profile is drawn by drawPane, off the payload it is handed.
         if (top && top.success) top = Object.assign({}, top, { tpo });
         $('cmBack').classList.remove('cm-loading');
@@ -742,11 +746,11 @@
         // profile to be legible in. The weekly pane is not drawn at all
         // rather than hidden — an undrawn chart is one less canvas and one
         // less resize observer.
-        $('cmPanes').classList.toggle('cm-panes--single', tpo);
+        $('cmPanes').classList.toggle('cm-panes--single', oneChart);
         state.panes = [
             paint('cmBodyTop', 'cmCapTop', top,
                   tpo ? `${TPO_LABEL} · TPO` : (INTERVAL_LABELS[interval] || interval)),
-            tpo ? null : paint('cmBodyWeekly', 'cmCapBottom', weekly, INTERVAL_LABELS[WEEKLY]),
+            oneChart ? null : paint('cmBodyWeekly', 'cmCapBottom', weekly, INTERVAL_LABELS[WEEKLY]),
         ].filter(Boolean);
         linkCrosshairs(state.panes);
 
@@ -762,6 +766,7 @@
         if (options.rows) state.rows = options.rows;
         if (options.interval) state.interval = options.interval;
         if ('tpo' in options) state.tpoOn = !!options.tpo;
+        if ('single' in options) state.single = !!options.single;
         // Re-read per open: stepping with ‹ › lands on another symbol's row,
         // whose band was measured on its own grid.
         state.tpoPin = options.tpo ? (options.tpoPin || {}) : {};
@@ -791,7 +796,7 @@
                     return;                 // no weekly pane to prime
                 }
                 fetchCandles(neighbour.symbol, state.interval).catch(() => {});
-                if (state.interval !== WEEKLY) {
+                if (state.interval !== WEEKLY && !state.single) {
                     fetchCandles(neighbour.symbol, WEEKLY).catch(() => {});
                 }
             });

@@ -21,6 +21,9 @@
         <button class="scanner-tab-btn" data-tab="narrow-cpr" onclick="switchScannerTab('narrow-cpr')">
             <span class="tab-icon">📏</span> Narrow CPR
         </button>
+        <button class="scanner-tab-btn" data-tab="weekly-open" onclick="switchScannerTab('weekly-open')">
+            <span class="tab-icon">🎯</span> W CPR Open
+        </button>
     </div>
 
     <!-- Right side: High IV Controls (visible when the High IV tab is active) -->
@@ -73,6 +76,16 @@
         <input type="date" id="narrowCprDateFilter" class="date-picker" title="Select analysis date">
         <button id="narrowCprRefreshBtn" class="refresh-btn" title="Refresh Narrow CPR Scanner">
             <span class="refresh-icon">📏</span> N CPR
+        </button>
+    </div>
+
+    <!-- Right side: Weekly CPR Open controls. The date is the session whose
+         OPEN is judged; the previous close is the trading day before it. -->
+    <div id="weekly-open-header-controls" class="header-controls-container"
+        style="display: none; gap: 8px; align-items: center;">
+        <input type="date" id="weeklyOpenDateFilter" class="date-picker" title="Session date — its open and first 1-hour candle are checked">
+        <button id="weeklyOpenRefreshBtn" class="refresh-btn" title="Re-scan from Fyers">
+            <span class="refresh-icon">🎯</span> W CPR Open
         </button>
     </div>
 </div>
@@ -204,6 +217,25 @@
          nothing matches — exactly when "0 matches, N skipped" matters. -->
     <div id="narrowCprFootnote"></div>
 </div>
+<!-- Weekly CPR Open — the selected day opened inside the weekly CPR and its
+     first 1-hour candle closed
+     outside it without reaching within 0.5% of the weekly Camarilla R3/S3.
+     CPR and Camarilla are the ones in force that week, from the previous
+     week's H/L/C. Read from Fyers (ICICI's candles carry stray highs/lows). See filters/weekly_cpr_open_scanner.py. -->
+<div id="weekly-open-scanner-content" style="display: none;">
+    <div class="results-row">
+        <div id="weeklyOpenResults" class="results results-hidden results-block">
+            <div class="dg-card">
+                <div class="dg-card-hdr">
+                    <span class="dg-card-title" id="weeklyOpenTitle">🎯 Open inside Weekly CPR → 1H breakout</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="weeklyOpenCount">(0)</span>
+                </div>
+                <div id="weeklyOpenGrid"></div>
+            </div>
+        </div>
+    </div>
+    <div id="weeklyOpenFootnote"></div>
+</div>
 {# Candle chart popup, opened by clicking a Narrow CPR scanner row. Same
    component the Watchlist grid opens — see templates/_candle_modal.html. #}
 {% include "_candle_modal.html" %}
@@ -219,7 +251,7 @@
 <script src="{{ url_for('static', filename='js/components/mine_cpr.js') }}?v={{ sv('js/components/mine_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/mine_tpo.js') }}?v={{ sv('js/components/mine_tpo.js') }}"></script>
 <script src="{{ url_for('static', filename='js/components/candle-modal.js') }}?v={{ sv('js/components/candle-modal.js') }}"></script>
-<script src="{{ url_for('static', filename='js/cpr_filter.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cpr_filter.js') }}?v={{ sv('js/cpr_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
 <script>
     /**
@@ -234,6 +266,7 @@
             'cpr':        { content: 'cpr-scanner-content',        controls: 'cpr-header-controls' },
             'ema':        { content: 'ema-scanner-content',        controls: 'ema-header-controls' },
             'narrow-cpr': { content: 'narrow-cpr-scanner-content', controls: 'narrow-cpr-header-controls' },
+            'weekly-open': { content: 'weekly-open-scanner-content', controls: 'weekly-open-header-controls' },
         };
         if (!sections[tab]) tab = 'cpr';
 
@@ -250,13 +283,16 @@
         if (tab === 'narrow-cpr' && typeof initNarrowCprOnce === 'function') {
             initNarrowCprOnce();
         }
+        if (tab === 'weekly-open' && typeof initWeeklyOpenOnce === 'function') {
+            initWeeklyOpenOnce();
+        }
     }
 
     // Auto-detect tab from URL search parameters on load
     document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
-        if (tabParam === 'ema' || tabParam === 'narrow-cpr') {
+        if (tabParam === 'ema' || tabParam === 'narrow-cpr' || tabParam === 'weekly-open') {
             switchScannerTab(tabParam);
         } else {
             switchScannerTab('cpr');

@@ -190,6 +190,19 @@ def _is_auth_error(err: Any) -> bool:
     return any(hint in msg for hint in _AUTH_ERROR_HINTS)
 
 
+# An entry the broker refused for want of margin ("Insufficient funds. Margin
+# required: … Margin available: …") is not traded live and not dropped: that
+# one stock is taken on paper instead, so the signal still gets a record. See
+# _fire_entry.
+_MARGIN_ERROR_HINTS = ('insufficient fund', 'insufficient margin', 'margin required',
+                       'margin exceed', 'margin shortfall')
+
+
+def _is_margin_error(err: Any) -> bool:
+    msg = str(err or '').lower()
+    return any(hint in msg for hint in _MARGIN_ERROR_HINTS)
+
+
 def _round_to_tick(price: float, tick: float, mode: str) -> float:
     """Snap a computed price to a valid exchange tick for that scrip. `tick`
     is the scrip's REAL tick size (see KiteService.get_tick_size) — assuming
@@ -621,21 +634,9 @@ class TMFAlgo:
         ref  = float(s.get('ltp') or trigger)
 
         if mode == 'paper':
-            # Paper: filled on the spot at the crossing price — the touch-or-
-            # better price the backtest assumes — with no order anywhere. The
-            # leg goes through _check_entry_fill like a real one (that is
-            # where the Target is computed), which skips the SL/Target
-            # placement for it; the tick then watches SL/Target on the LTP.
             # Neither TMF_ALGO_ACTIVE nor a broker slot gates this: nothing
             # can be lost, and the record is the whole point of paper.
-            s['entry_limit_price'] = ref
-            s['broker_positions'] = [{
-                'broker_idx': _PAPER_IDX, 'paper': True, 'entry_order_id': 'PAPER',
-                'filled': True, 'entry_price': ref, 'filled_qty': qty,
-            }]
-            s['phase'] = 'pending_entry'
-            logger.info(f"[TMF] {symbol}: {direction.upper()} trigger hit @ {trigger} — "
-                        f"PAPER fill x{qty} @ {ref} (no order placed)")
+            self._paper_fill(symbol, s, qty, ref)
             return
 
         if not algo_active or not self._broker_list:
@@ -670,6 +671,19 @@ class TMFAlgo:
                     symbol, transaction, qty, limit_price, trigger, ref)
                 errors = retry_errors or errors
 
+        # Refused for margin (2026-10-12: 360ONE, BDL and MAZDOCK all lost to
+        # "Insufficient funds" while the account was carrying other trades):
+        # that stock alone drops to paper, at the same crossing price, so it
+        # is still tracked and booked — in the paper book. The next trigger
+        # tries live again; TMF_MODE is untouched.
+        if not broker_positions and any(_is_margin_error(e) for e in errors):
+            detail = next(e for e in errors if _is_margin_error(e))
+            s['mode'] = 'paper'
+            s['paper_fallback'] = f'Live entry refused for margin: {detail[:160]}'
+            self._paper_fill(symbol, s, qty, ref)
+            logger.warning(f"[TMF] {symbol}: live entry refused for margin — taken on PAPER instead ({detail})")
+            return
+
         if not broker_positions:
             s['phase'] = 'done'
             detail = errors[0] if errors else 'no active broker'
@@ -682,6 +696,21 @@ class TMFAlgo:
             return
         s['broker_positions'] = broker_positions
         s['phase'] = 'pending_entry'
+
+    def _paper_fill(self, symbol: str, s: Dict[str, Any], qty: int, ref: float) -> None:
+        """Fill on the spot at the crossing price — the touch-or-better price
+        the backtest assumes — with no order anywhere. The leg goes through
+        _check_entry_fill like a real one (that is where the Target is
+        computed), which skips the SL/Target placement for it; the tick then
+        watches SL/Target on the LTP."""
+        s['entry_limit_price'] = ref
+        s['broker_positions'] = [{
+            'broker_idx': _PAPER_IDX, 'paper': True, 'entry_order_id': 'PAPER',
+            'filled': True, 'entry_price': ref, 'filled_qty': qty,
+        }]
+        s['phase'] = 'pending_entry'
+        logger.info(f"[TMF] {symbol}: {s['direction'].upper()} trigger hit @ {s['trigger']} — "
+                    f"PAPER fill x{qty} @ {ref} (no order placed)")
 
     def _place_entry_orders(self, symbol: str, transaction: str, qty: int,
                              limit_price: float, trigger: float,
@@ -903,6 +932,10 @@ class TMFAlgo:
             # are live — every trade before TMF_MODE existed was.
             'mode': 'paper' if self._is_paper(bp) else 'live',
         }
+        if s.get('paper_fallback'):
+            record['paper_fallback'] = s['paper_fallback']
+            reason = f'{reason} (paper — margin)'
+            record['reason'] = reason
         self._append_history(record)
         # Mirror the closed leg onto the stock's own state too (the history file
         # is a separate grid) so Stock Status can show the exit time, the price
