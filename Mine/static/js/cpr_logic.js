@@ -47,6 +47,18 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('tdCprPerf').addEventListener('click', showCprPerformance);
     document.getElementById('tdCprPerfClose').addEventListener('click', hideCprPerformance);
     tdElems.perfModal.addEventListener('click', e => { if (e.target === tdElems.perfModal) hideCprPerformance(); });
+    const maxLots = document.getElementById('tdCprPerfMaxLots');
+    maxLots.value = _tdPerf.maxLots = CPR_PERF_MAX_LOTS;
+    document.getElementById('tdCprPerfCompound').addEventListener('change', e => {
+        _tdPerf.compound = e.target.checked;
+        maxLots.disabled = !e.target.checked;
+        renderCprPerformance();
+    });
+    maxLots.addEventListener('change', () => {
+        const n = Math.floor(+maxLots.value);
+        maxLots.value = _tdPerf.maxLots = n >= 1 ? n : CPR_PERF_MAX_LOTS;
+        renderCprPerformance();
+    });
     document.getElementById('tdCprPerfTabs').addEventListener('click', e => {
         const b = e.target.closest('button[data-period]');
         if (!b) return;
@@ -910,8 +922,13 @@ function _tdCprTradesGrid(r) {
 // strike rule picked in the dropdown, after CPR_BROKERAGE per trade — the
 // same net the Strategy list shows. A trade with no priced option leg is
 // left out (the tile row says how many trades that is).
-const _tdPerf = { period: 'monthly', equity: null, breakdown: null };
+const _tdPerf = { period: 'monthly', equity: null, breakdown: null, compound: false, maxLots: 27 };
 const CPR_PERF_START = 100000;      // ₹ the equity curve starts from
+const CPR_PERF_PER_LOT = 20000;     // ₹ of equity per lot when compounding: ₹1,00,000 trades 5 lots
+// Compounding's lot ceiling (editable on the popup). Without one the sizing feeds
+// on itself — 600 trades took 5 lots to 38.8 crore — which no strike's book could
+// fill; 27 lots is NIFTY's freeze limit, one order.
+const CPR_PERF_MAX_LOTS = 27;
 
 // Every priced trade, oldest first: { date, time, gross, charge, net, result }.
 function _tdPerfTrades() {
@@ -930,6 +947,19 @@ function _tdPerfTrades() {
                    net: gross - CPR_BROKERAGE, result: (t.manual && t.manual.result) || '' });
     });
     out.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    // Compounding: each trade is sized off the equity BEFORE it — one lot per
+    // CPR_PERF_PER_LOT (never under one, never over the max-lots box) — and its
+    // P&L is the per-lot premium move × lot size × those lots, less the same
+    // flat brokerage per trade.
+    if (_tdPerf.compound) {
+        let eq = CPR_PERF_START;
+        for (const t of out) {
+            t.lots = Math.min(_tdPerf.maxLots, Math.max(1, Math.floor(eq / CPR_PERF_PER_LOT)));
+            t.gross *= t.lots;
+            t.net = t.gross - t.charge;
+            eq += t.net;
+        }
+    }
     return out;
 }
 
@@ -970,10 +1000,11 @@ function renderCprPerformance() {
     const cnt = k => trades.filter(t => t.result === k).length;
     const nets = trades.map(t => t.net);
     const cls = v => v > 0 ? 'dg-pos' : v < 0 ? 'dg-neg' : '';
-    const rs = (v, sign) => (v < 0 ? '−' : (sign && v > 0 ? '+' : '')) + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const rs = (v, sign) => (v < 0 ? '−' : (sign && v > 0 ? '+' : '')) + _tdRupees(Math.abs(v));
     const tile = (l, v, c = '') => `<div class="td-perf-tile"><div class="l">${l}</div><div class="v ${c}">${v}</div></div>`;
     const nSel = (((d.summary && d.summary.strategies) || [])).filter(s => _tdCprState.filter.has(s.name)).length;
-    meta.textContent = `${d.symbol}${_tdCprState.year ? ' · ' + _tdCprState.year : ''}${nSel ? ` · ${nSel} setup${nSel === 1 ? '' : 's'}` : ''} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}`;
+    const lotsTxt = _tdPerf.compound ? ` · ${trades[0].lots} → ${trades[trades.length - 1].lots} lots (1 per ₹${(CPR_PERF_PER_LOT / 1000).toFixed(0)}K, max ${_tdPerf.maxLots})` : '';
+    meta.textContent = `${d.symbol}${_tdCprState.year ? ' · ' + _tdCprState.year : ''}${nSel ? ` · ${nSel} setup${nSel === 1 ? '' : 's'}` : ''} · ${trades.length} trades · at ${o.premium ? '≈' + o.premium + ' strike' : 'ATM'} · lot ${o.summary.lot}${lotsTxt}`;
     tiles.innerHTML =
         tile('Total trades', trades.length) + tile('Wins', winsT.length, 'dg-pos') + tile('Losses', lossT.length, 'dg-neg') +
         tile('Win rate', (100 * winsT.length / trades.length).toFixed(1) + '%') +
@@ -1002,9 +1033,16 @@ function _tdPerfColours() {
     return { tick: muted, grid: 'rgba(148,163,184,.15)', zero: 'rgba(148,163,184,.55)' };
 }
 
+// ₹ in the Indian way, short once it is big: ₹4,20,646 · ₹1.19 Cr.
+function _tdRupees(a) {
+    return a >= 1e7 ? '₹' + (a / 1e7).toLocaleString('en-IN', { maximumFractionDigits: 2 }) + ' Cr'
+                    : '₹' + Math.round(a).toLocaleString('en-IN');
+}
+
 function _tdPerfFmtY(v) {
     const a = Math.abs(v), s = v < 0 ? '−' : '';
-    return a >= 100000 ? s + '₹' + (a / 100000).toFixed(a % 100000 ? 1 : 0) + 'L' : a >= 1000 ? s + '₹' + (a / 1000).toFixed(0) + 'K' : s + '₹' + a;
+    return a >= 1e7 ? s + '₹' + +(a / 1e7).toFixed(1) + 'Cr'
+         : a >= 100000 ? s + '₹' + (a / 100000).toFixed(a % 100000 ? 1 : 0) + 'L' : a >= 1000 ? s + '₹' + (a / 1000).toFixed(0) + 'K' : s + '₹' + a;
 }
 
 function _tdPerfEquity(trades) {
@@ -1012,10 +1050,10 @@ function _tdPerfEquity(trades) {
     const col = _tdPerfColours();
     const labels = ['Start'], data = [CPR_PERF_START], dots = [''];
     let eq = CPR_PERF_START;
-    trades.forEach((t, i) => { eq += t.net; labels.push('T' + (i + 1)); data.push(Math.round(eq)); dots.push(`${t.date} ${t.time}`); });
+    trades.forEach((t, i) => { eq += t.net; labels.push('T' + (i + 1)); data.push(Math.round(eq)); dots.push(`${t.date} ${t.time}${t.lots ? ' · ' + t.lots + ' lots' : ''}`); });
     const diff = eq - CPR_PERF_START, up = diff >= 0;
     const m = document.getElementById('tdCprPerfEquityMeta');
-    m.textContent = `${up ? '+' : '−'}₹${Math.abs(Math.round(diff)).toLocaleString('en-IN')} (${up ? '+' : ''}${(100 * diff / CPR_PERF_START).toFixed(1)}%)`;
+    m.textContent = `${up ? '+' : '−'}${_tdRupees(Math.abs(diff))} (${up ? '+' : ''}${(100 * diff / CPR_PERF_START).toLocaleString('en-IN', { maximumFractionDigits: 1 })}%)`;
     m.className = up ? 'dg-pos' : 'dg-neg';
     if (_tdPerf.equity) _tdPerf.equity.destroy();
     _tdPerf.equity = new Chart(document.getElementById('tdCprPerfEquity'), {
@@ -1026,7 +1064,7 @@ function _tdPerfEquity(trades) {
             responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
             plugins: { legend: { display: false }, tooltip: { displayColors: false, padding: 10, callbacks: {
                 title: c => c[0].label, afterTitle: c => dots[c[0].dataIndex],
-                label: c => ' ₹' + c.parsed.y.toLocaleString('en-IN') } } },
+                label: c => ' ' + _tdRupees(c.parsed.y) } } },
             scales: {
                 x: { grid: { display: false }, ticks: { color: col.tick, font: { size: 9 }, maxTicksLimit: 14 } },
                 y: { grid: { color: col.grid }, ticks: { color: col.tick, font: { size: 9 }, callback: _tdPerfFmtY } },
@@ -1069,7 +1107,7 @@ const _tdPerfBarLabels = {
         chart.getDatasetMeta(0).data.forEach((bar, i) => {
             const v = data.datasets[0].data[i];
             if (v == null) return;
-            const a = Math.abs(v), txt = (v >= 0 ? '+' : '−') + '₹' + (a >= 100000 ? (a / 100000).toFixed(1) + 'L' : a >= 1000 ? (a / 1000).toFixed(1) + 'K' : a);
+            const a = Math.abs(v), txt = (v >= 0 ? '+' : '−') + '₹' + (a >= 1e7 ? (a / 1e7).toFixed(2) + 'Cr' : a >= 100000 ? (a / 100000).toFixed(1) + 'L' : a >= 1000 ? (a / 1000).toFixed(1) + 'K' : a);
             ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
             ctx.textBaseline = v >= 0 ? 'bottom' : 'top';
             ctx.fillText(txt, bar.x, v >= 0 ? bar.y - 3 : bar.y + 3);
@@ -1102,7 +1140,7 @@ function _tdPerfBreakdown(trades) {
             plugins: { legend: { display: false }, tooltip: { displayColors: false, padding: 10, callbacks: {
                 title: c => labels[c[0].dataIndex],
                 label: c => { const x = g[keys[c.dataIndex]], n = x.wins + x.losses, v = values[c.dataIndex];
-                    return [` P&L: ${v >= 0 ? '+' : '−'}₹${Math.abs(v).toLocaleString('en-IN')}`, ` Trades: ${n}  (${x.wins}W / ${x.losses}L)`,
+                    return [` P&L: ${v >= 0 ? '+' : '−'}${_tdRupees(Math.abs(v))}`, ` Trades: ${n}  (${x.wins}W / ${x.losses}L)`,
                             ` Win rate: ${Math.round(100 * x.wins / n)}%`]; } } } },
             scales: {
                 x: { grid: { display: false }, ticks: { color: col.tick, font: { size: 9, weight: '500' } } },

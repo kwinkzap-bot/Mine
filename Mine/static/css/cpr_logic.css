@@ -147,3 +147,8 @@ body.td-modal-open { overflow: hidden; }
 .td-strat-nt .td-strat-head { grid-template-columns: minmax(220px, 1.4fr) repeat(2, minmax(90px, .5fr)) 24px; }
 .td-strat-nt .td-strat-name { color: var(--td-muted); }
 .td-strat-tbl td.why { white-space: normal; font-size: 10.5px; line-height: 1.35; color: var(--td-text); }
+.td-perf-compound { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--td-text, inherit); cursor: pointer; white-space: nowrap; user-select: none; }
+.td-perf-compound input { margin: 0; accent-color: var(--td-accent); cursor: pointer; }
+.td-perf-maxlots { width: 54px; padding: 3px 6px; }
+.td-perf-maxlots:disabled { opacity: .45; }
+.td-perf-tile .v { overflow-wrap: anywhere; }

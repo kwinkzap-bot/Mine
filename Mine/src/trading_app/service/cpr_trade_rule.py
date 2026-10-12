@@ -346,25 +346,31 @@ NEAR_TARGET_X = 0.6      # a level nearer than this x the risk -> 1:2 target ins
 STRONG_BODY = 0.6        # the rejection candle must close with a body >= 60% of its range
 GAP_MIN_PCT = 0.25       # an open this far past R1/PDH (S1/PDL) is a gap day, not an "above" day
 NARROW_PCT = 0.13        # CPR under this % of price is Narrow on the sheet's scale -> a trend day is expected
-WICK_MIN = 0.5           # the 09:15 candle's rejection wick must be at least half its range
+WICK_MIN = 0.3           # the 09:15 candle's rejection wick must be at least this much of its range (was 0.5; 0.3-0.4 all gain in 2018-24 and 2025-26)
 INSIDE_MAX = 0.5         # the 09:20 confirmation candle is at most half the 09:15 range
 TREND_SL_PCT = 0.025     # trend-day stop sits this close under the breakout candle (~6 pts)
 TREND_RR = 2.0           # trend-day target is 1:2
 BASE_MIN_BARS = 2        # a gap-day base is at least this many small candles after 09:15 ...
 BASE_MIN_COUNTER = 2     # ... at least this many of them against the fill (red on a gap-down)
 SETUP_UNTIL = '11:00'    # last bar that may be the rejection candle
-LATE_SETUP_UNTIL = '13:00'   # ... the virgin-CPR rejection may come this late
-RETEST_UNTIL = '14:00'       # ... the retest after a big 09:15 candle's box breaks may come this late
+LATE_SETUP_UNTIL = '12:00'   # ... the virgin-CPR rejection may come this late (was 13:00; 12:00-12:30 gain in both periods, with fewer stops)
+RETEST_UNTIL = '14:15'       # ... the retest after a big 09:15 candle's box breaks may come this late (was 14:00)
 SIGNAL_MAX_PCT = 0.15    # a rejection candle bigger than this % of price is too large to trade off (29 Jun 2026: 60 pts)
+SHOCK_CANDLE_PCT = 0.8   # ... and one this big (~140 pts) is a news shock: no 09:20 continuation off it
 BIG_CANDLE_PCT = 0.25    # a 09:15 candle this big (~60 pts) is entered off the 09:20 candle, not its own extreme (31 Aug 2026: 90 pts, 19 Aug: 70)
-BOX_REJECT_MAX_PCT = 0.3 # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; 20 Jan 2025: 89 pts, too big)
+BOX_REJECT_MAX_PCT = 0.45   # ... but a 09:15 box REJECTION is traded off its own candle up to this size (18 Jun 2025: 61 pts; was 0.3 — 0.4-0.5 gain in both periods)
 REVERSAL_MAX_RR = 3.0    # the reversal-after-stop's virgin-CPR target must lie within this many risks
 MIN_STOP = 15.0          # a stop closer than this is noise: 0 of 7 such trades survived (Mar-Sep 2026) — no trade
-FADE_MIN_REWARD = 40.0      # the box-to-box fade is taken only when the other box is more than this many points from the entry
+AGAINST_YDAY_PCT = 0.5      # a trade against yesterday's move of at least this % ...
+QUIET_OPEN_PCT = 0.3        # ... on a 09:15 candle no bigger than this % of price is no trade: 2020-26, 57 trades, 25% wins, -699 pts
+FADE_MIN_REWARD = 0.0       # the fade's target (the CPR) must be at least this far ahead of the entry; 40 left only 14 fades, +38
+SQUEEZE_REFUSE_PCT = 0.15   # the squeeze below which a setup candle wider than the Cam band is refused (was 0.25 with SQUEEZE_CAM_PCT; 0.15-0.2 gain +305 in both periods)
 SQUEEZE_CAM_PCT = 0.25      # a narrow CPR, small box and Cam R3-S3 this close (% of price) is a squeezed day: a setup candle wider than the whole Cam band is no trade (2020-26: 3 wins in 10)
 MAX_TRADES_PER_DAY = 2     # 2 = a second trade after the first one closes (the reversal after a stop, the virgin-CPR rejection); 1 = one a day. 2020-24: 2/14 second trades hit target vs 40% for first trades. The sheet keeps the trades it was written with: re-run the sheet after changing this
 BOX_NEAR_X = 0.35          # an opening BUY on a big 09:15 candle with PDH/R1 closer than this x the stop ahead of it is no trade (16 Apr 2025: 17 pts for a 75-pt stop)
 INSIDE_SL_BUFFER = 10.0     # the stop of an inside-the-CPR break sits this many pts past the candle's extreme: 26 Mar 2025's SELL was stopped by a 3-pt wick, then fell 270 pts
+RETRACEMENT_TRADE = False   # the big-box retracement entry (2026-10-11: off — 12 trades in 2018-26 netted +0.5 index pts and lost on the option leg; no target or stop variant was positive)
+RETRACE_RR = 1.0           # the big-box retracement's target, in risks: the far box (4-8R away) was reached once in 12; 1:1 more than doubles the hit rate
 FADE_MAX_X = 1.5           # a wall-rejection fade back to the CPR is taken only when the CPR is within this x the stop (24 Sep, 31 Jan 2025: 77 and 70 pts for 47 and 24 — both stopped)
 VIRGIN_WEEKLY_UNTIL = '09:30'   # an opening setup whose candle trades inside an untouched weekly CPR is no trade (28 Aug 2025: SELL 24,519, then the reversal)
 EARLY_UNTIL = '09:30'     # an early setup with a big stop (EARLY_MIN_RISK+), against the gap AND under/over the previous close, is no trade
@@ -438,7 +444,10 @@ def propose(chart, bars):
     # holding under PDL/S1 is the entry — SELL under its low, SL over its
     # own high (not the 09:15 high), target 1:2 or the nearer virgin CPR
     # (31 Aug 2026). Mirror for a big green break over PDH/R1.
-    if rng1 > px * BIG_CANDLE_PCT / 100 and len(bars) > 1:
+    # A 09:15 candle of SHOCK size (SHOCK_CANDLE_PCT, ~140 pts) is a news gap, not a
+    # break to follow: the 09:20 continuation sells (buys) an exhausted move (20 Apr
+    # 2020: 1.31%, 17 Apr 2023: 1.09% — both stopped). The day goes to the other setups.
+    if px * BIG_CANDLE_PCT / 100 < rng1 <= px * SHOCK_CANDLE_PCT / 100 and len(bars) > 1:
         c2 = bars[1]
         rng2 = c2['high'] - c2['low']
         small2 = 0 < rng2 <= rng1 * INSIDE_MAX
@@ -1175,6 +1184,7 @@ def propose(chart, bars):
 
     reached = False
     in_break, break_t, break_px = None, None, None       # the inside-CPR break awaiting its cross candle
+    box_turn = None                                      # between the CPRs: the break ran into the far box, so the trade is that box's rejection
     big_reject = None                                    # a CPR rejection too big to enter off, awaiting its small retest candle
     # The weekly CPR lying over the PDH/R1 box (under the PDL/S1 box) with
     # the 09:15 open inside that zone: the zone_rejection setup.
@@ -1346,12 +1356,37 @@ def propose(chart, bars):
                 if made:
                     return (*made, i)
             continue
+        if box_turn:
+            # The break's entry sat in the far box — support (resistance), not room. The trade
+            # is that box's rejection the other way: a candle into the box closing back out of
+            # it, entry over (under) it, SL just past the box, target the other box (30 Oct 2023:
+            # the SELL at 18,955 was inside PDL/S1 18,927-18,957; 09:45 dipped to 18,940 and
+            # closed 18,968 over the box -> BUY 18,973, target PDH/R1 19,076).
+            vbuf = px * TREND_SL_PCT / 100
+            if box_turn == 'buy' and b['low'] <= lo_wall[1] and b['close'] > lo_wall[1]:
+                entry, sl, target = math.ceil(b['high'] + 1), math.floor(lo_wall[0] - vbuf), round(hi_wall[0])
+                if target > entry and entry - sl >= MIN_STOP:
+                    return ({'trade': 'BUY', 'entry': float(entry), 'target': float(target), 'sl': float(sl)},
+                            f"{turn_why}; {b['time']} candle dipped into PDL/S1 {lo_wall[0]:,.0f}-{lo_wall[1]:,.0f} (low {b['low']:,.0f}) and closed back over it "
+                            f"at {b['close']:,.0f} -> BUY over it; SL under the box; target the PDH/R1 box {hi_wall[0]:,.0f}", i)
+            if box_turn == 'sell' and b['high'] >= hi_wall[0] and b['close'] < hi_wall[0]:
+                entry, sl, target = math.floor(b['low'] - 1), math.ceil(hi_wall[1] + vbuf), round(lo_wall[1])
+                if target < entry and sl - entry >= MIN_STOP:
+                    return ({'trade': 'SELL', 'entry': float(entry), 'target': float(target), 'sl': float(sl)},
+                            f"{turn_why}; {b['time']} candle reached PDH/R1 {hi_wall[0]:,.0f}-{hi_wall[1]:,.0f} (high {b['high']:,.0f}) and closed back under it "
+                            f"at {b['close']:,.0f} -> SELL under it; SL over the box; target the PDL/S1 box {lo_wall[1]:,.0f}", i)
+            continue
         if side_open == 'between-up':
             if green and b['close'] > lv['tc']:
                 chop = sum(1 for x in bars[:i] if lv['bc'] <= x['close'] <= lv['tc'])
                 if chop >= CHOP_CLOSES:
                     return None, (f"above the weekly CPR, under the daily one; {b['time']} candle closed above the daily CPR, but {chop} candles had already closed inside it — chop, not a break — no trade"), None
                 entry, sl = b['high'] + buf, min(lv['bc'], b['low']) - buf
+                if entry >= hi_wall[0]:
+                    box_turn = 'sell'
+                    turn_why = (f"above the weekly CPR, under the daily one; {b['time']} closed over the daily CPR but the {entry:,.0f} entry is in "
+                                f"the PDH/R1 box {hi_wall[0]:,.0f}-{hi_wall[1]:,.0f} — no buy into resistance")
+                    continue
                 made = build('BUY', entry, sl, next_level(entry, True, resistances),
                              f"above the weekly CPR, under the daily one; {b['time']} candle closed above the daily CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} at {b['close']:,.0f}")
                 if made:
@@ -1363,6 +1398,11 @@ def propose(chart, bars):
                 if chop >= CHOP_CLOSES:
                     return None, (f"below the weekly CPR, above the daily one; {b['time']} candle closed below the daily CPR, but {chop} candles had already closed inside it — chop, not a break — no trade"), None
                 entry, sl = b['low'] - buf, max(lv['tc'], b['high']) + buf
+                if entry <= lo_wall[1]:
+                    box_turn = 'buy'
+                    turn_why = (f"below the weekly CPR, above the daily one; {b['time']} closed under the daily CPR but the {entry:,.0f} entry is in "
+                                f"the PDL/S1 box {lo_wall[0]:,.0f}-{lo_wall[1]:,.0f} — no sell into support")
+                    continue
                 made = build('SELL', entry, sl, next_level(entry, False, supports),
                              f"below the weekly CPR, above the daily one; {b['time']} candle closed below the daily CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} at {b['close']:,.0f}")
                 if made:
@@ -1564,10 +1604,11 @@ def simulate(bars, trade):
     reaches it is a strong candle closing through the CPR (past `through`),
     the target is replaced by the extended level and the run goes on, with
     the same stop. The returned trade dict has the target actually used."""
-    sim = svc.simulate_trade(bars, trade['trade'], trade['entry'], trade['target'], trade['sl'])
+    sim = svc.simulate_trade(bars, trade['trade'], trade['entry'], trade['target'], trade['sl'], lock=False)
     ext = trade.get('extend')
+    locked = lambda: (svc.simulate_trade(bars, trade['trade'], trade['entry'], trade['target'], trade['sl']), trade)
     if not ext or sim['result'] != 'Target':
-        return sim, trade
+        return locked()
     k = next(i for i, b in enumerate(bars) if b['time'] == sim['exit_time'])
     b = bars[k]
     rng = b['high'] - b['low']
@@ -1575,7 +1616,7 @@ def simulate(bars, trade):
     broke = (rng > 0 and abs(b['close'] - b['open']) / rng >= STRONG_BODY
              and ((b['close'] > ext['through']) if is_buy else (b['close'] < ext['through'])))
     if not broke:
-        return sim, trade
+        return locked()
     used = dict(trade, target=ext['level'])
     entry, sl, target = sim.get('fill') or trade['entry'], trade['sl'], ext['level']
     base = {'entry_time': sim['entry_time'], 'fill': entry}
@@ -1593,6 +1634,35 @@ def simulate(bars, trade):
     sq = next((x for x in bars if x['time'] >= svc.SQUARE_OFF), None)
     exit_px, exit_t = (sq['open'], sq['time']) if sq else (bars[-1]['close'], bars[-1]['time'])
     return dict(base, result='EOD', pnl=round(exit_px - entry if is_buy else entry - exit_px, 2), exit_time=exit_t), used
+
+
+# Per-strategy exit tuning, applied to a trade after every filter has passed it
+# (so it never changes WHICH trades are taken): (points the stop is moved further
+# from the entry, target as a multiple of the new risk or None to keep it).
+# Each held in both 2018-24 and 2025-26 with the target lock on, on a strategy
+# with 15+ trades; the win rates are the sheet's before -> after.
+EXIT_TUNING = {
+    'Inside CPR → breakout candle': (10.0, 1.5),        # 44 trades, 57% -> 68%, +763
+    'Inside CPR → cross candle': (10.0, 1.5),           # 51 trades, 41% -> 49%, +261
+    'Reversal after a stop → virgin CPR': (15.0, None),  # 15 trades, 47% -> 60%, +231
+    'Narrow CPR trend day': (5.0, 1.0),                 # 26 trades, 50% -> 62%, +77
+    '09:15 strong break (narrow CPR)': (0.0, 2.0),      # 19 trades, 84% -> 84%, +97
+}
+
+
+def tune_exit(trade, why):
+    """EXIT_TUNING for the strategy `why` names; the trade unchanged otherwise."""
+    tune = EXIT_TUNING.get(svc.strategy_of(why))
+    if not trade or not tune:
+        return trade
+    widen, rr = tune
+    d = 1 if trade['trade'] == 'BUY' else -1
+    sl = trade['sl'] - d * widen
+    out = dict(trade, sl=float(sl))
+    if rr is not None:
+        out['target'] = float(round(trade['entry'] + d * rr * abs(trade['entry'] - sl)))
+        out.pop('extend', None)
+    return out
 
 
 def cap_risk(trade, why):
@@ -1803,6 +1873,8 @@ def box_retracement(chart, bars):
                        f"SL under its low; target the upper box (PDH/R1 {hi_box[1]:,.0f})")
                 return {'trade': 'BUY', 'entry': float(entry), 'target': float(round(hi_box[1])), 'sl': float(sl)}, why, 1
 
+    if not RETRACEMENT_TRADE:
+        return None                       # the retracement itself is switched off (see RETRACEMENT_TRADE)
     touched, touch_hi, touch_lo = False, 0.0, float('inf')
     for i, b in enumerate(bars[1:], start=1):
         if b['time'] > SETUP_UNTIL:
@@ -1820,8 +1892,8 @@ def box_retracement(chart, bars):
                        f"(high {c1['high']:,.0f}, closed {c1['close']:,.0f} under it) on a {c1['high'] - c1['low']:.0f}-pt candle — "
                        f"too big to enter under; waited for the retracement: price came back to the box and {b['time']} made a lower high "
                        f"({b['high']:,.0f}) and closed under it at {b['close']:,.0f} -> SELL under it; SL over its high; "
-                       f"target the lower box (PDL/S1 {lo_box[0]:,.0f})")
-                return {'trade': 'SELL', 'entry': float(entry), 'target': float(round(lo_box[0])), 'sl': float(sl)}, why, i
+                       f"target 1:{RETRACE_RR:g} (the lower box is too far to reach)")
+                return {'trade': 'SELL', 'entry': float(entry), 'target': float(round(entry - RETRACE_RR * (sl - entry))), 'sl': float(sl)}, why, i
         else:
             if b['low'] <= lo_box[1]:
                 touched, touch_lo = True, min(touch_lo, b['low'])
@@ -1832,8 +1904,8 @@ def box_retracement(chart, bars):
                        f"(low {c1['low']:,.0f}, closed {c1['close']:,.0f} over it) on a {c1['high'] - c1['low']:.0f}-pt candle — "
                        f"too big to enter over; waited for the retracement: price came back to the box and {b['time']} made a higher low "
                        f"({b['low']:,.0f}) and closed over it at {b['close']:,.0f} -> BUY over it; SL under its low; "
-                       f"target the upper box (PDH/R1 {hi_box[1]:,.0f})")
-                return {'trade': 'BUY', 'entry': float(entry), 'target': float(round(hi_box[1])), 'sl': float(sl)}, why, i
+                       f"target 1:{RETRACE_RR:g} (the upper box is too far to reach)")
+                return {'trade': 'BUY', 'entry': float(entry), 'target': float(round(entry + RETRACE_RR * (entry - sl))), 'sl': float(sl)}, why, i
     return None
 
 
@@ -1915,38 +1987,40 @@ def squeezed(chart, bars):
 def squeeze_fade(chart, bars):
     """The squeezed day's own trade: the first candle by SETUP_UNTIL that reaches
     the PDH/R1 box and closes back under it is a SELL under its low, SL just over
-    the box, target the PDL/S1 box's near edge — mirror off PDL/S1. A stop under
+    the box, target the daily CPR's TC — mirror off PDL/S1 to the BC. A stop under
     MIN_STOP or a target already behind the entry is skipped and the next candle
-    looked at (2020-24, on squeezed days the rule did not trade: 19 trades, 68%).
+    looked at. The CPR, not the other box: a squeezed day rarely travels box to
+    box, but it does get back to the pivot (2018-26: 20 fades, 15 won, +131 pts,
+    against 14 fades, 6 won, +38 aiming at the far box with a 40-pt minimum).
     (trade, why, index) or None."""
     lv = chart['levels']
     buf = bars[0]['close'] * TREND_SL_PCT / 100
     hi = (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
     lo = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1']))
-    head = f"squeezed day (narrow CPR, small box, Cam R3-S3 {lv['cr3'] - lv['cs3']:.0f} pts) — trade the swing from box to box"
+    head = f"squeezed day (narrow CPR, small box, Cam R3-S3 {lv['cr3'] - lv['cs3']:.0f} pts) — fade the box back to the CPR"
     for i, b in enumerate(bars[1:], start=1):
         if b['time'] > SETUP_UNTIL:
             break
         if QUIET_FROM <= b['time'] < QUIET_TO:
             continue                                   # the lull holds for the fade too
         if b['high'] >= hi[0] and b['close'] < hi[0]:
-            entry, sl, target = math.floor(b['low'] - 1), math.ceil(hi[1] + buf), round(lo[1])
+            entry, sl, target = math.floor(b['low'] - 1), math.ceil(hi[1] + buf), round(lv['tc'])
             if entry - target > FADE_MIN_REWARD and sl - entry >= MIN_STOP:
                 return ({'trade': 'SELL', 'entry': float(entry), 'target': float(target), 'sl': float(sl)},
                         f"{head}; {b['time']} candle reached PDH/R1 {hi[0]:,.0f}-{hi[1]:,.0f} (high {b['high']:,.0f}) and closed back under it at "
-                        f"{b['close']:,.0f} -> SELL under it; SL over the box; target the PDL/S1 box {lo[1]:,.0f}", i)
+                        f"{b['close']:,.0f} -> SELL under it; SL over the box; target the CPR (TC {lv['tc']:,.0f})", i)
         if b['low'] <= lo[1] and b['close'] > lo[1]:
-            entry, sl, target = math.ceil(b['high'] + 1), math.floor(lo[0] - buf), round(hi[0])
+            entry, sl, target = math.ceil(b['high'] + 1), math.floor(lo[0] - buf), round(lv['bc'])
             if target - entry > FADE_MIN_REWARD and entry - sl >= MIN_STOP:
                 return ({'trade': 'BUY', 'entry': float(entry), 'target': float(target), 'sl': float(sl)},
                         f"{head}; {b['time']} candle reached PDL/S1 {lo[0]:,.0f}-{lo[1]:,.0f} (low {b['low']:,.0f}) and closed back over it at "
-                        f"{b['close']:,.0f} -> BUY over it; SL under the box; target the PDH/R1 box {hi[0]:,.0f}", i)
+                        f"{b['close']:,.0f} -> BUY over it; SL under the box; target the CPR (BC {lv['bc']:,.0f})", i)
     return None
 
 
 def propose_all(chart, bars):
     """`_propose_all_core`'s trades — and, on a SQUEEZED day where it ends
-    with no trade for any reason, the box-to-box fade (`squeeze_fade`) as the
+    with no trade for any reason, the box fade back to the CPR (`squeeze_fade`) as the
     day's one trade, its reason after the refusal it replaces."""
     out = _propose_all_core(chart, bars)
     if any(p for p, *_ in out) or not squeezed(chart, bars):
@@ -1956,7 +2030,7 @@ def propose_all(chart, bars):
         return out
     p, why, i = fade
     p, why = cap_risk(p, why)
-    sim, used = simulate(bars[i:], p)
+    sim, used = simulate(bars[i:], tune_exit(p, why))
     return [(used, f"{out[0][1]} — instead: {why}" if out[0][1] else why, i, sim)]
 
 
@@ -2003,7 +2077,7 @@ def _propose_all_core(chart, bars):
         lvs_ = chart['levels']
         band_ = lvs_['cr3'] - lvs_['cs3']
         if (chart.get('cpr_type') == 'Narrow' and chart.get('boxes') == 'Small'
-                and 0 < band_ < bars[0]['close'] * SQUEEZE_CAM_PCT / 100
+                and 0 < band_ < bars[0]['close'] * SQUEEZE_REFUSE_PCT / 100
                 and bars[i]['high'] - bars[i]['low'] >= band_):
             return [(None, f"{why} — a squeezed day (narrow CPR, small box, Cam R3-S3 only {band_:.0f} pts) and the {bars[i]['time']} candle "
                            f"is {bars[i]['high'] - bars[i]['low']:.0f} pts, wider than the whole band: the move is already spent — no trade", None, None)]
@@ -2041,6 +2115,17 @@ def _propose_all_core(chart, bars):
         lv_ = chart['levels']
         if lv_['bc'] <= p['entry'] <= lv_['tc']:
             return [(None, f"{why} — the {p['entry']:,.0f} entry is inside the daily CPR {lv_['bc']:,.0f}-{lv_['tc']:,.0f} — no trade", None, None)]
+        # Against yesterday's strong move on a quiet open: yesterday closed AGAINST the
+        # trade by AGAINST_YDAY_PCT or more and the 09:15 candle is small — nothing
+        # today has turned that move, and fading it fails (2020-26: 57 such trades,
+        # 14 winners, -699 pts; negative in 5 of 7 years).
+        ps2_, p2_ = chart.get('prev_session'), chart.get('prev2_close')
+        if ps2_ and p2_:
+            yday_ = (ps2_['close'] - p2_) / ps2_['close'] * 100 * (1 if p['trade'] == 'BUY' else -1)
+            open_ = (bars[0]['high'] - bars[0]['low']) / bars[0]['close'] * 100
+            if yday_ <= -AGAINST_YDAY_PCT and open_ <= QUIET_OPEN_PCT:
+                return [(None, f"{why} — yesterday moved {abs(yday_):.2f}% against this {p['trade']} and the 09:15 candle is only "
+                               f"{open_:.2f}% of price: a quiet open has not turned yesterday's move — no trade", None, None)]
         p, why = cap_risk(p, why)
         if abs(p['entry'] - p['sl']) < MIN_STOP:
             return [(None, f"{why} — the stop is only {abs(p['entry'] - p['sl']):.0f} pts, under {MIN_STOP:.0f}: noise — no trade", None, None)]
@@ -2057,11 +2142,11 @@ def _propose_all_core(chart, bars):
                 p2, why2 = virgin_target(p2, why2, chart)
                 p2, why2 = vwap_in_the_way(p2, why2, bars, i2)
             if p2:
-                sim2, used2 = simulate(bars[i2:], p2)
+                sim2, used2 = simulate(bars[i2:], tune_exit(p2, why2))
                 sim2['after'] = 'refused'
                 return [(None, why, None, None), (used2, why2, i2, sim2)]
         return [(None, why, None, None)]
-    sim, used = simulate(bars[i:], p)
+    sim, used = simulate(bars[i:], tune_exit(p, why))
     out = [(used, why, i, sim)]
     if sim['result'] in ('SL', 'Target') and MAX_TRADES_PER_DAY < 2:
         return out                         # one trade a day: the day ends with the first trade's exit
@@ -2076,7 +2161,7 @@ def _propose_all_core(chart, bars):
             p2, why2 = vwap_in_the_way(p2, why2, bars, i2)
             if not p2:
                 return out
-            sim2, used2 = simulate(bars[i2:], p2)
+            sim2, used2 = simulate(bars[i2:], tune_exit(p2, why2))
             sim2['after'] = sim['result']
             out.append((used2, why2, i2, sim2))
     return out

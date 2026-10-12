@@ -52,6 +52,7 @@ STRIKE_STEP = {'NIFTY': 50, 'BANKNIFTY': 100, 'FINNIFTY': 50, 'MIDCPNIFTY': 25, 
 BROKERAGE = 100.0   # ₹ per trade, taken off every ₹/lot figure; `pnl` in points stays gross
 LOT_SIZE = {'NIFTY': 65, 'BANKNIFTY': 30, 'FINNIFTY': 65, 'MIDCPNIFTY': 120, 'SENSEX': 20}
 EXPIRY_CADENCE = {'NIFTY': 'weekly', 'SENSEX': 'weekly'}      # the rest are monthly-only
+WEEKLY_SINCE = {'NIFTY': date(2019, 2, 11)}   # NIFTY weekly options were listed from here; before it only the monthly contract existed
 OPTION_EXCHANGE = {'SENSEX': 'BFO'}
 
 MIN_PREMIUM = 0.05            # an estimate never goes below the tick
@@ -62,7 +63,7 @@ DELTA_MIN_POINTS = 20         # minutes needed before a slope is trusted
 SETUP_BAR_MINUTES = 5         # the sheet's setup candle is a 5-minute bar
 
 
-LEGS_CACHE_VERSION = 2        # bump when how a leg is priced changes: every saved leg is then re-read
+LEGS_CACHE_VERSION = 4        # bump when how a leg is priced changes: every saved leg is then re-read (4: the watched-target lock)
 LEG_RETRY_DAYS = 7            # a leg that found no option data is looked up again after this long
 _LEGS_LOCK = threading.Lock()
 
@@ -86,7 +87,10 @@ def contract(symbol: str, day: date, trade: str, entry: float,
     if trade not in ('BUY', 'SELL') or entry is None:
         return None
     step = strike_step(symbol)
-    expiry = expiry_on_or_after(day, trading_days, EXPIRY_CADENCE.get(symbol.upper(), 'monthly'))
+    cadence = EXPIRY_CADENCE.get(symbol.upper(), 'monthly')
+    if cadence == 'weekly' and day < WEEKLY_SINCE.get(symbol.upper(), date.min):
+        cadence = 'monthly'                    # 2018: there was no weekly contract to buy
+    expiry = expiry_on_or_after(day, trading_days, cadence)
     if expiry is None:
         return None
     return {'strike': int(round(entry / step) * step),

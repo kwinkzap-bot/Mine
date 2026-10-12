@@ -189,13 +189,14 @@ def test_analyse_builds_chart_side_and_matches():
     assert row['match']['price_vs_daily'] is True
     assert row['match']['cpr_direction'] is True
     t = row['trades'][0]
-    assert t['chart']['result'] == 'Target' and t['chart']['pnl'] == 50.0
+    # 09:25 closed through the 80-pt target: locked there and ridden to the day's last close (+55)
+    assert t['chart']['result'] == 'Target' and t['chart']['pnl'] == 55.0 and t['chart']['target_time'] == '09:25'
     assert t['chart']['reasons']['entry'].startswith('BUY')
     assert t['match'] is True
     assert res['summary']['agreement']['price_vs_daily'] == {'match': 1, 'total': 1, 'pct': 100.0}
     assert res['summary']['agreement']['result'] == {'match': 1, 'total': 1, 'pct': 100.0}
     assert res['summary']['manual']['pnl'] == 50.0
-    assert res['summary']['chart']['pnl'] == 50.0
+    assert res['summary']['chart']['pnl'] == 55.0                 # the locked ride
 
 
 def test_analyse_folds_a_multi_trade_day_into_one_row():
@@ -508,7 +509,7 @@ def test_simulate_fills_at_the_open_when_a_bar_opens_past_the_entry():
         {'time': '13:15', 'open': 23302.95, 'high': 23326.3, 'low': 23300.3, 'close': 23307.8},
         {'time': '13:20', 'open': 23309.95, 'high': 23400.0, 'low': 23308.65, 'close': 23395.0},
     ]
-    sim = svc.simulate_trade(bars, 'BUY', 23300.0, 23393.0, 23274.0, '13:10')
+    sim = svc.simulate_trade(bars, 'BUY', 23300.0, 23393.0, 23274.0, '13:10', lock=False)
     assert sim['result'] == 'Target' and sim['entry_time'] == '13:15' and sim['fill'] == 23302.95
     assert sim['pnl'] == pytest.approx(23393.0 - 23302.95)
 
@@ -580,3 +581,22 @@ def test_square_off_is_final_at_1515():
     # an entry that only trades after the cut-off never fills
     late = [_bar('09:15', 100, 101, 99, 100), _bar('15:15', 100, 120, 99, 118)]
     assert svc.simulate_trade(late, 'BUY', 110, 115, 95)['result'] == 'No fill'
+
+
+def test_a_target_closed_through_is_locked_and_ridden():
+    """LOCK_TARGET: a bar closing through the target moves the stop to it; the
+    trade is out at the next touch of the target, or at the 15:15 open."""
+    bars = [{'time': '09:15', 'open': 100.0, 'high': 101.0, 'low': 99.0, 'close': 100.0},
+            {'time': '09:20', 'open': 100.0, 'high': 106.0, 'low': 100.0, 'close': 105.0},   # fills the BUY at 102
+            {'time': '09:25', 'open': 105.0, 'high': 113.0, 'low': 104.0, 'close': 112.0},   # target 110 reached, closed over it
+            {'time': '09:30', 'open': 112.0, 'high': 120.0, 'low': 111.0, 'close': 118.0},
+            {'time': '09:35', 'open': 118.0, 'high': 118.0, 'low': 108.0, 'close': 109.0}]  # back to the target: out there
+    sim = svc.simulate_trade(bars, 'BUY', 102.0, 110.0, 95.0)
+    assert sim['result'] == 'Target' and sim['target_time'] == '09:25' and sim['exit_time'] == '09:35' and sim['pnl'] == 8.0
+    ride = bars[:4] + [{'time': '15:15', 'open': 125.0, 'high': 126.0, 'low': 124.0, 'close': 125.0}]
+    sim = svc.simulate_trade(ride, 'BUY', 102.0, 110.0, 95.0)
+    assert sim['result'] == 'Target' and sim['exit_time'] == '15:15' and sim['pnl'] == 23.0
+    wick = bars[:2] + [dict(bars[2], close=109.0)] + bars[3:]                            # tagged it, closed back under: out at that CLOSE
+    sim = svc.simulate_trade(wick, 'BUY', 102.0, 110.0, 95.0)                            # (no order rests at a target that is ridden)
+    assert sim['exit_time'] == '09:25' and sim['pnl'] == 7.0 and 'target_time' not in sim
+    assert svc.simulate_trade(ride, 'BUY', 102.0, 110.0, 95.0, lock=False)['pnl'] == 8.0

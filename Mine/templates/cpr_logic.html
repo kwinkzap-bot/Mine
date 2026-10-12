@@ -89,6 +89,9 @@
                         <div class="td-msel-panel hidden" id="tdCprPerfFilterPanel"></div>
                     </div>
                     <select class="td-select" id="tdCprPerfYear" title="Show one year of the sheet"><option value="">All years</option></select>
+                    <label class="td-perf-compound" title="Start with ₹1,00,000 at 5 lots and trade one more lot for every ₹20,000 the account grows (one fewer as it falls, never under 1)"><input type="checkbox" id="tdCprPerfCompound"> Compound lots</label>
+                    <label class="td-perf-compound" title="Compounding never trades more lots than this (27 = NIFTY's freeze limit, one order)">max
+                        <input type="number" class="td-select td-perf-maxlots" id="tdCprPerfMaxLots" min="1" step="1" value="27" disabled> lots</label>
                     <button type="button" class="td-btn" id="tdCprPerfClose" title="Close (Esc)">✕</button>
                 </div>
             </div>
@@ -111,7 +114,9 @@
             </div>
             <div class="td-cpr-note">Every sheet trade that has an option leg, at the strike rule picked in the dropdown: <b>P&amp;L</b> is the premium
                 move × lot size <b>after ₹100 brokerage per trade</b> (gross and charges are shown apart). Win / loss by that net rupee sign;
-                target / SL / time exit by how the index trade ended. The curve starts at ₹1,00,000.</div>
+                target / SL / time exit by how the index trade ended. The curve starts at ₹1,00,000. With <b>Compound lots</b> ticked each
+                trade is sized off the account before it — one lot per ₹20,000, so 5 lots at the start, up to the <b>max lots</b> box (27 =
+                NIFTY's freeze limit) — and its P&amp;L is that many lots.</div>
         </div>
     </div>
 

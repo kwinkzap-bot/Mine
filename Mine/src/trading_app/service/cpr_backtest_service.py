@@ -64,6 +64,12 @@ LEVEL_AT_PCT = 0.08
 LEVEL_REASON_NEAR_PCT = 0.3
 
 SQUARE_OFF = '15:15'          # a trade still open is squared off here
+# A target is watched, not rested: a candle that CLOSES through it moves the
+# stop up to the target and the trade rides on, out at the next touch of the
+# target or at SQUARE_OFF; a candle that tags it and closes back is out at its
+# close. 2018-26 on the sheet's trades: +846 pts over a resting target order
+# (+424 in 2018-24, +423 in 2025-26).
+LOCK_TARGET = True
 
 # Fyers serves at most 99 days of intraday bars per request.
 INTRADAY_CHUNK_DAYS = 90
@@ -263,14 +269,20 @@ def manual_colour(text: Optional[str]) -> Optional[str]:
 
 def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Optional[float],
                    target: Optional[float], sl: Optional[float],
-                   setup_time: Optional[str] = None) -> Dict[str, Any]:
+                   setup_time: Optional[str] = None, lock: Optional[bool] = None) -> Dict[str, Any]:
     """What the session's bars say the trade did: fill at the first bar after
     the setup candle (09:15 unless `setup_time` says otherwise) that trades
     through the entry — at the entry, or at the bar's open when it opened
     past the level, as a stop order would — then whichever of target / SL a
     later bar reaches first. Bar-level, so a bar reaching both is 'Both'
     rather than a guess. Still open at SQUARE_OFF -> 'EOD' at that price.
-    `pnl` is from the fill, and `fill` says what that was."""
+    `pnl` is from the fill, and `fill` says what that was.
+    With `lock` (LOCK_TARGET by default) a bar closing through the target
+    moves the stop to it instead of exiting (see LOCK_TARGET); the result is
+    still 'Target', `target_time` is when it was reached and `exit_time` and
+    `pnl` are where the ride ended."""
+    lock = LOCK_TARGET if lock is None else lock
+    locked_at = None
     if not trade or entry is None or target is None or sl is None:
         return {'result': None, 'pnl': None, 'entry_time': None, 'exit_time': None}
     is_buy = trade == 'BUY'
@@ -291,6 +303,14 @@ def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Opti
                 fill = max(entry, b['open']) if is_buy else min(entry, b['open'])
             else:
                 continue
+        if locked_at is not None:
+            # Riding past the target: out at the next touch of it — at the bar's
+            # open if that opened beyond it.
+            if (b['low'] <= target) if is_buy else (b['high'] >= target):
+                px = min(target, b['open']) if is_buy else max(target, b['open'])
+                return {'result': 'Target', 'pnl': _r(px - fill if is_buy else fill - px), 'fill': fill,
+                        'entry_time': bars[filled_at]['time'], 'target_time': locked_at, 'exit_time': b['time']}
+            continue
         hit_t = (b['high'] >= target) if is_buy else (b['low'] <= target)
         hit_s = (b['low'] <= sl) if is_buy else (b['high'] >= sl)
         if i == filled_at and ((b['open'] <= sl) if is_buy else (b['open'] >= sl)):
@@ -301,6 +321,17 @@ def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Opti
             hit_s = False
         if hit_t and hit_s:
             return {'result': 'Both', 'pnl': None, 'fill': fill,
+                    'entry_time': bars[filled_at]['time'], 'exit_time': b['time']}
+        if hit_t and lock:
+            # Riding past a target means no order rests there, so the bar's CLOSE
+            # decides: through it, the stop moves to the target; tagged and back,
+            # the trade is out at that close — not at the target, which a resting
+            # order would have sold (on 1-minute bars the lock is still worth
+            # +529 pts over the resting target, 2018-26).
+            if (b['close'] > target) if is_buy else (b['close'] < target):
+                locked_at = b['time']
+                continue
+            return {'result': 'Target', 'pnl': _r(b['close'] - fill if is_buy else fill - b['close']), 'fill': fill,
                     'entry_time': bars[filled_at]['time'], 'exit_time': b['time']}
         if hit_t:
             return {'result': 'Target', 'pnl': _r(target - fill if is_buy else fill - target), 'fill': fill,
@@ -314,6 +345,9 @@ def simulate_trade(bars: List[Dict[str, Any]], trade: Optional[str], entry: Opti
     # is the 15:15 bar's open (the last close when the day ends earlier).
     sq = next((b for b in bars if b['time'] >= SQUARE_OFF), None)
     exit_px, exit_t = (sq['open'], sq['time']) if sq else (bars[-1]['close'], bars[-1]['time'])
+    if locked_at is not None:
+        return {'result': 'Target', 'pnl': _r(exit_px - fill if is_buy else fill - exit_px), 'fill': fill,
+                'entry_time': bars[filled_at]['time'], 'target_time': locked_at, 'exit_time': exit_t}
     return {'result': 'EOD', 'pnl': _r(exit_px - fill if is_buy else fill - exit_px), 'fill': fill,
             'entry_time': bars[filled_at]['time'], 'exit_time': exit_t}
 
@@ -496,6 +530,8 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
     by_date = {b['date'].isoformat(): i for i, b in enumerate(daily)}
     weeks = weekly_bars(daily)
     week_keys = sorted(weeks)
+    first_touch = _cpr_first_touch(daily)                 # the virgin lookups, worked out once
+    week_bands = _weekly_band_index(daily, weeks, week_keys)
 
     # Average first-candle range per session, for the Small/Big reading.
     first_ranges: Dict[str, float] = {}
@@ -577,10 +613,11 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
             # through — the virgin CPRs still standing at today's open, the
             # supports/resistances a trade's target stops at (30 Apr 2026:
             # 15 Apr's 23,732-23,806 under a SELL from 23,929).
-            'virgin_cprs': virgin_cprs(daily, idx),
-            'virgin_weekly': virgin_weekly(daily, idx, weeks, week_keys),
+            'virgin_cprs': virgin_cprs(daily, idx, first_touch),
+            'virgin_weekly': virgin_weekly(daily, idx, weeks, week_keys, week_bands),
             'prev_session': {'date': prev['date'].isoformat(), 'high': _r(prev['high']),
                              'low': _r(prev['low']), 'close': _r(prev['close'])},
+            'prev2_close': _r(prev2['close']),       # the session before yesterday: yesterday's own move is close vs this
             'day': {'open': _r(daily[idx]['open']), 'high': _r(daily[idx]['high']),
                     'low': _r(daily[idx]['low']), 'close': _r(daily[idx]['close'])},
         }
@@ -607,16 +644,42 @@ def analyse(manual_rows: List[Dict[str, Any]], daily: List[Dict[str, Any]],
     return {'rows': out_rows, 'summary': summarise(out_rows)}
 
 
-def virgin_cprs(daily: List[Dict[str, Any]], idx: int) -> List[Dict[str, Any]]:
-    """The CPRs of sessions before `daily[idx]` that no session from their
-    own day up to yesterday has traded through, lowest first. A CPR is
-    touched when a session's range overlaps it."""
-    out = []
-    for j in range(1, idx):
+def _cpr_first_touch(daily: List[Dict[str, Any]]) -> List[int]:
+    """For each session j, the first session from j on whose range overlaps
+    j's CPR (len(daily) when none has yet). Worked out once per analysis: the
+    sheet now spans 2011 on, and asking "touched since?" afresh for every
+    session against every earlier one was most of a page load."""
+    n = len(daily)
+    first = [n] * n
+    for j in range(1, n):
         q = daily[j - 1]
         lv = levels(q['high'], q['low'], q['close'])
-        if any(b['low'] <= lv['tc'] and b['high'] >= lv['bc'] for b in daily[j:idx]):
-            continue
+        for k in range(j, n):
+            b = daily[k]
+            if b['low'] <= lv['tc'] and b['high'] >= lv['bc']:
+                first[j] = k
+                break
+    return first
+
+
+def virgin_cprs(daily: List[Dict[str, Any]], idx: int,
+                first_touch: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+    """The CPRs of sessions before `daily[idx]` that no session from their
+    own day up to yesterday has traded through, lowest first. A CPR is
+    touched when a session's range overlaps it. `first_touch` (from
+    _cpr_first_touch) makes it a lookup instead of a scan."""
+    out = []
+    for j in range(1, idx):
+        if first_touch is not None:
+            if first_touch[j] < idx:
+                continue
+            q = daily[j - 1]
+            lv = levels(q['high'], q['low'], q['close'])
+        else:
+            q = daily[j - 1]
+            lv = levels(q['high'], q['low'], q['close'])
+            if any(b['low'] <= lv['tc'] and b['high'] >= lv['bc'] for b in daily[j:idx]):
+                continue
         out.append({'date': daily[j]['date'].isoformat(), 'bc': _r(lv['bc']), 'tc': _r(lv['tc'])})
     return sorted(out, key=lambda v: v['bc'])
 
@@ -624,23 +687,40 @@ def virgin_cprs(daily: List[Dict[str, Any]], idx: int) -> List[Dict[str, Any]]:
 WEEKLY_BANDS_BACK = 8       # the Pine indicator draws this many weeks of weekly CPR bands
 
 
-def virgin_weekly(daily: List[Dict[str, Any]], idx: int, weeks: Dict[tuple, Dict[str, float]],
-                  week_keys: List[tuple]) -> List[Dict[str, Any]]:
-    """The weekly CPR bands of the last WEEKLY_BANDS_BACK weeks before the
-    session's own that no session has traded through since the band's week
-    began — the untouched (virgin) weekly CPRs still on the chart. A week's
-    band is the CPR of the week before it."""
-    tk = _week_key(daily[idx]['date'])
-    out = []
-    for k in [k for k in week_keys if k < tk][-WEEKLY_BANDS_BACK:]:
-        i = week_keys.index(k)
-        if i == 0:
+def _weekly_band_index(daily: List[Dict[str, Any]], weeks: Dict[tuple, Dict[str, float]],
+                       week_keys: List[tuple]) -> Dict[tuple, tuple]:
+    """Week -> (lo, hi, first daily index of the week, first index from then on
+    that trades into the band — len(daily) when none). Once per analysis."""
+    n = len(daily)
+    start: Dict[tuple, int] = {}
+    for j, b in enumerate(daily):
+        start.setdefault(_week_key(b['date']), j)
+    out: Dict[tuple, tuple] = {}
+    for i, k in enumerate(week_keys):
+        if i == 0 or k not in start:
             continue
         w = weeks[week_keys[i - 1]]
         lv = levels(w['high'], w['low'], w['close'])
         lo, hi = min(lv['bc'], lv['tc']), max(lv['bc'], lv['tc'])
-        start = next(j for j, b in enumerate(daily) if _week_key(b['date']) == k)
-        if any(b['low'] <= hi and b['high'] >= lo for b in daily[start:idx]):
+        first = next((j for j in range(start[k], n) if daily[j]['low'] <= hi and daily[j]['high'] >= lo), n)
+        out[k] = (lo, hi, start[k], first)
+    return out
+
+
+def virgin_weekly(daily: List[Dict[str, Any]], idx: int, weeks: Dict[tuple, Dict[str, float]],
+                  week_keys: List[tuple], bands: Optional[Dict[tuple, tuple]] = None) -> List[Dict[str, Any]]:
+    """The weekly CPR bands of the last WEEKLY_BANDS_BACK weeks before the
+    session's own that no session has traded through since the band's week
+    began — the untouched (virgin) weekly CPRs still on the chart. A week's
+    band is the CPR of the week before it."""
+    bands = bands if bands is not None else _weekly_band_index(daily, weeks, week_keys)
+    tk = _week_key(daily[idx]['date'])
+    out = []
+    for k in [k for k in week_keys if k < tk][-WEEKLY_BANDS_BACK:]:
+        if k not in bands:
+            continue
+        lo, hi, _start, first = bands[k]
+        if first < idx:
             continue
         out.append({'week': f'{k[0]}-W{k[1]:02d}', 'bc': _r(lo), 'tc': _r(hi)})
     return out
@@ -666,14 +746,22 @@ def _how(setup, entry, stop, target, example):
 
 
 _STRATEGIES = (
-    (lambda r: 'trade the swing from box to box' in r, 'Squeezed day → box-to-box fade', _how(
+    (lambda r: 'no sell into support' in r or 'no buy into resistance' in r, 'Between the CPRs → far-box rejection', _how(
+        "Between the weekly and daily CPRs, the close beyond the daily CPR came, but its entry would sit inside the far box "
+        "(a SELL in PDL/S1, a BUY in PDH/R1) — selling into support, buying into resistance.",
+        "Instead: the first candle by 11:00 that dips into PDL/S1 and closes back over it → BUY over its high "
+        "(mirror: reaches PDH/R1, closes back under → SELL under its low).",
+        "Just past the box: under PDL/S1 (over PDH/R1) by 0.025% of price.",
+        "The other box's near edge: PDH/R1 for the BUY, PDL/S1 for the SELL.",
+        "30 Oct 2023: SELL 18,955 would have been in PDL/S1 18,927-18,957; 09:45 closed 18,968 back over it → BUY 18,973, target PDH/R1 19,076 (+103).")),
+    (lambda r: 'fade the box back to the CPR' in r or 'trade the swing from box to box' in r, 'Squeezed day → box-to-box fade', _how(
         "A squeezed day: narrow CPR, small box and Cam R3/S3 within 0.25% of price, and the rule took nothing else. "
-        "The levels are packed, so the day tends to swing from one box to the other.",
+        "The levels are packed: the day rarely travels box to box, but it does swing back to the pivot.",
         "The first candle by 11:00 (outside the 10:30–11:30 lull) that reaches the PDH/R1 box and closes back under it → SELL under its low; "
         "mirror off PDL/S1 → BUY over its high.",
         "Just past the box: over PDH/R1 (under PDL/S1) by 0.025% of price; a stop under 15 pts is skipped.",
-        "The other box's near edge: PDL/S1 for the SELL, PDH/R1 for the BUY.",
-        "28 Aug 2024: squeezed day, 09:35 candle closed back over PDL/S1 → BUY, target the PDH/R1 box (+76).")),
+        "The daily CPR: TC for the SELL, BC for the BUY (2018-26: 20 fades, 15 won, +131 pts — the far box gave 14, 6 won, +38).",
+        "Squeezed day, a candle closed back over PDL/S1 → BUY over its high, target the CPR's BC.")),
     (lambda r: 'wicked out of it both ways' in r, 'Inside CPR, wicked both ways → the box decides', _how(
         "The 09:15 candle opens and closes inside the CPR but its high is over TC and its low under BC — both CPR lines are spent, "
         "so the day is decided at the box. The first close over the PDH/R1 box (under the PDL/S1 box) is the break candle.",
@@ -687,22 +775,22 @@ _STRATEGIES = (
         "A second trade on a volatile day (by 13:00): the bar that stopped the first trade is a strong candle the other way, and a virgin CPR lies ahead of it "
         "within 3× the risk. The virgin-CPR late rejection, when it applies, comes first.",
         "BUY over that candle's high (SELL under its low).",
-        "The candle's other end: under its low for the BUY, over its high for the SELL.",
+        "The candle's other end, 15 pts further: under its low for the BUY, over its high for the SELL.",
         "The nearest virgin CPR ahead — its near edge.",
         "20 Jan 2025: the 09:20-candle SELL was stopped by the 09:55 strong green → BUY 23,237, SL 23,204, target 17 Jan's virgin CPR 23,318 (+81).")),
     (lambda r: 'cross candle' in r, 'Inside CPR → cross candle', _how(
         "09:15 closes inside the daily CPR on a BIG candle (over 0.25% of price) — its far end is no stop. "
         "Any later close out of the CPR is the break; the next candle that comes back to that CPR line is the cross candle.",
         "Over the cross candle's high (BUY) / under its low (SELL). A close back inside the CPR voids the break and waits for a new one.",
-        "Under the cross candle's low (BUY) / over its high (SELL).",
-        "The next PDH/R1 (PDL/S1); 1:2 when that level is nearer than the risk.",
+        "10 pts under the cross candle's low (BUY) / over its high (SELL).",
+        "1:1.5 of that risk.",
         "7 Apr 2026: 10:00 closed 22,914 over TC 22,902; 10:05 cross candle 22,929-22,894 → BUY 22,930, SL 22,892, target PDH 22,998.")),
     (lambda r: '09:15 closed inside the CPR' in r, 'Inside CPR → breakout candle', _how(
         "09:15 closes inside the daily CPR on a normal-sized candle. On a WIDE-CPR day the break needs room: if the next box "
         "(PDH/R1 above, PDL/S1 below) is closer to the entry than the risk, price is boxed in and the day is skipped.",
         "The first STRONG candle (body ≥ 60%) closing out of the CPR: over its high (BUY) / under its low (SELL).",
-        "The 09:15 candle's other end (its low for a BUY, its high for a SELL).",
-        "The nearer of PDH/R1 (PDL/S1); 1:2 if too near, 1:1 if further than 1.5× the risk.",
+        "10 pts past the 09:15 candle's other end (under its low for a BUY, over its high for a SELL).",
+        "1:1.5 of that risk.",
         "17 Feb 2026: 09:40 closed above TC → BUY 25,647, SL 25,630, target PDH 25,697.")),
     (lambda r: 'retested it' in r, 'Big 09:15 to the box → retest', _how(
         "A big red 09:15 candle (over 0.25%) opens above the PDL/S1 box and closes AT it, and 09:20 is not a small red close under the box — no sell. "
@@ -771,15 +859,15 @@ _STRATEGIES = (
     (lambda r: 'trend day expected' in r, 'Narrow CPR trend day', _how(
         "Narrow CPR (under 0.13%) with the open clear of both CPRs — a trend day is expected — and the 09:15 candle rejects the other side (wick ≥ half its range, close at the far end).",
         "The first strong candle in the trend's direction by 11:00: over its high (under its low). While PDH/R1 (PDL/S1) still lies ahead it is the wall — the candle must close through it; a candle turned back from the wall is instead a fade → SELL under its low.",
-        "0.025% beyond the breakout candle; for the fade, over the high so far.",
-        "1:2; for the fade, the first CPR line.",
+        "0.025% beyond the breakout candle, plus 5 pts; for the fade, over the high so far, plus 5 pts.",
+        "1:1 of that risk.",
         "10 Feb 2026: 09:30 bull candle → BUY 25,945, SL 25,903, target 26,029. 11 Feb: 09:20 rejected from R1 → SELL 25,974, SL 26,011, target 25,933.")),
     (lambda r: 'strong red candle touched PDL/S1' in r or 'strong green candle touched PDH/R1' in r,
      '09:15 strong break (narrow CPR)', _how(
         "Narrow CPR and the 09:15 candle itself is a strong break (body ≥ 60%): it touches PDL/S1 and closes below it. Mirror: a strong green 09:15 through PDH/R1.",
         "SELL under the 09:15 low — or under a level lying just beneath it. BUY over the 09:15 high for the mirror.",
         "Over the 09:15 high (under its low for the BUY).",
-        "1:2.",
+        "1:2 of the risk.",
         "12 Feb 2026: SELL 25,844 under S2, SL 25,909; squared off at 15:15.")),
     (lambda r: ('above the weekly CPR, under the daily one' in r
                 or 'below the weekly CPR, above the daily one' in r), 'Between the CPRs', _how(
@@ -875,6 +963,10 @@ _NO_TRADE = (
      'No trade · CPR or box in the way',
      _nt("The daily CPR (or the next box) lies between the entry and the target, nearer than the risk: nowhere to go.",
          "21 Jan 2026: BUY 25,242 with the CPR 39 pts up against a 58-pt stop.")),
+    (lambda r: "has not turned yesterday's move" in r,
+     "No trade · against yesterday's move, quiet open",
+     _nt("Yesterday closed 0.5% or more against the trade and today's 09:15 candle is small (0.30% of price or less): nothing has turned yesterday's move, and fading it fails — 57 such trades, 14 winners, -699 pts over 2020-26.",
+         "A SELL on a day after a 0.6% rally, with a 50-pt 09:15 candle.")),
     (lambda r: 'squeezed day' in r,
      'No trade · squeezed day, setup candle too big',
      _nt("A narrow CPR and small box with Cam R3/S3 packed within 0.25% of price, and a setup candle wider than the whole Cam band: the move is already spent.",
@@ -1171,7 +1263,9 @@ def rule_note(why: str, sim: Optional[Dict[str, Any]], second: bool = False) -> 
         return f"{tag}: {why}"
     return (f"{tag}: {why}; chart replay {sim['result']}"
             + (f" {sim['entry_time']} -> {sim['exit_time']}" if sim['exit_time'] else '')
-            + (f", squared off at {sim['exit_time']}, P&L {sim['pnl']:+.0f}" if sim['result'] == 'EOD' and sim['pnl'] is not None else ''))
+            + (f", squared off at {sim['exit_time']}, P&L {sim['pnl']:+.0f}" if sim['result'] == 'EOD' and sim['pnl'] is not None else '')
+            + (f", target reached at {sim['target_time']} and locked (stop to the target), out at {sim['exit_time']}, P&L {sim['pnl']:+.0f}"
+               if sim.get('target_time') and sim['pnl'] is not None else ''))
 
 
 def chart_rows(r: Dict[str, Any], bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

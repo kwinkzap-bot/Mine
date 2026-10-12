@@ -1105,7 +1105,8 @@ def test_20_jan_2025_sells_the_small_0920_and_buys_the_reversal_to_the_virgin_cp
     assert len(out) == 2
     (p1, why1, _, sim1), (p2, why2, i2, sim2) = out
     assert p1 == {'trade': 'SELL', 'entry': 23209.0, 'target': 23161.0, 'sl': 23233.0} and 'PDH/R1' in why1 and sim1['result'] == 'SL'
-    assert p2 == {'trade': 'BUY', 'entry': 23238.0, 'target': 23318.0, 'sl': 23203.0} and bars[i2]['time'] == '09:55'
+    # EXIT_TUNING: the reversal's stop sits 15 pts further, under the 09:55 low
+    assert p2 == {'trade': 'BUY', 'entry': 23238.0, 'target': 23318.0, 'sl': 23188.0} and bars[i2]['time'] == '09:55'
     assert 'the reversal' in why2 and 'virgin CPR 23,318-23,332' in why2 and sim2['result'] == 'Target'
 
 
@@ -1140,11 +1141,14 @@ def _chart_22():
     return chart
 
 
-def test_22_sep_2026_sells_the_retracement_after_a_big_box_rejection():
+def test_22_sep_2026_sells_the_retracement_after_a_big_box_rejection(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
     from trading_app.service.cpr_trade_rule import box_retracement
+    assert box_retracement(_chart_22(), BARS_22 + _session()[-25:]) is None      # switched off since 2026-10-11
+    monkeypatch.setattr(rule, 'RETRACEMENT_TRADE', True)
     p, why, i = box_retracement(_chart_22(), BARS_22 + _session()[-25:])
-    assert p == {'trade': 'SELL', 'entry': 23452.0, 'target': 23315.0, 'sl': 23468.0} and BARS_22[i]['time'] == '10:15'
-    assert 'too big to enter under' in why and 'made a lower high' in why and 'target the lower box' in why
+    assert p == {'trade': 'SELL', 'entry': 23452.0, 'target': 23436.0, 'sl': 23468.0} and BARS_22[i]['time'] == '10:15'   # 1:1, not the far box
+    assert 'too big to enter under' in why and 'made a lower high' in why and 'target 1:1' in why
 
 
 def test_the_retracement_needs_the_box_retouched_and_a_lower_high():
@@ -1686,7 +1690,8 @@ def test_a_squeezed_day_with_a_setup_candle_wider_than_the_cam_band_is_no_trade(
     small = dict(big, open=24630.0, high=24645.0, low=24628.0, close=24643.0)                         # 17 pts, clear of the CPR
     chart = _chart(c1, (24661.25, 24587.65, 24613.0), (24600.0, 24300.0, 24400.0))
     chart.update(cpr_type='Narrow', boxes='Small')
-    assert chart['levels']['cr3'] - chart['levels']['cs3'] < 24568 * rule.SQUEEZE_CAM_PCT / 100     # a 40-pt Cam band
+    assert chart['levels']['cr3'] - chart['levels']['cs3'] < 24568 * rule.SQUEEZE_CAM_PCT / 100     # a 40-pt Cam band (0.16%)
+    monkeypatch.setattr(rule, 'SQUEEZE_REFUSE_PCT', 0.25)       # the refusal's own threshold, as on 18 Jul 2024
     def take(setup):
         bars = [c1] + [dict(setup, time=t) for t in ('09:20', '09:25', '09:30', '09:35')] + [setup] + _session()[-25:]
         monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': setup['high'] + 1, 'target': setup['high'] + 150,
@@ -1696,6 +1701,9 @@ def test_a_squeezed_day_with_a_setup_candle_wider_than_the_cam_band_is_no_trade(
     assert p is None and 'squeezed day' in why
     assert take(small)[0] is not None
     chart['cpr_type'] = 'Medium'                                    # not a narrow CPR: no squeeze
+    assert take(big)[0] is not None
+    chart['cpr_type'] = 'Narrow'
+    monkeypatch.setattr(rule, 'SQUEEZE_REFUSE_PCT', 0.15)       # today's threshold: a 0.16% band is not tight enough to refuse
     assert take(big)[0] is not None
 
 
@@ -1708,7 +1716,7 @@ def _squeeze_chart():
     return c1, chart
 
 
-def test_squeeze_fade_sells_a_rejection_of_the_upper_box_to_the_lower_box():
+def test_squeeze_fade_sells_a_rejection_of_the_upper_box_back_to_the_cpr():
     from trading_app.service import cpr_trade_rule as rule
     c1, chart = _squeeze_chart()
     lv = chart['levels']
@@ -1717,8 +1725,13 @@ def test_squeeze_fade_sells_a_rejection_of_the_upper_box_to_the_lower_box():
     bars = [c1, {'time': '09:20', 'open': 24605.0, 'high': 24615.0, 'low': 24600.0, 'close': 24610.0}, rej] + _session()[-25:]
     assert rule.squeezed(chart, bars)
     p, why, i = rule.squeeze_fade(chart, bars)
-    assert p['trade'] == 'SELL' and bars[i]['time'] == '09:40' and p['target'] == round(lo_top) and p['sl'] > hi_top
-    assert 'box to box' in why
+    assert p['trade'] == 'SELL' and bars[i]['time'] == '09:40' and p['target'] == round(lv['tc']) and p['sl'] > hi_top
+    assert 'back to the CPR' in why
+    lo_bot = min(lv['pdl'], lv['s1'])
+    up = {'time': '09:40', 'open': lo_top + 5, 'high': lo_top + 20, 'low': lo_top - 3, 'close': lo_top + 15}   # mirror: BUY to the BC
+    b2 = [c1, bars[1], up] + _session()[-25:]
+    p2, _, _ = rule.squeeze_fade(chart, b2)
+    assert p2['trade'] == 'BUY' and p2['target'] == round(lv['bc']) and p2['sl'] < lo_bot
     lull = [c1, dict(rej, time='10:45')] + _session()[-25:]                                     # the lull holds for the fade too
     assert rule.squeeze_fade(chart, lull) is None
 
@@ -1759,3 +1772,68 @@ def test_19_sep_2024_a_0915_that_opened_over_pdh_r1_is_not_the_strong_break():
     chart2 = _chart(inside, (25482.2, 25285.55, 25377.55), (25400.0, 24950.0, 25200.0))
     p, why, _ = propose(chart2, [inside] + _session()[-25:])
     assert p and p['trade'] == 'BUY' and 'big move expected; 09:15 strong green candle touched' in why
+
+
+# ── against yesterday's strong move on a quiet open: no trade ──
+
+def test_a_trade_against_yesterdays_strong_move_on_a_quiet_open_is_no_trade(monkeypatch):
+    from trading_app.service import cpr_trade_rule as rule
+    bars = BARS_7 + _session()[-25:]
+    quiet = dict(bars[0], high=bars[0]['close'] + 20, low=bars[0]['close'] - 20)          # a 40-pt 09:15 candle: under 0.30%
+    bars = [quiet] + bars[1:]
+    chart = _chart_7(quiet)
+    chart['levels'] = dict(chart['levels'], pdh=24500.0, r1=24520.0, bc=22000.0, tc=22010.0)
+    monkeypatch.setattr(rule, 'propose', lambda c, b: ({'trade': 'BUY', 'entry': 22930.0, 'target': 23010.0, 'sl': 22890.0}, 'x', 6))
+    chart.update(prev_session={'close': 22800.0}, prev2_close=22950.0)                    # yesterday fell 0.66%: the BUY is against it
+    out = rule._propose_all_core(chart, bars)
+    assert out[0][0] is None and "has not turned yesterday's move" in out[0][1]
+    chart.update(prev2_close=22850.0)                                                     # a 0.22% fall: not strong enough to matter
+    assert rule._propose_all_core(chart, bars)[0][0] is not None
+    chart.update(prev2_close=22650.0)                                                     # yesterday rose: the BUY goes with it
+    assert rule._propose_all_core(chart, bars)[0][0] is not None
+
+
+def test_before_weekly_options_existed_the_leg_is_on_the_monthly_contract():
+    from datetime import date, timedelta
+    from trading_app.service import cpr_option_service as opt
+    days = [date(2018, 3, 1) + timedelta(days=i) for i in range(60) if (date(2018, 3, 1) + timedelta(days=i)).weekday() < 5]
+    c = opt.contract('NIFTY', date(2018, 3, 5), 'BUY', 10450.0, days)
+    assert c['expiry'] == '2018-03-29'                  # the March monthly (last Thursday of this calendar), not the 8 Mar "weekly"
+    days = [date(2019, 3, 1) + timedelta(days=i) for i in range(40) if (date(2019, 3, 1) + timedelta(days=i)).weekday() < 5]
+    assert opt.contract('NIFTY', date(2019, 3, 5), 'BUY', 11000.0, days)['expiry'] == '2019-03-07'   # weekly from Feb 2019
+
+
+def test_17_apr_2023_no_0920_continuation_off_a_shock_size_0915_candle():
+    c1 = {'time': '09:15', 'open': 17863.0, 'high': 17863.0, 'low': 17671.0, 'close': 17674.0}     # 192 pts: 1.1% of price
+    c2 = {'time': '09:20', 'open': 17673.0, 'high': 17689.0, 'low': 17628.0, 'close': 17663.0}
+    chart = _chart(c1, (17842.2, 17729.7, 17828.0), (17900.0, 17600.0, 17750.0))
+    p, why, _ = propose(chart, [c1, c2] + _session()[-25:])
+    assert not (p and 'too big to enter under — waited for 09:20' in why)
+
+
+# ── 30 Oct 2023: a between-the-CPRs SELL whose entry is inside PDL/S1 turns into the box's rejection BUY ──
+
+def test_30_oct_2023_no_sell_into_the_lower_box_buy_its_rejection_instead():
+    c1 = {'time': '09:15', 'open': 19053.0, 'high': 19084.0, 'low': 18998.0, 'close': 19032.0}
+    bars = [c1,
+            {'time': '09:20', 'open': 19033.0, 'high': 19044.0, 'low': 19015.0, 'close': 19016.0},
+            {'time': '09:25', 'open': 19016.0, 'high': 19029.0, 'low': 19010.0, 'close': 19014.0},
+            {'time': '09:30', 'open': 19013.0, 'high': 19013.0, 'low': 18965.0, 'close': 18974.0},   # closes under the daily CPR
+            {'time': '09:35', 'open': 18973.0, 'high': 18981.0, 'low': 18964.0, 'close': 18980.0},
+            {'time': '09:40', 'open': 18979.0, 'high': 18984.0, 'low': 18941.0, 'close': 18946.0},
+            {'time': '09:45', 'open': 18947.0, 'high': 18972.0, 'low': 18940.0, 'close': 18968.0}]   # dips into PDL/S1, closes back over it
+    chart = _chart(c1, (19076.2, 18926.7, 19047.2), (19300.0, 19000.0, 19150.0))
+    chart['weekly'] = {'pp': 19147.27, 'bc': 19097.23, 'tc': 19197.3}
+    p, why, i = propose(chart, bars + _session()[-25:])
+    assert p['trade'] == 'BUY' and bars[i]['time'] == '09:45' and p['entry'] == 18973.0
+    assert 'no sell into support' in why and p['target'] == round(min(chart['levels']['pdh'], chart['levels']['r1']))
+
+
+def test_exit_tuning_moves_the_stop_and_restrikes_the_target():
+    from trading_app.service import cpr_trade_rule as rule
+    p = {'trade': 'BUY', 'entry': 100.0, 'target': 140.0, 'sl': 80.0}
+    t = rule.tune_exit(p, '09:15 closed inside the CPR; 09:40 broke out')     # Inside CPR → breakout candle: +10, 1:1.5
+    assert t == {'trade': 'BUY', 'entry': 100.0, 'target': 145.0, 'sl': 70.0}
+    s = rule.tune_exit(dict(p, trade='SELL', target=60.0, sl=120.0), '09:15 closed inside the CPR')
+    assert s['sl'] == 130.0 and s['target'] == 55.0
+    assert rule.tune_exit(p, 'some other setup') is p
