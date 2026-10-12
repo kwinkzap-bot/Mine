@@ -349,7 +349,7 @@ def test_op_orders_carry_no_automatic_stop_loss():
     pad. Read off the same tuple the dispatcher branches on."""
     import inspect
     src = inspect.getsource(api._dispatch_order_to_brokers)
-    assert "_auto_sl = strategy not in ('intrinsic', 'oix', 'op')" in src
+    assert "_auto_sl = strategy not in ('intrinsic', 'oix', 'op', 'cpr')" in src
 
 
 # ── the strike step comes from the chain, per underlying ─────────────────

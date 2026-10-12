@@ -1,4 +1,4 @@
-/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + EMA Confluence + Swing Momentum tabs */
+/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + CPR Logic + EMA Confluence + Swing Momentum tabs */
 'use strict';
 
 let _scStatusTimer     = null;
@@ -6,7 +6,7 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade changes
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'sc', 'tmf', 'ema-confluence', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -440,6 +440,7 @@ function algoSwitch(tab) {
     clearTimeout(_scHistoryTimer);
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
+    if (typeof _cprClearTimers === 'function') _cprClearTimers();
     if (typeof _emacClearTimers === 'function') _emacClearTimers();
     if (tab === 'active') {
         _activeFetchAll();
@@ -450,6 +451,9 @@ function algoSwitch(tab) {
     } else if (tab === 'tmf') {
         _tmfFetchStatus();
         _tmfFetchHistory();
+    } else if (tab === 'cpr') {
+        _cprFetchStatus();
+        _cprFetchHistory();
     } else if (tab === 'ema-confluence') {
         _emacFetchStatus();
         _emacFetchHistory();

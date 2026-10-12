@@ -8338,7 +8338,10 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     # under a stock option trading at 30 is either an instant exit or a
     # rejected trigger price. 'op' is placement only by design: that page
     # attaches nothing to an order and starts no monitor over it.
-    _auto_sl = strategy not in ('intrinsic', 'oix', 'op')
+    # 'cpr' is the CPR Logic algo, whose stop is the index's and whose
+    # backstop SL-M it places itself — an extra flat stop here would be a
+    # second order on the sell side.
+    _auto_sl = strategy not in ('intrinsic', 'oix', 'op', 'cpr')
 
     # A manual SELL closes the position — kill any running auto-exit monitors for this
     # strike so an orphaned monitor can't fire another SELL later.
@@ -8380,6 +8383,13 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): OP_ACTIVE not enabled")
                 continue
 
+        # The CPR Logic algo, under its own flag: BROKER_N_CPR_ACTIVE.
+        if strategy == 'cpr':
+            raw_active = UserEnvManager.get_user_var(username, f'BROKER_{i}_CPR_ACTIVE', 'false').strip().lower()
+            if raw_active not in ('true', '1', 'yes'):
+                logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): CPR_ACTIVE not enabled")
+                continue
+
         # The caller's own narrowing, applied after every flag: a gate can
         # only ever take brokers away from the routing, never add one that the
         # BROKER_N_*_ACTIVE flags left out.
@@ -8405,6 +8415,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             return {'success': False, 'error': 'No OI-Crossover-enabled broker found. Set BROKER_N_OIX_ACTIVE=true in .env'}
         elif strategy == 'op':
             return {'success': False, 'error': 'No broker is enabled for the Order Placement page. Set BROKER_N_OP_ACTIVE=true in .env'}
+        elif strategy == 'cpr':
+            return {'success': False, 'error': 'No broker is enabled for CPR Logic. Set BROKER_N_CPR_ACTIVE=true in .env'}
         else:
             return {'success': False, 'error': 'No active broker found. Set BROKER_N_ACTIVE=true in .env'}
 
@@ -8436,6 +8448,15 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             if not op_active:
                 logger.info(f"[OP] Skipping broker {_active_instance} ({broker}) because BROKER_N_OP_ACTIVE is FALSE")
                 return {'success': False, 'error': f'Order Placement orders for {broker} are DISABLED in config'}, 403
+
+        if strategy == 'cpr':
+            cpr_active = UserEnvManager.get_user_var(username, f'BROKER_{_active_instance}_CPR_ACTIVE', 'false').lower().strip() in ('true', '1', 'yes')
+            if not cpr_active:
+                return {'success': False, 'error': f'CPR Logic orders for {broker} are DISABLED in config'}, 403
+            if lots_for is None:
+                # Its size is always the caller's, per account; a CPR order
+                # must never fall through to a default lot count below.
+                return {'success': False, 'error': 'CPR Logic orders are sized by the caller'}, 400
 
         if gate is not None:
             # The same vocabulary the routing loop above hands it: 'zerodha',
@@ -9347,6 +9368,146 @@ def algo_tmf_stop() -> EndpointResponse:
         return jsonify({'success': True, 'message': '30-Min Fakeout algo stopped'})
     except Exception as e:
         logger.error(f'[tmf/stop] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/cpr-logic/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_cpr_status() -> EndpointResponse:
+    """The CPR Logic algo today: its settings, the day's levels, every setup
+    and trade with its option leg, the log, and whether live orders would go
+    out right now (mode live AND an account with BROKER_N_CPR_ACTIVE)."""
+    try:
+        from trading_app.algo.cpr_logic import cpr_algo as cpr
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        try:
+            with open(cpr.STATE_FILE) as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+        inst = cpr.get_instance(username)
+        st = cpr.settings(username)
+        accounts = cpr.cpr_accounts(username)
+        hist = cpr.load_history()
+        return jsonify({
+            'success': True,
+            'running': bool(inst and inst.is_running()),
+            'settings': st,
+            'accounts': accounts,
+            'live_armed': st['mode'] == 'live' and any(a['stoppable'] and a['lots'] for a in accounts),
+            'state': inst.state if inst and inst.state else state,
+            'booked': {'paper': round(cpr.booked_pnl('paper'), 2), 'live': round(cpr.booked_pnl('live'), 2)},
+            'next_lots': {m: cpr.lots_for_trade(username, m, st['lots']) for m in ('paper', 'live')},
+            'history_count': len(hist),
+        })
+    except Exception as e:
+        logger.error(f'[cpr/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/cpr-logic/settings', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_cpr_settings() -> EndpointResponse:
+    """Save the tab's choices: mode (paper/live), lot_mode (fixed/compound),
+    lots (paper's fixed size), max_lots (compound's ceiling), start_capital
+    (compound's starting ₹, one lot per ₹20,000 of it). Each is read at
+    the next entry, so nothing needs a restart. A position already open keeps
+    the mode and size it was entered with."""
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        data = request.get_json(silent=True) or {}
+        saves = {}
+        if 'mode' in data:
+            v = str(data['mode']).strip().lower()
+            if v not in ('paper', 'live'):
+                return jsonify({'success': False, 'error': "mode must be 'paper' or 'live'"}), 400
+            saves['CPR_LOGIC_MODE'] = v
+        if 'lot_mode' in data:
+            v = str(data['lot_mode']).strip().lower()
+            if v not in ('fixed', 'compound'):
+                return jsonify({'success': False, 'error': "lot_mode must be 'fixed' or 'compound'"}), 400
+            saves['CPR_LOT_MODE'] = v
+        for key, var, lo, hi in (('lots', 'CPR_LOTS', 1, 27), ('max_lots', 'CPR_MAX_LOTS', 1, 500),
+                                 ('start_capital', 'CPR_START_CAPITAL', 20000, 100_000_000)):
+            if key in data:
+                try:
+                    n = int(data[key])
+                except (TypeError, ValueError):
+                    return jsonify({'success': False, 'error': f'{key} must be a whole number'}), 400
+                if not lo <= n <= hi:
+                    return jsonify({'success': False, 'error': f'{key} must be {lo}-{hi}'}), 400
+                saves[var] = str(n)
+        for var, val in saves.items():
+            if not UserEnvManager.save_user_var(username, var, val):
+                return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500
+        if 'CPR_LOGIC_MODE' in saves:
+            logger.warning(f"[cpr/settings] {username} switched CPR Logic to {saves['CPR_LOGIC_MODE'].upper()}")
+        return jsonify({'success': True, 'saved': saves})
+    except Exception as e:
+        logger.error(f'[cpr/settings] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/cpr-logic/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_cpr_history() -> EndpointResponse:
+    """Every closed CPR Logic trade, paper and live, newest first."""
+    try:
+        from trading_app.algo.cpr_logic import cpr_algo as cpr
+        rows = list(reversed(cpr.load_history()))
+        return jsonify({'success': True, 'trades': rows, 'count': len(rows)})
+    except Exception as e:
+        logger.error(f'[cpr/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/cpr-logic/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_cpr_start() -> EndpointResponse:
+    """Start the thread and keep it starting every day (CPR_LOGIC_ENABLED)."""
+    try:
+        from trading_app.algo.cpr_logic import cpr_algo as cpr
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        UserEnvManager.save_user_var(username, 'CPR_LOGIC_ENABLED', 'true')
+        started = cpr.ensure_running(username, source='start-button')
+        inst = cpr.get_instance(username)
+        return jsonify({'success': True, 'running': bool(inst and inst.is_running()),
+                        'message': 'CPR Logic started' if started else
+                                   'CPR Logic enabled — it runs 09:00-15:30 on trading days'})
+    except Exception as e:
+        logger.error(f'[cpr/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/cpr-logic/stop', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_cpr_stop() -> EndpointResponse:
+    """Stop the thread and keep it stopped until Start. A live position it
+    holds is NOT squared off by this — its backstop SL-M stays at the broker
+    and the Order Placement strip shows it."""
+    try:
+        from trading_app.algo.cpr_logic import cpr_algo as cpr
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        UserEnvManager.save_user_var(username, 'CPR_LOGIC_ENABLED', 'false')
+        inst = cpr.get_instance(username)
+        if inst and inst.is_running():
+            inst.stop()
+        return jsonify({'success': True, 'message': 'CPR Logic stopped'})
+    except Exception as e:
+        logger.error(f'[cpr/stop] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

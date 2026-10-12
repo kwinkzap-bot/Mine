@@ -13,7 +13,7 @@ engine, four brokers. Treat every change as touching real orders.
 
 **Never call `create_app()` outside the real app.** It runs
 `init_extensions` → `init_scheduler` (`app/__init__.py:27` →
-`extensions.py:96` → `scheduler.py:978`), which registers 17 cron jobs and
+`extensions.py:96` → `scheduler.py:978`), which registers 19 cron jobs and
 immediately restarts the live algos. A test or REPL that imports it during
 market hours places real orders. Tests build a bare `Flask()` instead — see
 `tests/route_app.py`.
@@ -61,7 +61,7 @@ few seconds later. Booting it out is the real stop, and `bootstrap` puts it
 back.
 
 A restart takes ~8s to serve again and re-runs `init_scheduler`, so it
-re-registers the 17 cron jobs and **restarts the live algos** — the same reason
+re-registers the 19 cron jobs and **restarts the live algos** — the same reason
 `create_app()` is dangerous. Verify afterwards:
 
 ```bash
@@ -279,6 +279,51 @@ until every flat slot is booked (`TgCallStore.get_unbooked`). The 📒 Auto P&L
 button on /orderplacement reads `GET /api/order-placement/tg-calls/history`.
 Tests: `tests/test_tg_call_engine.py`, `test_tg_calls_listener.py`,
 `test_tg_call_store.py`.
+
+## CPR Logic live algo
+
+The /cpr-logic rule, run live on NIFTY options — the **CPR Logic** tab on
+/algo (`templates/algo_cpr.html`, `static/js/algo_cpr.js`), the thread
+`algo/cpr_logic/cpr_algo.py`, the brain `service/cpr_live_engine.py`, routes
+`/api/algo/cpr-logic/{status,settings,history,start,stop}`, jobs
+`cpr_logic_start` 09:05 + `cpr_logic_watchdog` (and startup recovery).
+Added 2026-10-12, **paper by default**:
+
+```
+CPR_LOGIC_MODE=paper            # live = real orders; the tab's toggle, read at each ENTRY
+CPR_LOGIC_ENABLED=true          # the tab's Start/Stop (scheduler honours it)
+CPR_LOT_MODE=fixed              # compound = 1 lot per CPR_PER_LOT of CPR_START_CAPITAL + the mode's booked P&L
+CPR_LOTS=1                      # paper's fixed size
+CPR_START_CAPITAL / CPR_PER_LOT / CPR_MAX_LOTS   # 20000 / 20000 / 27 — compound starts at 1 lot
+BROKER_N_CPR_ACTIVE=true        # per account, with BROKER_N_ACTIVE; zerodha/fyers only
+BROKER_N_CPR_LOTS=1             # per account; an account without it is refused, never guessed
+```
+
+Load-bearing:
+
+* **One rule, two drivers.** The engine calls `cpr_trade_rule.propose_all` on
+  the closed candles so far (and `second_trade`, factored out of
+  `_propose_all_core` for it) — never a copy of the rule. Every decision is
+  final once made. Replayed that way over 2018-26 it earns what the sheet
+  does (618 trades, 54.9 %, +10,956 pts vs 606 / 54.5 % / +10,802). It
+  decides at the 09:15 close on one candle where the sheet would have waited
+  for 09:20 — kept, because waiting earned less (+10,302).
+* **The trade is on the index; the order is an option.** Entry, stop and
+  target are NIFTY levels watched on the index (price polled every 5 s only
+  while a trade is armed/open; the closed candle's extremes are the net for
+  missed wicks). On the entry the ≈`CPR_PREMIUM` (200) front-weekly strike is
+  bought at market (`_dispatch_order_to_brokers(strategy='cpr')`, records
+  `strategy='op'` / `source='cpr'` so the /orderplacement strip shows them);
+  exits sell it at market via `exit_selected_records`. Live, an SL-M
+  **backstop** rests on the premium at `fill − 0.75 × index risk` — the floor
+  if the app is down, not the exit.
+* **`strategy='cpr'` is opted out of the dispatcher's automatic `entry − 20`
+  stop** and routes on `BROKER_N_CPR_ACTIVE` only; it refuses to size itself.
+* **A fill read off a candle that is not the latest is never traded** — a
+  restart catching up the morning marks it `missed`.
+* Target lock and close-back exits are the sheet's (`simulate_trade`).
+
+Tests: `tests/test_cpr_live.py`.
 
 ## The env file is read by threads and rewritten whole
 

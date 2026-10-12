@@ -281,6 +281,26 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # CPR Logic (the /cpr-logic rule run live on NIFTY options): up at
+        # 09:05 so the day's history is loaded before the first candle closes
+        # at 09:20, and the same watchdog shape brings it back if it dies.
+        self.scheduler.add_job(
+            self._start_cpr_logic,
+            CronTrigger(day_of_week='mon-fri', hour=9, minute=5, second=0, timezone='Asia/Kolkata'),
+            id='cpr_logic_start',
+            name='CPR Logic Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+        self.scheduler.add_job(
+            self._watchdog_cpr_logic,
+            CronTrigger(day_of_week='mon-fri', hour='9-15', minute='*/5', second=45, timezone='Asia/Kolkata'),
+            id='cpr_logic_watchdog',
+            name='CPR Logic Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         # Telegram calls: the channel listener comes up before the open so the
         # first call of the day is not missed, and the same watchdog shape
         # brings back either thread (listener, call engine) if it dies.
@@ -777,6 +797,27 @@ class MarketScheduler:
         """Every 5 minutes during market hours: restart TMF thread if it crashed."""
         self._ensure_tmf_running(source='Watchdog')
 
+    # ── CPR Logic ────────────────────────────────────────────────────────────
+
+    def _ensure_cpr_running(self, source: str = '') -> None:
+        """Start the CPR Logic thread on a trading day unless the tab's Stop
+        was clicked (CPR_LOGIC_ENABLED=false). The window and the idempotence
+        are cpr_algo.ensure_running's; paper vs live is decided per entry
+        inside the thread, never here."""
+        try:
+            if not self.is_trading_day():
+                return
+            from trading_app.algo.cpr_logic import cpr_algo
+            cpr_algo.ensure_running(self._algo_username(), source=source)
+        except Exception as e:
+            logger.error(f"[CPR {source}] _ensure_cpr_running failed: {e}", exc_info=True)
+
+    def _start_cpr_logic(self) -> None:
+        self._ensure_cpr_running(source='Scheduler')
+
+    def _watchdog_cpr_logic(self) -> None:
+        self._ensure_cpr_running(source='Watchdog')
+
     # ── Telegram calls ───────────────────────────────────────────────────────
 
     def _ensure_tg_calls_running(self, source: str = '') -> None:
@@ -1107,6 +1148,7 @@ def init_scheduler(app):
         market_scheduler._ensure_sc_running(source='Startup')
         market_scheduler._ensure_tmf_running(source='Startup')
         market_scheduler._ensure_ema_confluence_running(source='Startup')
+        market_scheduler._ensure_cpr_running(source='Startup')
         # And the Telegram-call engine, for the case this restart is exactly
         # what it has to survive: a live position with a stop resting at the
         # broker and a plan on disk that nothing is reading until this line

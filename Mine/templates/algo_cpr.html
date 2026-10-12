@@ -1,0 +1,77 @@
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- CPR Logic panel — the /cpr-logic rule, run live on NIFTY  -->
+    <!-- options. Own files: algo_cpr.html + static/js/algo_cpr.js -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-cpr-panel">
+
+    <div class="ag-header">
+        <span class="ag-title">CPR Logic</span>
+        <span id="cprModeBadge" class="dg-badge dg-badge--warn">PAPER</span>
+        <!-- CPR_LOGIC_MODE, read at every entry: Paper records the option leg at
+             its real premium and sends nothing; Live buys it at every account
+             with BROKER_N_CPR_ACTIVE=true (zerodha / fyers). -->
+        <div class="rtp-period-tabs" id="cprModeToggle" style="margin-left:0"
+             title="Paper: every setup, fill and exit is recorded at the option's real premium — nothing is sent. Live: the option is bought at every account with BROKER_N_CPR_ACTIVE=true. Applies from the next entry; an open position keeps its mode.">
+            <button class="rtp-period-tab" data-mode="paper" onclick="_cprSetMode('paper')">Paper</button>
+            <button class="rtp-period-tab" data-mode="live"  onclick="_cprSetMode('live')">Live</button>
+        </div>
+        <span id="cprRunBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="cprRunBadgeText">Stopped</span>
+        </span>
+        <button class="ag-btn ag-btn-strikes" onclick="_cprStart()">▶ Start</button>
+        <button class="ag-btn ag-btn-strikes" onclick="_cprStop()">■ Stop</button>
+        <a class="ag-btn ag-btn-strikes" href="/cpr-logic" title="The rule's backtest sheet">Sheet ↗</a>
+        <span class="ag-last-upd" id="cprLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Sizing ──────────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Sizing</span>
+            <div class="rtp-period-tabs" id="cprLotModeToggle" style="margin-left:12px"
+                 title="Fixed: BROKER_N_CPR_LOTS per account (the box below in paper). Compound: one lot per ₹20,000 of the Capital box plus the booked P&amp;L of that mode, up to Max lots.">
+                <button class="rtp-period-tab" data-lot-mode="fixed"    onclick="_cprSave({lot_mode:'fixed'})">Fixed lots</button>
+                <button class="rtp-period-tab" data-lot-mode="compound" onclick="_cprSave({lot_mode:'compound'})">Compound (1 per ₹20K)</button>
+            </div>
+            <label class="cpr-num" title="Paper's fixed size (live accounts use BROKER_N_CPR_LOTS)">Paper lots
+                <input type="number" id="cprLots" min="1" max="27" step="1" onchange="_cprSave({lots:+this.value})"></label>
+            <label class="cpr-num" title="Compound's starting capital — one lot per ₹20,000 of it plus the booked P&amp;L (₹20,000 = 1 lot to start)">Capital ₹
+                <input type="number" id="cprCapital" class="cpr-num-wide" min="20000" step="20000" onchange="_cprSave({start_capital:+this.value})"></label>
+            <label class="cpr-num" title="Compound never trades more lots than this (27 = NIFTY's freeze limit, one order)">Max lots
+                <input type="number" id="cprMaxLots" min="1" max="500" step="1" onchange="_cprSave({max_lots:+this.value})"></label>
+            <span id="cprNextLots" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+        </div>
+        <div class="ag-card-body"><div class="ag-grid" id="cprAccounts"><div class="ag-empty">…</div></div></div>
+    </div>
+
+    <!-- ── Today ───────────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Today</span>
+            <span id="cprLevels" style="margin-left:12px;font-size:11px;color:var(--ag-text-3)"></span>
+            <span class="ag-card-hdr-actions" style="margin-left:auto">
+                <button class="ag-btn ag-btn-strikes" onclick="_cprFetchStatus()">↻ Refresh</button>
+            </span>
+        </div>
+        <div class="ag-card-body">
+            <div id="cprTrades"><div class="ag-empty">No setup yet today</div></div>
+            <div class="cpr-log" id="cprLog"></div>
+        </div>
+    </div>
+
+    <!-- ── History ─────────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Trade History</span>
+            <div class="rtp-period-tabs" id="cprBookTabs" style="margin-left:12px">
+                <button class="rtp-period-tab active" data-book="all"   onclick="_cprSetBook('all')">All</button>
+                <button class="rtp-period-tab"        data-book="paper" onclick="_cprSetBook('paper')">Paper</button>
+                <button class="rtp-period-tab"        data-book="live"  onclick="_cprSetBook('live')">Live</button>
+            </div>
+            <span id="cprHistSummary" style="margin-left:auto;font-size:11px;font-weight:700"></span>
+        </div>
+        <div id="cprHistBody"><div class="ag-empty">No completed trades</div></div>
+    </div>
+
+    </div><!-- #algo-cpr-panel -->

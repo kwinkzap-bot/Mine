@@ -1617,7 +1617,7 @@ def simulate(bars, trade):
              and ((b['close'] > ext['through']) if is_buy else (b['close'] < ext['through'])))
     if not broke:
         return locked()
-    used = dict(trade, target=ext['level'])
+    used = dict(trade, target=ext['level'], planned_target=trade['target'])
     entry, sl, target = sim.get('fill') or trade['entry'], trade['sl'], ext['level']
     base = {'entry_time': sim['entry_time'], 'fill': entry}
     for x in bars[k + 1:]:
@@ -2148,20 +2148,33 @@ def _propose_all_core(chart, bars):
         return [(None, why, None, None)]
     sim, used = simulate(bars[i:], tune_exit(p, why))
     out = [(used, why, i, sim)]
-    if sim['result'] in ('SL', 'Target') and MAX_TRADES_PER_DAY < 2:
-        return out                         # one trade a day: the day ends with the first trade's exit
-    if sim['result'] in ('SL', 'Target', 'No fill'):
-        after = sim['exit_time'] if sim['result'] in ('SL', 'Target') else bars[i]['time']
-        start = next((k for k, b in enumerate(bars) if b['time'] > after), len(bars))
-        late = virgin_cpr_rejection(chart, bars, start) or reversal_after_stop(chart, bars, sim, used)
-        if late:
-            p2, why2, i2 = late
-            p2, why2 = cap_risk(p2, why2)
-            p2, why2 = virgin_target(p2, why2, chart)
-            p2, why2 = vwap_in_the_way(p2, why2, bars, i2)
-            if not p2:
-                return out
-            sim2, used2 = simulate(bars[i2:], tune_exit(p2, why2))
-            sim2['after'] = sim['result']
-            out.append((used2, why2, i2, sim2))
+    nxt = second_trade(chart, bars, sim, used, i)
+    if nxt:
+        p2, why2, i2 = nxt
+        sim2, used2 = simulate(bars[i2:], tune_exit(p2, why2))
+        sim2['after'] = sim['result']
+        out.append((used2, why2, i2, sim2))
     return out
+
+
+def second_trade(chart, bars, sim, used, i):
+    """The day's second trade after a first one (`used`, set up at bar `i`)
+    that `sim` says ended — stopped, at target, or never filled — or None:
+    the virgin-CPR rejection after its exit, else the reversal after a stop.
+    Shared by the replay above and the live engine, which hands in the
+    first trade's REAL exit (result and the 5-minute bar it happened in).
+    Returned untuned: the caller applies tune_exit, as for the first."""
+    if sim['result'] in ('SL', 'Target') and MAX_TRADES_PER_DAY < 2:
+        return None                        # one trade a day: the day ends with the first trade's exit
+    if sim['result'] not in ('SL', 'Target', 'No fill'):
+        return None
+    after = sim['exit_time'] if sim['result'] in ('SL', 'Target') else bars[i]['time']
+    start = next((k for k, b in enumerate(bars) if b['time'] > after), len(bars))
+    late = virgin_cpr_rejection(chart, bars, start) or reversal_after_stop(chart, bars, sim, used)
+    if not late:
+        return None
+    p2, why2, i2 = late
+    p2, why2 = cap_risk(p2, why2)
+    p2, why2 = virgin_target(p2, why2, chart)
+    p2, why2 = vwap_in_the_way(p2, why2, bars, i2)
+    return (p2, why2, i2) if p2 else None
