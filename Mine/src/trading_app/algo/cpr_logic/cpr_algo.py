@@ -18,9 +18,19 @@ crosses the entry, the ≈``CPR_PREMIUM`` (default 200) strike of the front
 weekly expiry is BOUGHT — CE for a BUY setup, PE for a SELL — at market. When
 the index reaches the stop, or the 5-minute close settles the target, or it is
 15:15, that option is sold at market. Live, an SL-M also rests at the broker
-on the premium (``BACKSTOP_X`` of the index risk below the fill) — not the
-exit, which is the index's, but the floor if this app is down when the market
-runs.
+on the premium, ``CPR_BACKSTOP_X`` (1.5) × the index risk below the fill — not
+the exit, which is the index's, but the floor if this app is down when the
+market runs (0 = none). It is set that far on purpose: on 13 Oct 2026 it sat at
+0.75× and an in-the-money CE, which moves point for point with NIFTY and
+loses time value besides, reached it at 11:15 while NIFTY was still well clear
+of its stop — the broker sold at 148.05, and the trade then ran to +175 pts.
+
+**The books are the broker's.** A live leg's entry and exit prices are its
+real average fills, read back from the order book (``leg_fills``) — not the
+quote at the moment. A leg the broker closes on its own (the backstop firing,
+a square-off by hand) is seen on the next sweep and booked at that fill. A
+trade is written to history only once every leg's fills are in (or 2 minutes
+after its exit, flagged).
 
 **Sizing** — ``CPR_LOT_MODE``: ``fixed`` trades ``BROKER_N_CPR_LOTS`` per
 account (``CPR_LOTS`` in paper, default 1); ``compound`` trades one lot per
@@ -56,7 +66,9 @@ _HARD_STOP_MIN = 15 * 60 + 30
 _DAILY_SINCE = date(2017, 7, 1)      # the virgin CPRs look back over every session since
 _PRIOR_DAYS = 45                     # 5-minute history for the first-candle average (20 sessions)
 _STOPPABLE = ('zerodha', 'kite', 'fyers')
-BACKSTOP_X = 0.75                    # premium SL-M: fill - BACKSTOP_X x the index risk (≈ delta 0.5 x 1.5)
+BACKSTOP_X = 1.5                     # premium SL-M: fill - CPR_BACKSTOP_X (this) x the index risk; 0 = none
+_SYNC_SECS = 15                      # how often a live leg's fills / broker-side close are read back
+_BOOK_WAIT_SECS = 120                # a fill the order book never reports: book on what is known
 
 _instances: Dict[str, 'CPRAlgo'] = {}
 
@@ -369,7 +381,8 @@ class CPRAlgo:
 
         for ev in events:
             self._act(ev, now)
-        if events:
+        synced = self._sync_live_legs(now)
+        if events or synced:
             self._save_state()
         else:
             self.state['updated'] = _hhmm(now)
@@ -380,8 +393,108 @@ class CPRAlgo:
         return f'{h + m // 60:02d}:{m % 60:02d}'
 
     def _open_legs(self) -> bool:
-        return any(leg.get('open') for t in self.state['day']['trades']
-                   for leg in (t.get('legs') or {}).values())
+        return any(leg.get('open') or (not t.get('booked') and t.get('option'))
+                   for t in self.state['day']['trades'] for leg in (t.get('legs') or {}).values())
+
+    # ── the broker's side of a live leg ─────────────────────────────────
+
+    def _fills(self, record_id) -> Optional[tuple]:
+        """(status, avg, qty) of one stored order at its broker, or None."""
+        if not record_id:
+            return None
+        from trading_app.app.routes.api import leg_fills
+        from trading_app.app.order_placement.op_signal_engine import _session
+        from trading_app.app.utils.mine_order_store import MineOrderStore
+        rec = MineOrderStore.get_order(record_id)
+        if not rec:
+            return None
+        try:
+            rows = leg_fills(rec, self.username, _session(self.username))
+        except Exception as e:
+            logger.debug(f'[CPR] fills of {record_id} unavailable: {e}')
+            return None
+        if not rows:
+            return None
+        status = 'OPEN' if any(r[0] == 'OPEN' for r in rows.values()) else next(iter(rows.values()))[0]
+        qty = sum(int(r[2] or 0) for r in rows.values())
+        px = [r[1] for r in rows.values() if r[1]]
+        return status, (round(sum(px) / len(px), 2) if px else None), qty
+
+    def _sync_live_legs(self, now: datetime) -> bool:
+        """Read every live leg's real fills back, notice a leg the broker closed
+        on its own, and book a trade whose legs are all settled. True when
+        anything changed."""
+        if _time.time() - self.state.get('_synced_at', 0) < _SYNC_SECS:
+            return False
+        self.state['_synced_at'] = _time.time()
+        changed = False
+        for t in self.state['day']['trades']:
+            for key, leg in (t.get('legs') or {}).items():
+                if key == 'paper':
+                    continue
+                if leg.get('entry_record') and not leg.get('entry_confirmed'):
+                    f = self._fills(leg['entry_record'])
+                    if f and f[0] == 'EXECUTED' and f[1]:
+                        leg.update(entry=f[1], entry_confirmed=True)
+                        changed = True
+                if leg.get('open') and leg.get('sl_record'):
+                    f = self._fills(leg['sl_record'])
+                    if f and f[0] == 'EXECUTED' and f[2] > 0:
+                        leg.update(open=False, exit=f[1], exit_confirmed=True, exit_time=_hhmm(now),
+                                   exit_reason='backstop SL-M filled at the broker')
+                        self._note(f"#{t['n']} {leg['name']}: the backstop SL-M at {leg.get('backstop')} "
+                                   f"FILLED at the broker ({f[1]}) — the position is flat; the index "
+                                   f"trade is followed on paper from here")
+                        self._alert('cpr_exit', f"CPR — backstop filled at {leg['name']}",
+                                    f"sold at {f[1]}; NIFTY {self.state.get('spot')}", t)
+                        changed = True
+                if not leg.get('open') and leg.get('exit_record') and not leg.get('exit_confirmed'):
+                    f = self._fills(leg['exit_record'])
+                    if f and f[0] == 'EXECUTED' and f[1]:
+                        leg.update(exit=f[1], exit_confirmed=True)
+                        changed = True
+                if leg.get('entry') is not None and leg.get('exit') is not None:
+                    pnl = round((leg['exit'] - leg['entry']) * self._qty(leg), 2)
+                    if pnl != leg.get('pnl'):
+                        leg['pnl'] = pnl
+                        changed = True
+            if self._book_if_settled(t):
+                changed = True
+        return changed
+
+    def _book_if_settled(self, t) -> bool:
+        """Write the trade's history row once: when its index trade is over or
+        every leg is already flat at the broker, and every leg's fills are in
+        (or _BOOK_WAIT_SECS have passed since the last exit)."""
+        if t.get('booked') or not t.get('option'):
+            return False
+        legs = t.get('legs') or {}
+        if any(l.get('open') for l in legs.values()):
+            return False
+        flat_at = t.get('flat_at') or _time.time()
+        t.setdefault('flat_at', flat_at)
+        pending = [l for k, l in legs.items() if k != 'paper' and l.get('qty')
+                   and not (l.get('entry_confirmed') and l.get('exit_confirmed'))]
+        if pending and _time.time() - flat_at < _BOOK_WAIT_SECS:
+            return False
+        t['booked'] = True
+        pnl = sum(float(l.get('pnl') or 0) for l in legs.values())
+        _append_history({
+            'date': self.state['day']['date'], 'n': t['n'], 'mode': t.get('mode'),
+            'strategy': t['strategy'], 'side': t['trade'], 'setup_time': t['setup_time'],
+            'entry': t['entry'], 'sl': t['sl'], 'target': t['target'],
+            'index_fill': t['fill'], 'fill_time': t['fill_time'], 'index_exit': t.get('exit'),
+            'exit_time': t.get('exit_time') or min((l.get('exit_time') or '99:99') for l in legs.values()),
+            'result': t.get('result') or 'Backstop', 'pts': t.get('pts'),
+            'locked_at': t.get('locked_at'),            # when a ridden target was reached
+            'strike': t['option']['strike'], 'option_type': t['option']['type'],
+            'legs': {k: {x: v.get(x) for x in ('name', 'lots', 'qty', 'entry', 'exit', 'pnl', 'exit_reason')}
+                     for k, v in legs.items()},
+            'pnl': round(pnl, 2),
+            'unconfirmed': bool(pending) or None,
+        })
+        self._note(f"#{t['n']}: booked ₹{pnl:,.0f}" + (' (fills not all confirmed)' if pending else ''))
+        return True
 
     # ── acting on the engine ────────────────────────────────────────────
 
@@ -507,13 +620,16 @@ class CPRAlgo:
                 # The floor if the app is down when the market runs: not the
                 # exit (that is the index stop), so it sits a step beyond it.
                 risk = abs(t['fill'] - t['sl'])
-                trigger = round(max(0.05, entry - BACKSTOP_X * risk), 1)
-                signal = {'id': self._signal_id(t), 'symbol': SYMBOL, 'strike': opt['strike'],
-                          'option_type': opt['type'], 'action': 'BUY', 'lot_size': lot_size}
-                sl_id = _place_stop_leg(signal, a['instance'], qty // lot_size, trigger,
-                                        self.username, session_data, source='cpr')
+                x = _num(self.username, 'CPR_BACKSTOP_X', BACKSTOP_X)
+                trigger = round(entry - x * risk, 1) if x > 0 else None
+                sl_id = None
+                if trigger and trigger > 0.05:
+                    signal = {'id': self._signal_id(t), 'symbol': SYMBOL, 'strike': opt['strike'],
+                              'option_type': opt['type'], 'action': 'BUY', 'lot_size': lot_size}
+                    sl_id = _place_stop_leg(signal, a['instance'], qty // lot_size, trigger,
+                                            self.username, session_data, source='cpr')
                 leg.update(backstop=trigger, sl_record=sl_id)
-                if not sl_id:
+                if trigger and trigger > 0.05 and not sl_id:
                     self._alert('cpr_order_failed', f"CPR — no backstop SL at {a['name']}",
                                 f'the SL-M at {trigger} was refused; the index stop still exits', t)
             else:
@@ -530,9 +646,9 @@ class CPRAlgo:
             if not leg.get('open'):
                 continue
             if key == 'paper':
-                leg.update(exit=exit_px, open=False)
+                leg.update(exit=exit_px, open=False, exit_time=t['exit_time'])
             else:
-                leg.update(self._exit_live(t, leg, exit_px))
+                leg.update(self._exit_live(t, leg, exit_px), exit_time=t['exit_time'])
             leg['pnl'] = (round((leg['exit'] - leg['entry']) * self._qty(leg), 2)
                           if leg.get('exit') is not None and leg.get('entry') is not None else None)
         self._note(f"#{t['n']} {t['trade']}: {t['result']} at {t['exit_time']} — index {t['exit']:,.0f} "
@@ -541,18 +657,9 @@ class CPRAlgo:
         self._alert('cpr_exit', f"CPR exit — {t['result']} {t['pts']:+.0f} pts",
                     f"{t['strategy']} · NIFTY {opt['strike'] if opt else '—'} {opt['type'] if opt else ''} · "
                     f"₹{pnl:,.0f}", t)
-        if opt:
-            _append_history({
-                'date': self.state['day']['date'], 'n': t['n'], 'mode': t.get('mode'),
-                'strategy': t['strategy'], 'side': t['trade'], 'setup_time': t['setup_time'],
-                'entry': t['entry'], 'sl': t['sl'], 'target': t['target'],
-                'index_fill': t['fill'], 'fill_time': t['fill_time'], 'index_exit': t['exit'],
-                'exit_time': t['exit_time'], 'result': t['result'], 'pts': t['pts'],
-                'strike': opt['strike'], 'option_type': opt['type'],
-                'legs': {k: {x: v.get(x) for x in ('name', 'lots', 'qty', 'entry', 'exit', 'pnl')}
-                         for k, v in legs.items()},
-                'pnl': round(pnl, 2),
-            })
+        t['flat_at'] = _time.time()
+        if 'paper' in legs:
+            self._book_if_settled(t)
 
     def _qty(self, leg) -> int:
         if leg.get('qty'):
@@ -582,7 +689,29 @@ class CPRAlgo:
         if errs:
             self._alert('cpr_order_failed', f"CPR — exit refused at {leg['name']}", str(errs[0]), t)
             return {'exit_error': str(errs[0])}
-        return {'exit': exit_px, 'open': False}
+        exits = [ex for ex in (res.get('exits') or []) if int(ex.get('instance') or 0) == int(leg['instance'])]
+        if not exits:
+            # Nothing left to sell: the broker had already closed it (the
+            # backstop, or a hand square-off) — book that fill, not this quote.
+            f = self._fills(leg.get('sl_record'))
+            if f and f[0] == 'EXECUTED' and f[2] > 0:
+                return {'exit': f[1], 'open': False, 'exit_confirmed': True,
+                        'exit_reason': 'backstop SL-M filled at the broker'}
+            return {'exit': exit_px, 'open': False, 'exit_reason': 'already flat at the broker — fill unknown'}
+        from trading_app.app.routes.order_placement_api import OP_STRATEGY
+        ex = exits[0]
+        rec = MineOrderStore.add_order({
+            'mode': 'broker', 'symbol': SYMBOL, 'strike': t['option']['strike'],
+            'option_type': t['option']['type'], 'action': ex.get('side') or 'SELL',
+            'strategy': OP_STRATEGY, 'order_type': 'MARKET', 'type': 'MARKET', 'instrument': 'NFO',
+            'price': None, 'quantity': sum(int(e.get('quantity') or 0) for e in exits),
+            'status': 'OPEN', 'username': self.username, 'source': 'cpr',
+            'signal_id': self._signal_id(t), 'leg': 'EXIT',
+            'broker_order_ids': [{'broker': e.get('broker'), 'instance': leg['instance'], 'order_id': oid,
+                                  'success': True, 'quantity': int(e.get('quantity') or 0)}
+                                 for e in exits for oid in (e.get('order_ids') or [])],
+        })
+        return {'exit': exit_px, 'open': False, 'exit_record': rec['id']}
 
     def _signal_id(self, t) -> str:
         return f"cpr-{self.state['day']['date']}-{t['n']}"

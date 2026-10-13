@@ -13,7 +13,7 @@
     "fill_time": "09:40",
     "index_exit": 22702.05,
     "exit_time": "15:15",
-    "result": "Target",
+    "result": "Backstop",
     "pts": 174.7,
     "strike": 22350,
     "option_type": "CE",
@@ -22,11 +22,15 @@
         "name": "Devanai (Kite)",
         "lots": 1,
         "qty": 65,
-        "entry": 196.35,
-        "exit": 352.0,
-        "pnl": 10117.25
+        "entry": 197.4,
+        "exit": 148.05,
+        "pnl": -3207.75,
+        "exit_reason": "backstop SL-M filled at the broker 11:15:10 (trigger 148.1)"
       }
     },
-    "pnl": 10117.25
+    "pnl": -3207.75,
+    "broker_exit_time": "11:15",
+    "note": "Corrected 2026-10-13 to Zerodha fills: the 0.75x backstop fired at 11:15 while NIFTY was clear of its 22,463 stop; the index trade itself ran to +174.7 pts (Target at 15:15), the option position was already flat.",
+    "locked_at": "14:30"
   }
 ]

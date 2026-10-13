@@ -277,3 +277,56 @@ def test_cpr_orders_route_on_their_own_flag_and_carry_no_automatic_stop(monkeypa
     unsized = api._dispatch_order_to_brokers(symbol='NIFTY', strike=24850, option_type='CE', action='BUY',
                                              strategy='cpr', username='u', session_data={})
     assert 'sized by the caller' in unsized['summary'][0]['result']['error']
+
+
+# ── the books are the broker's ─────────────────────────────────────────────
+
+def _live_trade(algo, legs):
+    algo.state = {'day': eng.new_day('2026-10-13'), 'log': [], 'last_bar': None}
+    t = {'n': 1, 'trade': 'BUY', 'strategy': 'Inside CPR → cross candle', 'setup_time': '09:35',
+         'entry': 22522.0, 'sl': 22463.0, 'target': 22610.0, 'fill': 22527.35, 'fill_time': '09:40',
+         'status': 'open', 'mode': 'live', 'option': {'symbol': 'NIFTY', 'strike': 22350, 'type': 'CE', 'quoted': 196.35},
+         'legs': legs}
+    algo.state['day']['trades'].append(t)
+    return t
+
+
+def test_a_backstop_filled_at_the_broker_is_booked_at_its_fill(monkeypatch, tmp_path):
+    """13 Oct 2026: the SL-M sold at 148.05 at 11:15; the app kept the trade
+    open and booked a 352 exit at 15:15. Now the sweep sees the stop fill."""
+    cpr, algo = _FakeAlgo.make(monkeypatch, tmp_path, {})
+    leg = {'name': 'Devanai (Kite)', 'instance': 2, 'lots': 1, 'qty': 65, 'entry': 196.35, 'open': True,
+           'entry_record': 'E', 'sl_record': 'S', 'backstop': 148.1}
+    t = _live_trade(algo, {'2': leg})
+    books = {'E': ('EXECUTED', 197.40, 65), 'S': ('OPEN', None, 0)}
+    algo._fills = lambda rid: books.get(rid)
+    algo._sync_live_legs(datetime(2026, 10, 13, 9, 41, tzinfo=IST))
+    assert leg['entry'] == 197.40 and leg['entry_confirmed'] and leg['open']
+    books['S'] = ('EXECUTED', 148.05, 65)
+    algo.state['_synced_at'] = 0
+    algo._sync_live_legs(datetime(2026, 10, 13, 11, 15, 20, tzinfo=IST))
+    assert not leg['open'] and leg['exit'] == 148.05 and leg['pnl'] == round((148.05 - 197.40) * 65, 2)
+    rows = cpr.load_history()
+    assert len(rows) == 1 and rows[0]['pnl'] == -3207.75 and rows[0]['result'] == 'Backstop'
+    # The index trade running on to its 15:15 exit books nothing a second time.
+    t.update(status='closed', exit=22702.05, exit_time='15:15', result='Target', pts=174.7)
+    algo._leave(t, datetime(2026, 10, 13, 15, 15, tzinfo=IST))
+    assert len(cpr.load_history()) == 1
+
+
+def test_an_exit_is_booked_at_its_real_fill_not_the_quote(monkeypatch, tmp_path):
+    cpr, algo = _FakeAlgo.make(monkeypatch, tmp_path, {})
+    leg = {'name': 'Saranya (Kite)', 'instance': 1, 'lots': 1, 'qty': 65, 'entry': 197.4, 'entry_confirmed': True,
+           'open': False, 'exit': 352.0, 'exit_record': 'X', 'sl_record': 'S'}
+    t = _live_trade(algo, {'1': leg})
+    t.update(status='closed', exit=22702.05, exit_time='15:15', result='Target', pts=174.7, flat_at=1e18)
+    algo._fills = lambda rid: {'X': ('EXECUTED', 349.5, 65), 'S': ('CANCELLED', None, 0)}.get(rid)
+    algo._sync_live_legs(datetime(2026, 10, 13, 15, 15, 30, tzinfo=IST))
+    assert leg['exit'] == 349.5 and cpr.load_history()[0]['pnl'] == round((349.5 - 197.4) * 65, 2)
+
+
+def test_the_backstop_sits_1_5_risks_under_the_fill(monkeypatch, tmp_path):
+    from trading_app.algo.cpr_logic import cpr_algo as cpr
+    assert cpr.BACKSTOP_X == 1.5
+    # 13 Oct: 197.40 fill, 64-pt index risk -> 100.9, well under the 148 that sold it at 0.75x.
+    assert round(197.40 - cpr.BACKSTOP_X * (22527.35 - 22463.0), 1) == 100.9

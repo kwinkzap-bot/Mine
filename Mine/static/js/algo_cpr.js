@@ -79,7 +79,8 @@ function _cprRenderTrades(trades) {
         return Object.assign({}, t, {
             leg: t.option ? `NIFTY ${t.option.strike} ${t.option.type}` : (t.missed ? 'missed' : '—'),
             lots: legs.map(l => `${l.name}: ${l.lots ?? '—'}`).join(', ') || '—',
-            prem: legs.length ? legs.map(l => `${_cprNum(l.entry)} → ${l.exit != null ? _cprNum(l.exit) : '…'}`).join(', ') : '—',
+            prem: legs.length ? legs.map(l => `${_cprNum(l.entry)} → ${l.exit != null ? _cprNum(l.exit) : '…'}`
+                                         + (/backstop/.test(l.exit_reason || '') ? ' (backstop SL)' : '')).join(', ') : '—',
             pnl_inr: legs.some(l => l.pnl != null) ? pnl : null,
         });
     });
@@ -95,12 +96,13 @@ function _cprRenderTrades(trades) {
             { key: 'setup_time', label: 'Setup at' },
             { key: 'entry', label: 'Entry', format: _cprNum },
             { key: 'stop', label: 'SL', format: (v, t) => _cprNum(v) + (t.locked ? ' 🔒' : '') },
-            { key: 'target', label: 'Target', format: _cprNum },
+            { key: 'target', label: 'Target', format: (v, t) => _cprNum(v) + (t.locked_at ? ` · reached ${t.locked_at} 🔒` : '') },
             { key: 'fill', label: 'Index fill', format: (v, t) => v == null ? '—' : `${_cprNum(v)} @ ${t.fill_time}` },
             { key: 'leg', label: 'Option' },
             { key: 'lots', label: 'Lots' },
             { key: 'prem', label: 'Premium' },
-            { key: 'pts', label: 'Pts', format: (v, t) => v == null ? '—' : `${v > 0 ? '+' : ''}${_cprNum(v)} (${t.result})`, tone: DataGrid.sign },
+            { key: 'pts', label: 'Pts', format: (v, t) => v == null ? '—'
+                  : `${v > 0 ? '+' : ''}${_cprNum(v)} (${t.result}, out ${_cprNum(t.exit)} ${t.exit_time})`, tone: DataGrid.sign },
             { key: 'pnl_inr', label: 'P&L', strong: true, format: v => v == null ? '—' : DataGrid.inr(v), tone: DataGrid.sign },
         ],
     });
@@ -135,11 +137,12 @@ function _cprRenderHistory() {
             { key: 'side', label: 'Side', tone: v => v === 'SELL' ? 'neg' : 'pos', strong: true },
             { key: 'strategy', label: 'Setup' },
             { key: 'fill_time', label: 'In' },
-            { key: 'exit_time', label: 'Out' },
+            { key: 'exit_time', label: 'Out', format: (v, t) => (v || '—') + (t.locked_at ? ` (target ${t.locked_at} 🔒)` : '') },
             { key: 'index_fill', label: 'Index in', format: _cprNum },
             { key: 'index_exit', label: 'Index out', format: _cprNum },
             { key: 'pts', label: 'Pts', format: v => v == null ? '—' : (v > 0 ? '+' : '') + _cprNum(v), tone: DataGrid.sign },
-            { key: 'result', label: 'Result', badge: v => v === 'Target' ? 'pos' : v === 'SL' ? 'neg' : 'warn' },
+            { key: 'result', label: 'Result', badge: v => v === 'Target' ? 'pos' : v === 'SL' || v === 'Backstop' ? 'neg' : 'warn',
+              title: (_, t) => t.note || Object.values(t.legs || {}).map(l => l.exit_reason).filter(Boolean).join('; ') },
             { key: 'strike', label: 'Option', format: (v, t) => `${v} ${t.option_type}` },
             { key: 'legs', label: 'Lots · premium', format: v => Object.values(v || {}).map(l => `${l.lots}× ${_cprNum(l.entry)}→${_cprNum(l.exit)}`).join(', ') || '—' },
             { key: 'pnl', label: 'P&L', strong: true, format: v => v == null ? '—' : DataGrid.inr(v), tone: DataGrid.sign },

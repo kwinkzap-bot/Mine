@@ -763,17 +763,32 @@ function renderCprBacktest(d) {
 function _tdCprReachTime(t, key) {
     const c = t.chart || {};
     if (key === 'entry') return c.entry_time || '';
-    if (key === 'target' && (c.result === 'Target' || c.result === 'Both')) return c.exit_time || '';
+    // A locked target was REACHED at target_time; the trade rode on to exit_time.
+    if (key === 'target' && (c.result === 'Target' || c.result === 'Both')) return c.target_time || c.exit_time || '';
     if (key === 'sl' && (c.result === 'SL' || c.result === 'Both')) return c.exit_time || '';
     return '';
+}
+
+// A target closed through is not where the trade ended: the stop moved up to
+// it and the trade rode on. This is the line that says where it did end.
+function _tdCprExitLine(t) {
+    const c = t.chart || {};
+    if (!c.target_time || c.pnl == null || c.fill == null) return '';
+    const px = t.manual.trade === 'BUY' ? c.fill + c.pnl : c.fill - c.pnl;
+    return `<div class="td-cpr-part td-cpr-level" title="The ${_tdEsc(c.target_time)} candle closed through the target, so the stop moved up to it and the trade rode on — out at the next touch of the target, or at 15:15">`
+         + `<span class="td-cpr-part-label">Exit 🔒</span><span class="td-cpr-price">${_tdEsc(_tdNum(px, 0))}</span>`
+         + `<span class="td-cpr-why">${_tdEsc(c.exit_time || '')}</span></div>`;
 }
 
 // Entry / Target / SL price with the reach time underneath (sub-grid).
 function _tdCprPrice(t, key) {
     const when = _tdCprReachTime(t, key);
+    const c = t.chart || {};
+    const out = key === 'target' && c.target_time && c.pnl != null && c.fill != null
+        ? `<span class="td-cpr-why" title="Closed through at ${_tdEsc(c.target_time)}: the stop moved up to the target and the trade rode on">exit 🔒 ${_tdEsc(_tdNum(t.manual.trade === 'BUY' ? c.fill + c.pnl : c.fill - c.pnl, 0))} ${_tdEsc(c.exit_time || '')}</span>` : '';
     return `<div class="td-cpr-cell" style="align-items:flex-end">
         <span>${_tdEsc(_tdNum(t.manual[key], 0))}</span>
-        ${when ? `<span class="td-cpr-why">${_tdEsc(when)}</span>` : ''}</div>`;
+        ${when ? `<span class="td-cpr-why">${_tdEsc(when)}</span>` : ''}${out}</div>`;
 }
 
 // ── the option leg ────────────────────────────────────────────────────────
@@ -807,13 +822,14 @@ function _tdCprOptionCell(leg) {
     }
     const est = k => (leg.estimated || []).includes(k);
     const time = k => k === 'entry' ? leg.entry_time
-               : (k === 'target' && leg.result === 'Target') || (k === 'sl' && leg.result === 'SL') ? leg.exit_time : '';
+               : k === 'target' && leg.result === 'Target' ? (leg.target_time || leg.exit_time)
+               : k === 'sl' && leg.result === 'SL' ? leg.exit_time : '';
     const lines = [['entry', 'Entry'], ['target', 'Target'], ['sl', 'SL']].map(([k, label]) =>
         `<div class="td-cpr-part td-cpr-level"><span class="td-cpr-part-label">${label}</span>`
         + `<span class="td-cpr-price${est(k) ? ' td-cpr-est' : ''}">${est(k) ? '≈ ' : ''}${_tdEsc(_tdNum(leg[k], 2))}</span>`
         + (time(k) ? `<span class="td-cpr-why">${_tdEsc(time(k))}</span>` : '') + `</div>`).join('');
-    const eod = leg.result === 'EOD' && leg.exit != null
-        ? `<div class="td-cpr-part td-cpr-level"><span class="td-cpr-part-label">EOD</span><span class="td-cpr-price">${_tdEsc(_tdNum(leg.exit, 2))}</span><span class="td-cpr-why">${_tdEsc(leg.exit_time || '')}</span></div>`
+    const eod = (leg.result === 'EOD' || leg.target_time) && leg.exit != null
+        ? `<div class="td-cpr-part td-cpr-level"><span class="td-cpr-part-label">${leg.target_time ? 'Exit 🔒' : 'EOD'}</span><span class="td-cpr-price">${_tdEsc(_tdNum(leg.exit, 2))}</span><span class="td-cpr-why">${_tdEsc(leg.exit_time || '')}</span></div>`
         : '';
     return `<div class="td-cpr-group">${head}${lines}${eod}</div>`;
 }
@@ -850,7 +866,7 @@ function _tdCprTradeCell(t) {
              + (when ? `<span class="td-cpr-why">${_tdEsc(when)}</span>` : '') + `</div>`;
     }).join('');
     return `<div class="td-cpr-group">
-        <span class="td-cpr-side ${side === 'BUY' ? 'dg-pos' : 'dg-neg'}">${_tdEsc(side)}</span>${lines}</div>`;
+        <span class="td-cpr-side ${side === 'BUY' ? 'dg-pos' : 'dg-neg'}">${_tdEsc(side)}</span>${lines}${_tdCprExitLine(t)}</div>`;
 }
 
 // Result and P&L show the sheet's figure only — one value, SL or Target —
@@ -859,7 +875,8 @@ function _tdCprTradeCell(t) {
 // Result agreement chip carry it.
 function _tdCprResult(t, chart) {
     const c = t.chart;
-    const when = c && c.entry_time ? `${c.entry_time}${c.exit_time ? ' → ' + c.exit_time : ''}` : '';
+    const when = c && c.entry_time ? `${c.entry_time}${c.exit_time ? ' → ' + c.exit_time : ''}`
+                                     + (c.target_time ? ` · target ${c.target_time} 🔒` : '') : '';
     const res = t.manual.result;
     const cls = res === 'Target' ? 'dg-pos' : res === 'SL' ? 'dg-neg' : '';
     return `<div class="td-cpr-cell">

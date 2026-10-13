@@ -315,8 +315,14 @@ Load-bearing:
   bought at market (`_dispatch_order_to_brokers(strategy='cpr')`, records
   `strategy='op'` / `source='cpr'` so the /orderplacement strip shows them);
   exits sell it at market via `exit_selected_records`. Live, an SL-M
-  **backstop** rests on the premium at `fill − 0.75 × index risk` — the floor
-  if the app is down, not the exit.
+  **backstop** rests on the premium at `fill − CPR_BACKSTOP_X (1.5) × index
+  risk` (0 = none) — the floor if the app is down, not the exit. It was 0.75×
+  until 2026-10-13, when an ITM CE hit it at 11:15 (−₹3,208) while NIFTY was
+  clear of its stop and the index trade went on to +175 pts.
+* **The books are the broker's.** Entry/exit prices are read back from the
+  order book (`leg_fills`) every 15 s; a backstop (or hand square-off) filled
+  at the broker closes the leg at its fill; history is written once fills are
+  in (`_book_if_settled`). Before this the tab booked LTP quotes.
 * **`strategy='cpr'` is opted out of the dispatcher's automatic `entry − 20`
   stop** and routes on `BROKER_N_CPR_ACTIVE` only; it refuses to size itself.
 * **A fill read off a candle that is not the latest is never traded** — a

@@ -63,7 +63,7 @@ DELTA_MIN_POINTS = 20         # minutes needed before a slope is trusted
 SETUP_BAR_MINUTES = 5         # the sheet's setup candle is a 5-minute bar
 
 
-LEGS_CACHE_VERSION = 4        # bump when how a leg is priced changes: every saved leg is then re-read (4: the watched-target lock)
+LEGS_CACHE_VERSION = 5        # bump when how a leg is priced changes: every saved leg is then re-read (5: a locked leg's target_time)
 LEG_RETRY_DAYS = 7            # a leg that found no option data is looked up again after this long
 _LEGS_LOCK = threading.Lock()
 
@@ -210,7 +210,7 @@ def option_leg(tm: Dict[str, Any], con: Dict[str, Any], spot: List[Dict[str, Any
     """The premium the index trade `tm` would have paid and collected on
     contract `con`, from the index's and the option's 1-minute bars."""
     leg: Dict[str, Any] = dict(con, entry=None, target=None, sl=None, exit=None,
-                               entry_time=None, exit_time=None, result=None, pnl=None,
+                               entry_time=None, exit_time=None, target_time=None, result=None, pnl=None,
                                pnl_lot=None, delta=None, estimated=[], error=None)
     if not spot:
         leg['error'] = 'no 1-minute index bars'
@@ -219,7 +219,8 @@ def option_leg(tm: Dict[str, Any], con: Dict[str, Any], spot: List[Dict[str, Any
         leg['error'] = 'no option bars'
         return leg
     sim = sim or replay(tm, spot)
-    leg.update(result=sim['result'], entry_time=sim['entry_time'], exit_time=sim['exit_time'])
+    leg.update(result=sim['result'], entry_time=sim['entry_time'], exit_time=sim['exit_time'],
+               target_time=sim.get('target_time'))
     if sim['result'] in (None, 'No fill'):
         return leg
 
@@ -236,6 +237,9 @@ def option_leg(tm: Dict[str, Any], con: Dict[str, Any], spot: List[Dict[str, Any
     if sim['result'] in ('Target', 'SL'):
         exit_bar = bar_at(opt, sim['exit_time'])
         exit_px = exit_bar['close'] if exit_bar else None
+        if sim.get('target_time') and sim['exit_time'] >= cpr_bt.SQUARE_OFF and exit_bar \
+                and exit_bar['time'] == sim['exit_time']:
+            exit_px = exit_bar['open']          # a ridden target squared off at 15:15: that bar's open
     elif sim['result'] == 'EOD':
         exit_bar = bar_at(opt, sim['exit_time'])
         # The square-off is at that bar's open, as the index replay's is.
@@ -246,6 +250,11 @@ def option_leg(tm: Dict[str, Any], con: Dict[str, Any], spot: List[Dict[str, Any
     # The level that closed the trade is a real print; the other is the
     # entry premium moved by the day's delta, and says so.
     leg['target'] = exit_px if sim['result'] == 'Target' else _est(entry_px, delta, tm['entry'], tm['target'])
+    if sim.get('target_time'):
+        # Locked: the target printed at target_time and the trade rode on to
+        # exit_time — the target's premium is THAT bar's, the exit's is later.
+        tbar = bar_at(opt, sim['target_time'])
+        leg['target'] = tbar['close'] if tbar else _est(entry_px, delta, tm['entry'], tm['target'])
     leg['sl'] = exit_px if sim['result'] == 'SL' else _est(entry_px, delta, tm['entry'], tm['sl'])
     if sim['result'] != 'Target' and leg['target'] is not None:
         leg['estimated'].append('target')

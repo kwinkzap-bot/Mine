@@ -271,3 +271,17 @@ def test_crossing_minute_without_minutes_is_the_bar_stamp():
     """No 1-minute path (no provider) must leave the old behaviour, not crash."""
     assert svc.crossing_minute([], '12:30', 5, 106) == '12:30'
     assert svc.crossing_minute([], None, 5, 106) is None
+
+
+def test_a_locked_leg_prices_its_target_where_it_was_reached_and_its_exit_later():
+    """13 Oct 2026: target 22,610 closed through at 14:30, ridden to 15:15 —
+    the leg's Target is the 14:30 premium, its exit the 15:15 one."""
+    from trading_app.service import cpr_option_service as ops
+    tm = {'trade': 'BUY', 'entry': 22522.0, 'target': 22610.0, 'sl': 22463.0, 'setup_time': '09:35'}
+    bar = lambda t, c: {'time': t, 'open': c, 'high': c, 'low': c, 'close': c}
+    spot = [bar('09:40', 22525.0), bar('14:30', 22634.0), bar('15:15', 22702.0)]
+    opt = [bar('09:40', 201.95), bar('14:30', 290.0), dict(bar('15:15', 364.25), close=366.0)]
+    sim = {'result': 'Target', 'entry_time': '09:40', 'target_time': '14:30', 'exit_time': '15:15', 'pnl': 180.05}
+    leg = ops.option_leg(tm, {'strike': 22350, 'option_type': 'CE'}, spot, opt, 65, sim)
+    assert leg['target_time'] == '14:30' and leg['target'] == 290.0
+    assert leg['exit'] == 364.25 and leg['pnl'] == round(364.25 - 201.95, 2)
