@@ -91,6 +91,40 @@ _FIRST_HOUR_CLOSE = (10, 15)
 _WORKERS = 4
 
 
+def weekly_levels(high: float, low: float, close: float) -> Dict:
+    """CPR + Camarilla R3/S3 a week's high / low / close puts in force for the
+    NEXT week. Shared with the backtest (Backtest/weekly_cpr_breakout_engine)
+    so the scan and the backtest can never drift apart."""
+    pp, bc, tc = CPRService.calculate_cpr(high, low, close)
+    return {'pp': pp, 'bc': bc, 'tc': tc,
+            'r3': close + (high - low) * _CAMARILLA_R3,
+            's3': close - (high - low) * _CAMARILLA_R3}
+
+
+def judge_first_hour(hour: Dict, levels: Dict) -> Dict:
+    """Conditions 2–4 on a closed first-hour candle against `levels`.
+
+    Returns side ('above' | 'below' | 'inside'), dir ('BUY' | 'SELL' | None
+    for a doji), room_pct (to R3 / S3 on that side, None inside) and ok.
+    Shared with the backtest, which enters on exactly the hours this passes.
+    """
+    c1 = hour['close']
+    direction = 'BUY' if c1 > hour['open'] else 'SELL' if c1 < hour['open'] else None
+    bc, tc, r3, s3 = levels['bc'], levels['tc'], levels['r3'], levels['s3']
+    if c1 > tc:
+        return {'side': 'above', 'dir': direction, 'room_pct': (r3 - c1) / c1 * 100,
+                'ok': direction == 'BUY' and c1 < r3 * (1 - CAM_NEAR_PCT / 100)}
+    if c1 < bc:
+        return {'side': 'below', 'dir': direction, 'room_pct': (c1 - s3) / c1 * 100,
+                'ok': direction == 'SELL' and c1 > s3 * (1 + CAM_NEAR_PCT / 100)}
+    return {'side': 'inside', 'dir': direction, 'room_pct': None, 'ok': False}
+
+
+def opens_inside(day_open: float, levels: Dict) -> bool:
+    """Condition 1."""
+    return levels['bc'] <= day_open <= levels['tc']
+
+
 def _weekly_cpr(df: pd.DataFrame, session: pd.Timestamp) -> Optional[Dict]:
     """The weekly CPR + Camarilla in force on `session`, from the last week
     with bars that ended before `session`'s week began, and how its width
@@ -104,14 +138,11 @@ def _weekly_cpr(df: pd.DataFrame, session: pd.Timestamp) -> Optional[Dict]:
     widths = [cpr_width_pct(w.high, w.low, w.close) for w in weeks.itertuples()]
     last = weeks.iloc[-1]
     high, low, close = float(last['high']), float(last['low']), float(last['close'])
-    pp, bc, tc = CPRService.calculate_cpr(high, low, close)
 
     width = widths[-1]
     context = [w for w in widths[-1 - _CONTEXT_WEEKS:-1] if w is not None]
     avg = sum(context) / len(context) if len(context) >= _MIN_CONTEXT else None
-    return {'week': str(weeks.index[-1]), 'pp': pp, 'bc': bc, 'tc': tc,
-            'r3': close + (high - low) * _CAMARILLA_R3,
-            's3': close - (high - low) * _CAMARILLA_R3,
+    return {'week': str(weeks.index[-1]), **weekly_levels(high, low, close),
             'w_high': high, 'w_low': low, 'w_close': close,
             'width_pct': width, 'avg_width_pct': avg,
             'ratio': (width / avg) if (avg and width is not None) else None}
@@ -172,34 +203,18 @@ def evaluate(df: pd.DataFrame, session_date,
 
     prev_close = float(before['close'].iloc[-1])
     day_open = float(today['open'].iloc[0])
-    # Condition 1.
-    open_ok = bc <= day_open <= tc
+    open_ok = opens_inside(day_open, cpr)
 
-    # Conditions 2–3: where the first hour closed against the CPR, and how
-    # much room it left to the Camarilla level on that side.
+    # Conditions 2–4: where the first hour closed against the CPR, its
+    # colour, and how much room it left to the Camarilla level on that side.
     hour = _first_hour(intraday, day, now or datetime.now())
     r3, s3 = cpr['r3'], cpr['s3']
-    fh_dir = None
     if hour is None:
-        fh_side, fh_room, fh_ok = 'pending', None, False
+        fh_side, fh_dir, fh_room, fh_ok = 'pending', None, None, False
     else:
-        c1 = hour['close']
-        # Condition 3: BUY = green hour, SELL = red; a doji (close == open)
-        # is neither.
-        if c1 > hour['open']:
-            fh_dir = 'BUY'
-        elif c1 < hour['open']:
-            fh_dir = 'SELL'
-        if c1 > tc:
-            fh_side = 'above'
-            fh_room = (r3 - c1) / c1 * 100
-            fh_ok = fh_dir == 'BUY' and c1 < r3 * (1 - CAM_NEAR_PCT / 100)
-        elif c1 < bc:
-            fh_side = 'below'
-            fh_room = (c1 - s3) / c1 * 100
-            fh_ok = fh_dir == 'SELL' and c1 > s3 * (1 + CAM_NEAR_PCT / 100)
-        else:
-            fh_side, fh_room, fh_ok = 'inside', None, False
+        verdict = judge_first_hour(hour, cpr)
+        fh_side, fh_dir = verdict['side'], verdict['dir']
+        fh_room, fh_ok = verdict['room_pct'], verdict['ok']
 
     return {
         'prev_date': before.index[-1].strftime('%Y-%m-%d'),

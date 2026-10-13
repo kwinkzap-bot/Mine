@@ -127,13 +127,19 @@ def _merge(base: Optional[pd.DataFrame], new: Optional[pd.DataFrame]) -> Optiona
 
 
 def get_minute_history(provider, token, symbol: str, start_date: str, end_date: str,
-                        provider_tag: str = 'default') -> Optional[pd.DataFrame]:
+                        provider_tag: str = 'default',
+                        retain: bool = True) -> Optional[pd.DataFrame]:
     """1-minute OHLC for `symbol` covering [start_date, end_date] ('YYYY-MM-DD').
 
     Serves from the local per-symbol file, contacting the provider only for
     the range not yet stored — a gap at the head (deeper history requested),
     a gap at the tail (newer days requested), or today's still-forming
     session (refreshed at most once per _TAIL_REFRESH_TTL_SEC).
+
+    retain=False reads the file without keeping it in this process's memory
+    afterwards. A file is the symbol's WHOLE history (~30 MB for eight years),
+    so a scan of the full F&O list that retains every one holds gigabytes in
+    the live trading process; the disk cache is what makes a re-run cheap.
     """
     start = pd.Timestamp(start_date)
     end   = pd.Timestamp(end_date)
@@ -145,7 +151,7 @@ def get_minute_history(provider, token, symbol: str, start_date: str, end_date: 
         entry = _mem.get(key)
         if entry is None:
             entry = _load_disk(key)
-            if entry is not None:
+            if entry is not None and retain:
                 with _mem_lock:
                     _mem[key] = entry
 
@@ -195,8 +201,9 @@ def get_minute_history(provider, token, symbol: str, start_date: str, end_date: 
         if entry is None or entry["df"].empty:
             return None
 
-        with _mem_lock:
-            _mem[key] = entry
+        if retain:
+            with _mem_lock:
+                _mem[key] = entry
         if changed:
             _save_disk(key, entry)
 

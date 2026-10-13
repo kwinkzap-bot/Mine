@@ -6605,6 +6605,217 @@ def run_thirty_min_fakeout_optimise_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
+# ── Weekly CPR Breakout backtest ─────────────────────────────────────────────
+# The /scanners "W CPR Open" rule, traded on every F&O future stock: open
+# inside the weekly CPR, first hour closes outside it as a direction candle
+# short of R3/S3 → enter at 10:15, stop at the hour's other extreme, target
+# rr × risk. See Backtest/weekly_cpr_breakout_engine.py. Fyers data, like the
+# scanner (ICICI's equity candles carry stray highs/lows). Daily and 1-minute
+# bars both come from per-stock disk stores, so only what is not on disk yet
+# goes to Fyers — the first run back to 2017 is minutes, later ones a minute
+# or two of local reads — and it is a background task the page polls.
+_WCB_RR_CHOICES = (1.0, 1.5, 2.0, 2.5, 3.0)
+_wcb_tasks: dict = {}
+_wcb_tasks_lock = threading.Lock()
+
+
+@api_bp.route('/backtest/weekly-cpr-breakout', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_weekly_cpr_breakout_backtest_api():
+    """Start a Weekly CPR Breakout backtest; returns {'task_id'} to poll at
+    /backtest/weekly-cpr-breakout/status/<task_id>.
+
+    Body: start_date, end_date ('YYYY-MM-DD'); symbol ('' = every F&O future
+    stock); direction 'both' | 'buy' | 'sell'; rr_ratio (1:rr, default 2);
+    exit_time 'HH:MM' (default 15:15); lots (per trade, × the stock's lot
+    size, default 1). Each trade's ₹ is points × lots × lot size, less
+    _TMF_BROKERAGE_PER_TRADE."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    data = request.get_json(silent=True) or {}
+    start_date_str = data.get('start_date')
+    end_date_str = data.get('end_date')
+    try:
+        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+        datetime.strptime(end_date_str, '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+    direction = str(data.get('direction', 'both')).lower()
+    if direction not in ('both', 'buy', 'sell'):
+        direction = 'both'
+    try:
+        rr = float(data.get('rr_ratio', 2))
+    except (TypeError, ValueError):
+        rr = 2.0
+    if rr not in _WCB_RR_CHOICES:
+        rr = 2.0
+    try:
+        eh, em = (int(x) for x in str(data.get('exit_time', '15:15')).split(':'))
+    except ValueError:
+        eh, em = 15, 15
+    lots = max(1, int(data.get('lots', 1) or 1))
+    single = str(data.get('symbol', '') or '').strip().upper()
+
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    try:
+        lot_sizes = _fno_lot_sizes()
+    except FileNotFoundError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
+    indices = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'}
+    universe = sorted(s for s in lot_sizes if s not in indices)
+    if single:
+        if single not in lot_sizes or single in indices:
+            return jsonify({'success': False, 'error': f'{single} is not an F&O future stock.'}), 400
+        universe = [single]
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': len(universe)}}
+    with _wcb_tasks_lock:
+        _wcb_tasks[task_id] = task
+
+    def _run():
+        import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+        from trading_app.Backtest.thirty_min_fakeout_engine import summarize_trades
+        from trading_app.Backtest.weekly_cpr_breakout_engine import run_symbol
+        from trading_app.filters.candle_store import get_daily_history
+
+        # A week before start is enough for the first week's levels; three
+        # covers a holiday week in between.
+        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+        daily_days = (end_dt - start_dt).days + 21
+        tag = _provider_tag(fyers)
+
+        def _one(symbol):
+            token = f'NSE:{symbol}-EQ'
+            # Daily bars through the shared per-stock disk store, under a
+            # Fyers-only key: back to 2017 is ~10 Fyers requests a stock, so
+            # it is fetched once and then read locally. The plain-symbol key
+            # is shared with whatever provider filled it — ICICI's candles
+            # carry stray wicks, which is the reason this backtest is on Fyers.
+            daily = get_daily_history(fyers, token, f'fyers__{symbol}', daily_days,
+                                      end_date=end_dt)
+            if daily is None or daily.empty:
+                return symbol, None
+            daily = daily[['open', 'high', 'low', 'close']].astype(float)
+            daily.index = pd.to_datetime(daily.index).normalize()
+            # retain=False: 200-odd files of whole history would otherwise
+            # stay in this (live trading) process's memory after the run.
+            minutes = get_minute_history(fyers, token, symbol, start_date_str, end_date_str,
+                                         provider_tag=tag, retain=False)
+            if minutes is None or minutes.empty:
+                return symbol, None
+            return symbol, run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
+                                      rr=rr, exit_hm=(eh, em), direction=direction)
+
+        all_trades, failed, no_data, done = [], 0, 0, 0
+        try:
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {pool.submit(_one, s): s for s in universe}
+                for fut in as_completed(futures):
+                    sym = futures[fut]
+                    done += 1
+                    task['progress'] = {'done': done, 'total': len(universe)}
+                    try:
+                        _, trades = fut.result()
+                    except Exception as e:
+                        failed += 1
+                        logger.error(f"[WeeklyCprBreakout] {sym} failed: {e}")
+                        continue
+                    if trades is None:
+                        no_data += 1
+                        continue
+                    lot = int(lot_sizes.get(sym) or 1)
+                    qty = lots * lot
+                    for t in trades:
+                        t['symbol'] = sym
+                        t['lot_size'] = lot
+                        t['qty'] = qty
+                        t['capital'] = round(t['entry_price'] * qty, 2)
+                        t['brokerage'] = _TMF_BROKERAGE_PER_TRADE
+                        t['sl_risk_rupees'] = round(abs(t['entry_price'] - t['sl_price']) * qty, 2)
+                        t['gross_pnl_rupees'] = round(t['pnl'] * qty, 2)
+                        t['pnl_rupees'] = round(t['gross_pnl_rupees'] - _TMF_BROKERAGE_PER_TRADE, 2)
+                        all_trades.append(t)
+
+            all_trades.sort(key=lambda t: t['entry_time'])
+            summary = summarize_trades(all_trades)
+            rs = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
+            gross = summarize_trades([{**t, 'pnl': t['gross_pnl_rupees']} for t in all_trades])
+            capital = (sum(t['capital'] for t in all_trades) / len(all_trades)) if all_trades else 0.0
+            summary.update({
+                'total_pnl_rupees': rs['total_pnl'],
+                'total_gross_pnl_rupees': gross['total_pnl'],
+                'avg_win_rupees': rs['avg_win'], 'avg_loss_rupees': rs['avg_loss'],
+                'profit_factor_rupees': rs['profit_factor'],
+                'max_drawdown_rupees': rs['max_drawdown'],
+                'capital_per_trade': round(capital, 2),
+                'total_brokerage': _TMF_BROKERAGE_PER_TRADE * len(all_trades),
+                'targets': sum(1 for t in all_trades if t['exit_reason'] == 'Target hit'),
+                'stops': sum(1 for t in all_trades if t['exit_reason'] == 'SL hit'),
+                'time_exits': sum(1 for t in all_trades if t['exit_reason'] == 'Time exit'),
+                'symbols_scanned': len(universe),
+                'symbols_with_trades': len({t['symbol'] for t in all_trades}),
+                'symbols_no_data': no_data, 'symbols_failed': failed,
+                'rr_ratio': rr, 'lots': lots, 'multi_symbol': True,
+            })
+            cagr = 0.0
+            try:
+                span = (datetime.strptime(end_date_str, '%Y-%m-%d') - start_dt).days
+                end_value = capital + summary['total_pnl_rupees']
+                if span > 0 and capital > 0 and end_value > 0:
+                    cagr = round(((end_value / capital) ** (365.0 / span) - 1) * 100, 2)
+            except Exception:
+                cagr = 0.0
+            summary['cagr_pct'] = cagr
+            logger.info('[WeeklyCprBreakout] %s..%s: %d stocks (%d no data, %d failed) -> %d trades',
+                        start_date_str, end_date_str, len(universe), no_data, failed, len(all_trades))
+            task['payload'] = {'trades': all_trades, 'summary': summary}
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[WeeklyCprBreakout] run failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'wcb-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
+                    'progress': task['progress']})
+
+
+@api_bp.route('/backtest/weekly-cpr-breakout/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def weekly_cpr_breakout_status(task_id):
+    """Poll a Weekly CPR Breakout backtest started by the POST above."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _wcb_tasks_lock:
+        task = _wcb_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running',
+                        'progress': task['progress'], 'elapsed': elapsed})
+    if task['status'] == 'error':
+        with _wcb_tasks_lock:
+            _wcb_tasks.pop(task_id, None)
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    # Delivered once, then dropped — a year of trades across 200 stocks is
+    # not something to keep in memory for a page that already has it.
+    with _wcb_tasks_lock:
+        _wcb_tasks.pop(task_id, None)
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 # ── Optimise-grid ₹ economics (mirrors the frontend so the leaderboard drops
 # combos whose Net P&L is negative *after brokerage*, not just in points) ──────
 _BT_LOT_VALUE_BY_SYMBOL = {'NIFTY': 65, 'BANKNIFTY': 30, 'SENSEX': 20}

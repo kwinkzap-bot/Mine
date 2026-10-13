@@ -19,20 +19,21 @@
         <div class="bt-header-controls">
             <span id="liveFlagBadge" class="bt-live-flag" style="display:none;" title="These params are currently running as a live algo"><span class="dot"></span>LIVE</span>
             <select id="strategyStatusSelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
-                <option value="live" selected>🔴 Live</option>
+                <option value="live">🔴 Live</option>
                 <option value="success">✅ Success</option>
-                <option value="testing">🧪 Testing</option>
+                <option value="testing" selected>🧪 Testing</option>
                 <option value="failure">❌ Failure</option>
             </select>
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="second_candle">🕒 Candle Breakout</option>
-                <option value="option_breakout" selected>🎯 30-Sec Option Breakout</option>
+                <option value="option_breakout">🎯 30-Sec Option Breakout</option>
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
                 <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
                 <option value="ema_pullback">📉 EMA Confluence Breakout</option>
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
+                <option value="weekly_cpr_breakout" selected>📐 Weekly CPR Breakout</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
@@ -689,6 +690,50 @@
             </div>
 
             <!-- Swing Momentum params -->
+            <!-- Weekly CPR Breakout — the /scanners "W CPR Open" rule traded
+                 over every F&O future stock: open inside the weekly CPR, first
+                 1-hour candle closes outside it as a BUY/SELL candle short of
+                 R3/S3 → enter 10:15, SL at that hour's other extreme, target
+                 1:R. See Backtest/weekly_cpr_breakout_engine.py. -->
+            <div id="weeklyCprBreakoutParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="wcbDirection">Direction</label>
+                    <select id="wcbDirection">
+                        <option value="both" selected>Buy &amp; Sell</option>
+                        <option value="buy">Buy only</option>
+                        <option value="sell">Sell only</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="wcbRrRatio" title="Target = entry ± this many times the risk (entry to the first-hour candle's High for a SELL, its Low for a BUY).">Target (R:R)</label>
+                    <select id="wcbRrRatio">
+                        <option value="1">1 : 1</option>
+                        <option value="1.5">1 : 1.5</option>
+                        <option value="2" selected>1 : 2</option>
+                        <option value="2.5">1 : 2.5</option>
+                        <option value="3">1 : 3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="wcbExitTime">Cut-off Time</label>
+                    <input type="time" id="wcbExitTime" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="wcbLots" title="Lots per trade. Each trade is sized lots × that stock's lot size.">Lots</label>
+                    <input type="number" id="wcbLots" value="1" min="1" step="1">
+                </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Rule</label>
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        Day opens inside the weekly CPR → first 1-hour candle (09:15–10:15) closes
+                        above TC as a green candle (BUY) or below BC as a red one (SELL), more than
+                        0.5% short of weekly R3/S3 → enter at the 10:15 close · SL = that candle's
+                        Low (BUY) / High (SELL) · target = R × risk · a bar touching both counts as
+                        the SL · otherwise out at the cut-off. Fyers data.
+                    </small>
+                </div>
+            </div>
+
             <div id="swingMomentumParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label>Index</label>

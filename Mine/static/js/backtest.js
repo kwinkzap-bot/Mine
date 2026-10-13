@@ -267,6 +267,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function isEmaAllMode() {
         return selectedSymbol === ALL_STOCKS && isEmaStrategy();
     }
+    // Weekly CPR Breakout offers the same pseudo-symbol: every F&O future
+    // stock, or the one picked in the Symbol box.
+    function isWcbStrategy() {
+        return (document.getElementById('strategySelect')?.value || '') === 'weekly_cpr_breakout';
+    }
 
     // Kicked off only after ALL_STOCKS above exists — its completion callback
     // runs applyLotValueForSymbol(), which reads it.
@@ -278,7 +283,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show every matching symbol (not just the first 15) — the list
         // itself scrolls (#symbolList has max-height + overflow-y in CSS),
         // same as the Open Interest page's symbol dropdown.
-        const pool = isEmaStrategy() ? [ALL_STOCKS, ...allSymbols] : allSymbols;
+        const pool = (isEmaStrategy() || isWcbStrategy()) ? [ALL_STOCKS, ...allSymbols] : allSymbols;
         const matches = pool.filter(s => {
             if (!filter) return true;
             return s.includes(filter);
@@ -437,6 +442,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const pcParamsRow   = document.getElementById('pivotConfluenceParamsRow');
         const pcLotRow      = document.getElementById('pivotConfluenceLotRow');
         const pcOptPanel    = document.getElementById('pivotConfluenceOptimisePanel');
+        const wcbParamsRow  = document.getElementById('weeklyCprBreakoutParamsRow');
+        if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
@@ -567,12 +574,26 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intervalSelect) intervalSelect.value = '5minute';
             if (startDateInput) startDateInput.value = '2017-01-01';
             updatePcInvestment();
+
+        } else if (val === 'weekly_cpr_breakout') {
+            if (wcbParamsRow) wcbParamsRow.style.display = 'grid';
+            // The shared Symbol box, with ALL STOCKS (every F&O future stock)
+            // first and selected by default, as EMA Confluence Breakout does.
+            // The timeframe is fixed by the rule — a first HOUR read off
+            // 1-minute bars — so the Timeframe picker does not apply.
+            if (intFg) intFg.style.display = 'none';
+            selectedSymbol = ALL_STOCKS;
+            symbolSearch.value = ALL_STOCKS;
+            // 2017 to today — as far back as the 1-minute store reaches.
+            const wcbEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = '2017-01-01';
+            if (wcbEnd) wcbEnd.value = localToday();
         }
 
         // "All Stocks" only exists for EMA Confluence Breakout — every other
         // strategy backtests one symbol, so switching away falls back to the
         // default rather than posting a symbol the backend can't resolve.
-        if (val !== 'ema_pullback' && selectedSymbol === ALL_STOCKS) {
+        if (val !== 'ema_pullback' && val !== 'weekly_cpr_breakout' && selectedSymbol === ALL_STOCKS) {
             selectedSymbol = 'NIFTY';
             symbolSearch.value = selectedSymbol;
             applyLotValueForSymbol(selectedSymbol);
@@ -641,7 +662,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -752,6 +773,11 @@ document.addEventListener('DOMContentLoaded', function() {
         // fetch-and-render path below.
         if (_strat === 'option_breakout') {
             await runOptionBreakout();
+            return;
+        }
+        // Also backgrounded: every F&O stock, minutes on a cold cache.
+        if (_strat === 'weekly_cpr_breakout') {
+            await runWeeklyCprBreakout();
             return;
         }
         const symbol = symbolSearch.value.toUpperCase();
@@ -966,6 +992,65 @@ document.addEventListener('DOMContentLoaded', function() {
         if (reqs) line += ` · ${reqs} Breeze req${elapsed ? ' @ ' + (reqs / elapsed).toFixed(1) + '/s' : ''}`;
         if (data.stage) line += ` · ${data.stage}`;
         return line;
+    }
+
+    // ── Weekly CPR Breakout — start + poll ─────────────────────────────
+    // Two Fyers daily requests per stock plus whatever 1-minute tail is not on
+    // disk yet: a minute or two warm, several cold. The server answers with a
+    // task id; this polls it and shows how many stocks are done.
+    let _wcbRun = 0;
+    async function runWeeklyCprBreakout() {
+        const payload = {
+            // ALL STOCKS -> '' (every F&O future stock); anything else is
+            // that one stock.
+            symbol:     selectedSymbol === ALL_STOCKS ? '' : (selectedSymbol || '').toUpperCase(),
+            start_date: document.getElementById('startDate')?.value,
+            end_date:   document.getElementById('endDate')?.value,
+            direction:  document.getElementById('wcbDirection')?.value || 'both',
+            rr_ratio:   parseFloat(document.getElementById('wcbRrRatio')?.value || 2),
+            exit_time:  document.getElementById('wcbExitTime')?.value || '15:15',
+            lots:       Math.max(1, parseInt(document.getElementById('wcbLots')?.value || 1)),
+        };
+        const myRun = ++_wcbRun;
+        resultsArea.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader('Running Weekly CPR Breakout', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/weekly-cpr-breakout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _wcbRun) return;             // superseded
+                data = await (await fetch(`/api/backtest/weekly-cpr-breakout/status/${taskId}`)).json();
+                if (myRun !== _wcbRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Running Weekly CPR Breakout',
+                    `${p.done || 0} / ${p.total || 0} stocks · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            const s = data.summary || {};
+            if (s.symbols_no_data) window.showNotification(
+                `${s.symbols_no_data} stock${s.symbols_no_data === 1 ? '' : 's'} had no Fyers data for this range`, 'info');
+            displayResults(data);
+        } catch (err) {
+            if (myRun !== _wcbRun) return;
+            _hideOptLoader();
+            console.error('Weekly CPR Breakout error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
     }
 
     // ── 30-Sec Option Breakout — start + poll ───────────────────────────
@@ -1448,7 +1533,10 @@ document.addEventListener('DOMContentLoaded', function() {
         // TMF scan — many symbols, each trade already sized to ₹ server-side —
         // so it takes the same ₹ cards/columns instead of the points ones.
         const isEmaAll = !!(isEma && summary && summary.multi_symbol);
-        const isMultiSymbol = isTmf || isEmaAll;
+        // Weekly CPR Breakout runs every F&O future stock, each trade sized
+        // server-side (lots × that stock's lot size) — the same ₹ cards.
+        const isWcb  = strategySelect && strategySelect.value === 'weekly_cpr_breakout';
+        const isMultiSymbol = isTmf || isEmaAll || isWcb;
         // Scalp Pullback is single-symbol and points-based like the 2nd-candle
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
@@ -1648,7 +1736,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 let sub = `brok: ₹${Math.round(totalBrok).toLocaleString('en-IN')} · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
                 // The EMA scan's per-entry figure is an average across very
                 // differently priced stocks, so say how many actually traded.
-                if (isEmaAll) sub += ` · ${summary.symbols_with_trades || 0}/${summary.symbols_scanned || 0} stocks`;
+                if (isEmaAll || isWcb) sub += ` · ${summary.symbols_with_trades || 0}/${summary.symbols_scanned || 0} stocks`;
+                if (isWcb) sub += ` · ${summary.targets || 0} target / ${summary.stops || 0} SL / ${summary.time_exits || 0} time`;
                 netSubEl.textContent = sub;
             }
 
@@ -1674,7 +1763,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const lotValue2 = (isSc || isOb || isSp || isPc || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : 65;
-        const isMoney     = isSc || isOb || isSp || isPc || isTmf || isEma;
+        const isMoney     = isSc || isOb || isSp || isPc || isTmf || isEma || isWcb;
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
