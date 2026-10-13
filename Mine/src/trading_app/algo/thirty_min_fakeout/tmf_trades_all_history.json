@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "NAM-INDIA",
+    "direction": "SELL",
+    "qty": 470,
+    "entry_price": 1063.0,
+    "exit_price": 1067.7165957446812,
+    "sl_price": 1073.0,
+    "target_price": 1045.5,
+    "pnl": -2216.8,
+    "reason": "Time Exit",
+    "entry_time": "2026-10-13T10:53:00.162631",
+    "exit_time": "2026-10-13T15:05:06.461413",
+    "broker_idx": 1,
+    "entry_order_id": "2109877541950382080",
+    "sl_order_id": "2109877586632302592",
+    "target_order_id": "2109877587106258944",
+    "mode": "live",
+    "date": "2026-10-13"
+  },
+  {
     "symbol": "ASTRAL",
     "direction": "SELL",
     "qty": 347,

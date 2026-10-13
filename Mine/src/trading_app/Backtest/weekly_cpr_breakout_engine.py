@@ -6,10 +6,13 @@ verdict are ITS functions, weekly_levels / opens_inside / judge_first_hour,
 never a copy):
 
   1. D opens inside the weekly CPR in force that week;
-  2. D's first 1-hour candle (09:15–10:15) closes outside it;
-  3. as a direction candle agreeing with the break — green above TC (BUY),
-     red below BC (SELL);
-  4. more than 0.5 % short of the weekly Camarilla R3 (BUY) / S3 (SELL);
+  2–4. the first-hour verdict (judge_first_hour, `signal`, `candle_type`):
+     'candle' (default) — any bearish (red) candle type is a SELL, any
+     bullish (green) one a BUY (a doji is neither), optionally narrowed to
+     one shape; its low / high — the entry level — is more than 0.5 % short
+     of weekly S3 / R3; it need not close outside the CPR. 'close' — the
+     earlier rule: it closes below BC as a red candle (SELL) / above TC as a
+     green one (BUY), short of S3 / R3;
   5. quality: the weekly CPR is narrow (≤ 0.5× its 10-week average width)
      and the first hour's range is ≥ 1.6 % of price (passes_quality).
 
@@ -42,7 +45,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from trading_app.filters.weekly_cpr_open_scanner import (
-    DEFAULT_MAX_CPR_RATIO, DEFAULT_MIN_HOUR_RANGE_PCT, hour_range_pct,
+    DEFAULT_CANDLE_TYPE, DEFAULT_MAX_CPR_RATIO, DEFAULT_MIN_HOUR_RANGE_PCT, DEFAULT_SIGNAL,
+    hour_range_pct,
     judge_first_hour, opens_inside, passes_quality, weekly_levels)
 from trading_app.service.cpr_service import cpr_width_pct
 
@@ -139,7 +143,9 @@ def run_symbol(daily: pd.DataFrame, minutes: pd.DataFrame, start: str, end: str,
                rr: float = DEFAULT_RR, exit_hm: Tuple[int, int] = DEFAULT_EXIT,
                direction: str = 'both', now: Optional[datetime] = None,
                max_ratio: Optional[float] = DEFAULT_MAX_CPR_RATIO,
-               min_range_pct: Optional[float] = DEFAULT_MIN_HOUR_RANGE_PCT) -> List[Dict]:
+               min_range_pct: Optional[float] = DEFAULT_MIN_HOUR_RANGE_PCT,
+               signal: str = DEFAULT_SIGNAL,
+               candle_type: str = DEFAULT_CANDLE_TYPE) -> List[Dict]:
     """Every trade the rule takes on one symbol between `start` and `end`.
 
     `daily` must reach back ~11 weeks before `start` — a week for the first
@@ -172,7 +178,7 @@ def run_symbol(daily: pd.DataFrame, minutes: pd.DataFrame, start: str, end: str,
         hour = _first_hour(bars)
         if hour is None:
             continue
-        verdict = judge_first_hour(hour, levels)
+        verdict = judge_first_hour(hour, levels, signal, candle_type)
         if not verdict['ok']:
             continue
         if not passes_quality(levels.get('ratio'), hour, max_ratio, min_range_pct):
@@ -213,8 +219,14 @@ def run_symbol(daily: pd.DataFrame, minutes: pd.DataFrame, start: str, end: str,
             'cpr_week': levels['week'],
             'fh_high': round(hour['high'], 2), 'fh_low': round(hour['low'], 2),
             'fh_close': round(hour['close'], 2),
+            'fh_signal': verdict['side'],
+            'fh_type': verdict.get('type'),
             'fh_range_pct': round(hour_range_pct(hour), 2),
             'cpr_ratio': round(levels['ratio'], 2) if levels.get('ratio') is not None else None,
+            # Unrounded, for Find Best Params: filtering on the rounded copies
+            # let a 0.504× week through a ≤ 0.5× combo the backtest refuses.
+            'cpr_ratio_raw': levels.get('ratio'),
+            'fh_range_raw': hour_range_pct(hour),
             'trigger': round(trigger, 2),
         })
     return trades
@@ -239,22 +251,24 @@ def score_combos(per_rr: Dict[float, Sequence[tuple]], recent_from: str,
     """Rank every combo by net ₹.
 
     `per_rr[rr]` holds one tuple per trade of the unfiltered replay at that
-    target: (entry_time iso, 'BUY'|'SELL', cpr_ratio or None, fh_range_pct,
-    net ₹ after brokerage). A trade with no ratio (too little history) only
-    counts where the width filter is off. `recent_*` is the trades from
-    `recent_from` on, by themselves.
+    target: (entry_time iso, 'BUY'|'SELL', unrounded cpr ratio or None,
+    unrounded first-hour range %, net ₹ after brokerage, gross ₹). The
+    filters compare exactly as passes_quality does. A trade with no ratio
+    (too little history) only counts where the width filter is off. A WIN is
+    gross P&L > 0, as on the backtest's cards; the ₹ totals are net.
+    `recent_*` is the trades from `recent_from` on, by themselves.
     """
     from trading_app.Backtest.thirty_min_fakeout_engine import summarize_trades
     results = []
     for rr, ratio, rng, direction in itertools.product(OPT_RR, OPT_RATIO, OPT_RANGE, OPT_DIRECTION):
         rows = sorted((r for r in per_rr.get(rr, ())
                        if (ratio is None or (r[2] is not None and r[2] <= ratio))
-                       and r[3] >= rng
+                       and (not rng or r[3] >= rng)
                        and (direction == 'both' or r[1] == direction.upper())),
                       key=lambda r: r[0])
         if len(rows) < min_trades:
             continue
-        s = summarize_trades([{'pnl': r[4], 'result': 'WIN' if r[4] > 0 else 'LOSS'} for r in rows])
+        s = summarize_trades([{'pnl': r[4], 'result': 'WIN' if r[5] > 0 else 'LOSS'} for r in rows])
         recent = [r[4] for r in rows if r[0] >= recent_from]
         results.append({
             'rr_ratio': rr,
@@ -263,14 +277,15 @@ def score_combos(per_rr: Dict[float, Sequence[tuple]], recent_from: str,
             'direction': direction,
             'total_trades': s['total_trades'], 'wins': s['wins'],
             'win_rate': round(s['wins'] / s['total_trades'] * 100, 1),
+            'gross_pnl_rupees': round(sum(r[5] for r in rows), 2),
             'net_pnl_rupees': round(s['total_pnl'], 2),
             'avg_pnl_rupees': round(s['total_pnl'] / s['total_trades'], 2),
             'profit_factor_rupees': s['profit_factor'],
             'max_drawdown_rupees': s['max_drawdown'],
             'recent_trades': len(recent),
             'recent_net_rupees': round(sum(recent), 2),
-            'recent_win_rate': (round(sum(1 for x in recent if x > 0) / len(recent) * 100, 1)
-                                if recent else None),
+            'recent_win_rate': (round(sum(1 for r in rows if r[0] >= recent_from and r[5] > 0)
+                                      / len(recent) * 100, 1) if recent else None),
         })
     results.sort(key=lambda r: r['net_pnl_rupees'], reverse=True)
     return results

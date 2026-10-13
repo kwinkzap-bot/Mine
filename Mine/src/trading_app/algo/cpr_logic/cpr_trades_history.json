@@ -1,0 +1,32 @@
+[
+  {
+    "date": "2026-10-13",
+    "n": 1,
+    "mode": "live",
+    "strategy": "Inside CPR \u2192 cross candle",
+    "side": "BUY",
+    "setup_time": "09:35",
+    "entry": 22522.0,
+    "sl": 22463.0,
+    "target": 22610.0,
+    "index_fill": 22527.35,
+    "fill_time": "09:40",
+    "index_exit": 22702.05,
+    "exit_time": "15:15",
+    "result": "Target",
+    "pts": 174.7,
+    "strike": 22350,
+    "option_type": "CE",
+    "legs": {
+      "2": {
+        "name": "Devanai (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 196.35,
+        "exit": 352.0,
+        "pnl": 10117.25
+      }
+    },
+    "pnl": 10117.25
+  }
+]

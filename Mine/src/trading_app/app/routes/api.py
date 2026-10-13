@@ -6706,6 +6706,19 @@ def run_weekly_cpr_breakout_backtest_api():
         min_range_pct = DEFAULT_MIN_HOUR_RANGE_PCT
     lots = max(1, int(data.get('lots', 1) or 1))
     single = str(data.get('symbol', '') or '').strip().upper()
+    # First-hour signal — filters/weekly_cpr_open_scanner: 'candle' (any
+    # bearish / bullish candle type, narrowed by candle_type) or 'close'
+    # (closes outside the CPR). 'hammer' is the earlier name for candle +
+    # 'rejection' (shooting star SELL / hammer BUY).
+    from trading_app.filters.weekly_cpr_open_scanner import CANDLE_TYPES
+    signal = str(data.get('signal', 'candle')).lower()
+    candle_type = str(data.get('candle_type', 'all')).lower()
+    if signal == 'hammer':
+        signal, candle_type = 'candle', 'rejection'
+    if signal != 'close':
+        signal = 'candle'
+    if candle_type not in CANDLE_TYPES:
+        candle_type = 'all'
 
     fyers = get_fyers_adapter()
     if fyers is None:
@@ -6782,7 +6795,8 @@ def run_weekly_cpr_breakout_backtest_api():
                 return symbol, None
             trades = run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
                                 rr=rr, exit_hm=(eh, em), direction=direction,
-                                max_ratio=max_cpr_ratio, min_range_pct=min_range_pct)
+                                max_ratio=max_cpr_ratio, min_range_pct=min_range_pct,
+                                signal=signal, candle_type=candle_type)
             if pricer is None:
                 return symbol, trades
             # The order is the option: price each stock trade's CE / PE at
@@ -6868,6 +6882,7 @@ def run_weekly_cpr_breakout_backtest_api():
                 'rr_ratio': rr, 'lots': lots, 'multi_symbol': True,
                 'max_cpr_ratio': max_cpr_ratio if max_cpr_ratio is not None else 'any',
                 'min_range_pct': min_range_pct,
+                'signal': signal, 'candle_type': candle_type,
             })
             cagr = 0.0
             try:
@@ -6938,7 +6953,14 @@ from trading_app.Backtest.weekly_cpr_breakout_engine import (
 def weekly_cpr_breakout_optimise():
     """Start a Find Best Params sweep; poll .../optimise/status/<task_id>.
     Body: start_date, end_date, symbol ('' = every F&O future stock),
-    exit_time, lots — as the backtest."""
+    exit_time, lots, basis — as the backtest.
+
+    Scored on the SAME P&L basis the backtest will run, so a row and the
+    backtest of it agree trade for trade. basis 'option' prices every
+    trade's ATM option exactly as the backtest does (one Breeze request per
+    trade-day, shared by the four targets) — affordable for one stock or
+    index; for ALL STOCKS it would be thousands of requests, so that sweep
+    runs on the futures basis and says so (`basis` in the result)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -6955,6 +6977,19 @@ def weekly_cpr_breakout_optimise():
         eh, em = 15, 20
     lots = max(1, int(data.get('lots', 1) or 1))
     single = str(data.get('symbol', '') or '').strip().upper()
+    # First-hour signal — filters/weekly_cpr_open_scanner: 'candle' (any
+    # bearish / bullish candle type, narrowed by candle_type) or 'close'
+    # (closes outside the CPR). 'hammer' is the earlier name for candle +
+    # 'rejection' (shooting star SELL / hammer BUY).
+    from trading_app.filters.weekly_cpr_open_scanner import CANDLE_TYPES
+    signal = str(data.get('signal', 'candle')).lower()
+    candle_type = str(data.get('candle_type', 'all')).lower()
+    if signal == 'hammer':
+        signal, candle_type = 'candle', 'rejection'
+    if signal != 'close':
+        signal = 'candle'
+    if candle_type not in CANDLE_TYPES:
+        candle_type = 'all'
 
     fyers = get_fyers_adapter()
     if fyers is None:
@@ -6967,6 +7002,19 @@ def weekly_cpr_breakout_optimise():
     universe, err = _wcb_universe(single, lot_sizes)
     if err:
         return jsonify({'success': False, 'error': err}), 400
+    basis = 'futures' if str(data.get('basis', 'option')).lower() == 'futures' else 'option'
+    basis_note = None
+    if basis == 'option' and not single:
+        basis, basis_note = 'futures', 'all_stocks'
+    if basis == 'option' and single == 'SENSEX':
+        basis, basis_note = 'futures', 'sensex'
+    icici = None
+    if basis == 'option':
+        icici = get_icici_adapter()
+        if icici is None:
+            return jsonify({'success': False,
+                            'error': 'Option P&L reads past premiums from ICICI Direct, which is not '
+                                     'logged in — log in to ICICI, or switch P&L basis to Futures.'}), 503
 
     task_id = uuid.uuid4().hex[:12]
     task = {'status': 'running', 'started': _time.time(),
@@ -6980,7 +7028,11 @@ def weekly_cpr_breakout_optimise():
         from trading_app.Backtest.minute_candle_store import get_minute_history
         from trading_app.Backtest.weekly_cpr_breakout_engine import run_symbol
         from trading_app.filters.candle_store import get_daily_history
+        from trading_app.Backtest.weekly_cpr_option_leg import (
+            OptionLegPricer, current_strike_steps, trading_days_of)
 
+        pricer = (OptionLegPricer(icici, current_strike_steps(fyers.instruments('NFO')))
+                  if basis == 'option' else None)
         daily_days = (end_dt - start_dt).days + 95
         tag = _provider_tag(fyers)
         recent_from = (end_dt - timedelta(days=3 * 365)).strftime('%Y-%m-%d')
@@ -6997,15 +7049,30 @@ def weekly_cpr_breakout_optimise():
             if minutes is None or minutes.empty:
                 return symbol, None
             qty = lots * int(lot_sizes.get(symbol) or 1)
+            days = trading_days_of(minutes) if pricer else None
             out = {}
             for rr in _WCB_OPT_RR:
                 trades = run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
                                     rr=rr, exit_hm=(eh, em), direction='both',
-                                    max_ratio=None, min_range_pct=0)
-                # Only what the filters and the score need.
-                out[rr] = [(t['entry_time'], t['direction'], t.get('cpr_ratio'),
-                            t['fh_range_pct'], t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE)
-                           for t in trades]
+                                    max_ratio=None, min_range_pct=0,
+                                    signal=signal, candle_type=candle_type)
+                rows = []
+                for t in trades:
+                    if pricer:
+                        # Exactly the backtest's pricing; a trade it cannot
+                        # price is left out here as it is there.
+                        leg = pricer.price(symbol, t, days)
+                        if leg is None:
+                            continue
+                        gross = (leg['exit_premium'] - leg['entry_premium']) * qty
+                        net = gross - _WCB_OPTION_BROKERAGE
+                    else:
+                        gross = t['pnl'] * qty
+                        net = gross - _TMF_BROKERAGE_PER_TRADE
+                    # Unrounded ratio / range: the backtest filters on those.
+                    rows.append((t['entry_time'], t['direction'], t.get('cpr_ratio_raw'),
+                                 t['fh_range_raw'], net, gross))
+                out[rr] = rows
             return symbol, out
 
         per_rr = {rr: [] for rr in _WCB_OPT_RR}
@@ -7033,7 +7100,8 @@ def weekly_cpr_breakout_optimise():
                 'total': len(results),
                 'total_combos_tested': _WCB_OPT_COMBOS,
                 'symbols_used': used, 'min_trades': _WCB_OPT_MIN_TRADES,
-                'recent_from': recent_from, 'basis': 'futures',
+                'recent_from': recent_from, 'basis': basis, 'basis_note': basis_note,
+                'signal': signal, 'candle_type': candle_type,
             }
             task['status'] = 'complete'
             logger.info('[WeeklyCprBreakout optimise] %s..%s: %d stocks, %d combos kept',

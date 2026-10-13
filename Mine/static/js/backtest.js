@@ -1014,6 +1014,8 @@ document.addEventListener('DOMContentLoaded', function() {
             exit_time:  document.getElementById('wcbExitTime')?.value || '15:20',
             max_cpr_ratio: document.getElementById('wcbMaxRatio')?.value || '0.5',
             basis:      document.getElementById('wcbBasis')?.value || 'option',
+            signal:     document.getElementById('wcbSignal')?.value || 'candle',
+            candle_type: document.getElementById('wcbCandleType')?.value || 'all',
             // 0 is meaningful — it turns the range filter off.
             min_range_pct: parseFloat(document.getElementById('wcbMinRange')?.value ?? 1.6),
             lots:       Math.max(1, parseInt(document.getElementById('wcbLots')?.value || 1)),
@@ -3609,6 +3611,9 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Direction',      key: 'direction',            fmt: r => r.direction === 'both' ? 'Buy & Sell' : (r.direction === 'buy' ? 'Buy' : 'Sell') },
         { label: 'Trades',         key: 'total_trades',         fmt: r => r.total_trades },
         { label: 'Win%',           key: 'win_rate',             fmt: r => `${r.win_rate ?? 0}%` },
+        // Named after the backtest cards they match: "Total P&L" there is
+        // gross (before brokerage), "Net P&L (₹)" is after it.
+        { label: 'Total P&L (gross)', key: 'gross_pnl_rupees',  fmt: r => _rs(r.gross_pnl_rupees || 0) },
         { label: 'Net P&L (₹)',    key: 'net_pnl_rupees',       fmt: r => _rs(r.net_pnl_rupees) },
         { label: 'Avg / Trade',    key: 'avg_pnl_rupees',       fmt: r => _rs(r.avg_pnl_rupees) },
         { label: 'Prof. Factor',   key: 'profit_factor_rupees', fmt: r => (r.profit_factor_rupees || 0).toFixed(2) },
@@ -3622,17 +3627,29 @@ document.addEventListener('DOMContentLoaded', function() {
         const panel     = document.getElementById('weeklyCprBreakoutOptimisePanel');
         const metaEl    = document.getElementById('wcbOptMeta');
         const recalcBtn = document.getElementById('wcbRecalcOptBtn');
+        const basisTxt = data.basis === 'option'
+            ? 'Stock option ₹ (ATM, ICICI premiums) — same as the backtest'
+            : (data.basis_note === 'all_stocks'
+                ? 'Futures ₹ — ALL STOCKS is scored on futures (pricing every option would be thousands of ICICI requests); "Use" switches P&L Basis to Futures so the backtest matches'
+                : data.basis_note === 'sensex'
+                    ? 'Futures ₹ — SENSEX options are on BSE, not priced'
+                    : 'Futures ₹ — same as the backtest');
         if (metaEl) metaEl.textContent =
             `${data.total_combos_tested} combos · ${data.total} with ≥ ${data.min_trades} trades · `
-            + `${data.symbols_used} stocks · futures ₹ basis (option legs are not swept)`;
+            + `${data.symbols_used} stock${data.symbols_used === 1 ? '' : 's'} · ${basisTxt}`;
+        // "Use" also sets the basis the sweep scored on, so the backtest of a
+        // row reproduces that row.
+        _wcbOptBasis = data.basis || 'futures';
         _mountSingleOptGrid('wcbOptGrid', data.results || [], WCB_OPT_COLS, 'net_pnl_rupees', applyWcbOptResult);
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
         if (data.best) applyWcbOptResult(data.best);
     }
 
+    let _wcbOptBasis = 'futures';
     function applyWcbOptResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('wcbBasis', _wcbOptBasis);
         set('wcbRrRatio', String(r.rr_ratio));
         set('wcbMaxRatio', String(r.max_cpr_ratio));
         set('wcbMinRange', String(r.min_range_pct));
@@ -3640,7 +3657,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (window.showNotification) window.showNotification(
             `Applied: 1:${r.rr_ratio} · W CPR ${r.max_cpr_ratio === 'any' ? 'any' : '≤ ' + r.max_cpr_ratio + '×'}`
             + ` · 1H range ${r.min_range_pct ? '≥ ' + r.min_range_pct + '%' : 'off'} · ${r.direction}`
-            + ` · Win% ${r.win_rate}%`, 'success');
+            + ` · ${_wcbOptBasis === 'option' ? 'option' : 'futures'} basis · Win% ${r.win_rate}%`, 'success');
     }
 
     async function runWcbOptimise(recalculate) {
@@ -3665,6 +3682,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Not swept — scored under the values the single run uses.
                     exit_time:  document.getElementById('wcbExitTime')?.value || '15:20',
                     lots:       Math.max(1, parseInt(document.getElementById('wcbLots')?.value || 1)),
+                    basis:      document.getElementById('wcbBasis')?.value || 'option',
+            signal:     document.getElementById('wcbSignal')?.value || 'candle',
+            candle_type: document.getElementById('wcbCandleType')?.value || 'all',
                 }),
             });
             let data = await resp.json();

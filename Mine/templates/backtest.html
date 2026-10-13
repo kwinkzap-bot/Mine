@@ -697,6 +697,24 @@
                  1:R. See Backtest/weekly_cpr_breakout_engine.py. -->
             <div id="weeklyCprBreakoutParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
+                    <label for="wcbSignal" title="Any candle: the first 1-hour candle's colour gives the side — any bearish (red) candle type is a SELL, any bullish (green) one a BUY (a doji is neither); it need not close outside the CPR. 1H close outside CPR: the earlier rule — closes below BC (SELL) / above TC (BUY).">Signal</label>
+                    <select id="wcbSignal">
+                        <option value="candle" selected>Any bearish / bullish candle</option>
+                        <option value="close">1H close outside CPR</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="wcbCandleType" title="Narrow the Any-candle signal to one shape. Marubozu: body ≥ 80% of the range. Shooting star / Hammer: long wick (≥ 2× body) against the trade — upper for a SELL, lower for a BUY. Hanging man / Inverted hammer: the long wick on the other side. Spinning top: body ≤ 30% of the range. Plain body: anything else. In the 2017–2026 replay no single shape clearly beat All types.">Candle Type</label>
+                    <select id="wcbCandleType">
+                        <option value="all" selected>All types</option>
+                        <option value="marubozu">Marubozu</option>
+                        <option value="rejection">Shooting star / Hammer</option>
+                        <option value="counter_wick">Hanging man / Inv. hammer</option>
+                        <option value="spinning_top">Spinning top</option>
+                        <option value="body">Plain body</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="wcbBasis" title="Stock option: the signal, entry and exit stay on the STOCK's price, but the order is its ATM CALL (BUY) / PUT (SELL), booked at the option's recorded premiums from ICICI Direct (needs an ICICI login; the first long run uses a big share of the day's Breeze requests — run it after market hours). Futures: P&L on the stock's own move × lot size.">P&amp;L Basis</label>
                     <select id="wcbBasis">
                         <option value="option" selected>Stock option (ATM)</option>
@@ -745,14 +763,14 @@
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Rule</label>
                     <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
-                        Weekly CPR is narrow (≤ W CPR Width × its 10-week normal) → day opens inside
-                        it → first 1-hour candle (09:15–10:15) closes above TC (BUY) or below BC
-                        (SELL), more than 0.5% short of weekly R3/S3, with a range ≥ Min 1H Range % →
-                        BUY on a break ABOVE that candle's High, SELL on a break BELOW its Low · SL =
-                        the other end · target = R × the candle's range · no break before the cut-off
-                        = no trade · a bar touching both counts as the SL. Signals on the stock (Fyers);
-                        with Stock option basis the order is its ATM CE (BUY) / PE (SELL), monthly
-                        expiry, priced from ICICI's recorded premiums.
+                        Weekly CPR is narrow (≤ W CPR Width × its 10-week normal) → day opens inside it →
+                        first 1-hour candle (09:15–10:15) with range ≥ Min 1H Range % gives the signal:
+                        <b>Any candle</b> — any bearish (red) candle type = SELL, any bullish (green)
+                        one = BUY (Candle Type narrows it to one shape; a doji is neither); or
+                        <b>1H close outside CPR</b> — closes below BC = SELL, above TC = BUY · SELL on a break BELOW that candle's Low, BUY on a break ABOVE its
+                        High, more than 0.5% short of weekly S3/R3 · SL = the other end · target = R × the
+                        candle's range · no break before the cut-off = no trade. Signals on the stock
+                        (Fyers); with Stock option basis the order is its ATM CE (BUY) / PE (SELL).
                     </small>
                 </div>
             </div>

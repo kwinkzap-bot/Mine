@@ -56,7 +56,7 @@ def _session(day=MONDAY, first_open=101.0, hour_close=104.0):
 def _eval(day=MONDAY, hour_close=104.0, now=AFTER_HOUR, first_open=101.0, **kw):
     return evaluate(_daily(today=day, **kw), day.date(),
                     intraday=_session(day, first_open=first_open, hour_close=hour_close),
-                    now=now)
+                    now=now, signal='close')
 
 
 # ── levels ───────────────────────────────────────────────────────────────
@@ -167,7 +167,8 @@ def test_first_hour_is_pending_until_1015():
 def test_first_hour_needs_both_bars():
     df = _daily(today=WED)
     only_first = _session(WED).iloc[:1]
-    assert evaluate(df, WED.date(), intraday=only_first, now=AFTER_HOUR)['fh_side'] == 'pending'
+    assert evaluate(df, WED.date(), intraday=only_first, now=AFTER_HOUR,
+                    signal='close')['fh_side'] == 'pending'
 
 
 # ── fetch and scan ──────────────────────────────────────────────────────
@@ -224,9 +225,25 @@ def test_scan_keeps_every_row_and_rolls_weekend_back(monkeypatch):
               **_frames('BBB', fri, hour_close=101.0)}        # first hour back inside
     seen = []
     out = filter_weekly_cpr_open(_Svc(frames), root_date=datetime(2026, 10, 18),  # Sunday
-                                 progress_cb=lambda d, t: seen.append((d, t)), now=AFTER_HOUR)
+                                 progress_cb=lambda d, t: seen.append((d, t)), now=AFTER_HOUR,
+                                 signal='close')
     assert out['date'] == '2026-10-16'
     assert [r['symbol'] for r in out['rows']] == ['AAA', 'BBB']
     assert [r['symbol'] for r in select_matches(out['rows'])] == ['AAA']
     assert (out['read'], out['skipped'], out['scanned']) == (2, 1, 3)
     assert seen[-1] == (3, 3) and len(seen) == 3
+
+
+
+def test_classify_candle():
+    from trading_app.filters.weekly_cpr_open_scanner import classify_candle as cc
+    lab = lambda o, h, l, c: (cc({'open': o, 'high': h, 'low': l, 'close': c}) or {}).get('label')
+    assert lab(101, 104.5, 100.5, 100.6) == 'Shooting star'          # red, long upper wick
+    assert lab(101, 101.5, 97.6, 101.4) == 'Hammer'                  # green, long lower wick
+    assert lab(101, 101.1, 97.5, 100.6) == 'Hanging man'             # red, long lower wick
+    assert lab(100.6, 104.5, 100.5, 101) == 'Inverted hammer'        # green, long upper wick
+    assert lab(102, 102.1, 100.2, 100.3) == 'Bearish marubozu'
+    assert lab(100.3, 102.1, 100.2, 102.0) == 'Bullish marubozu'
+    assert lab(101, 102, 99, 100.6) == 'Bearish spinning top'        # small body, wicks both sides
+    assert lab(100, 102, 99.5, 101.2) == 'Bullish candle'
+    assert lab(101, 104.5, 100.5, 101.0) is None                     # doji

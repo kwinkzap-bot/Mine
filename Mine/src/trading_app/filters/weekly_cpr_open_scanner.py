@@ -116,13 +116,90 @@ def weekly_levels(high: float, low: float, close: float) -> Dict:
             's3': close - (high - low) * _CAMARILLA_R3}
 
 
-def judge_first_hour(hour: Dict, levels: Dict) -> Dict:
-    """Conditions 2–4 on a closed first-hour candle against `levels`.
+# The first-hour signal.
+#   'candle' (default): the 09:15–10:15 candle's COLOUR gives the side — any
+#     bearish (red) candle type is a SELL, any bullish (green) one a BUY — and
+#     it does NOT have to close outside the CPR. `candle_type` can narrow it to
+#     one shape (CANDLE_TYPES); a doji (body ≤ 5 % of range) has no side.
+#   'close': the earlier rule — the hour closes below BC as a red candle
+#     (SELL) / above TC as a green one (BUY).
+# Replayed over every F&O stock 2017–2026 with the quality filters on, all
+# candle types together: 762 trades, out-of-sample 60.9 % wins / PF 1.65,
+# every year positive; no single shape clearly beat the others (each had too
+# few trades to rank). Without the quality filters it is break-even.
+SIGNALS = ('candle', 'close')
+DEFAULT_SIGNAL = 'candle'
+# Shapes, named relative to the side traded: 'rejection' is the wick AGAINST
+# the trade (shooting star for a SELL, hammer for a BUY), 'counter_wick' the
+# wick WITH it (hanging man for a SELL, inverted hammer for a BUY).
+CANDLE_TYPES = ('all', 'marubozu', 'rejection', 'counter_wick', 'spinning_top', 'body')
+DEFAULT_CANDLE_TYPE = 'all'
+DOJI_BODY_MAX = 0.05          # body at most this share of the range: no side
+MARUBOZU_BODY_MIN = 0.8       # body at least this share of the range
+WICK_X_BODY = 2.0             # a long wick is at least this × the body ...
+OTHER_WICK_MAX = 0.25         # ... with the other wick at most this share of the range
+SPINNING_BODY_MAX = 0.3       # small body, wicks both sides
+_LABELS = {
+    ('marubozu', 'SELL'): 'Bearish marubozu', ('marubozu', 'BUY'): 'Bullish marubozu',
+    ('rejection', 'SELL'): 'Shooting star', ('rejection', 'BUY'): 'Hammer',
+    ('counter_wick', 'SELL'): 'Hanging man', ('counter_wick', 'BUY'): 'Inverted hammer',
+    ('spinning_top', 'SELL'): 'Bearish spinning top', ('spinning_top', 'BUY'): 'Bullish spinning top',
+    ('body', 'SELL'): 'Bearish candle', ('body', 'BUY'): 'Bullish candle',
+}
 
-    Returns side ('above' | 'below' | 'inside'), dir ('BUY' | 'SELL' | None
-    for a doji), room_pct (to R3 / S3 on that side, None inside) and ok.
-    Shared with the backtest, which enters on exactly the hours this passes.
+
+def classify_candle(hour: Dict) -> Optional[Dict]:
+    """{'dir': 'BUY'|'SELL', 'type': one of CANDLE_TYPES[1:], 'label': name},
+    or None for a doji / a flat candle."""
+    o, h, l, c = hour['open'], hour['high'], hour['low'], hour['close']
+    body, rng = abs(c - o), h - l
+    if rng <= 0 or body <= DOJI_BODY_MAX * rng:
+        return None
+    side = 'BUY' if c > o else 'SELL'
+    upper, lower = h - max(o, c), min(o, c) - l
+    if body >= MARUBOZU_BODY_MIN * rng:
+        kind = 'marubozu'
+    elif upper >= WICK_X_BODY * body and lower <= OTHER_WICK_MAX * rng:
+        kind = 'rejection' if side == 'SELL' else 'counter_wick'
+    elif lower >= WICK_X_BODY * body and upper <= OTHER_WICK_MAX * rng:
+        kind = 'rejection' if side == 'BUY' else 'counter_wick'
+    elif body <= SPINNING_BODY_MAX * rng:
+        kind = 'spinning_top'
+    else:
+        kind = 'body'
+    return {'dir': side, 'type': kind, 'label': _LABELS[(kind, side)]}
+
+
+def judge_first_hour(hour: Dict, levels: Dict, signal: str = DEFAULT_SIGNAL,
+                     candle_type: str = DEFAULT_CANDLE_TYPE) -> Dict:
+    """The first-hour verdict on a closed first-hour candle against `levels`.
+
+    Returns side, dir ('BUY' | 'SELL' | None), room_pct (to R3 / S3 on that
+    side) and ok. Shared with the backtest, which enters on exactly the hours
+    this passes.
+
+    signal 'candle': side is the candle's name (classify_candle — 'Shooting
+    star', 'Bullish marubozu', … or 'Doji'); the room to R3 (BUY) / S3 (SELL)
+    is measured from the ENTRY level — the high / low the trade breaks —
+    since nothing has to close outside the CPR.
+    signal 'close': side is 'above' | 'below' | 'inside' (the earlier rule).
     """
+    if signal != 'close':
+        info = classify_candle(hour)
+        if info is None:
+            return {'side': 'Doji', 'dir': None, 'room_pct': None, 'ok': False}
+        r3, s3 = levels['r3'], levels['s3']
+        type_ok = candle_type in (None, 'all') or info['type'] == candle_type
+        if info['dir'] == 'BUY':
+            trig = hour['high']
+            return {'side': info['label'], 'dir': 'BUY', 'type': info['type'],
+                    'room_pct': (r3 - trig) / trig * 100,
+                    'ok': type_ok and trig < r3 * (1 - CAM_NEAR_PCT / 100)}
+        trig = hour['low']
+        return {'side': info['label'], 'dir': 'SELL', 'type': info['type'],
+                'room_pct': (trig - s3) / trig * 100,
+                'ok': type_ok and trig > s3 * (1 + CAM_NEAR_PCT / 100)}
+
     c1 = hour['close']
     direction = 'BUY' if c1 > hour['open'] else 'SELL' if c1 < hour['open'] else None
     bc, tc, r3, s3 = levels['bc'], levels['tc'], levels['r3'], levels['s3']
@@ -208,7 +285,9 @@ def _position(price: float, bc: float, tc: float) -> str:
 
 def evaluate(df: pd.DataFrame, session_date,
              intraday: Optional[pd.DataFrame] = None,
-             now: Optional[datetime] = None) -> Optional[Dict]:
+             now: Optional[datetime] = None,
+             signal: str = DEFAULT_SIGNAL,
+             candle_type: str = DEFAULT_CANDLE_TYPE) -> Optional[Dict]:
     """Read one symbol's daily bars (and D's 30-minute bars) for `session_date`.
 
     Returns the levels and every verdict, matched or not, or None when the
@@ -244,7 +323,7 @@ def evaluate(df: pd.DataFrame, session_date,
     if hour is None:
         fh_side, fh_dir, fh_room, fh_ok = 'pending', None, None, False
     else:
-        verdict = judge_first_hour(hour, cpr)
+        verdict = judge_first_hour(hour, cpr, signal, candle_type)
         fh_side, fh_dir = verdict['side'], verdict['dir']
         fh_room, fh_ok = verdict['room_pct'], verdict['ok']
 
@@ -308,7 +387,8 @@ def _frame(data) -> Optional[pd.DataFrame]:
 def get_weekly_cpr_open_row(cpr_service: "CPRFilterService", symbol: str,
                             root_date: datetime, token=None,
                             is_index: bool = False,
-                            now: Optional[datetime] = None) -> Optional[Dict]:
+                            now: Optional[datetime] = None,
+                            signal: str = DEFAULT_SIGNAL) -> Optional[Dict]:
     """One symbol's reading for `root_date`, matched or not; None if unreadable."""
     if token is None:
         token = cpr_service.get_token(symbol)
@@ -340,7 +420,7 @@ def get_weekly_cpr_open_row(cpr_service: "CPRFilterService", symbol: str,
                 {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
             df = pd.concat([df, daily[daily.index.date > last]]).sort_index()
 
-    reading = evaluate(df, root_date.date(), intraday=session_bars, now=now)
+    reading = evaluate(df, root_date.date(), intraday=session_bars, now=now, signal=signal)
     if reading is None:
         return None
     return {'symbol': symbol, 'is_index': is_index, **reading}
@@ -349,7 +429,8 @@ def get_weekly_cpr_open_row(cpr_service: "CPRFilterService", symbol: str,
 def filter_weekly_cpr_open(cpr_service: "CPRFilterService",
                            root_date: Optional[datetime] = None,
                            progress_cb: Optional[Callable[[int, int], None]] = None,
-                           now: Optional[datetime] = None) -> Dict:
+                           now: Optional[datetime] = None,
+                           signal: str = DEFAULT_SIGNAL) -> Dict:
     """Scan futures stocks + indices for `root_date`.
 
     Returns {'rows': every readable row (select_matches() applies the
@@ -375,7 +456,8 @@ def filter_weekly_cpr_open(cpr_service: "CPRFilterService",
 
     with ThreadPoolExecutor(max_workers=_WORKERS) as executor:
         futures = {
-            executor.submit(get_weekly_cpr_open_row, cpr_service, sym, root_date, tok, idx, now): sym
+            executor.submit(get_weekly_cpr_open_row, cpr_service, sym, root_date, tok, idx, now,
+                            signal): sym
             for sym, tok, idx in universe
         }
         for n, future in enumerate(as_completed(futures), 1):

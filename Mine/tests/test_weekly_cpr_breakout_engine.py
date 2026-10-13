@@ -47,10 +47,10 @@ def _run(**kw):
     their own tests at the bottom."""
     rr = kw.pop('rr', 2.0)
     direction = kw.pop('direction', 'both')
+    opts = dict(max_ratio=kw.pop('max_ratio', None), min_range_pct=kw.pop('min_range_pct', 0),
+                signal=kw.pop('signal', 'close'), candle_type=kw.pop('candle_type', 'all'))
     return run_symbol(_daily(), _minutes(**kw), '2026-10-12', '2026-10-16',
-                      rr=rr, direction=direction, now=AFTER,
-                      max_ratio=kw.pop('max_ratio', None),
-                      min_range_pct=kw.pop('min_range_pct', 0))
+                      rr=rr, direction=direction, now=AFTER, **opts)
 
 
 # BUY setup used below: hour H 105 / L 100.5 / C 104 -> trigger 105, SL 100.5,
@@ -140,7 +140,7 @@ def test_direction_filter():
 def test_session_still_trading_is_skipped():
     mid = datetime(2026, 10, 14, 11, 0)
     assert run_symbol(_daily(), _minutes(after=[BREAK_UP]), '2026-10-12', '2026-10-16',
-                      now=mid, max_ratio=None, min_range_pct=0) == []
+                      now=mid, max_ratio=None, min_range_pct=0, signal='close') == []
 
 
 # ── quality filters (narrow weekly CPR, first-hour range) ─────────────────
@@ -160,7 +160,8 @@ def _long_daily(in_force_close=103.0):
 
 
 def _filtered(daily, **kw):
-    return run_symbol(daily, _minutes(**kw), '2026-10-12', '2026-10-16', rr=2.0, now=AFTER)
+    return run_symbol(daily, _minutes(**kw), '2026-10-12', '2026-10-16', rr=2.0, now=AFTER,
+                      signal='close')
 
 
 def test_narrow_week_with_a_wide_first_hour_trades_by_default():
@@ -182,7 +183,7 @@ def test_a_quiet_first_hour_is_skipped():
               after=[('11:00', 103.0, 102.7, 102.95)])
     assert _filtered(_long_daily(), **kw) == []
     assert len(run_symbol(_long_daily(), _minutes(**kw), '2026-10-12', '2026-10-16',
-                          now=AFTER, min_range_pct=1.0)) == 1
+                          now=AFTER, min_range_pct=1.0, signal='close')) == 1
 
 
 def test_too_little_history_for_a_ratio_is_skipped_while_the_filter_is_on():
@@ -194,9 +195,9 @@ def test_too_little_history_for_a_ratio_is_skipped_while_the_filter_is_on():
 def test_score_combos_applies_filters_to_the_unfiltered_replay():
     from trading_app.Backtest.weekly_cpr_breakout_engine import OPT_COMBOS, score_combos
     # 40 narrow wide-range SELL winners, 40 wide-CPR BUY losers, 5 with no ratio.
-    rows = ([(f'2025-01-{1 + i % 28:02d}T11:00', 'SELL', 0.4, 2.5, 1000.0) for i in range(40)]
-            + [(f'2025-02-{1 + i % 28:02d}T11:00', 'BUY', 1.5, 2.5, -800.0) for i in range(40)]
-            + [('2025-03-03T11:00', 'SELL', None, 2.5, 500.0)] * 5)
+    rows = ([(f'2025-01-{1 + i % 28:02d}T11:00', 'SELL', 0.4, 2.5, 1000.0, 1300.0) for i in range(40)]
+            + [(f'2025-02-{1 + i % 28:02d}T11:00', 'BUY', 1.5, 2.5, -800.0, -500.0) for i in range(40)]
+            + [('2025-03-03T11:00', 'SELL', None, 2.5, 500.0, 800.0)] * 5)
     res = score_combos({rr: rows for rr in (1.0, 1.5, 2.0, 3.0)}, recent_from='2025-02-01')
     pick = lambda **kw: next(r for r in res if all(r[k] == v for k, v in kw.items()))
     best = res[0]
@@ -220,3 +221,64 @@ def test_symbol_box_accepts_indices_and_stocks():
     assert _wcb_universe('TITAN', lots) == (['TITAN'], None)
     assert _wcb_universe('XYZ', lots)[0] is None
     assert _wcb_token('NIFTY') == 'NSE:NIFTY50-INDEX' and _wcb_token('TITAN') == 'NSE:TITAN-EQ'
+
+
+def test_score_combos_filters_on_exact_values_and_counts_gross_wins():
+    """Regression: the sweep filtered on ROUNDED ratio / range while the
+    backtest uses exact ones, so a 0.504x week sat in a <= 0.5x row the
+    backtest then refused. And a win is gross > 0, as on the backtest cards."""
+    from trading_app.Backtest.weekly_cpr_breakout_engine import passes_quality, score_combos
+    base = [(f'2025-01-{1 + i % 28:02d}T11:00', 'BUY', 0.45, 2.0, 500.0, 800.0) for i in range(30)]
+    edge = [('2025-02-03T11:00', 'BUY', 0.504, 1.5996, 200.0, 500.0),
+            ('2025-02-04T11:00', 'BUY', 0.45, 2.0, -100.0, 200.0)]   # gross win, net loss
+    res = score_combos({rr: base + edge for rr in (1.0, 1.5, 2.0, 3.0)}, '2025-01-01')
+    row = next(r for r in res if r['max_cpr_ratio'] == 0.5 and r['min_range_pct'] == 1.6
+               and r['direction'] == 'both' and r['rr_ratio'] == 1.0)
+    assert row['total_trades'] == 31                       # the 0.504x / 1.5996 % trade is out
+    assert not passes_quality(0.504, {'high': 101.5996, 'low': 100.0, 'close': 100.0}, 0.5, 1.6)
+    assert row['wins'] == 31                               # gross > 0 on every one
+    assert row['net_pnl_rupees'] == 30 * 500.0 - 100.0
+
+
+
+# ── any bearish / bullish candle signal (the default) ─────────────────────
+
+def test_red_shooting_star_sells_on_a_break_of_its_low_without_closing_below_bc():
+    # Opens 101 (inside 100..102), runs to 104.5, closes 100.6 inside the CPR —
+    # red, long upper wick: a shooting star. SELL below 100.5; SL 104.5; risk 4.
+    kw = dict(day_open=101.0, hour_close=100.6, hour_high=104.5, hour_low=100.5,
+              after=[('11:00', 100.6, 100.4, 100.45), ('12:00', 100.5, 92.0, 93.0)])
+    (t,) = _run(signal='candle', **kw)
+    assert (t['direction'], t['fh_signal'], t['fh_type']) == ('SELL', 'Shooting star', 'rejection')
+    assert (t['entry_price'], t['sl_price'], t['target_price']) == (100.5, 104.5, 92.5)
+    assert t['exit_reason'] == 'Target hit'
+    assert _run(signal='close', **kw) == []              # closed inside: no 'close' signal
+
+
+def test_any_red_candle_is_a_sell_and_any_green_a_buy():
+    # A plain red bar with no notable wicks — no longer needs to be a hammer.
+    (t,) = _run(signal='candle', day_open=102.0, hour_close=100.3, hour_high=102.1,
+                hour_low=100.2, after=[('11:00', 100.3, 100.1, 100.15)])
+    assert (t['direction'], t['fh_signal']) == ('SELL', 'Bearish marubozu')
+    (t,) = _run(signal='candle', day_open=101.0, hour_close=101.4, hour_high=101.5,
+                hour_low=97.6, after=[('11:00', 101.6, 101.3, 101.55)])
+    assert (t['direction'], t['fh_signal'], t['entry_price'], t['sl_price']) == \
+        ('BUY', 'Hammer', 101.5, 97.6)
+
+
+def test_candle_type_narrows_the_signal():
+    kw = dict(day_open=102.0, hour_close=100.3, hour_high=102.1, hour_low=100.2,
+              after=[('11:00', 100.3, 100.1, 100.15)])          # a bearish marubozu
+    assert len(_run(signal='candle', candle_type='marubozu', **kw)) == 1
+    assert _run(signal='candle', candle_type='rejection', **kw) == []
+
+
+def test_a_doji_has_no_side():
+    assert _run(signal='candle', day_open=101.0, hour_close=101.05, hour_high=103.0,
+                hour_low=99.0, after=[('11:00', 103.1, 98.9, 101.0)]) == []
+
+
+def test_entry_level_too_near_s3_is_skipped():
+    # S3 97.5; low 97.9 is within 0.5 % of it.
+    assert _run(signal='candle', day_open=100.2, hour_close=98.0, hour_high=104.0,
+                hour_low=97.9, after=[('11:00', 98.0, 97.8, 97.85)]) == []

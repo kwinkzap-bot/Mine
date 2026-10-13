@@ -392,7 +392,7 @@ async function loadWeeklyOpenData(refresh = false) {
         if (response && response.success) {
             const rows = response.rows || [];
             if (titleSpan) titleSpan.textContent =
-                `🎯 Narrow W CPR → ${response.date} open inside → 1H (≥1.6% range) closes outside, `
+                `🎯 Narrow W CPR → ${response.date} open inside → 1H (≥1.6% range) bearish / bullish candle, `
                 + `not within ${response.cam_near_pct}% of R3/S3`;
             displayResults('weeklyOpen', rows);
             if (footnote) {
@@ -594,9 +594,9 @@ const _SCANNER_COLUMNS = {
             { key: 'fh_dir', label: 'Signal', sortable: true,
               badge: v => v === 'BUY' ? 'pos' : v === 'SELL' ? 'neg' : 'neutral',
               title: (_v, row) => `1H open ${px(row.fh_open)} → close ${px(row.fh_close)}` },
-            { key: 'fh_side', label: '1H vs CPR', sortable: true,
-              format: v => v === 'above' ? 'Above TC' : v === 'below' ? 'Below BC' : v,
-              badge: v => v === 'above' ? 'pos' : v === 'below' ? 'neg' : 'neutral' },
+            { key: 'fh_side', label: '1H Candle', sortable: true,
+              format: v => ({ above: 'Above TC', below: 'Below BC' })[v] || v,
+              badge: (_v, row) => row.fh_dir === 'BUY' ? 'pos' : row.fh_dir === 'SELL' ? 'neg' : 'neutral' },
             { key: 'fh_range_pct', label: '1H Range %', sortable: true, align: 'right',
               format: v => v == null ? '—' : Number(v).toFixed(2) + '%',
               title: () => 'First-hour High − Low as a % of its close — must be at least 1.6%' },
