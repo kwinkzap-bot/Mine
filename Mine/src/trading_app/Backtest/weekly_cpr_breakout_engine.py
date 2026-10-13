@@ -9,18 +9,25 @@ never a copy):
   2. D's first 1-hour candle (09:15–10:15) closes outside it;
   3. as a direction candle agreeing with the break — green above TC (BUY),
      red below BC (SELL);
-  4. more than 0.5 % short of the weekly Camarilla R3 (BUY) / S3 (SELL).
+  4. more than 0.5 % short of the weekly Camarilla R3 (BUY) / S3 (SELL);
+  5. quality: the weekly CPR is narrow (≤ 0.5× its 10-week average width)
+     and the first hour's range is ≥ 1.6 % of price (passes_quality).
 
 The trade:
 
-  * entry  — at the first hour's close, 10:15;
+  * entry  — a BREAKOUT of the first-hour candle after 10:15: a BUY when a
+             1-minute bar trades above its HIGH, a SELL when one trades below
+             its LOW. Filled at that level, or at the bar's open when the bar
+             gaps straight through it. No break before `exit_time` = no trade.
+             (Until 2026-10-13 the entry was the first hour's close at 10:15.)
   * stop   — the first-hour candle's other extreme: its LOW for a BUY, its
-             HIGH for a SELL;
-  * target — `rr` × that risk from the entry (1:2 by default);
-  * exit   — whichever of stop / target a later 1-minute bar touches first.
-             A bar touching both is booked as the STOP: one bar cannot say
-             which came first, and assuming the worse one keeps the result
-             honest. Neither by `exit_time` (15:15) closes at that bar.
+             HIGH for a SELL — so the risk is the candle's whole range;
+  * target — `rr` × that range from the entry level (1:1.5 by default);
+  * exit   — whichever of stop / target a 1-minute bar touches first,
+             starting with the entry bar itself. A bar touching both is
+             booked as the STOP: one bar cannot say which came first, and
+             assuming the worse one keeps the result honest. Neither by
+             `exit_time` (15:20) closes at that bar.
 
 One trade per symbol per day. The weekly levels come from DAILY bars (the
 official close, as the scanner and the chart popup use); the open, first
@@ -28,16 +35,24 @@ hour and the exit walk come from 1-minute bars.
 """
 from __future__ import annotations
 
+import itertools
 from datetime import datetime, time as dt_time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
 from trading_app.filters.weekly_cpr_open_scanner import (
-    judge_first_hour, opens_inside, weekly_levels)
+    DEFAULT_MAX_CPR_RATIO, DEFAULT_MIN_HOUR_RANGE_PCT, hour_range_pct,
+    judge_first_hour, opens_inside, passes_quality, weekly_levels)
+from trading_app.service.cpr_service import cpr_width_pct
 
-DEFAULT_RR = 2.0
-DEFAULT_EXIT = (15, 15)
+# 1:1.5 and out at 15:20 — chosen with the quality filters on 2026-10-13
+# (see the scanner module's note): over every F&O stock since 2017 1:1.5 was
+# the best target and holding to 15:20 beat 15:15 in-sample AND out-of-sample.
+DEFAULT_RR = 1.5
+DEFAULT_EXIT = (15, 20)
+_CONTEXT_WEEKS = 10
+_MIN_CONTEXT = 4
 _FIRST_HOUR_START = dt_time(9, 15)
 _FIRST_HOUR_END = dt_time(10, 15)      # exclusive: the 09:15..10:14 minute bars
 
@@ -53,13 +68,20 @@ def weekly_level_table(daily: pd.DataFrame) -> Dict[pd.Timestamp, Dict]:
         return {}
     weeks = daily.groupby(daily.index.to_period('W-SUN')).agg(
         {'high': 'max', 'low': 'min', 'close': 'last'})
+    widths = [cpr_width_pct(float(r.high), float(r.low), float(r.close))
+              for r in weeks.itertuples()]
     table: Dict[pd.Timestamp, Dict] = {}
     prev = None
-    for period, row in weeks.iterrows():
+    for k, (period, row) in enumerate(weeks.iterrows()):
         if prev is not None:
             table[period.start_time.normalize()] = prev
-        prev = {'week': str(period), **weekly_levels(
-            float(row['high']), float(row['low']), float(row['close']))}
+        # Width against the 10 weeks before it — the scanner's _weekly_cpr
+        # measure, so "narrow" means the same thing in both.
+        ctx = [w for w in widths[max(0, k - _CONTEXT_WEEKS):k] if w is not None]
+        avg = sum(ctx) / len(ctx) if len(ctx) >= _MIN_CONTEXT else None
+        prev = {'week': str(period),
+                'ratio': (widths[k] / avg) if (avg and widths[k] is not None) else None,
+                **weekly_levels(float(row['high']), float(row['low']), float(row['close']))}
     # The week after the last one with bars (the one being traded now).
     if prev is not None:
         nxt = (weeks.index[-1] + 1).start_time.normalize()
@@ -80,31 +102,50 @@ def _first_hour(bars: pd.DataFrame) -> Optional[Dict]:
             'low': float(hour['low'].min()), 'close': float(hour['close'].iloc[-1])}
 
 
-def _walk(bars: pd.DataFrame, direction: str, sl: float, target: float,
-          exit_at: dt_time) -> Tuple[pd.Timestamp, float, str]:
-    """(exit time, exit price, reason) for a position opened at 10:15."""
+def _trade(bars: pd.DataFrame, direction: str, trigger: float, sl: float,
+           target: float, exit_at: dt_time
+           ) -> Optional[Tuple[pd.Timestamp, float, pd.Timestamp, float, str]]:
+    """Walk the bars after 10:15: wait for the break of `trigger`, then for
+    stop / target. Returns (entry time, entry price, exit time, exit price,
+    reason), or None when price never broke out before `exit_at`."""
+    buy = direction == 'BUY'
     after = bars[bars.index.time >= _FIRST_HOUR_END]
+    entry_ts = entry_px = None
     for ts, bar in after.iterrows():
         if ts.time() >= exit_at:
-            return ts, float(bar['open']), 'Time exit'
-        hit_sl = bar['low'] <= sl if direction == 'BUY' else bar['high'] >= sl
-        hit_tg = bar['high'] >= target if direction == 'BUY' else bar['low'] <= target
+            if entry_ts is None:
+                return None                     # never broke out
+            return entry_ts, entry_px, ts, float(bar['open']), 'Time exit'
+        if entry_ts is None:
+            broke = bar['high'] >= trigger if buy else bar['low'] <= trigger
+            if not broke:
+                continue
+            # A bar that opens beyond the level gaps through it: filled at
+            # the open, not at a price that never traded.
+            entry_ts = ts
+            entry_px = max(trigger, float(bar['open'])) if buy else min(trigger, float(bar['open']))
+        hit_sl = bar['low'] <= sl if buy else bar['high'] >= sl
+        hit_tg = bar['high'] >= target if buy else bar['low'] <= target
         if hit_sl:                              # both in one bar -> the stop
-            return ts, sl, 'SL hit'
+            return entry_ts, entry_px, ts, sl, 'SL hit'
         if hit_tg:
-            return ts, target, 'Target hit'
-    last_ts = after.index[-1] if not after.empty else bars.index[-1]
-    last_px = float(after['close'].iloc[-1]) if not after.empty else float(bars['close'].iloc[-1])
-    return last_ts, last_px, 'Time exit'
+            return entry_ts, entry_px, ts, target, 'Target hit'
+    if entry_ts is None:
+        return None
+    return entry_ts, entry_px, after.index[-1], float(after['close'].iloc[-1]), 'Time exit'
 
 
 def run_symbol(daily: pd.DataFrame, minutes: pd.DataFrame, start: str, end: str,
                rr: float = DEFAULT_RR, exit_hm: Tuple[int, int] = DEFAULT_EXIT,
-               direction: str = 'both', now: Optional[datetime] = None) -> List[Dict]:
+               direction: str = 'both', now: Optional[datetime] = None,
+               max_ratio: Optional[float] = DEFAULT_MAX_CPR_RATIO,
+               min_range_pct: Optional[float] = DEFAULT_MIN_HOUR_RANGE_PCT) -> List[Dict]:
     """Every trade the rule takes on one symbol between `start` and `end`.
 
-    `daily` must reach back at least a week before `start` (for the first
-    week's levels). `direction` 'buy' / 'sell' keeps one side only. A session
+    `daily` must reach back ~11 weeks before `start` — a week for the first
+    week's levels, ten more for its narrowness ratio (without them the first
+    weeks have no ratio and are skipped while that filter is on).
+    `max_ratio` / `min_range_pct` are the quality filters (None / 0 = off). `direction` 'buy' / 'sell' keeps one side only. A session
     still trading at `now` (before its exit time) is skipped — its result is
     not known yet.
     """
@@ -134,21 +175,28 @@ def run_symbol(daily: pd.DataFrame, minutes: pd.DataFrame, start: str, end: str,
         verdict = judge_first_hour(hour, levels)
         if not verdict['ok']:
             continue
+        if not passes_quality(levels.get('ratio'), hour, max_ratio, min_range_pct):
+            continue
         side = verdict['dir']
         if (direction == 'buy' and side != 'BUY') or (direction == 'sell' and side != 'SELL'):
             continue
 
-        entry = hour['close']
+        # Break of the first-hour candle: above its high for a BUY, below its
+        # low for a SELL; the stop is the other end, so risk = its range.
+        trigger = hour['high'] if side == 'BUY' else hour['low']
         sl = hour['low'] if side == 'BUY' else hour['high']
-        risk = abs(entry - sl)
+        risk = hour['high'] - hour['low']
         if risk <= 0:
             continue
-        target = entry + rr * risk if side == 'BUY' else entry - rr * risk
-        exit_ts, exit_px, reason = _walk(bars, side, sl, target, exit_at)
+        target = trigger + rr * risk if side == 'BUY' else trigger - rr * risk
+        result = _trade(bars, side, trigger, sl, target, exit_at)
+        if result is None:
+            continue
+        entry_ts, entry, exit_ts, exit_px, reason = result
         pnl = (exit_px - entry) if side == 'BUY' else (entry - exit_px)
 
         trades.append({
-            'entry_time': (day + pd.Timedelta(hours=10, minutes=15)).isoformat(),
+            'entry_time': entry_ts.isoformat(),
             'exit_time': exit_ts.isoformat(),
             'direction': side,
             'type': 'Long' if side == 'BUY' else 'Short',
@@ -164,5 +212,65 @@ def run_symbol(daily: pd.DataFrame, minutes: pd.DataFrame, start: str, end: str,
             'w_r3': round(levels['r3'], 2), 'w_s3': round(levels['s3'], 2),
             'cpr_week': levels['week'],
             'fh_high': round(hour['high'], 2), 'fh_low': round(hour['low'], 2),
+            'fh_close': round(hour['close'], 2),
+            'fh_range_pct': round(hour_range_pct(hour), 2),
+            'cpr_ratio': round(levels['ratio'], 2) if levels.get('ratio') is not None else None,
+            'trigger': round(trigger, 2),
         })
     return trades
+
+
+# ── Find Best Params ─────────────────────────────────────────────────────
+# Target × W CPR width × min first-hour range × direction. Only the target
+# changes how a trade plays out, so the caller replays each stock once per
+# OPT_RR with the filters off and direction 'both', and score_combos applies
+# the rest to those trades' own fields — the same answer as running every
+# combo, at a fraction of the cost.
+OPT_RR = (1.0, 1.5, 2.0, 3.0)
+OPT_RATIO = (0.3, 0.5, 0.8, None)          # None = any width
+OPT_RANGE = (0.0, 1.2, 1.6, 2.0)           # 0 = off
+OPT_DIRECTION = ('both', 'buy', 'sell')
+OPT_COMBOS = len(OPT_RR) * len(OPT_RATIO) * len(OPT_RANGE) * len(OPT_DIRECTION)
+OPT_MIN_TRADES = 30
+
+
+def score_combos(per_rr: Dict[float, Sequence[tuple]], recent_from: str,
+                 min_trades: int = OPT_MIN_TRADES) -> List[Dict]:
+    """Rank every combo by net ₹.
+
+    `per_rr[rr]` holds one tuple per trade of the unfiltered replay at that
+    target: (entry_time iso, 'BUY'|'SELL', cpr_ratio or None, fh_range_pct,
+    net ₹ after brokerage). A trade with no ratio (too little history) only
+    counts where the width filter is off. `recent_*` is the trades from
+    `recent_from` on, by themselves.
+    """
+    from trading_app.Backtest.thirty_min_fakeout_engine import summarize_trades
+    results = []
+    for rr, ratio, rng, direction in itertools.product(OPT_RR, OPT_RATIO, OPT_RANGE, OPT_DIRECTION):
+        rows = sorted((r for r in per_rr.get(rr, ())
+                       if (ratio is None or (r[2] is not None and r[2] <= ratio))
+                       and r[3] >= rng
+                       and (direction == 'both' or r[1] == direction.upper())),
+                      key=lambda r: r[0])
+        if len(rows) < min_trades:
+            continue
+        s = summarize_trades([{'pnl': r[4], 'result': 'WIN' if r[4] > 0 else 'LOSS'} for r in rows])
+        recent = [r[4] for r in rows if r[0] >= recent_from]
+        results.append({
+            'rr_ratio': rr,
+            'max_cpr_ratio': ratio if ratio is not None else 'any',
+            'min_range_pct': rng,
+            'direction': direction,
+            'total_trades': s['total_trades'], 'wins': s['wins'],
+            'win_rate': round(s['wins'] / s['total_trades'] * 100, 1),
+            'net_pnl_rupees': round(s['total_pnl'], 2),
+            'avg_pnl_rupees': round(s['total_pnl'] / s['total_trades'], 2),
+            'profit_factor_rupees': s['profit_factor'],
+            'max_drawdown_rupees': s['max_drawdown'],
+            'recent_trades': len(recent),
+            'recent_net_rupees': round(sum(recent), 2),
+            'recent_win_rate': (round(sum(1 for x in recent if x > 0) / len(recent) * 100, 1)
+                                if recent else None),
+        })
+    results.sort(key=lambda r: r['net_pnl_rupees'], reverse=True)
+    return results

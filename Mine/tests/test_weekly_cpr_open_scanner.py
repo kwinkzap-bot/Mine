@@ -99,12 +99,17 @@ def test_width_ratio_is_against_ten_weeks_before():
     assert r['w_ratio'] == 0.39
 
 
-def test_cpr_width_no_longer_decides():
-    """The very-narrow condition was removed: a normal-width week, and one
-    with too little history to average, match on the breakout alone."""
+def test_quality_filters_narrow_cpr_and_first_hour_range():
+    """A normal-width week and a quiet first hour are both left out by
+    default; either filter can be switched off."""
     wide = dict(_eval(WED, in_force_close=108.0, hour_close=106.0), symbol='X', is_index=False)
-    assert wide['w_ratio'] == 1.0 and select_matches([wide])
-    assert select_matches([dict(wide, w_ratio=None)])
+    assert wide['w_ratio'] == 1.0 and wide['fh_ok']
+    assert not select_matches([wide])
+    assert select_matches([wide], max_ratio=None)
+    narrow = dict(_eval(WED), symbol='X', is_index=False)      # 0.39×, range 3.3 %
+    assert narrow['fh_range_pct'] > 1.6 and select_matches([narrow])
+    assert not select_matches([narrow], min_range_pct=5.0)
+    assert not select_matches([dict(narrow, cpr_ratio_raw=None)])
 
 
 # ── the conditions: first hour closes outside, short of R3 / S3 ─────────

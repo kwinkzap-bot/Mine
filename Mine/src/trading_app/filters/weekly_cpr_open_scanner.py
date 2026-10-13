@@ -68,6 +68,21 @@ logger = logging.getLogger(__name__)
 # How close to R3 / S3 the first hour may close and still leave room, in percent.
 CAM_NEAR_PCT = 0.5
 
+# Quality filters, added 2026-10-13 after a replay of every F&O stock since
+# 2017 (32,238 open-inside / first-hour-outside sessions). Without them the
+# rule was break-even after costs (+0.03 %/trade, PF 1.06). With BOTH, chosen
+# on 2017–2022 and then checked on 2023–2026, which the choice never saw:
+# 52.9 % wins, +0.19 %/trade, PF 1.37, every calendar year positive:
+#   * the weekly CPR is narrow — at most this many times its own 10-week
+#     average width (a narrow band says a trending week);
+#   * the first hour has real range — High − Low at least this % of its close
+#     (a quiet first hour's break is mostly noise; the smallest quarter of
+#     first hours lost money in both periods).
+# Neighbouring values (0.4–0.6×, 1.4–1.8 %) work too — not a knife-edge fit.
+# None / 0 switches either one off.
+DEFAULT_MAX_CPR_RATIO = 0.5
+DEFAULT_MIN_HOUR_RANGE_PCT = 1.6
+
 # Weekly CPRs the in-force one's width is compared with (the grid's ×avg
 # column, information only), and the fewest that make an average.
 _CONTEXT_WEEKS = 10
@@ -118,6 +133,23 @@ def judge_first_hour(hour: Dict, levels: Dict) -> Dict:
         return {'side': 'below', 'dir': direction, 'room_pct': (c1 - s3) / c1 * 100,
                 'ok': direction == 'SELL' and c1 > s3 * (1 + CAM_NEAR_PCT / 100)}
     return {'side': 'inside', 'dir': direction, 'room_pct': None, 'ok': False}
+
+
+def passes_quality(cpr_ratio: Optional[float], hour: Dict,
+                   max_ratio: Optional[float] = DEFAULT_MAX_CPR_RATIO,
+                   min_range_pct: Optional[float] = DEFAULT_MIN_HOUR_RANGE_PCT) -> bool:
+    """The two quality filters above. A CPR with too little history to
+    average (ratio None) never counts as narrow while that filter is on."""
+    if max_ratio is not None and (cpr_ratio is None or cpr_ratio > max_ratio):
+        return False
+    if min_range_pct and hour_range_pct(hour) < min_range_pct:
+        return False
+    return True
+
+
+def hour_range_pct(hour: Dict) -> float:
+    """First-hour High − Low as a % of its close."""
+    return (hour['high'] - hour['low']) / hour['close'] * 100 if hour['close'] else 0.0
 
 
 def opens_inside(day_open: float, levels: Dict) -> bool:
@@ -243,13 +275,21 @@ def evaluate(df: pd.DataFrame, session_date,
         'fh_room_pct': round(fh_room, 2) if fh_room is not None else None,
         'fh_ok': fh_ok,
         'open_ok': open_ok,
+        'fh_range_pct': round(hour_range_pct(hour), 2) if hour else None,
+        'cpr_ratio_raw': cpr['ratio'],
+        'hour': hour,
     }
 
 
-def select_matches(rows: List[Dict]) -> List[Dict]:
+def select_matches(rows: List[Dict],
+                   max_ratio: Optional[float] = DEFAULT_MAX_CPR_RATIO,
+                   min_range_pct: Optional[float] = DEFAULT_MIN_HOUR_RANGE_PCT) -> List[Dict]:
     """Rows that opened inside the CPR (1) and whose first hour closed outside
-    it (2) as a candle of that direction (3) with room left to R3 / S3 (4). Indices first, then the most room."""
-    out = [r for r in rows if r.get('open_ok') and r.get('fh_ok')]
+    it (2) as a candle of that direction (3) with room left to R3 / S3 (4),
+    on a narrow weekly CPR with a first hour of real range (the quality
+    filters). Indices first, then the most room."""
+    out = [r for r in rows if r.get('open_ok') and r.get('fh_ok') and r.get('hour')
+           and passes_quality(r.get('cpr_ratio_raw'), r['hour'], max_ratio, min_range_pct)]
     return sorted(out, key=lambda r: (not r['is_index'], -(r.get('fh_room_pct') or 0.0),
                                       r['symbol']))
 

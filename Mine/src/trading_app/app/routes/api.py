@@ -6608,13 +6608,45 @@ def run_thirty_min_fakeout_optimise_status(task_id):
 # ── Weekly CPR Breakout backtest ─────────────────────────────────────────────
 # The /scanners "W CPR Open" rule, traded on every F&O future stock: open
 # inside the weekly CPR, first hour closes outside it as a direction candle
-# short of R3/S3 → enter at 10:15, stop at the hour's other extreme, target
-# rr × risk. See Backtest/weekly_cpr_breakout_engine.py. Fyers data, like the
+# short of R3/S3 → enter on a break of that hour's high (BUY) / low (SELL),
+# stop at its other extreme, target rr × its range. See Backtest/weekly_cpr_breakout_engine.py. Fyers data, like the
 # scanner (ICICI's equity candles carry stray highs/lows). Daily and 1-minute
 # bars both come from per-stock disk stores, so only what is not on disk yet
 # goes to Fyers — the first run back to 2017 is minutes, later ones a minute
 # or two of local reads — and it is a background task the page polls.
+# The indices the Symbol box offers beside the stocks. Traded on the index's
+# own candles; NIFTY's options are its WEEKLY ones (weekly_cpr_option_leg),
+# the rest monthly. SENSEX's options are on BSE, which the option leg does
+# not price, so it runs on the futures basis only.
+_WCB_INDEX_TOKENS = {
+    'NIFTY': 'NSE:NIFTY50-INDEX',
+    'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+    'FINNIFTY': 'NSE:FINNIFTY-INDEX',
+    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+    'SENSEX': 'BSE:SENSEX-INDEX',
+}
+
+
+def _wcb_token(symbol: str) -> str:
+    """Fyers symbol for a stock or one of the indices above."""
+    return _WCB_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ')
+
+
+def _wcb_universe(single: str, lot_sizes: dict):
+    """(symbols, error). '' = every F&O future stock (indices are picked one
+    at a time); otherwise that one stock or index."""
+    stocks = sorted(s for s in lot_sizes if s not in _WCB_INDEX_TOKENS)
+    if not single:
+        return stocks, None
+    if single in _WCB_INDEX_TOKENS or single in stocks:
+        return [single], None
+    return None, f'{single} is not an F&O stock or a supported index.'
+
+
 _WCB_RR_CHOICES = (1.0, 1.5, 2.0, 2.5, 3.0)
+# ₹ per round trip on an OPTION leg: ₹20 an order each way plus exchange
+# charges and STT on the sell — the figure the CPR option grid uses too.
+_WCB_OPTION_BROKERAGE = 100
 _wcb_tasks: dict = {}
 _wcb_tasks_lock = threading.Lock()
 
@@ -6627,9 +6659,14 @@ def run_weekly_cpr_breakout_backtest_api():
     /backtest/weekly-cpr-breakout/status/<task_id>.
 
     Body: start_date, end_date ('YYYY-MM-DD'); symbol ('' = every F&O future
-    stock); direction 'both' | 'buy' | 'sell'; rr_ratio (1:rr, default 2);
-    exit_time 'HH:MM' (default 15:15); lots (per trade, × the stock's lot
-    size, default 1). Each trade's ₹ is points × lots × lot size, less
+    stock); direction 'both' | 'buy' | 'sell'; rr_ratio (1:rr, default 1.5);
+    exit_time 'HH:MM' (default 15:20); lots (per trade, × the stock's lot
+    size, default 1); max_cpr_ratio (weekly CPR at most this × its 10-week
+    average width, default 0.5, 'any' = off); min_range_pct (first-hour range
+    at least this % of price, default 1.6, 0 = off); basis 'option' (default:
+    the signal is the stock's, the order its ATM CE for a BUY / PE for a SELL,
+    priced off ICICI's recorded premiums — Backtest/weekly_cpr_option_leg.py)
+    or 'futures' (P&L on the stock's own move × lot size). Each trade's ₹ is points × lots × lot size, less
     _TMF_BROKERAGE_PER_TRADE."""
     auth_error = check_auth()
     if auth_error:
@@ -6645,16 +6682,28 @@ def run_weekly_cpr_breakout_backtest_api():
     direction = str(data.get('direction', 'both')).lower()
     if direction not in ('both', 'buy', 'sell'):
         direction = 'both'
+    from trading_app.Backtest.weekly_cpr_breakout_engine import DEFAULT_RR
+    from trading_app.filters.weekly_cpr_open_scanner import (
+        DEFAULT_MAX_CPR_RATIO, DEFAULT_MIN_HOUR_RANGE_PCT)
     try:
-        rr = float(data.get('rr_ratio', 2))
+        rr = float(data.get('rr_ratio', DEFAULT_RR))
     except (TypeError, ValueError):
-        rr = 2.0
+        rr = DEFAULT_RR
     if rr not in _WCB_RR_CHOICES:
-        rr = 2.0
+        rr = DEFAULT_RR
     try:
-        eh, em = (int(x) for x in str(data.get('exit_time', '15:15')).split(':'))
+        eh, em = (int(x) for x in str(data.get('exit_time', '15:20')).split(':'))
     except ValueError:
-        eh, em = 15, 15
+        eh, em = 15, 20
+    ratio_arg = str(data.get('max_cpr_ratio', DEFAULT_MAX_CPR_RATIO))
+    try:
+        max_cpr_ratio = None if ratio_arg == 'any' else float(ratio_arg)
+    except ValueError:
+        max_cpr_ratio = DEFAULT_MAX_CPR_RATIO
+    try:
+        min_range_pct = max(0.0, float(data.get('min_range_pct', DEFAULT_MIN_HOUR_RANGE_PCT)))
+    except (TypeError, ValueError):
+        min_range_pct = DEFAULT_MIN_HOUR_RANGE_PCT
     lots = max(1, int(data.get('lots', 1) or 1))
     single = str(data.get('symbol', '') or '').strip().upper()
 
@@ -6666,16 +6715,27 @@ def run_weekly_cpr_breakout_backtest_api():
         lot_sizes = _fno_lot_sizes()
     except FileNotFoundError as e:
         return jsonify({'success': False, 'error': str(e)}), 404
-    indices = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'}
-    universe = sorted(s for s in lot_sizes if s not in indices)
-    if single:
-        if single not in lot_sizes or single in indices:
-            return jsonify({'success': False, 'error': f'{single} is not an F&O future stock.'}), 400
-        universe = [single]
+    universe, err = _wcb_universe(single, lot_sizes)
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+
+    basis = 'futures' if str(data.get('basis', 'option')).lower() == 'futures' else 'option'
+    icici = None
+    if basis == 'option':
+        # Resolved here, in the request thread — it reads the session.
+        if single == 'SENSEX':
+            return jsonify({'success': False,
+                            'error': "SENSEX options trade on BSE, which the option P&L does not price "
+                                     "— switch P&L basis to Futures for SENSEX."}), 400
+        icici = get_icici_adapter()
+        if icici is None:
+            return jsonify({'success': False,
+                            'error': 'Option P&L reads past premiums from ICICI Direct, which is not '
+                                     'logged in — log in to ICICI, or switch P&L basis to Futures.'}), 503
 
     task_id = uuid.uuid4().hex[:12]
     task = {'status': 'running', 'started': _time.time(),
-            'progress': {'done': 0, 'total': len(universe)}}
+            'progress': {'done': 0, 'total': len(universe), 'priced': 0}}
     with _wcb_tasks_lock:
         _wcb_tasks[task_id] = task
 
@@ -6686,15 +6746,23 @@ def run_weekly_cpr_breakout_backtest_api():
         from trading_app.Backtest.thirty_min_fakeout_engine import summarize_trades
         from trading_app.Backtest.weekly_cpr_breakout_engine import run_symbol
         from trading_app.filters.candle_store import get_daily_history
+        from trading_app.Backtest.weekly_cpr_option_leg import (
+            OptionLegPricer, current_strike_steps, trading_days_of)
 
-        # A week before start is enough for the first week's levels; three
-        # covers a holiday week in between.
+        pricer = None
+        if basis == 'option':
+            # Current strike steps (and lot sizes) off the Fyers symbol master.
+            nfo = fyers.instruments('NFO')
+            pricer = OptionLegPricer(icici, current_strike_steps(nfo))
+
+        # A week before start for the first week's levels, ten more for its
+        # narrowness ratio, and slack for holiday weeks: ~13 weeks.
         end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
-        daily_days = (end_dt - start_dt).days + 21
+        daily_days = (end_dt - start_dt).days + 95
         tag = _provider_tag(fyers)
 
         def _one(symbol):
-            token = f'NSE:{symbol}-EQ'
+            token = _wcb_token(symbol)
             # Daily bars through the shared per-stock disk store, under a
             # Fyers-only key: back to 2017 is ~10 Fyers requests a stock, so
             # it is fetched once and then read locally. The plain-symbol key
@@ -6712,17 +6780,34 @@ def run_weekly_cpr_breakout_backtest_api():
                                          provider_tag=tag, retain=False)
             if minutes is None or minutes.empty:
                 return symbol, None
-            return symbol, run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
-                                      rr=rr, exit_hm=(eh, em), direction=direction)
+            trades = run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
+                                rr=rr, exit_hm=(eh, em), direction=direction,
+                                max_ratio=max_cpr_ratio, min_range_pct=min_range_pct)
+            if pricer is None:
+                return symbol, trades
+            # The order is the option: price each stock trade's CE / PE at
+            # the minutes the stock entered and exited. Unpriced trades (no
+            # candles for any strike tried) are left out and counted.
+            days = trading_days_of(minutes)
+            priced = []
+            for t in trades:
+                leg = pricer.price(symbol, t, days)
+                if leg is None:
+                    t['_unpriced'] = True
+                else:
+                    t.update(leg)
+                    task['progress']['priced'] = task['progress'].get('priced', 0) + 1
+                priced.append(t)
+            return symbol, priced
 
-        all_trades, failed, no_data, done = [], 0, 0, 0
+        all_trades, failed, no_data, done, unpriced = [], 0, 0, 0, 0
         try:
             with ThreadPoolExecutor(max_workers=6) as pool:
                 futures = {pool.submit(_one, s): s for s in universe}
                 for fut in as_completed(futures):
                     sym = futures[fut]
                     done += 1
-                    task['progress'] = {'done': done, 'total': len(universe)}
+                    task['progress'] = {**task['progress'], 'done': done, 'total': len(universe)}
                     try:
                         _, trades = fut.result()
                     except Exception as e:
@@ -6735,14 +6820,28 @@ def run_weekly_cpr_breakout_backtest_api():
                     lot = int(lot_sizes.get(sym) or 1)
                     qty = lots * lot
                     for t in trades:
+                        if t.pop('_unpriced', False):
+                            unpriced += 1
+                            continue
                         t['symbol'] = sym
                         t['lot_size'] = lot
                         t['qty'] = qty
-                        t['capital'] = round(t['entry_price'] * qty, 2)
-                        t['brokerage'] = _TMF_BROKERAGE_PER_TRADE
-                        t['sl_risk_rupees'] = round(abs(t['entry_price'] - t['sl_price']) * qty, 2)
+                        t['stock_pnl'] = t['pnl']
+                        if basis == 'option':
+                            # Win / loss and ₹ are the OPTION's; the stock's
+                            # own move stays on the row as stock_pnl.
+                            t['pnl'] = round(t['exit_premium'] - t['entry_premium'], 2)
+                            t['result'] = 'WIN' if t['pnl'] > 0 else ('LOSS' if t['pnl'] < 0 else 'SCRATCH')
+                            t['capital'] = round(t['entry_premium'] * qty, 2)
+                            t['brokerage'] = _WCB_OPTION_BROKERAGE
+                            # A bought option can lose at most its premium.
+                            t['sl_risk_rupees'] = t['capital']
+                        else:
+                            t['capital'] = round(t['entry_price'] * qty, 2)
+                            t['brokerage'] = _TMF_BROKERAGE_PER_TRADE
+                            t['sl_risk_rupees'] = round(abs(t['entry_price'] - t['sl_price']) * qty, 2)
                         t['gross_pnl_rupees'] = round(t['pnl'] * qty, 2)
-                        t['pnl_rupees'] = round(t['gross_pnl_rupees'] - _TMF_BROKERAGE_PER_TRADE, 2)
+                        t['pnl_rupees'] = round(t['gross_pnl_rupees'] - t['brokerage'], 2)
                         all_trades.append(t)
 
             all_trades.sort(key=lambda t: t['entry_time'])
@@ -6757,7 +6856,9 @@ def run_weekly_cpr_breakout_backtest_api():
                 'profit_factor_rupees': rs['profit_factor'],
                 'max_drawdown_rupees': rs['max_drawdown'],
                 'capital_per_trade': round(capital, 2),
-                'total_brokerage': _TMF_BROKERAGE_PER_TRADE * len(all_trades),
+                'total_brokerage': sum(t['brokerage'] for t in all_trades),
+                'pnl_basis': 'stock_option' if basis == 'option' else 'futures',
+                'unpriced': unpriced,
                 'targets': sum(1 for t in all_trades if t['exit_reason'] == 'Target hit'),
                 'stops': sum(1 for t in all_trades if t['exit_reason'] == 'SL hit'),
                 'time_exits': sum(1 for t in all_trades if t['exit_reason'] == 'Time exit'),
@@ -6765,6 +6866,8 @@ def run_weekly_cpr_breakout_backtest_api():
                 'symbols_with_trades': len({t['symbol'] for t in all_trades}),
                 'symbols_no_data': no_data, 'symbols_failed': failed,
                 'rr_ratio': rr, 'lots': lots, 'multi_symbol': True,
+                'max_cpr_ratio': max_cpr_ratio if max_cpr_ratio is not None else 'any',
+                'min_range_pct': min_range_pct,
             })
             cagr = 0.0
             try:
@@ -6814,6 +6917,143 @@ def weekly_cpr_breakout_status(task_id):
     with _wcb_tasks_lock:
         _wcb_tasks.pop(task_id, None)
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
+# Find Best Params grid for Weekly CPR Breakout. Only the target changes how a
+# trade plays out, so each stock is replayed once per target with the quality
+# filters off and direction 'both'; the CPR-width, first-hour-range and
+# direction filters are then applied to those trades' own fields — the same
+# answer as re-running every combo, at a twelfth of the cost. Scored on the
+# FUTURES basis: pricing every combo's option legs would be tens of thousands
+# of Breeze requests. Ranked by net ₹; 'recent' is the last 3 years of the
+# range on its own, so a combo carried by old years shows up as one.
+from trading_app.Backtest.weekly_cpr_breakout_engine import (
+    OPT_RR as _WCB_OPT_RR, OPT_COMBOS as _WCB_OPT_COMBOS,
+    OPT_MIN_TRADES as _WCB_OPT_MIN_TRADES, score_combos as _wcb_score_combos)
+
+
+@api_bp.route('/backtest/weekly-cpr-breakout/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def weekly_cpr_breakout_optimise():
+    """Start a Find Best Params sweep; poll .../optimise/status/<task_id>.
+    Body: start_date, end_date, symbol ('' = every F&O future stock),
+    exit_time, lots — as the backtest."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    data = request.get_json(silent=True) or {}
+    start_date_str, end_date_str = data.get('start_date'), data.get('end_date')
+    try:
+        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+    try:
+        eh, em = (int(x) for x in str(data.get('exit_time', '15:20')).split(':'))
+    except ValueError:
+        eh, em = 15, 20
+    lots = max(1, int(data.get('lots', 1) or 1))
+    single = str(data.get('symbol', '') or '').strip().upper()
+
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    try:
+        lot_sizes = _fno_lot_sizes()
+    except FileNotFoundError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
+    universe, err = _wcb_universe(single, lot_sizes)
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': len(universe)}}
+    with _wcb_tasks_lock:
+        _wcb_tasks[task_id] = task
+
+    def _run():
+        import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+        from trading_app.Backtest.weekly_cpr_breakout_engine import run_symbol
+        from trading_app.filters.candle_store import get_daily_history
+
+        daily_days = (end_dt - start_dt).days + 95
+        tag = _provider_tag(fyers)
+        recent_from = (end_dt - timedelta(days=3 * 365)).strftime('%Y-%m-%d')
+
+        def _one(symbol):
+            token = _wcb_token(symbol)
+            daily = get_daily_history(fyers, token, f'fyers__{symbol}', daily_days, end_date=end_dt)
+            if daily is None or daily.empty:
+                return symbol, None
+            daily = daily[['open', 'high', 'low', 'close']].astype(float)
+            daily.index = pd.to_datetime(daily.index).normalize()
+            minutes = get_minute_history(fyers, token, symbol, start_date_str, end_date_str,
+                                         provider_tag=tag, retain=False)
+            if minutes is None or minutes.empty:
+                return symbol, None
+            qty = lots * int(lot_sizes.get(symbol) or 1)
+            out = {}
+            for rr in _WCB_OPT_RR:
+                trades = run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
+                                    rr=rr, exit_hm=(eh, em), direction='both',
+                                    max_ratio=None, min_range_pct=0)
+                # Only what the filters and the score need.
+                out[rr] = [(t['entry_time'], t['direction'], t.get('cpr_ratio'),
+                            t['fh_range_pct'], t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE)
+                           for t in trades]
+            return symbol, out
+
+        per_rr = {rr: [] for rr in _WCB_OPT_RR}
+        used, done = 0, 0
+        try:
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {pool.submit(_one, s): s for s in universe}
+                for fut in as_completed(futures):
+                    done += 1
+                    task['progress'] = {'done': done, 'total': len(universe)}
+                    try:
+                        _, out = fut.result()
+                    except Exception as e:
+                        logger.error(f"[WeeklyCprBreakout optimise] {futures[fut]} failed: {e}")
+                        continue
+                    if out is None:
+                        continue
+                    used += 1
+                    for rr, rows in out.items():
+                        per_rr[rr].extend(rows)
+
+            results = _wcb_score_combos(per_rr, recent_from)
+            task['payload'] = {
+                'results': results, 'best': results[0] if results else None,
+                'total': len(results),
+                'total_combos_tested': _WCB_OPT_COMBOS,
+                'symbols_used': used, 'min_trades': _WCB_OPT_MIN_TRADES,
+                'recent_from': recent_from, 'basis': 'futures',
+            }
+            task['status'] = 'complete'
+            logger.info('[WeeklyCprBreakout optimise] %s..%s: %d stocks, %d combos kept',
+                        start_date_str, end_date_str, used, len(results))
+        except Exception as e:
+            logger.error(f"[WeeklyCprBreakout optimise] failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'wcb-opt-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
+                    'progress': task['progress']})
+
+
+@api_bp.route('/backtest/weekly-cpr-breakout/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def weekly_cpr_breakout_optimise_status(task_id):
+    """Poll a Find Best Params sweep — same task table as the backtest."""
+    return weekly_cpr_breakout_status(task_id)
 
 
 # ── Optimise-grid ₹ economics (mirrors the frontend so the leaderboard drops

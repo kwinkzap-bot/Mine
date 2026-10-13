@@ -392,7 +392,7 @@ async function loadWeeklyOpenData(refresh = false) {
         if (response && response.success) {
             const rows = response.rows || [];
             if (titleSpan) titleSpan.textContent =
-                `🎯 ${response.date} open inside Weekly CPR → 1H BUY/SELL candle closes outside, `
+                `🎯 Narrow W CPR → ${response.date} open inside → 1H (≥1.6% range) closes outside, `
                 + `not within ${response.cam_near_pct}% of R3/S3`;
             displayResults('weeklyOpen', rows);
             if (footnote) {
@@ -597,6 +597,9 @@ const _SCANNER_COLUMNS = {
             { key: 'fh_side', label: '1H vs CPR', sortable: true,
               format: v => v === 'above' ? 'Above TC' : v === 'below' ? 'Below BC' : v,
               badge: v => v === 'above' ? 'pos' : v === 'below' ? 'neg' : 'neutral' },
+            { key: 'fh_range_pct', label: '1H Range %', sortable: true, align: 'right',
+              format: v => v == null ? '—' : Number(v).toFixed(2) + '%',
+              title: () => 'First-hour High − Low as a % of its close — must be at least 1.6%' },
             { key: 'fh_room_pct', label: 'Room to R3/S3', sortable: true, align: 'right',
               format: v => v == null ? '—' : Number(v).toFixed(2) + '%',
               title: (_v, row) => `R3 ${px(row.w_r3)} · S3 ${px(row.w_s3)}` },

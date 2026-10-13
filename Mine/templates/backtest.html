@@ -697,6 +697,13 @@
                  1:R. See Backtest/weekly_cpr_breakout_engine.py. -->
             <div id="weeklyCprBreakoutParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
+                    <label for="wcbBasis" title="Stock option: the signal, entry and exit stay on the STOCK's price, but the order is its ATM CALL (BUY) / PUT (SELL), booked at the option's recorded premiums from ICICI Direct (needs an ICICI login; the first long run uses a big share of the day's Breeze requests — run it after market hours). Futures: P&L on the stock's own move × lot size.">P&amp;L Basis</label>
+                    <select id="wcbBasis">
+                        <option value="option" selected>Stock option (ATM)</option>
+                        <option value="futures">Futures</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="wcbDirection">Direction</label>
                     <select id="wcbDirection">
                         <option value="both" selected>Buy &amp; Sell</option>
@@ -705,18 +712,31 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="wcbRrRatio" title="Target = entry ± this many times the risk (entry to the first-hour candle's High for a SELL, its Low for a BUY).">Target (R:R)</label>
+                    <label for="wcbRrRatio" title="Target = the breakout level ± this many times the first-hour candle's range (its High − Low, which is the risk).">Target (R:R)</label>
                     <select id="wcbRrRatio">
                         <option value="1">1 : 1</option>
-                        <option value="1.5">1 : 1.5</option>
-                        <option value="2" selected>1 : 2</option>
+                        <option value="1.5" selected>1 : 1.5</option>
+                        <option value="2">1 : 2</option>
                         <option value="2.5">1 : 2.5</option>
                         <option value="3">1 : 3</option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label for="wcbExitTime">Cut-off Time</label>
-                    <input type="time" id="wcbExitTime" value="15:15">
+                    <input type="time" id="wcbExitTime" value="15:20">
+                </div>
+                <div class="form-group">
+                    <label for="wcbMaxRatio" title="Only weeks whose weekly CPR is narrow: its width at most this many times its own average over the 10 weeks before it. 0.5× was the best in the 2017–2026 replay.">W CPR Width</label>
+                    <select id="wcbMaxRatio">
+                        <option value="0.3">≤ 0.3× normal</option>
+                        <option value="0.5" selected>≤ 0.5× normal</option>
+                        <option value="0.8">≤ 0.8× normal</option>
+                        <option value="any">Any width</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="wcbMinRange" title="Skip a first hour whose High − Low is less than this % of its close — a quiet first hour's break is mostly noise. 1.6% was the best in the 2017–2026 replay; 0 turns it off.">Min 1H Range %</label>
+                    <input type="number" id="wcbMinRange" value="1.6" min="0" step="0.1">
                 </div>
                 <div class="form-group">
                     <label for="wcbLots" title="Lots per trade. Each trade is sized lots × that stock's lot size.">Lots</label>
@@ -725,11 +745,14 @@
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Rule</label>
                     <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
-                        Day opens inside the weekly CPR → first 1-hour candle (09:15–10:15) closes
-                        above TC as a green candle (BUY) or below BC as a red one (SELL), more than
-                        0.5% short of weekly R3/S3 → enter at the 10:15 close · SL = that candle's
-                        Low (BUY) / High (SELL) · target = R × risk · a bar touching both counts as
-                        the SL · otherwise out at the cut-off. Fyers data.
+                        Weekly CPR is narrow (≤ W CPR Width × its 10-week normal) → day opens inside
+                        it → first 1-hour candle (09:15–10:15) closes above TC (BUY) or below BC
+                        (SELL), more than 0.5% short of weekly R3/S3, with a range ≥ Min 1H Range % →
+                        BUY on a break ABOVE that candle's High, SELL on a break BELOW its Low · SL =
+                        the other end · target = R × the candle's range · no break before the cut-off
+                        = no trade · a bar touching both counts as the SL. Signals on the stock (Fyers);
+                        with Stock option basis the order is its ATM CE (BUY) / PE (SELL), monthly
+                        expiry, priced from ICICI's recorded premiums.
                     </small>
                 </div>
             </div>
@@ -872,6 +895,19 @@
                 </div>
                 <div class="opt-table-wrap">
                     <div id="tmfOptGrid"></div>
+                </div>
+            </div>
+
+            <div id="weeklyCprBreakoutOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">📐 Weekly CPR Breakout Best Params</h4>
+                        <button id="wcbRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="wcbOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="wcbOptGrid"></div>
                 </div>
             </div>
 

@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let _scOptAbort  = null;  // AbortController for the in-flight POST request
     // Same generation-token pattern for the 30-Min Fakeout optimise.
     let _tmfOptRun   = 0;
+    let _wcbOptRun   = 0;
     let _tmfOptAbort = null;
     // Same generation-token pattern for the Scalp Pullback optimise.
     let _spOptRun    = 0;
@@ -475,12 +476,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
         const smOptPanel  = document.getElementById('smOptimisePanel');
         if (smOptPanel)  smOptPanel.style.display  = 'none';
+        const wcbOptPanel = document.getElementById('weeklyCprBreakoutOptimisePanel');
+        if (wcbOptPanel) wcbOptPanel.style.display = 'none';
 
         if (mainInputsRow) {
             mainInputsRow.classList.remove('form-row-5','form-row-6','form-row-7');
@@ -1007,8 +1010,12 @@ document.addEventListener('DOMContentLoaded', function() {
             start_date: document.getElementById('startDate')?.value,
             end_date:   document.getElementById('endDate')?.value,
             direction:  document.getElementById('wcbDirection')?.value || 'both',
-            rr_ratio:   parseFloat(document.getElementById('wcbRrRatio')?.value || 2),
-            exit_time:  document.getElementById('wcbExitTime')?.value || '15:15',
+            rr_ratio:   parseFloat(document.getElementById('wcbRrRatio')?.value || 1.5),
+            exit_time:  document.getElementById('wcbExitTime')?.value || '15:20',
+            max_cpr_ratio: document.getElementById('wcbMaxRatio')?.value || '0.5',
+            basis:      document.getElementById('wcbBasis')?.value || 'option',
+            // 0 is meaningful — it turns the range filter off.
+            min_range_pct: parseFloat(document.getElementById('wcbMinRange')?.value ?? 1.6),
             lots:       Math.max(1, parseInt(document.getElementById('wcbLots')?.value || 1)),
         };
         const myRun = ++_wcbRun;
@@ -1035,11 +1042,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
                 _showOptLoader('Running Weekly CPR Breakout',
-                    `${p.done || 0} / ${p.total || 0} stocks · ${data.elapsed || 0}s`);
+                    `${p.done || 0} / ${p.total || 0} stocks`
+                    + (payload.basis === 'option' ? ` · ${p.priced || 0} option legs priced (ICICI)` : '')
+                    + ` · ${data.elapsed || 0}s`);
             }
             _hideOptLoader();
             if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
             const s = data.summary || {};
+            if (s.unpriced) window.showNotification(
+                `${s.unpriced} trade${s.unpriced === 1 ? '' : 's'} left out — no ICICI option candles for the strike`, 'info');
             if (s.symbols_no_data) window.showNotification(
                 `${s.symbols_no_data} stock${s.symbols_no_data === 1 ? '' : 's'} had no Fyers data for this range`, 'info');
             displayResults(data);
@@ -1738,6 +1749,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // differently priced stocks, so say how many actually traded.
                 if (isEmaAll || isWcb) sub += ` · ${summary.symbols_with_trades || 0}/${summary.symbols_scanned || 0} stocks`;
                 if (isWcb) sub += ` · ${summary.targets || 0} target / ${summary.stops || 0} SL / ${summary.time_exits || 0} time`;
+                if (isWcb && summary.pnl_basis === 'stock_option') sub += ' · ATM option P&L';
                 netSubEl.textContent = sub;
             }
 
@@ -2210,6 +2222,19 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN'), tone: DataGrid.sign },
     ];
 
+    // Weekly CPR Breakout booked on the stock's option: the Entry/Exit Price
+    // columns stay the STOCK's (the signal), these show the contract bought
+    // and its premiums, and the stock's own move beside the option P&L.
+    const WCB_OPTION_COLS = [
+        { key: 'option', label: 'Option', sortable: true },
+        { key: 'entry_premium', label: 'Entry Prem', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'exit_premium', label: 'Exit Prem', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'stock_pnl', label: 'Stock P&L', sortable: true,
+          format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
+    ];
+
     // Candle Breakout run on the option basis. The index Entry/Exit Price
     // columns above still apply — the signal, SL and Target are index levels —
     // so these say which leg was priced against them and what it cost, and keep
@@ -2424,7 +2449,14 @@ document.addEventListener('DOMContentLoaded', function() {
         let columns = multi ? MULTI_SYMBOL_TRADES_COLS : TRADES_COLS;
         // The multi-symbol column set already carries qty/brokerage/₹ P&L, so
         // it only needs the contract pair spliced in ahead of them.
-        if (futures) {
+        if (multi && lastData.summary && lastData.summary.pnl_basis === 'stock_option') {
+            // Option legs go in ahead of Quantity; "SL Risk" on a bought
+            // option is the premium paid, so it is relabelled.
+            columns = [...columns.slice(0, -4), ...WCB_OPTION_COLS,
+                       columns[columns.length - 4],
+                       { ...columns[columns.length - 3], label: 'Premium Paid (₹)' },
+                       ...columns.slice(-2)];
+        } else if (futures) {
             columns = multi
                 ? [...columns.slice(0, -4), EMA_FUTURES_COLS[0], EMA_FUTURES_COLS[1], ...columns.slice(-4)]
                 : [...columns, ...EMA_FUTURES_COLS];
@@ -3559,7 +3591,109 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'ema_pullback') runEmaOptimise(false);
         else if (strat === 'scalp_pullback') runSpOptimise(false);
         else if (strat === 'pivot_confluence') runPcOptimise(false);
+        else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
     });
+
+    // ── Weekly CPR Breakout — Find Best Params ──────────────────────────
+    // Sweeps Target × W CPR Width × Min 1H Range × Direction (192 combos)
+    // over the Symbol box's stock(s) and the Start/End dates, scored on the
+    // FUTURES basis (sweeping option legs would be tens of thousands of ICICI
+    // requests). Ranked by net ₹; "Last 3 yrs" is the end of the range on its
+    // own — a combo whose total comes from old years shows up there.
+    const _rs = v => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`;
+    const WCB_OPT_COLS = [
+        { label: '#',              key: null,                   fmt: (r, i) => i + 1 },
+        { label: 'Target',         key: 'rr_ratio',             fmt: r => `1 : ${r.rr_ratio}` },
+        { label: 'W CPR Width',    key: 'max_cpr_ratio',        fmt: r => r.max_cpr_ratio === 'any' ? 'Any' : `≤ ${r.max_cpr_ratio}×` },
+        { label: 'Min 1H Range',   key: 'min_range_pct',        fmt: r => r.min_range_pct ? `${r.min_range_pct}%` : 'Off' },
+        { label: 'Direction',      key: 'direction',            fmt: r => r.direction === 'both' ? 'Buy & Sell' : (r.direction === 'buy' ? 'Buy' : 'Sell') },
+        { label: 'Trades',         key: 'total_trades',         fmt: r => r.total_trades },
+        { label: 'Win%',           key: 'win_rate',             fmt: r => `${r.win_rate ?? 0}%` },
+        { label: 'Net P&L (₹)',    key: 'net_pnl_rupees',       fmt: r => _rs(r.net_pnl_rupees) },
+        { label: 'Avg / Trade',    key: 'avg_pnl_rupees',       fmt: r => _rs(r.avg_pnl_rupees) },
+        { label: 'Prof. Factor',   key: 'profit_factor_rupees', fmt: r => (r.profit_factor_rupees || 0).toFixed(2) },
+        { label: 'Max DD (₹)',     key: 'max_drawdown_rupees',  fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
+        { label: 'Last 3 yrs',     key: 'recent_net_rupees',    fmt: r => r.recent_trades
+              ? `${_rs(r.recent_net_rupees)} <small>(${r.recent_trades} · ${r.recent_win_rate}%)</small>` : '—' },
+        { label: '',               key: null,                   fmt: () => '' },   // Use button
+    ];
+
+    function renderWcbOptResults(data) {
+        const panel     = document.getElementById('weeklyCprBreakoutOptimisePanel');
+        const metaEl    = document.getElementById('wcbOptMeta');
+        const recalcBtn = document.getElementById('wcbRecalcOptBtn');
+        if (metaEl) metaEl.textContent =
+            `${data.total_combos_tested} combos · ${data.total} with ≥ ${data.min_trades} trades · `
+            + `${data.symbols_used} stocks · futures ₹ basis (option legs are not swept)`;
+        _mountSingleOptGrid('wcbOptGrid', data.results || [], WCB_OPT_COLS, 'net_pnl_rupees', applyWcbOptResult);
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyWcbOptResult(data.best);
+    }
+
+    function applyWcbOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('wcbRrRatio', String(r.rr_ratio));
+        set('wcbMaxRatio', String(r.max_cpr_ratio));
+        set('wcbMinRange', String(r.min_range_pct));
+        set('wcbDirection', r.direction);
+        if (window.showNotification) window.showNotification(
+            `Applied: 1:${r.rr_ratio} · W CPR ${r.max_cpr_ratio === 'any' ? 'any' : '≤ ' + r.max_cpr_ratio + '×'}`
+            + ` · 1H range ${r.min_range_pct ? '≥ ' + r.min_range_pct + '%' : 'off'} · ${r.direction}`
+            + ` · Win% ${r.win_rate}%`, 'success');
+    }
+
+    async function runWcbOptimise(recalculate) {
+        const panel     = document.getElementById('weeklyCprBreakoutOptimisePanel');
+        const recalcBtn = document.getElementById('wcbRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_wcbOptRun;
+        const done = () => { if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/weekly-cpr-breakout/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol:     selectedSymbol === ALL_STOCKS ? '' : (selectedSymbol || '').toUpperCase(),
+                    start_date: document.getElementById('startDate')?.value,
+                    end_date:   document.getElementById('endDate')?.value,
+                    // Not swept — scored under the values the single run uses.
+                    exit_time:  document.getElementById('wcbExitTime')?.value || '15:20',
+                    lots:       Math.max(1, parseInt(document.getElementById('wcbLots')?.value || 1)),
+                }),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2500));
+                if (myRun !== _wcbOptRun) return;
+                data = await (await fetch(`/api/backtest/weekly-cpr-breakout/optimise/status/${taskId}`)).json();
+                if (myRun !== _wcbOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Finding best params…',
+                    `${p.done || 0} / ${p.total || 0} stocks · 4 targets each · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            renderWcbOptResults(data);
+        } catch (err) {
+            if (myRun !== _wcbOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('Weekly CPR Breakout optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
+    const wcbRecalcBtn = document.getElementById('wcbRecalcOptBtn');
+    if (wcbRecalcBtn) wcbRecalcBtn.addEventListener('click', () => runWcbOptimise(true));
 
     // ── Swing Momentum Optimise ──────────────────────────────────────────
     const smRecalcOptBtn = document.getElementById('smRecalcOptBtn');
