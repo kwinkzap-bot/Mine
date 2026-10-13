@@ -2455,8 +2455,9 @@ def _weekly_open_cache_secs(session_date: str) -> int:
 @limiter.exempt
 def get_weekly_cpr_open_results() -> EndpointResponse:
     """Scan futures stocks + indices for the session `date` (default today):
-    the day opened inside the weekly CPR, and its first 1-hour candle closed
-    outside the CPR without reaching
+    the day opened inside the weekly CPR, and its first 1-hour candle — a BUY
+    (green) candle above TC or a SELL (red) one below BC — closed outside the
+    CPR without reaching
     within 0.5 % of the weekly Camarilla R3 / S3 on that side.
 
     Always read from Fyers, whatever DATA_PROVIDER is — ICICI's equity

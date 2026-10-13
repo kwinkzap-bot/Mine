@@ -53,9 +53,10 @@ def _session(day=MONDAY, first_open=101.0, hour_close=104.0):
                          'close': closes}, index=stamps)
 
 
-def _eval(day=MONDAY, hour_close=104.0, now=AFTER_HOUR, **kw):
+def _eval(day=MONDAY, hour_close=104.0, now=AFTER_HOUR, first_open=101.0, **kw):
     return evaluate(_daily(today=day, **kw), day.date(),
-                    intraday=_session(day, hour_close=hour_close), now=now)
+                    intraday=_session(day, first_open=first_open, hour_close=hour_close),
+                    now=now)
 
 
 # ── levels ───────────────────────────────────────────────────────────────
@@ -135,6 +136,21 @@ def test_first_hour_near_or_past_s3_fails():
     assert not _eval(WED, hour_close=97.9)['fh_ok']     # 97.5*1.005 = 97.99
     assert _eval(WED, hour_close=98.1)['fh_ok']
     assert not _eval(WED, hour_close=97.0)['fh_ok']
+
+
+def test_first_hour_must_be_a_direction_candle_agreeing_with_the_break():
+    buy = _eval(WED, first_open=101.0, hour_close=104.0)
+    assert (buy['fh_dir'], buy['fh_side'], buy['fh_ok']) == ('BUY', 'above', True)
+    sell = _eval(WED, first_open=101.0, hour_close=99.0)
+    assert (sell['fh_dir'], sell['fh_side'], sell['fh_ok']) == ('SELL', 'below', True)
+    # Red hour closing above TC / green hour closing below BC: fading the break.
+    red_above = _eval(WED, first_open=105.0, hour_close=104.0)
+    assert (red_above['fh_dir'], red_above['fh_side'], red_above['fh_ok']) == ('SELL', 'above', False)
+    green_below = _eval(WED, first_open=98.0, hour_close=99.0)
+    assert (green_below['fh_dir'], green_below['fh_side'], green_below['fh_ok']) == ('BUY', 'below', False)
+    # A doji is neither.
+    doji = _eval(WED, first_open=104.0, hour_close=104.0)
+    assert (doji['fh_dir'], doji['fh_ok']) == (None, False)
 
 
 def test_first_hour_is_pending_until_1015():

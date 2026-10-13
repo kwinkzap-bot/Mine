@@ -392,7 +392,7 @@ async function loadWeeklyOpenData(refresh = false) {
         if (response && response.success) {
             const rows = response.rows || [];
             if (titleSpan) titleSpan.textContent =
-                `🎯 ${response.date} open inside Weekly CPR → 1H close outside, `
+                `🎯 ${response.date} open inside Weekly CPR → 1H BUY/SELL candle closes outside, `
                 + `not within ${response.cam_near_pct}% of R3/S3`;
             displayResults('weeklyOpen', rows);
             if (footnote) {
@@ -591,6 +591,9 @@ const _SCANNER_COLUMNS = {
             { key: 'fh_close', label: '1H Close', sortable: true, align: 'right', strong: true,
               format: px,
               title: (_v, row) => `09:15–10:15 · H ${px(row.fh_high)} · L ${px(row.fh_low)}` },
+            { key: 'fh_dir', label: 'Signal', sortable: true,
+              badge: v => v === 'BUY' ? 'pos' : v === 'SELL' ? 'neg' : 'neutral',
+              title: (_v, row) => `1H open ${px(row.fh_open)} → close ${px(row.fh_close)}` },
             { key: 'fh_side', label: '1H vs CPR', sortable: true,
               format: v => v === 'above' ? 'Above TC' : v === 'below' ? 'Below BC' : v,
               badge: v => v === 'above' ? 'pos' : v === 'below' ? 'neg' : 'neutral' },

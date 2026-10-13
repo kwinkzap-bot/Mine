@@ -5,7 +5,11 @@ For the selected session date D, a symbol matches when ALL hold:
   1. D's OPEN is INSIDE the weekly CPR — BC <= open <= TC;
   2. D's FIRST 1-HOUR candle (09:15–10:15, two 30-minute bars) CLOSES OUTSIDE
      the weekly CPR — above TC or below BC, not on it;
-  3. and not near the weekly Camarilla level it is heading for: a close above
+  3. that candle is a DIRECTION candle agreeing with the break — a close
+     above TC must be a BUY candle (close > open), a close below BC a SELL
+     candle (close < open). A red hour that still closed above TC, or a
+     green one below BC, is fading its own break and is out;
+  4. and not near the weekly Camarilla level it is heading for: a close above
      TC must sit more than CAM_NEAR_PCT (0.5 %) below R3, a close below BC
      more than 0.5 % above S3. A close already at or past R3 / S3 is out too
      — the move the setup trades towards has already happened.
@@ -175,18 +179,25 @@ def evaluate(df: pd.DataFrame, session_date,
     # much room it left to the Camarilla level on that side.
     hour = _first_hour(intraday, day, now or datetime.now())
     r3, s3 = cpr['r3'], cpr['s3']
+    fh_dir = None
     if hour is None:
         fh_side, fh_room, fh_ok = 'pending', None, False
     else:
         c1 = hour['close']
+        # Condition 3: BUY = green hour, SELL = red; a doji (close == open)
+        # is neither.
+        if c1 > hour['open']:
+            fh_dir = 'BUY'
+        elif c1 < hour['open']:
+            fh_dir = 'SELL'
         if c1 > tc:
             fh_side = 'above'
             fh_room = (r3 - c1) / c1 * 100
-            fh_ok = c1 < r3 * (1 - CAM_NEAR_PCT / 100)
+            fh_ok = fh_dir == 'BUY' and c1 < r3 * (1 - CAM_NEAR_PCT / 100)
         elif c1 < bc:
             fh_side = 'below'
             fh_room = (c1 - s3) / c1 * 100
-            fh_ok = c1 > s3 * (1 + CAM_NEAR_PCT / 100)
+            fh_ok = fh_dir == 'SELL' and c1 > s3 * (1 + CAM_NEAR_PCT / 100)
         else:
             fh_side, fh_room, fh_ok = 'inside', None, False
 
@@ -212,6 +223,8 @@ def evaluate(df: pd.DataFrame, session_date,
         'fh_high': round(hour['high'], 2) if hour else None,
         'fh_low': round(hour['low'], 2) if hour else None,
         'fh_side': fh_side,
+        'fh_open': round(hour['open'], 2) if hour else None,
+        'fh_dir': fh_dir,
         'fh_room_pct': round(fh_room, 2) if fh_room is not None else None,
         'fh_ok': fh_ok,
         'open_ok': open_ok,
@@ -220,7 +233,7 @@ def evaluate(df: pd.DataFrame, session_date,
 
 def select_matches(rows: List[Dict]) -> List[Dict]:
     """Rows that opened inside the CPR (1) and whose first hour closed outside
-    it with room left to R3 / S3 (2–3). Indices first, then the most room."""
+    it (2) as a candle of that direction (3) with room left to R3 / S3 (4). Indices first, then the most room."""
     out = [r for r in rows if r.get('open_ok') and r.get('fh_ok')]
     return sorted(out, key=lambda r: (not r['is_index'], -(r.get('fh_room_pct') or 0.0),
                                       r['symbol']))
