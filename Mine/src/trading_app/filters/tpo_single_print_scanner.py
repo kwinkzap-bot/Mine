@@ -290,6 +290,60 @@ def reversal_direction(prev_days: pd.DataFrame, day_close: float,
     return ''
 
 
+TICK = 0.05
+# Stop buffer beyond the structural level, as a fraction of the close — keeps
+# a stop off the exact print every other stop sits behind.
+SL_BUFFER_PCT = 0.1
+
+
+def _tick(x: float) -> float:
+    return round(round(x / TICK) * TICK, 2)
+
+
+def trade_plan(direction: str, prev_days: pd.DataFrame, close: float,
+               day_high: float, day_low: float, vah: float,
+               val: float) -> Optional[Dict]:
+    """A suggested entry / stop / targets for a signal row, or None.
+
+    UP (DOWN is the mirror):
+      entry  buy-stop one tick above today's high — the next session has to
+             take out the signal day's high, so a P that stalls never fills.
+      stop   the HIGHER of the previous day's high (the level just broken —
+             back under it and the breakout failed) and today's VAL (back
+             under value and the acceptance failed), less SL_BUFFER_PCT.
+      T1     entry + 1R.
+      T2     the slide's origin (highest high of the four days before
+             today), when that is beyond T1; otherwise entry + 2R.
+    A levels-based suggestion for the person to judge, not an order: it
+    has not been backtested.
+    """
+    if direction not in ('UP', 'DOWN') or prev_days is None or len(prev_days) < 4:
+        return None
+    b = prev_days.iloc[-4:]
+    buf = close * SL_BUFFER_PCT / 100
+    if direction == 'UP':
+        entry = _tick(day_high + TICK)
+        sl = _tick(max(float(b['high'].iloc[-1]), val) - buf)
+        risk = entry - sl
+        if risk <= 0:
+            return None
+        t1 = _tick(entry + risk)
+        origin = float(b['high'].max())
+        t2 = _tick(origin if origin > t1 else entry + 2 * risk)
+    else:
+        entry = _tick(day_low - TICK)
+        sl = _tick(min(float(b['low'].iloc[-1]), vah) + buf)
+        risk = sl - entry
+        if risk <= 0:
+            return None
+        t1 = _tick(entry - risk)
+        origin = float(b['low'].min())
+        t2 = _tick(origin if origin < t1 else entry - 2 * risk)
+    return {'entry': entry, 'sl': sl, 't1': t1, 't2': t2,
+            'risk_pct': round(risk / entry * 100, 2),
+            'rr_t2': round(abs(t2 - entry) / risk, 2)}
+
+
 def get_tpo_row(cpr_service: "CPRFilterService", symbol: str,
                 root_date: datetime, token: Optional[int] = None,
                 is_index: bool = False) -> Optional[Dict]:
@@ -323,6 +377,7 @@ def get_tpo_row(cpr_service: "CPRFilterService", symbol: str,
     tallest = (singles[0]['high'] - singles[0]['low']) if singles else 0.0
     close = float(bars['close'].iloc[-1])
     direction = ''
+    plan = None
     daily = cpr_service.get_hist_data(symbol, days=_DAILY_LOOKBACK_DAYS,
                                       interval='day', end_date=root_date,
                                       token=token)
@@ -331,6 +386,10 @@ def get_tpo_row(cpr_service: "CPRFilterService", symbol: str,
         direction = reversal_direction(
             prev, close, profile['poc'],
             profile['session_high'], profile['session_low'])
+        if direction:
+            plan = trade_plan(direction, prev, close, profile['session_high'],
+                              profile['session_low'], profile['vah'],
+                              profile['val'])
 
     return {
         'symbol': symbol,
@@ -341,6 +400,9 @@ def get_tpo_row(cpr_service: "CPRFilterService", symbol: str,
         'row_step': profile['step'],
         'single_count': len(singles),
         'direction': direction,
+        # Flat keys so the grid can sort on them; None when there is no signal.
+        **{k: (plan or {}).get(k) for k in
+           ('entry', 'sl', 't1', 't2', 'risk_pct', 'rr_t2')},
         'tallest_pts': round(tallest, 2),
         'tallest_pct': round(tallest / close * 100, 3) if close else 0.0,
         # Every band, low→high, so the grid can name them and the chart can

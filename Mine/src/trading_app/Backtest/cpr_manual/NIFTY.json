@@ -39260,8 +39260,26 @@
       "reason": "09:15 closed inside the CPR 22,401-22,478 on a 170-pt candle \u2014 no stop at its far end; 09:30 candle closed above the CPR at 22,492; 09:35 cross candle came back to TC (low 22,475) -> BUY over it; SL under its low; target R1 22,575",
       "setup_time": "09:35",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 76.3 pts (0.341%), 09:15 candle O 22364.15 H 22458.55 L 22288.45 C 22436.95 | Trade by rule: 09:15 closed inside the CPR 22,401-22,478 on a 170-pt candle \u2014 no stop at its far end; 09:30 candle closed above the CPR at 22,492; 09:35 cross candle came back to TC (low 22,475) -> BUY over it; SL under its low; target R1 22,575; chart replay Target 09:40 -> 15:15, target reached at 14:30 and locked (stop to the target), out at 15:15, P&L +180"
+    },
+    {
+      "date": "2026-10-14",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Wide",
+      "cpr_direction": "Asc",
+      "first_candle": "Candle red near Prev High",
+      "boxes": "Big",
+      "trade": "SELL",
+      "entry": 22700.0,
+      "target": 22650.0,
+      "sl": 22727.0,
+      "result": "SL",
+      "pnl": -27.0,
+      "reason": "10:00 candle rejected from PDH (high 22,728, closed 22,704) -> SELL under it; SL over PDH 22,722; target CPR 22,650",
+      "setup_time": "10:00",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 144.5 pts (0.636%), 09:15 candle O 22715.75 H 22752.3 L 22663.8 C 22684.8 | Trade by rule: 10:00 candle rejected from PDH (high 22,728, closed 22,704) -> SELL under it; SL over PDH 22,722; target CPR 22,650; chart replay SL 10:05 -> 10:40"
     }
   ],
-  "extended_at": "2026-10-13 16:00",
+  "extended_at": "2026-10-14 16:15",
   "backfilled_from": "2018-01-01"
 }

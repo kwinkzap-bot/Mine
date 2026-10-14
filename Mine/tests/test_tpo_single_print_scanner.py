@@ -293,3 +293,23 @@ def test_down_is_the_mirror_with_a_b_shaped_profile():
     assert reversal_direction(CLIMB, 106, 108, 118, 106) == 'DOWN'
     assert reversal_direction(CLIMB, 110, 112, 118, 106) == ''   # not under 108
     assert reversal_direction(CLIMB, 106, 116, 118, 106) == ''   # POC high: not b
+
+
+def test_trade_plan_up_stops_behind_the_broken_high_and_targets_the_slide_origin():
+    from trading_app.filters.tpo_single_print_scanner import trade_plan
+    # prev high 117, VAL 116 -> stop under 117; entry one tick over 120
+    plan = trade_plan('UP', SLIDE, 118, 120, 108, 119, 116)
+    assert plan['entry'] == 120.05
+    assert plan['sl'] == 116.9      # 117 - 0.1% of 118 = 116.88, on the 0.05 tick
+    risk = plan['entry'] - plan['sl']
+    assert plan['t1'] == pytest.approx(plan['entry'] + risk, abs=0.05)
+    assert plan['t2'] == 125.0                               # slide origin high
+    assert trade_plan('', SLIDE, 118, 120, 108, 119, 116) is None
+
+
+def test_trade_plan_down_mirrors_and_never_returns_a_negative_risk():
+    from trading_app.filters.tpo_single_print_scanner import trade_plan
+    plan = trade_plan('DOWN', CLIMB, 106, 118, 106, 117, 107)
+    assert plan['entry'] == 105.95
+    assert plan['sl'] > plan['entry'] > plan['t1'] > plan['t2']
+    assert trade_plan('UP', SLIDE, 118, 112, 108, 111, 110) is None  # stop above entry

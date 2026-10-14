@@ -580,6 +580,17 @@ const _SCANNER_COLUMNS = {
               + 'day high with a P-shaped profile (POC in the top of the range). '
               + 'DOWN: the mirror — three days of higher lows and closes, a close below the previous day low, b-shaped.',
           cellClass: v => v === 'UP' ? 'gap-up' : v === 'DOWN' ? 'gap-down' : '' },
+        { key: 'entry', label: 'Entry', sortable: true, align: 'right', strong: true,
+          format: v => v == null ? '' : v.toFixed(2),
+          title: () => 'Stop-entry: one tick beyond the signal day\'s high (UP) / low (DOWN).' },
+        { key: 'sl', label: 'SL', sortable: true, align: 'right',
+          format: v => v == null ? '' : v.toFixed(2),
+          title: (_v, r) => r.risk_pct == null ? '' : `Risk ${r.risk_pct}% of entry. Beyond the broken previous-day level or the value edge, whichever is tighter.` },
+        { key: 't1', label: 'T1', sortable: true, align: 'right',
+          format: v => v == null ? '' : v.toFixed(2), title: () => 'Entry ± 1R.' },
+        { key: 't2', label: 'T2', sortable: true, align: 'right',
+          format: v => v == null ? '' : v.toFixed(2),
+          title: (_v, r) => r.rr_t2 == null ? '' : `${r.rr_t2}R. Origin of the three-day slide, else 2R.` },
         { key: 'bands', label: 'Band(s)', sortable: true,
           title: (_v, row) => `Row grid ${row.row_step} · ${row.periods} periods`
               + ` · session ${row.session_low}–${row.session_high}` },
