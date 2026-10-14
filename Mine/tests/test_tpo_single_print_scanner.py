@@ -37,7 +37,8 @@ def _session(highs, lows, closes=None, start=OPEN, step_mins=30):
     closes = closes or lows
     idx = [pd.Timestamp(start) + timedelta(minutes=step_mins * i)
            for i in range(len(highs))]
-    return pd.DataFrame({'high': highs, 'low': lows, 'close': closes}, index=idx)
+    return pd.DataFrame({'open': lows, 'high': highs, 'low': lows, 'close': closes},
+                        index=idx)
 
 
 def _profile(highs, lows, step=1.0, **kw):
@@ -187,6 +188,8 @@ class _StubService:
 
     def get_hist_data(self, symbol, days=5, interval='30minute',
                       end_date=None, token=None):
+        if interval == 'day':
+            return None          # no daily history: direction stays blank
         return self.frames.get(symbol)
 
     def get_fo_stocks(self):
@@ -259,3 +262,26 @@ def test_scan_rolls_a_weekend_back_to_friday(monkeypatch):
     assert seen['date'] == date(2026, 10, 2)
     assert result['date'] == '2026-10-02'
     assert result['scanned'] == 1 and result['skipped'] == 1
+
+
+def _days(*ohlc):
+    import pandas as pd
+    return pd.DataFrame(ohlc, columns=['open', 'high', 'low', 'close'])
+
+
+def test_reversal_direction_up_needs_two_down_days_then_close_over_prev_high():
+    from trading_app.filters.tpo_single_print_scanner import reversal_direction
+    down2 = _days((110, 112, 104, 105), (105, 106, 98, 100))
+    assert reversal_direction(down2, 100, 107) == 'UP'
+    assert reversal_direction(down2, 100, 105) == ''      # not over prev high 106
+    assert reversal_direction(down2, 107, 103) == ''      # today is down
+    mixed = _days((100, 112, 99, 111), (105, 106, 98, 100))
+    assert reversal_direction(mixed, 100, 107) == ''      # day -2 was up
+
+
+def test_reversal_direction_down_is_the_mirror():
+    from trading_app.filters.tpo_single_print_scanner import reversal_direction
+    up2 = _days((100, 106, 99, 105), (105, 112, 104, 110))
+    assert reversal_direction(up2, 110, 103) == 'DOWN'
+    assert reversal_direction(up2, 110, 105) == ''        # not under prev low 104
+    assert reversal_direction(up2.iloc[:1], 110, 103) == ''

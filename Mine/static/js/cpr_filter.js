@@ -423,6 +423,14 @@ async function loadWeeklyOpenData(refresh = false) {
 // it reads one session of 30-minute bars for every futures stock, which is
 // a request per symbol, and most visits to this tab are for the IV list.
 let _tpoSinglesLoaded = false;
+let _tpoSinglesRows = [];
+
+/** The scan's rows narrowed by the Direction dropdown (All / UP / DOWN). */
+function _tpoVisibleRows() {
+    const sel = document.getElementById('tpoDirectionFilter');
+    const want = sel ? sel.value : '';
+    return want ? _tpoSinglesRows.filter(r => r.direction === want) : _tpoSinglesRows;
+}
 
 /**
  * Fetches the TPO single-print scan for the date picker's session.
@@ -466,7 +474,13 @@ async function loadTpoSinglesData(refresh = false) {
             const rows = response.rows || [];
             if (titleSpan) titleSpan.textContent =
                 `📐 TPO Single Prints — 30-min periods, ${response.date} session`;
-            displayResults('tpoSingles', rows);
+            _tpoSinglesRows = rows;
+            const dirSel = document.getElementById('tpoDirectionFilter');
+            if (dirSel && !dirSel.dataset.bound) {
+                dirSel.dataset.bound = '1';
+                dirSel.addEventListener('change', () => displayResults('tpoSingles', _tpoVisibleRows()));
+            }
+            displayResults('tpoSingles', _tpoVisibleRows());
             if (footnote) {
                 footnote.textContent = `${rows.length} of ${response.scanned || 0} symbols`
                     + ` printed a single on ${response.date}`
@@ -558,6 +572,10 @@ const _SCANNER_COLUMNS = {
           format: v => Number(v || 0).toFixed(2) },
         { key: 'single_count', label: 'Singles', sortable: true, align: 'right',
           badge: () => 'warn' },
+        { key: 'direction', label: 'Direction', sortable: true, strong: true,
+          title: () => 'UP: previous two days down, today up and closed above the previous day high. '
+              + 'DOWN: previous two days up, today down and closed below the previous day low.',
+          cellClass: v => v === 'UP' ? 'gap-up' : v === 'DOWN' ? 'gap-down' : '' },
         { key: 'bands', label: 'Band(s)', sortable: true,
           title: (_v, row) => `Row grid ${row.row_step} · ${row.periods} periods`
               + ` · session ${row.session_low}–${row.session_high}` },
