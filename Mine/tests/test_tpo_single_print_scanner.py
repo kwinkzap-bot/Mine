@@ -269,19 +269,27 @@ def _days(*ohlc):
     return pd.DataFrame(ohlc, columns=['open', 'high', 'low', 'close'])
 
 
-def test_reversal_direction_up_needs_two_down_days_then_close_over_prev_high():
-    from trading_app.filters.tpo_single_print_scanner import reversal_direction
-    down2 = _days((110, 112, 104, 105), (105, 106, 98, 100))
-    assert reversal_direction(down2, 100, 107) == 'UP'
-    assert reversal_direction(down2, 100, 105) == ''      # not over prev high 106
-    assert reversal_direction(down2, 107, 103) == ''      # today is down
-    mixed = _days((100, 112, 99, 111), (105, 106, 98, 100))
-    assert reversal_direction(mixed, 100, 107) == ''      # day -2 was up
+SLIDE = _days((120, 125, 118, 122), (121, 124, 115, 118),
+              (118, 121, 112, 114), (114, 117, 108, 110))     # lower highs + closes
+CLIMB = _days((100, 105, 98, 102), (102, 108, 100, 106),
+              (106, 112, 104, 110), (110, 116, 108, 114))     # higher lows + closes
 
 
-def test_reversal_direction_down_is_the_mirror():
+def test_up_needs_a_three_day_slide_then_a_p_shaped_break_of_previous_high():
     from trading_app.filters.tpo_single_print_scanner import reversal_direction
-    up2 = _days((100, 106, 99, 105), (105, 112, 104, 110))
-    assert reversal_direction(up2, 110, 103) == 'DOWN'
-    assert reversal_direction(up2, 110, 105) == ''        # not under prev low 104
-    assert reversal_direction(up2.iloc[:1], 110, 103) == ''
+    # today 118 > prev high 117, POC at 116 of range 108-120 (top 67 %): P
+    assert reversal_direction(SLIDE, 118, 116, 120, 108) == 'UP'
+    assert reversal_direction(SLIDE, 116, 115, 120, 108) == ''   # not above 117
+    assert reversal_direction(SLIDE, 118, 111, 120, 108) == ''   # POC low: not P
+    broke = _days((120, 125, 118, 122), (121, 126, 115, 118),     # day -3 high rose
+                  (118, 121, 112, 114), (114, 117, 108, 110))
+    assert reversal_direction(broke, 118, 116, 120, 108) == ''
+    assert reversal_direction(SLIDE.iloc[1:], 118, 116, 120, 108) == ''  # 3 bars only
+
+
+def test_down_is_the_mirror_with_a_b_shaped_profile():
+    from trading_app.filters.tpo_single_print_scanner import reversal_direction
+    # today 112 < prev low 108? no: prev low is 108 -> close 106, POC 108 low end
+    assert reversal_direction(CLIMB, 106, 108, 118, 106) == 'DOWN'
+    assert reversal_direction(CLIMB, 110, 112, 118, 106) == ''   # not under 108
+    assert reversal_direction(CLIMB, 106, 116, 118, 106) == ''   # POC high: not b

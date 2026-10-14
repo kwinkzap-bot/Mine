@@ -32,5 +32,38 @@
     "broker_exit_time": "11:15",
     "note": "Corrected 2026-10-13 to Zerodha fills: the 0.75x backstop fired at 11:15 while NIFTY was clear of its 22,463 stop; the index trade itself ran to +174.7 pts (Target at 15:15), the option position was already flat.",
     "locked_at": "14:30"
+  },
+  {
+    "date": "2026-10-14",
+    "n": 1,
+    "mode": "live",
+    "strategy": "Rejection from PDH/R1 \u00b7 PDL/S1",
+    "side": "SELL",
+    "setup_time": "10:00",
+    "entry": 22700.0,
+    "sl": 22727.0,
+    "target": 22650.0,
+    "index_fill": 22698.3,
+    "fill_time": "10:07",
+    "index_exit": 22730.8,
+    "exit_time": "10:42",
+    "result": "SL",
+    "pts": -32.5,
+    "locked_at": null,
+    "strike": 22800,
+    "option_type": "PE",
+    "legs": {
+      "2": {
+        "name": "Devanai (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 202.8,
+        "exit": 181.8,
+        "pnl": -1365.0,
+        "exit_reason": null
+      }
+    },
+    "pnl": -1365.0,
+    "unconfirmed": null
   }
 ]

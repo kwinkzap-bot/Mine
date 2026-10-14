@@ -76,8 +76,8 @@ MIN_PERIODS = 4
 _LOOKBACK_DAYS = 5
 
 # Calendar days of daily bars for the two-day reversal check; 10 clears a
-# long weekend plus holidays.
-_DAILY_LOOKBACK_DAYS = 10
+# long weekend plus holidays and still leave four sessions.
+_DAILY_LOOKBACK_DAYS = 15
 
 
 # ── row geometry (mine_tpo.js) ───────────────────────────────────────────
@@ -252,24 +252,40 @@ def _session_bars(df: pd.DataFrame, day: datetime.date) -> pd.DataFrame:
     return frame[mask].sort_index()
 
 
-def reversal_direction(prev_days: pd.DataFrame, day_open: float,
-                       day_close: float) -> str:
-    """UP / DOWN when today reverses the two sessions before it, else ''.
+# Where the profile's POC must sit in the session range for the shape to
+# count: P (fat top, thin tail below) needs it in the top 40 %, b (the
+# mirror) in the bottom 40 %.
+SHAPE_POC_FRAC = 0.6
 
-    UP:   both previous days closed below their open (down days), today
-          closes above its open, and above the previous day's HIGH.
-    DOWN: the mirror — two up days, today down and closing below the
-          previous day's LOW.
-    `prev_days` is the daily bars strictly before today, oldest first.
+
+def reversal_direction(prev_days: pd.DataFrame, day_close: float,
+                       poc: float, day_high: float, day_low: float) -> str:
+    """UP / DOWN when today breaks a three-day slide with the matching shape.
+
+    UP:   each of the three days before today made no higher high than the
+          day before it and closed below that day's close, then today closes
+          above the previous day's HIGH and the profile is P-shaped (POC in
+          the top of the range — buyers accepted the breakout).
+    DOWN: the mirror — three days of no lower low and higher closes, today
+          closes below the previous day's LOW with a b-shaped profile.
+    `prev_days` is the daily bars strictly before today, oldest first; four
+    are needed because the first of the three is judged against its own
+    predecessor.
     """
-    if prev_days is None or len(prev_days) < 2:
+    if prev_days is None or len(prev_days) < 4:
         return ''
-    d2, d1 = prev_days.iloc[-2], prev_days.iloc[-1]
-    if (d2['close'] < d2['open'] and d1['close'] < d1['open']
-            and day_close > day_open and day_close > d1['high']):
+    rng = day_high - day_low
+    if rng <= 0:
+        return ''
+    poc_pos = (poc - day_low) / rng
+    b = prev_days.iloc[-4:]
+    hi, lo, cl = b['high'].tolist(), b['low'].tolist(), b['close'].tolist()
+    prev_high, prev_low = hi[-1], lo[-1]
+    slide = all(hi[i] <= hi[i - 1] and cl[i] < cl[i - 1] for i in (1, 2, 3))
+    climb = all(lo[i] >= lo[i - 1] and cl[i] > cl[i - 1] for i in (1, 2, 3))
+    if slide and day_close > prev_high and poc_pos >= SHAPE_POC_FRAC:
         return 'UP'
-    if (d2['close'] > d2['open'] and d1['close'] > d1['open']
-            and day_close < day_open and day_close < d1['low']):
+    if climb and day_close < prev_low and poc_pos <= 1 - SHAPE_POC_FRAC:
         return 'DOWN'
     return ''
 
@@ -307,15 +323,14 @@ def get_tpo_row(cpr_service: "CPRFilterService", symbol: str,
     tallest = (singles[0]['high'] - singles[0]['low']) if singles else 0.0
     close = float(bars['close'].iloc[-1])
     direction = ''
-    if singles:
-        # Daily bars cost a request, so only rows that matched pay for them.
-        daily = cpr_service.get_hist_data(symbol, days=_DAILY_LOOKBACK_DAYS,
-                                          interval='day', end_date=root_date,
-                                          token=token)
-        if daily is not None and not daily.empty:
-            prev = daily[daily.index.date < root_date.date()]
-            direction = reversal_direction(
-                prev, float(bars['open'].iloc[0]), close)
+    daily = cpr_service.get_hist_data(symbol, days=_DAILY_LOOKBACK_DAYS,
+                                      interval='day', end_date=root_date,
+                                      token=token)
+    if daily is not None and not daily.empty:
+        prev = daily[daily.index.date < root_date.date()]
+        direction = reversal_direction(
+            prev, close, profile['poc'],
+            profile['session_high'], profile['session_low'])
 
     return {
         'symbol': symbol,
@@ -343,13 +358,14 @@ def get_tpo_row(cpr_service: "CPRFilterService", symbol: str,
 # ── the scan ─────────────────────────────────────────────────────────────
 
 def select_singles(rows: List[Dict]) -> List[Dict]:
-    """The rows to show — the sessions that printed at least one single —
+    """The rows to show — sessions that printed a single or fired a
+    direction signal (which does not need one) —
     indices first, then the tallest band first.
 
     Kept out of the scan so a cached scan can be re-read without re-fetching
     214 symbols of intraday history.
     """
-    matched = [r for r in rows if r.get('single_count')]
+    matched = [r for r in rows if r.get('single_count') or r.get('direction')]
     return sorted(matched, key=lambda r: (not r['is_index'], -r['tallest_pct'],
                                           r['symbol']))
 

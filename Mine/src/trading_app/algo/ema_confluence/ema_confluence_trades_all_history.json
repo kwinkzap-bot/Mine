@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "SUPREMEIND",
+    "direction": "SELL",
+    "mode": "paper",
+    "qty": 175,
+    "lot_size": 175,
+    "entry_price": 3473.9,
+    "exit_price": 3609.3,
+    "spot_entry_price": 3459.7,
+    "spot_exit_price": 3600.0,
+    "sl_price": 3598.8,
+    "target_price": 2940.74,
+    "pnl": -23695.0,
+    "reason": "SL",
+    "signal_date": "2026-10-08",
+    "entry_time": "2026-10-09T09:26:20.691131",
+    "exit_time": "2026-10-14T12:37:16.903084",
+    "date": "2026-10-14"
+  },
+  {
     "symbol": "LICHSGFIN",
     "direction": "SELL",
     "mode": "paper",

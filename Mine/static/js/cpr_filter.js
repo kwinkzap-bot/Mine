@@ -425,10 +425,12 @@ async function loadWeeklyOpenData(refresh = false) {
 let _tpoSinglesLoaded = false;
 let _tpoSinglesRows = [];
 
-/** The scan's rows narrowed by the Direction dropdown (All / UP / DOWN). */
+/** The scan's rows narrowed by the Direction dropdown. Defaults to the rows
+ *  that fired UP or DOWN; '' shows every row, single-print-only ones too. */
 function _tpoVisibleRows() {
     const sel = document.getElementById('tpoDirectionFilter');
-    const want = sel ? sel.value : '';
+    const want = sel ? sel.value : 'SIGNAL';
+    if (want === 'SIGNAL') return _tpoSinglesRows.filter(r => r.direction);
     return want ? _tpoSinglesRows.filter(r => r.direction === want) : _tpoSinglesRows;
 }
 
@@ -482,8 +484,9 @@ async function loadTpoSinglesData(refresh = false) {
             }
             displayResults('tpoSingles', _tpoVisibleRows());
             if (footnote) {
-                footnote.textContent = `${rows.length} of ${response.scanned || 0} symbols`
-                    + ` printed a single on ${response.date}`
+                const signals = rows.filter(r => r.direction).length;
+                footnote.textContent = `${signals} UP/DOWN signals of ${response.scanned || 0} symbols`
+                    + ` on ${response.date} (${rows.length} incl. single prints only)`
                     + (response.skipped ? ` · ${response.skipped} skipped (no intraday history)` : '');
             }
         } else {
@@ -573,8 +576,9 @@ const _SCANNER_COLUMNS = {
         { key: 'single_count', label: 'Singles', sortable: true, align: 'right',
           badge: () => 'warn' },
         { key: 'direction', label: 'Direction', sortable: true, strong: true,
-          title: () => 'UP: previous two days down, today up and closed above the previous day high. '
-              + 'DOWN: previous two days up, today down and closed below the previous day low.',
+          title: () => 'UP: three days of lower highs and lower closes, then today closes above the previous '
+              + 'day high with a P-shaped profile (POC in the top of the range). '
+              + 'DOWN: the mirror — three days of higher lows and closes, a close below the previous day low, b-shaped.',
           cellClass: v => v === 'UP' ? 'gap-up' : v === 'DOWN' ? 'gap-down' : '' },
         { key: 'bands', label: 'Band(s)', sortable: true,
           title: (_v, row) => `Row grid ${row.row_step} · ${row.periods} periods`
