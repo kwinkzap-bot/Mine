@@ -316,9 +316,47 @@ def _option_minutes_fetcher(symbol: str) -> Callable[[Dict[str, Any], date], Lis
         raw = adapter.historical_option_minutes(
             symbol, date.fromisoformat(con['expiry']), con['strike'], con['option_type'],
             day, exchange_code=exchange)
-        return cpr_bt._intraday_by_session(raw).get(day.isoformat(), [])
+        bars = cpr_bt._intraday_by_session(raw).get(day.isoformat(), [])
+        if not bars:
+            # Breeze serves a session's option candles only after the day has been
+            # loaded overnight — the Update button's own session (2026-10-14) always
+            # came back empty, "no option bars". A contract that is still listed is
+            # on Fyers, which has today's bars at once.
+            bars = _fyers_option_minutes(symbol, con, day, exchange)
+        return bars
 
     return fetch
+
+
+def _fyers_option_minutes(symbol: str, con: Dict[str, Any], day: date,
+                          exchange: str) -> List[Dict[str, Any]]:
+    """One session of 1-minute bars for a still-listed option from Fyers, or
+    [] when Fyers has no such contract (expired) or no session."""
+    try:
+        from trading_app.service.provider_logic import get_fyers_adapter
+        fy = get_fyers_adapter()
+        if fy is None:
+            return []
+        expiry = date.fromisoformat(con['expiry'])
+        want = str(con['option_type']).upper()
+        root = symbol.upper()
+        token = None
+        for inst in fy.instruments(exchange):
+            if (str(inst.get('instrument_type') or '').upper() == want
+                    and inst.get('expiry') == expiry
+                    and abs(float(inst.get('strike', -1)) - float(con['strike'])) < 0.5
+                    and (str(inst.get('name') or '').strip().upper() == root
+                         or (str(inst.get('tradingsymbol') or '').upper().startswith(root)
+                             and not str(inst.get('tradingsymbol') or '').upper()[len(root):][:1].isalpha()))):
+                token = inst.get('instrument_token')
+                break
+        if not token:
+            return []
+        raw = fy.historical_data(token, day.isoformat(), day.isoformat(), 'minute', use_cache=False)
+        return cpr_bt._intraday_by_session(raw).get(day.isoformat(), [])
+    except Exception as e:      # noqa: BLE001 — a fallback must never break the grid
+        logger.warning(f"[CPR options] Fyers fallback {con.get('strike')}{con.get('option_type')} {day}: {e}")
+        return []
 
 
 def legs_for(symbol: str, rows: List[Dict[str, Any]], trading_days: List[date],
