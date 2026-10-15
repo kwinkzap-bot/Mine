@@ -52,6 +52,7 @@ window.MineCPR = (function () {
         box5m: false, box1m: false,
         mondayBox: true, mondayWeeksBack: 100,
         vwapCur: true, vwapPrev: true, vwapAvg3: true, vwapLabels: false,
+        supertrend: false, stPeriod: 10, stMult: 3,   // TradingView's ta.supertrend(3, 10)
     };
 
     const LIGHT_COLORS = {
@@ -64,6 +65,7 @@ window.MineCPR = (function () {
         mcpr15: '#f97316', mcpr30: '#0d9488', mcpr60: '#9333ea',
         box5m: '#00D2FF', box1m: '#FF6B6B', monday: '#000000', mondayDark: '#facc15',
         vwapCur: '#2563eb', vwapPrev: '#f97316', vwapAvg3: '#ef4444',
+        stUp: '#22c55e', stDown: '#ef4444',
         weekly: '#b45309', weeklyFill: '#f59e0b', weeklyVirginFill: '#d97706',   // amber shelf; virgin: the same amber, a shade deeper
     };
     // The script's navy / dark-green / black are drawn for a white chart;
@@ -209,6 +211,67 @@ window.MineCPR = (function () {
         return out;
     }
 
+    // Supertrend, TradingView's ta.supertrend(mult, period): ATR is Wilder's RMA
+    // of the true range, the bands sit hl2 ± mult × ATR and only ever tighten
+    // while the close stays on their side. Returned as TWO point lists — the
+    // line while the trend is up (under price) and while it is down (over it) —
+    // each padded with whitespace ({time} only) where the other side holds, so
+    // a flip breaks the line instead of drawing a diagonal across the pane.
+    // The first `period` bars have no ATR and are whitespace on both. Pure and
+    // exported: the Round Strike CE / PE legs call it on their own candles.
+    function supertrend(candles, period, mult, upColor, downColor) {
+        const up = [], down = [], line = [];
+        upColor = upColor || '#22c55e'; downColor = downColor || '#ef4444';
+        const n = candles.length;
+        period = Math.max(1, period | 0 || 10);
+        mult = +mult > 0 ? +mult : 3;
+        let atr = null, trSum = 0, finalUp = 0, finalDn = 0, dir = 1, prevClose = null, k = -1;   // k: index among priced bars
+        for (let i = 0; i < n; i++) {
+            const c = candles[i];
+            // A time-only row (padding / whitespace) has no prices: leave it blank.
+            if (c.high === undefined || c.low === undefined || c.close === undefined) {
+                up.push({ time: c.time }); down.push({ time: c.time }); line.push({ time: c.time });
+                continue;
+            }
+            k++;
+            const tr = prevClose == null ? c.high - c.low
+                : Math.max(c.high - c.low, Math.abs(c.high - prevClose), Math.abs(c.low - prevClose));
+            if (k < period) {
+                trSum += tr;
+                if (k === period - 1) atr = trSum / period;
+            } else {
+                atr = (atr * (period - 1) + tr) / period;
+            }
+            if (atr == null) {
+                up.push({ time: c.time }); down.push({ time: c.time }); line.push({ time: c.time });
+                prevClose = c.close;
+                continue;
+            }
+            const hl2 = (c.high + c.low) / 2;
+            const basicUp = hl2 - mult * atr, basicDn = hl2 + mult * atr;
+            if (k === period - 1) {
+                finalUp = basicUp; finalDn = basicDn; dir = 1;
+            } else {
+                // The flip is judged against the PREVIOUS bar's bands, as Pine
+                // does. Judging it against the band just rebuilt lets a close
+                // through the old band reset that band above the close, so the
+                // trend never flips and the line climbs along with price.
+                const prevUp = finalUp, prevDn = finalDn;
+                finalUp = (basicUp > prevUp || prevClose < prevUp) ? basicUp : prevUp;
+                finalDn = (basicDn < prevDn || prevClose > prevDn) ? basicDn : prevDn;
+                if (dir === -1 && c.close > prevDn) dir = 1;
+                else if (dir === 1 && c.close < prevUp) dir = -1;
+            }
+            if (dir === 1) { up.push({ time: c.time, value: finalUp }); down.push({ time: c.time }); line.push({ time: c.time, value: finalUp, color: upColor }); }
+            else { down.push({ time: c.time, value: finalDn }); up.push({ time: c.time }); line.push({ time: c.time, value: finalDn, color: downColor }); }
+            prevClose = c.close;
+        }
+        // `line` is the same thing as ONE series coloured per point: the chart
+        // joins the two halves of a pair across a flip with a long diagonal
+        // instead of breaking, so callers draw `line`; up/down stay for tests.
+        return { up, down, line };
+    }
+
     // Session VWAP plus the previous session's closing VWAP and the average
     // of the last three closing VWAPs, each held flat across the current day.
     // An index carries no volume — every bar weighs the same in that case,
@@ -303,6 +366,12 @@ window.MineCPR = (function () {
             const on = [['ema9', 9], ['ema20', 20], ['ema50', 50], ['ema100', 100], ['ema200', 200]].filter(([k]) => S[k]);
             const series = emaAll(candles, on.map(([, p]) => p));
             on.forEach(([k], i) => { lines[k] = { points: series[i], color: COLORS[k], width: 1, key: k }; });
+        }
+
+        // ── Supertrend
+        if (S.supertrend) {
+            const st = supertrend(candles, S.stPeriod, S.stMult, COLORS.stUp, COLORS.stDown);
+            lines.supertrend = { points: st.line, color: COLORS.stUp, width: 2, key: 'supertrend' };
         }
 
         // ── VWAP (≤15m)
@@ -787,6 +856,11 @@ window.MineCPR = (function () {
             { key: 'ema100', label: 'EMA 100', sub: true, color: COLORS.ema100 },
             { key: 'ema200', label: 'EMA 200', sub: true, color: '#6b7280' },
         ] },
+        { title: 'Supertrend', items: [
+            { key: 'supertrend', label: 'Supertrend', color: COLORS.stUp },
+            { key: 'stPeriod', type: 'number', label: 'ATR length', min: 1, max: 200, sub: true },
+            { key: 'stMult', type: 'number', label: 'Factor', min: 0.5, max: 20, step: 0.5, sub: true },
+        ] },
         { title: 'VWAP', gate: 'showVwap', gateLabel: '≤15m', items: [
             { key: 'vwapCur', label: 'Current VWAP', color: COLORS.vwapCur },
             { key: 'vwapPrev', label: 'Previous VWAP', color: COLORS.vwapPrev },
@@ -873,6 +947,6 @@ window.MineCPR = (function () {
         });
     }
 
-    return { DEFAULTS, COLORS, SECONDS, SPEC, tfInfo, compute, attach, detach, aggregate, periodKey, dayKey, sessionStart,
+    return { DEFAULTS, COLORS, SECONDS, SPEC, tfInfo, compute, supertrend, attach, detach, aggregate, periodKey, dayKey, sessionStart,
              renderSettings, bindSettings, refreshGates };
 })();

@@ -14721,15 +14721,31 @@ def _sm_compute_today_rankings(index_name: str):
     # column for a handful of them. Retry just those once — otherwise a transient
     # gap silently drops the stock from the ranking, which shifts every rank below
     # it and makes a holding look like it lost its rank entirely.
-    missing = [y for y in yf_symbols
-               if y not in close_df.columns or not close_df[y].notna().any()]
-    if missing:
-        retry_df = _download(missing)
-        if retry_df is not None:
-            for y in missing:
+    # A big flaky batch can drop dozens at once (42 on 2026-10-15 08:04, which
+    # then sat in the cache as "n/a" ranks), so retry in small chunks, up to
+    # three passes, until nothing is left or a pass recovers nothing.
+    for _ in range(3):
+        missing = [y for y in yf_symbols
+                   if y not in close_df.columns or not close_df[y].notna().any()]
+        if not missing:
+            break
+        recovered = False
+        for i in range(0, len(missing), 25):
+            chunk = missing[i:i + 25]
+            try:
+                retry_df = _download(chunk)
+            except Exception as e:
+                logger.warning('SM rankings retry chunk failed: %s', e)
+                continue
+            if retry_df is None:
+                continue
+            for y in chunk:
                 if y in retry_df.columns and retry_df[y].notna().any():
                     close_df[y] = retry_df[y]
-            close_df = close_df.sort_index()
+                    recovered = True
+        close_df = close_df.sort_index()
+        if not recovered:
+            break
 
     # Carry the last known close forward over short gaps so a symbol that has not
     # printed today's bar yet (or missed a session) still gets priced off its own
@@ -14809,7 +14825,9 @@ def _sm_rankings_cached(index_name: str, with_no_data: bool = False):
         ranked, no_data = entry[1], entry[2]
     else:
         ranked, _, no_data = _sm_compute_today_rankings(index_name)
-        if ranked:
+        # A run that lost symbols to a data hiccup must not be remembered for the
+        # full TTL — the next call should try the download again.
+        if ranked and len(no_data) <= 8:
             _sm_rankings_cache[index_name] = (now, ranked, no_data)
     return (ranked, no_data) if with_no_data else ranked
 

@@ -1,21 +1,21 @@
 [
   {
-    "symbol": "SUPREMEIND",
-    "direction": "SELL",
+    "symbol": "NESTLEIND",
+    "direction": "BUY",
     "mode": "paper",
-    "qty": 175,
-    "lot_size": 175,
-    "entry_price": 3473.9,
-    "exit_price": 3609.3,
-    "spot_entry_price": 3459.7,
-    "spot_exit_price": 3600.0,
-    "sl_price": 3598.8,
-    "target_price": 2940.74,
-    "pnl": -23695.0,
+    "qty": 500,
+    "lot_size": 500,
+    "entry_price": 1387.9,
+    "exit_price": 1326.2,
+    "spot_entry_price": 1383.8,
+    "spot_exit_price": 1321.8,
+    "sl_price": 1336.0,
+    "target_price": 1591.37,
+    "pnl": -30850.0,
     "reason": "SL",
-    "signal_date": "2026-10-08",
-    "entry_time": "2026-10-09T09:26:20.691131",
-    "exit_time": "2026-10-14T12:37:16.903084",
-    "date": "2026-10-14"
+    "signal_date": "2026-10-14",
+    "entry_time": "2026-10-15T09:16:51.928980",
+    "exit_time": "2026-10-15T12:26:10.794464",
+    "date": "2026-10-15"
   }
 ]

@@ -79,6 +79,10 @@
 
 let oipRSChart = null, oipRSCESeries = null, oipRSPESeries = null;
 let oipRSVwapCESeries = null, oipRSVwapPESeries = null;
+// Supertrend, computed per leg on its own candles (MineCPR.supertrend): the
+// line is one series per leg, coloured per point (a pair of up/down series is
+// bridged by diagonals across every flip).
+let oipRSStSeries = { ce: null, pe: null };
 let oipRSVolumeSeries = null, oipRSBnfVolumeSeries = null;
 let oipRSCurrentCEStrike = null, oipRSCurrentPEStrike = null;
 
@@ -97,7 +101,7 @@ let oipRSInterval = 'minute';
 const OIP_RS_STORAGE_KEY_INDICATORS = 'oipRS_indicators_v1';
 const OIP_RS_STORAGE_KEY_RAYS = 'oipRS_rays_v1';
 const OIP_RS_INDICATOR_CHECKBOX_IDS = [
-    'oipRSShowVwap', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
+    'oipRSShowVwap', 'oipRSShowSupertrend', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
     'oipRSShowOiChgCe', 'oipRSShowOiChgPe',
     'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
     'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo',
@@ -1011,6 +1015,19 @@ function oipRSInitCharts() {
         oipRSSaveIndicatorState();
     });
 
+    const showSt = document.getElementById('oipRSShowSupertrend')?.checked ?? false;
+    const addSt = color => oipRSChart.chart.addSeries(LightweightCharts.LineSeries, {
+        color, lineWidth: 2, visible: showSt,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null
+    });
+    oipRSStSeries = { ce: addSt('#16a34a'), pe: addSt('#2563eb') };
+    document.getElementById('oipRSShowSupertrend')?.addEventListener('change', (e) => {
+        Object.values(oipRSStSeries).forEach(s => s?.applyOptions({ visible: e.target.checked }));
+        if (e.target.checked && typeof oipRSDrawParked === 'function') oipRSDrawParked(false);
+        oipRSSaveIndicatorState();
+    });
+
     // Every level line on this chart — the two legs' 5 each plus the 4 Deciders
     // — is a step series, fed per render from that leg's (or both legs')
     // candles. autoscaleInfoProvider is left at null (as the VWAP lines above
@@ -1666,6 +1683,13 @@ function oipRSDrawParked(resetZoom) {
     if (typeof oipCalculateVWAP === 'function') {
         if (oipRSVwapCESeries) oipRSVwapCESeries.setData(oipCalculateVWAP(ceData));
         if (oipRSVwapPESeries) oipRSVwapPESeries.setData(oipCalculateVWAP(peData));
+    }
+
+    // Supertrend only while it is on — the maths walks every candle.
+    if (typeof MineCPR !== 'undefined' && document.getElementById('oipRSShowSupertrend')?.checked) {
+        const { stPeriod, stMult } = MineCPR.DEFAULTS;
+        oipRSStSeries.ce?.setData(MineCPR.supertrend(ceData, stPeriod, stMult, '#16a34a', '#dc2626').line);
+        oipRSStSeries.pe?.setData(MineCPR.supertrend(peData, stPeriod, stMult, '#2563eb', '#f59e0b').line);
     }
 
     // Chg in OI reads the `oi` field on these same candles, so it rides the
