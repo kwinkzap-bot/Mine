@@ -48,8 +48,43 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
         logger.error(f"Error getting Kite instance: {e}")
         return None
 
+_kite_probe_cache = {}   # access token -> (ok, checked_at)
+_KITE_PROBE_OK_TTL = 300
+_KITE_PROBE_FAIL_TTL = 60
+
+
+def _kite_serves_history(kite) -> bool:
+    """True if this Kite session may call historical_data (add-on + live token).
+
+    One tiny request, remembered for minutes — a missing add-on or a dead token
+    is a state, not a per-call accident, so the data provider falls through to
+    the next broker in the flag instead of handing every chart an empty list.
+    """
+    import time as _t
+    from datetime import datetime, timedelta
+    key = getattr(kite, 'access_token', None) or id(kite)
+    hit = _kite_probe_cache.get(key)
+    now = _t.time()
+    if hit and now - hit[1] < (_KITE_PROBE_OK_TTL if hit[0] else _KITE_PROBE_FAIL_TTL):
+        return hit[0]
+    ok = False
+    try:
+        end = datetime.now()
+        kite.historical_data(256265, end - timedelta(days=3), end, 'day')
+        ok = True
+    except Exception as exc:
+        # A transient network error must not demote Kite; only a refusal does.
+        name = type(exc).__name__
+        ok = name not in ('PermissionException', 'TokenException', 'InputException')
+        if not ok:
+            logger.warning(f"Kite history probe refused: {name}: {exc}")
+    _kite_probe_cache[key] = (ok, now)
+    return ok
+
+
 def get_data_provider(user: Optional[str] = None,
-                     context: Optional[Union[str, Sequence[str]]] = None) -> Optional[Any]:
+                     context: Optional[Union[str, Sequence[str]]] = None,
+                     exclude: Sequence[str] = ()) -> Optional[Any]:
     """Returns the configured data provider (Kite, Fyers or ICICI Direct).
 
     `context` (e.g. 'replay', 'backtest', 'algo_sc') looks up a
@@ -66,6 +101,11 @@ def get_data_provider(user: Optional[str] = None,
     flag: ('replay_round_strike', 'replay') reads
     REPLAY_ROUND_STRIKE_DATA_PROVIDER, then REPLAY_DATA_PROVIDER, then
     DATA_PROVIDER. An unset override is skipped, not treated as a dead end.
+
+    `exclude` names brokers the caller cannot use at all (e.g. ('ICICI',) for
+    the OI chain, whose service speaks only Fyers and Kite): they are skipped
+    wherever they appear in the flags, and the final hardcoded Kite fallback
+    still applies.
     """
     try:
         from trading_app.app.utils.user_env import UserEnvManager
@@ -84,14 +124,20 @@ def get_data_provider(user: Optional[str] = None,
                 return UserEnvManager.get_user_var(username, name, default)
 
         contexts = [context] if isinstance(context, str) else list(context or ())
-        candidates = [_read(f'{c.upper()}_DATA_PROVIDER') for c in contexts if c]
-        candidates.append(_read('DATA_PROVIDER', 'KITE'))
+        candidates = []
+        for raw in [_read(f'{c.upper()}_DATA_PROVIDER') for c in contexts if c] + [_read('DATA_PROVIDER', 'KITE')]:
+            # A flag may name several brokers in order — "KITE,ICICI" is Kite,
+            # and ICICI when Kite can't serve history. Trailing '# comments'
+            # arrive stripped or not, so cut at '#' before splitting.
+            candidates.extend(t for t in (raw or '').split('#', 1)[0].replace(',', ' ').split())
 
         tried = set()
-        for raw_val in candidates:
+        for idx, raw_val in enumerate(candidates):
             if not raw_val:
                 continue
             provider_type = raw_val.upper().split()[0]
+            if provider_type in {e.upper() for e in exclude}:
+                continue
             if provider_type in tried:
                 continue
             tried.add(provider_type)
@@ -119,7 +165,11 @@ def get_data_provider(user: Optional[str] = None,
             if provider_type == 'KITE':
                 kite = get_kite(user=username, instance=1)
                 if kite is not None:
-                    return kite
+                    # Only judge Kite while something else is still waiting: the
+                    # last candidate is served as-is, as before.
+                    if idx == len(candidates) - 1 or _kite_serves_history(kite):
+                        return kite
+                    logger.warning("Kite cannot serve history right now — trying the next data provider.")
                 continue
 
         # Nothing in the chain resolved — final hardcoded fallback.

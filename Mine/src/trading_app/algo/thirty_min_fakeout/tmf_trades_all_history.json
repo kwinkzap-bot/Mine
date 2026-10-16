@@ -1,5 +1,25 @@
 [
   {
+    "symbol": "HINDALCO",
+    "direction": "SELL",
+    "qty": 554,
+    "entry_price": 901.0,
+    "exit_price": 905.45,
+    "sl_price": 905.45,
+    "target_price": 892.4,
+    "pnl": -2465.3,
+    "reason": "SL Hit (paper \u2014 margin)",
+    "entry_time": "2026-10-16T10:58:55.847305",
+    "exit_time": "2026-10-16T12:03:52.852744",
+    "broker_idx": 0,
+    "entry_order_id": "PAPER",
+    "sl_order_id": null,
+    "target_order_id": null,
+    "mode": "paper",
+    "paper_fallback": "Live entry refused for margin: Insufficient funds. Margin required: 398119.05. Margin available: 396215.28. Add 1903.77 to place this order.",
+    "date": "2026-10-16"
+  },
+  {
     "symbol": "NAUKRI",
     "direction": "SELL",
     "qty": 405,

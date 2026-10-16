@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "MANKIND",
+    "direction": "BUY",
+    "mode": "paper",
+    "qty": 250,
+    "lot_size": 250,
+    "entry_price": 2508.0,
+    "exit_price": 2312.1,
+    "spot_entry_price": 2454.0,
+    "spot_exit_price": 2302.2,
+    "sl_price": 2303.0,
+    "target_price": 2576.7,
+    "pnl": -48975.0,
+    "reason": "SL",
+    "signal_date": "2026-09-21",
+    "entry_time": "2026-09-24T12:00:02.630792",
+    "exit_time": "2026-10-16T09:52:55.558931",
+    "date": "2026-10-16"
+  },
+  {
     "symbol": "NESTLEIND",
     "direction": "BUY",
     "mode": "paper",

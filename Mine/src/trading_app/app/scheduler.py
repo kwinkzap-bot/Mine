@@ -431,7 +431,7 @@ class MarketScheduler:
             # Background thread has no Flask session, so we pass user explicitly.
             # The DATA_PROVIDER env flag determines whether to use Kite or Fyers.
             from trading_app.app.routes.api import get_data_provider
-            provider = get_data_provider(user='Mine')
+            provider = get_data_provider(user='Mine', context='oi_profile', exclude=('ICICI',))
             
             if not provider:
                 logger.warning("OI Persistence: Could not get data provider. Check DATA_PROVIDER flag and credentials in env.")

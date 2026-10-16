@@ -39,10 +39,12 @@ EXPECTED_SIGNATURES = {
     "split_quantity_by_freeze_limit": "(symbol: str, total_qty: int, provider) -> list",
     # `context` widened from a single name to an ordered chain (str still
     # accepted) so one block of a page can sit on its own broker —
-    # REPLAY_ROUND_STRIKE_DATA_PROVIDER before REPLAY_DATA_PROVIDER.
+    # REPLAY_ROUND_STRIKE_DATA_PROVIDER before REPLAY_DATA_PROVIDER. `exclude`
+    # (default empty) lets the OI chain skip ICICI, which it cannot read.
     "get_data_provider": (
         "(user: Optional[str] = None, "
-        "context: Union[str, Sequence[str], NoneType] = None) -> Optional[Any]"
+        "context: Union[str, Sequence[str], NoneType] = None, "
+        "exclude: Sequence[str] = ()) -> Optional[Any]"
     ),
 }
 

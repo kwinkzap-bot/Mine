@@ -328,7 +328,11 @@ class KiteService:
         today = date.today()
         
         # Determine provider type for cache partitioning
-        p_type = 'fyers' if 'Fyers' in self.kite.__class__.__name__ else 'kite'
+        # Only a real KiteConnect may use the 'kite' file: the ICICI adapter's
+        # master is Fyers-shaped (symbol strings, not numeric tokens), and
+        # filing it under 'kite' once poisoned the file that real Kite needs.
+        _cls = self.kite.__class__.__name__
+        p_type = 'fyers' if 'Fyers' in _cls else ('icici' if 'Icici' in _cls else 'kite')
         cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v3.pkl')
         os.makedirs(os.path.dirname(cache_file), exist_ok=True)
         

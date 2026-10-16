@@ -269,7 +269,9 @@ def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol
     'monthly' — see get_option_symbol/find_option_symbol for the resolution
     logic. Included in the cache key so the two never collide.
     """
-    key = (symbol, strike, opt_type, expiry_type)
+    # Namespaced by vocabulary: a Fyers/ICICI symbol string cached under a flag
+    # flip must never be handed to Kite, which needs a numeric token.
+    key = (symbol, strike, opt_type, expiry_type, _provider_tag(data_provider))
     now_ts = _time.time()
     with _strike_token_cache_lock:
         cached = _strike_token_cache.get(key)
@@ -306,7 +308,7 @@ def _get_cached_future_token(kite_service, data_provider, is_fyers: bool, symbol
     token/tradingsymbol are None if the symbol has no listed F&O futures
     (e.g. sectoral indices like NIFTY IT). Cached until end of trading day.
     """
-    key = symbol
+    key = (symbol, _provider_tag(data_provider))
     now_ts = _time.time()
     with _future_token_cache_lock:
         cached = _future_token_cache.get(key)
@@ -9682,7 +9684,7 @@ def get_open_interest() -> EndpointResponse:
         from trading_app.service.open_interest_service import OpenInterestService
         
         # Data fetch always uses Broker 1 (Zerodha Kite - data account)
-        provider = get_data_provider()
+        provider = get_data_provider(context=_oi_profile_page_context(), exclude=('ICICI',))
         if not provider:
             return jsonify({
                 'success': False,
@@ -12530,7 +12532,8 @@ def _rs_oi_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
     """
     from trading_app.service.open_interest_service import OpenInterestService
 
-    provider = get_data_provider()
+    # The chain reads the page's own broker flag (OpenInterestService has no ICICI path).
+    provider = get_data_provider(context=_oi_profile_page_context(), exclude=('ICICI',))
     if not provider:
         return None
     oi_service = OpenInterestService(provider)
@@ -16586,6 +16589,13 @@ def time_and_sales() -> EndpointResponse:
     day_raw = (request.args.get('day') or '').strip()
     root = (request.args.get('root') or '').strip().upper()
     symbol = (request.args.get('symbol') or '').strip()
+    # The tape keys on Fyers strings ('NSE:NIFTY26OCTFUT'). Under a Kite data
+    # provider the candles payload's `future_symbol` is Kite's bare
+    # tradingsymbol ('NIFTY26OCTFUT'), which would open an empty tape of its
+    # own and fail the websocket subscribe — so a bare future is given back its
+    # exchange prefix (SENSEX/BANKEX trade on BSE).
+    if symbol and ':' not in symbol and symbol.upper().endswith('FUT'):
+        symbol = ('BSE:' if symbol.upper().startswith(('SENSEX', 'BANKEX')) else 'NSE:') + symbol.upper()
     # An archived day may be asked for by ROOT alone: the contract that was
     # front month then is not one the client can name, and for a day that was
     # never taped there is no day-list entry to read it off either.
