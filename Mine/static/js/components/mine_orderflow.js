@@ -213,6 +213,23 @@ window.MineOrderFlow = (function () {
         ofSigConfirm: true,      // cumulative delta must agree at the break
         ofSigRR: 2,              // fallback target in R when no opposite level is in front
         ofSigLines: true,        // draw the entry / stop / target lines, not just the mark
+
+        // ── Delta Bias (ΔB) ────────────────────────────────────────────
+        // A second, independent signal layer (own checkbox), added 2026-10-15.
+        // ΔX asks "is THIS bar unusual?"; ΔB asks "which side is in control of
+        // the session, and has that changed?" — it reads every bar's Max and
+        // Min Delta, holds a BIAS, and speaks only on a confirmation or a
+        // reversal. See buildBias().
+        ofBias: false,
+        ofBiasVolPct: 10,        // a strong bar's extreme is at least this % of its own volume
+        ofBiasMult: 1.5,         // …and this × the session's median bar extreme so far
+        ofBiasConfirm: 40,       // 2nd same-side strong bar must be this % of the first
+        ofBiasStart: 945,        // HHMM — no entry before this; the bias is still built from the open
+        ofBiasDay: 25,           // a signal / reversal candle's extreme is at least this % of the day's biggest extreme
+        ofBiasFlip: 50,          // a counter bar must be this % of the recent peak to challenge the bias
+        ofBiasLook: 20,          // bars the "recent peak" is taken over
+        ofBiasWait: 6,           // bars a pending first-bar confirmation stays alive
+        ofBiasRevWait: 40,       // bars a reversal candidate waits for its far side to break
     };
 
     const CELL_OPTIONS = [
@@ -264,7 +281,7 @@ window.MineOrderFlow = (function () {
     const MIN_CELL_W_ONE = 26;              // one
     const MARK_MIN_W = 7, MARK_MIN_H = 5;   // below this a cell is heat only, no boxes
     const HEADER_PX = 9;
-    const STATS_PX = 9;
+    const STATS_PX = 6.5;
     // Every figure the per-bar header can print, in the order it stacks:
     // [field on the bar, settings key]. The header draws the ones switched on.
     const HEADER_LINES = [
@@ -285,10 +302,10 @@ window.MineOrderFlow = (function () {
     // it is — a proportional one opened at a third of the chart for four rows.
     // Set ONCE, when the pane is created: the separator is draggable, and
     // re-applying this on every redraw would pull it back from under the user.
-    const STATS_ROW_PX = 21;
-    const statsOpenPx = rows => Math.max(1, rows) * STATS_ROW_PX + 6;
+    const STATS_ROW_PX = 10;
+    const statsOpenPx = rows => Math.max(1, rows) * STATS_ROW_PX;
     const STATS_MAX_SHARE = 0.35;           // never more of a short chart than this
-    const STATS_GAP_PX = 1;                 // air between two value boxes, CSS px
+    const STATS_GAP_PX = 0.5;                // air between two value boxes, CSS px
     const MAX_ROWS_PER_BAR = 200;           // a guard on the row loop, never hit by a real bar
 
     const secondsOf = k => (window.MineCPR && MineCPR.SECONDS[k]) || 300;
@@ -1173,6 +1190,250 @@ window.MineOrderFlow = (function () {
         return out;
     }
 
+    /* ── Delta Bias (ΔB) ─────────────────────────────────────────────────── */
+    // Reads every bar's Max Delta (buyers' high-water mark inside the bar) and
+    // Min Delta (sellers') and keeps a BIAS for the session, instead of judging
+    // bars one at a time. Written from the 15 Oct 2026 NIFTY 3-minute session:
+    //
+    //   09:15  Max 68K, Min −1.2K     buyers dominate         → candidate UP
+    //   09:18  Max 1.9K, Min −29K     red, but 29K < 68K      → ignored, bias not flipped
+    //   09:24  Max 56K                a second strong buy bar → CONFIRMED, BUY
+    //   09:27  Min −11K, green        small, closes up        → ignored
+    //   10:54  red candle, Max 27K    buyers still the extreme → bias reinforced
+    //   13:39  Min −21K, strong red   counter bar big enough vs the recent peak
+    //                                 → reversal CANDIDATE; its low breaking
+    //                                   confirms it: exit the long, SELL.
+    //
+    //  1. A STRONG bar: the bigger of its two extremes is ≥ `ofBiasVolPct` of
+    //     the bar's volume and ≥ `ofBiasMult` × the session's median bar extreme
+    //     so far (the median test is skipped for the first few bars — the open
+    //     has nothing to be compared with). The side with the bigger extreme
+    //     owns the bar whatever its colour: a green bar that printed a big Min
+    //     Delta is still a buying bar.
+    //  2. No bias yet: the first strong bar becomes a PENDING direction. A later
+    //     strong bar on the SAME side that is ≥ `ofBiasConfirm` % of it confirms
+    //     it (signal at that bar's close). A strong bar the other way replaces
+    //     it only if it is bigger — a smaller counter bar is noise.
+    //  3. Bias held: same-side strong bars reinforce it (a dot). A counter bar
+    //     only CHALLENGES it when it is strong, ≥ `ofBiasFlip` % of the bias
+    //     side's peak over the last `ofBiasLook` bars, and its own candle closes
+    //     in the counter direction (outer 40 % of its range). A challenge is
+    //     only a candidate: a later bar (within `ofBiasRevWait` bars) must trade through that
+    //     candle's far side to flip the bias. A close back through its other
+    //     side cancels it.
+    //  Entries wait until `ofBiasStart` (09:45) and need a CLOSE through the level; a signal or reversal candle must be ≥ `ofBiasDay` % of the day's biggest extreme.
+    //  The confirmation sets the bias; the ENTRY waits for a bar to trade through the first
+    //  candle's far side (14 Oct: strong sell bars, but no entry until the first candle's low broke).
+    //  A flip closes the open trade at the break and opens the opposite one.
+    //  The 15:15 cut-off and a new session close whatever is open and reset.
+    // One entry per signal: { dir, x/time (the confirming bar), entry, outX,
+    // outTime, outPrice, why, state, ext, anchor, reinforce[], cand }.
+    function buildBias(bars, set) {
+        const g = key => (set && key in set) ? set[key] : DEFAULTS[key];
+        if (!g('ofBias') || !bars || !bars.length) return [];
+        const volPct = Math.max(0, +g('ofBiasVolPct') || 0) / 100;
+        const mult = Math.max(0, +g('ofBiasMult') || 0);
+        const confirmFrac = Math.max(0, +g('ofBiasConfirm') || 0) / 100;
+        const flipFrac = Math.max(0, +g('ofBiasFlip') || 0) / 100;
+        const startMin = Math.floor((+g('ofBiasStart') || 0) / 100) * 60 + ((+g('ofBiasStart') || 0) % 100);
+        const dayFrac = Math.max(0, +g('ofBiasDay') || 0) / 100;
+        const look = Math.max(3, g('ofBiasLook') | 0);
+        const wait = Math.max(1, g('ofBiasWait') | 0);
+        const revWait = Math.max(wait, g('ofBiasRevWait') | 0);
+
+        const out = [];
+        let day = null, hist = [];      // hist: this session's per-bar { dir, ext }
+        let best = { '1': 0, '-1': 0 };   // the session's biggest extreme per side so far
+        let bias = 0, pending = null, cand = null, open = null, arm = null, peaks = [];
+
+        const close = (sg, why, price, b) => {
+            sg.why = why; sg.outPrice = price;
+            if (b) { sg.outX = b.x; sg.outTime = b.time; }
+            sg.state = why === 'reversal' ? 'flip' : why === 'stop' ? 'stop' : 'end';
+        };
+        const reset = () => { best = { '1': 0, '-1': 0 }; bias = 0; pending = null; cand = null; open = null; arm = null; peaks = []; hist = []; };
+        // The bias is held from the confirmation, but nothing is ENTERED
+        // until a bar trades through the first candle's far side (its low for
+        // a sell bias, its high for a buy one). `px` is where it filled.
+        const enter = (b, px) => {
+            const sg = {
+                dir: arm.dir, x: b.x, time: b.time, entry: px, state: 'live', ext: arm.ext,
+                rule: 'confirm', reinforce: arm.reinforce, anchor: arm.anchor, confirm: arm.confirm,
+                level: arm.level, stop: arm.stop,
+            };
+            out.push(sg); open = sg; arm = null;
+        };
+
+        for (let i = 0; i < bars.length; i++) {
+            const b = bars[i];
+            const key = dayKey(b.time);
+            if (key !== day) {
+                const prev = bars[i - 1];
+                if (open && prev) close(open, 'session end', prev.c, prev);
+                reset(); day = key;
+            }
+            if (minOfDay(b.time) >= SIG_CUTOFF_MIN) {
+                const prev = bars[i - 1];
+                if (open && prev) close(open, '15:15 cut-off', prev.c, prev);
+                open = null; bias = 0; pending = null; cand = null; arm = null;
+                continue;
+            }
+
+            const up = Math.max(0, b.maxDelta), dn = Math.max(0, -b.minDelta);
+            const d = up > dn ? 1 : dn > up ? -1 : 0;
+            const ext = Math.max(up, dn);
+            const med = hist.length >= 4 ? median(hist.slice(-look * 2).map(h => h.ext)) : 0;
+            // Near the day's biggest extreme on its side (≥ 60 % of it) with the
+            // other side almost silent (15 Oct 13:39: Min −21K, the largest sell delta of
+            // the session, Max tiny) is one-sided enough to count whatever the
+            // volume share or the median say.
+            const other = d > 0 ? dn : up;
+            const record = d !== 0 && hist.length >= 4 && ext >= 0.6 * best[String(d)] && other <= 0.25 * ext;
+            const strong = d !== 0 && ((ext >= b.volume * volPct && ext >= mult * med) || record);
+            if (d !== 0 && ext > best[String(d)]) best[String(d)] = ext;
+            const range = b.h - b.l;
+            const pos = range > 0 ? (b.c - b.l) / range : 0.5;
+            hist.push({ dir: d, ext });
+            // A signal or reversal candle has to be a MAJOR delta event of the day, not
+            // merely big for its own thin bar (13 Oct: a dozen 1-2K bars on 3K volume
+            // each qualified, and the whipsaw was the result).
+            const major = ext >= dayFrac * Math.max(best['1'], best['-1']);
+
+            // A trade's stop: the top of a sell's signal candle, the bottom of a
+            // buy's. Read on the bars AFTER the entry bar, at the level it held.
+            if (open && open.stop != null && open.x !== b.x) {
+                const hit = open.dir > 0 ? b.l <= open.stop : b.h >= open.stop;
+                if (hit) { close(open, 'stop', open.stop, b); open = null; }
+            }
+
+            // A SIGNAL CANDLE: once the bias is set and nothing is on, a bar on the
+            // bias side whose extreme dwarfs its other side (≤ 35 %) and whose
+            // candle closed that way becomes the one to trade: entry on its far
+            // side breaking, stop on the near side. The newest such bar wins until
+            // it is entered. 14 Oct: the 09:51 red bar (−16K, Max tiny) replaced
+            // the opening-candle level and the SELL was its break, not 11:30's.
+            if (bias !== 0 && !open && !(arm && arm.opening) && d === bias && major && ext >= b.volume * volPct) {
+                const otherSide = d > 0 ? dn : up;
+                const okClose = d > 0 ? b.c > b.o : b.c < b.o;
+                if (otherSide <= 0.35 * ext && okClose) {
+                    arm = {
+                        dir: d, ext, reinforce: arm ? arm.reinforce : [], confirm: arm ? arm.confirm : null,
+                        level: d > 0 ? b.h : b.l, stop: d > 0 ? b.l : b.h,
+                        anchor: { x: b.x, time: b.time },
+                    };
+                }
+            }
+
+            // Bias confirmed on an earlier bar, not yet entered: this bar either
+            // trades through the first candle's far side (the entry) or it does not.
+            if (arm && !open && (arm.opening || minOfDay(b.time) >= startMin)) {
+                // A CLOSE beyond the level, not a wick through it; filled at that close.
+                const through = arm.dir > 0 ? b.c > arm.level : b.c < arm.level;
+                if (through) enter(b, b.c);
+            }
+
+            // A pending reversal first: this bar either completes it or kills it.
+            if (cand && i > cand.until) cand = null;
+            if (cand && bias) {
+                const broke = cand.dir < 0 ? b.c < cand.level : b.c > cand.level;
+                const killed = cand.dir < 0 ? b.c > cand.kill : b.c < cand.kill;
+                if (broke && !killed) {
+                    const px = b.c;
+                    if (open) close(open, 'reversal', px, b);
+                    arm = null;
+                    const sg = {
+                        dir: cand.dir, x: b.x, time: b.time, entry: px, state: 'live',
+                        ext: cand.ext, rule: 'flip', reinforce: [], cand: { x: cand.x, time: cand.time },
+                        stop: cand.kill,
+                    };
+                    out.push(sg); open = sg; bias = cand.dir; peaks = [{ i, ext: cand.ext, dir: cand.dir }];
+                    pending = null; cand = null;
+                    continue;
+                }
+                if (killed) cand = null;
+            }
+
+            // `through` = an EARLIER bar than this one already traded through the
+            // first candle's far side; `lastBroke` is this bar's own, for the next.
+            if (pending && pending.i !== i) {
+                pending.through = pending.through || !!pending.lastBroke;
+                pending.lastBroke = pending.dir > 0 ? b.c > pending.h : b.c < pending.l;
+            }
+
+            if (!strong) continue;
+
+            if (bias === 0) {
+                // THE OPENING CANDLE. When the session's first bar is strong, one-sided
+                // AND directional (real body, closed in the outer 30 % of its range),
+                // it is a signal candle in its own right: bias from the first bar, entry
+                // on a close through its far side, exempt from the no-entry-before time.
+                // 13 Oct: Max 103K, Min −3K, closed on its high; the 09:21 bar closed
+                // above it → BUY 09:21. 14 Oct's first bar closed mid-range (an
+                // indecision candle), so it waits for a second strong bar instead.
+                if (hist.length === 1 && range > 0) {
+                    const body = Math.abs(b.c - b.o) / range;
+                    const directional = body >= 0.5 && (d > 0 ? pos >= 0.7 : pos <= 0.3);
+                    if (directional) {
+                        bias = d; peaks = [{ i, ext, dir: d }];
+                        arm = {
+                            dir: d, ext, reinforce: [], opening: true, confirm: null,
+                            level: d > 0 ? b.h : b.l, stop: d > 0 ? b.l : b.h,
+                            anchor: { x: b.x, time: b.time },
+                        };
+                        continue;
+                    }
+                }
+                if (!pending || i > pending.until) {
+                    pending = { dir: d, ext, x: b.x, time: b.time, until: i + wait, h: b.h, l: b.l, i };
+                } else if (d === pending.dir) {
+                    if (ext >= confirmFrac * pending.ext) {
+                        bias = d; peaks = [{ i, ext, dir: d }, { i: i - 1, ext: pending.ext, dir: d }];
+                        const level = d > 0 ? pending.h : pending.l;
+                        arm = {
+                            dir: d, ext, level, reinforce: [], stop: d > 0 ? pending.l : pending.h,
+                            anchor: { x: pending.x, time: pending.time }, confirm: { x: b.x, time: b.time },
+                        };
+                        // Already through the level before this bar → in at
+                        // this bar's close; through it on this bar → at the level.
+                        const was = pending.through;
+                        const now = d > 0 ? b.c > level : b.c < level;
+                        if ((was || now) && minOfDay(b.time) >= startMin) enter(b, b.c);
+                        pending = null;
+                    }
+                } else if (ext > pending.ext) {
+                    pending = { dir: d, ext, x: b.x, time: b.time, until: i + wait, h: b.h, l: b.l, i };
+                }
+                continue;
+            }
+
+            if (d === bias) {
+                peaks.push({ i, ext, dir: d });
+                if (open) open.reinforce.push({ x: b.x, time: b.time });
+                else if (arm) arm.reinforce.push({ x: b.x, time: b.time });
+                // A reversal candidate is NOT cancelled by the old side
+                // speaking again (15 Oct: small green Max Delta bars after the
+                // 13:39 -21K candle did not undo it — the SELL was the 14:15
+                // break of that candle's low). Only a close back through the
+                // candidate's far side, or a stronger candidate, replaces it.
+                continue;
+            }
+
+            // A counter bar. Challenges only if big enough against the recent
+            // peak AND its own candle closed that way.
+            const peak = Math.max(0, ...peaks.filter(p => p.i >= i - look).map(p => p.ext));
+            const closedCounter = d < 0 ? (b.c < b.o && pos <= 0.4) : (b.c > b.o && pos >= 0.6);
+            if (major && ext >= flipFrac * peak && closedCounter
+                && !(cand && cand.dir === d && cand.ext > ext)) {
+                cand = {
+                    dir: d, ext, x: b.x, time: b.time, until: i + revWait,
+                    level: d < 0 ? b.l : b.h,        // trade through this to flip
+                    kill: d < 0 ? b.h : b.l,         // close back through this to cancel
+                };
+            }
+        }
+        return out;
+    }
+
     /* ── compute: every drawn bar on the pane ────────────────────────────── */
     // `cache` is the pane's own Map(sessionKey -> {sig, bars}). A finished
     // session never changes, so only today's is rebuilt on a live tick.
@@ -1187,13 +1448,13 @@ window.MineOrderFlow = (function () {
         const s = key => (settings && key in settings) ? settings[key] : DEFAULTS[key];
         const info = tfInfo(interval);
         const cellsOk = !opts || opts.cells !== false;
-        const empty = { bars: [], signals: [], step: 0, sessions: [], missing: [], cellsOk, coverage: Tape.coverage() };
+        const empty = { bars: [], signals: [], bias: [], step: 0, sessions: [], missing: [], cellsOk, coverage: Tape.coverage() };
         // The footprint's own switch OR the signal layer's: ΔX reads the
         // bars this builds, so one of the two has to want them. With 'of' off
         // and ΔX on, the tape is still loaded and the bars still built —
         // nothing of the footprint is PAINTED (see `drawOn` in the renderer,
         // and the stats pane below), only the marks.
-        if ((!s('of') && !s('ofSig')) || !info.showOf || !candles || !candles.length) return empty;
+        if ((!s('of') && !s('ofSig') && !s('ofBias')) || !info.showOf || !candles || !candles.length) return empty;
 
         const secs = info.secs;
         // 0 = every session on the pane (see DEFAULTS.ofSessions).
@@ -1291,6 +1552,7 @@ window.MineOrderFlow = (function () {
         return {
             bars: drawn,
             signals: buildSignals(drawn, resolved, prof),
+            bias: buildBias(drawn, resolved),
             step, secs, cellsOk,
             sessions: used.map(x => x.key),
             missing,
@@ -1312,7 +1574,8 @@ window.MineOrderFlow = (function () {
                 const { series, chart, result } = state;
                 if (!series || !chart || !result.bars || !result.bars.length) return;
                 const set = result.settings || DEFAULTS;
-                if (!set.ofSig || !(result.signals || []).length) return;
+                const biasSigs = set.ofBias ? (result.bias || []) : [];
+                if (!(set.ofSig && (result.signals || []).length) && !biasSigs.length) return;
                 const C = isDark() ? DARK : LIGHT;
                 const ts = chart.timeScale();
 
@@ -1343,7 +1606,7 @@ window.MineOrderFlow = (function () {
                     // been taken — the entry, the stop under the signal
                     // candle and the target in front of it, each running to
                     // the bar that settled the trade.
-                    const sigs = result.signals;
+                    const sigs = set.ofSig ? result.signals : [];
                     const barAt = new Map(result.bars.map(b => [b.x, b]));
                     const last = result.bars[result.bars.length - 1];
                     const lw = Math.max(1, Math.round(vr));
@@ -1548,6 +1811,83 @@ window.MineOrderFlow = (function () {
                             tag(sg.state === 'target' ? '✓' : sg.state === 'stop' ? '✗'
                                 : sg.state === 'exit' ? '•' : '·',
                                 xB, yE, withAlpha(base, 0.95));
+                        }
+                    }
+
+                    // ── Delta Bias (ΔB) ──────────────────────────────
+                    // A filled triangle + BUY / SELL on the bar that confirmed
+                    // or reversed the bias, a ring on the candidate bar it came
+                    // from, dots on bars that reinforced it, and a line from the
+                    // entry to wherever the bias flipped, tagged with its points.
+                    const VIOLET = '#8b5cf6';
+                    for (const sg of biasSigs) {
+                        const b = barAt.get(sg.x);
+                        const x0 = xOf(sg.x, sg.time);
+                        if (x0 === null || !b) continue;
+                        const up = sg.dir > 0;
+                        const col = up ? C.buy : C.sell;
+                        const yA = yOf(up ? b.l : b.h);
+                        if (yA !== null && yA > -40 * vr && yA < H + 40 * vr) {
+                            const yT = yA + (up ? 8 * vr : -8 * vr);
+                            const big = tri * 1.3;
+                            ctx.fillStyle = col;
+                            ctx.beginPath();
+                            ctx.moveTo(x0, yT + (up ? -big : big));
+                            ctx.lineTo(x0 - big * 0.8, yT + (up ? big * 0.3 : -big * 0.3));
+                            ctx.lineTo(x0 + big * 0.8, yT + (up ? big * 0.3 : -big * 0.3));
+                            ctx.closePath();
+                            ctx.fill();
+                            ctx.textAlign = 'center';
+                            ctx.fillStyle = col;
+                            ctx.fillText((up ? 'BUY' : 'SELL') + (sg.rule === 'flip' ? ' \u21c4' : ''),
+                                         x0, yT + (up ? big + 8 * vr : -big - 8 * vr));
+                        }
+                        const ref = sg.anchor || sg.cand;
+                        if (ref) {
+                            const rb = barAt.get(ref.x), rx = xOf(ref.x, ref.time);
+                            const ry = rb ? yOf(up ? rb.l : rb.h) : null;
+                            if (rx !== null && ry !== null && ry >= 0 && ry <= H) {
+                                ctx.strokeStyle = VIOLET; ctx.lineWidth = lw; ctx.setLineDash([]);
+                                ctx.beginPath();
+                                ctx.arc(rx, ry + (up ? 7 * vr : -7 * vr), Math.max(3, 3.5 * vr), 0, Math.PI * 2);
+                                ctx.stroke();
+                            }
+                        }
+                        // The bar that confirmed the bias, when the entry came later
+                        // (the break of the first candle's far side): a small violet
+                        // diamond, so the wait between the two is readable.
+                        if (sg.confirm && sg.confirm.x !== sg.x) {
+                            const cb = barAt.get(sg.confirm.x), cx = xOf(sg.confirm.x, sg.confirm.time);
+                            const cy = cb ? yOf(up ? cb.l : cb.h) : null;
+                            if (cx !== null && cy !== null && cy >= 0 && cy <= H) {
+                                const m = Math.max(3, 3.5 * vr), yy = cy + (up ? 7 * vr : -7 * vr);
+                                ctx.fillStyle = VIOLET;
+                                ctx.beginPath();
+                                ctx.moveTo(cx, yy - m); ctx.lineTo(cx + m, yy); ctx.lineTo(cx, yy + m); ctx.lineTo(cx - m, yy);
+                                ctx.closePath(); ctx.fill();
+                            }
+                        }
+                        for (const rb of sg.reinforce || []) {
+                            const bar = barAt.get(rb.x), rx = xOf(rb.x, rb.time);
+                            const ry = bar ? yOf(up ? bar.l : bar.h) : null;
+                            if (rx === null || ry === null || ry < 0 || ry > H) continue;
+                            ctx.fillStyle = withAlpha(col, 0.7);
+                            ctx.beginPath();
+                            ctx.arc(rx, ry + (up ? 6 * vr : -6 * vr), Math.max(1.5, 2 * vr), 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                        const xEnd = sg.outX != null ? xOf(sg.outX, sg.outTime) : xOf(last.x, last.time);
+                        if (xEnd !== null) {
+                            seg(yOf(sg.entry), x0, xEnd + slot / 2, withAlpha(col, 0.85), [5, 3], lw);
+                            if (sg.stop != null) {
+                                seg(yOf(sg.stop), x0, xEnd + slot / 2, withAlpha(C.sell, 0.8), [2, 3], lw);
+                                tag('SL', xEnd + slot / 2, yOf(sg.stop), C.sell);
+                            }
+                            if (sg.outPrice != null) {
+                                const pts = (sg.outPrice - sg.entry) * (up ? 1 : -1);
+                                tag((pts >= 0 ? '+' : '') + pts.toFixed(1), xEnd + slot / 2, yOf(sg.entry),
+                                    pts >= 0 ? C.buy : C.sell);
+                            }
                         }
                     }
 
@@ -1857,7 +2197,7 @@ window.MineOrderFlow = (function () {
                             peak[key] = 1;
                             for (const bar of bars) peak[key] = Math.max(peak[key], Math.abs(bar[key]));
                         }
-                        const showText = cellW >= 26 * hr && rowH >= (STATS_PX + 3) * vr;
+                        const showText = cellW >= 22 * hr && rowH >= (STATS_PX + 1) * vr;
                         for (const bar of bars) {
                             const cx = xOf(bar.x, bar.time);
                             if (cx === null) continue;
@@ -1869,21 +2209,16 @@ window.MineOrderFlow = (function () {
                             rows.forEach(([key], i) => {
                                 const v = bar[key];
                                 const y = i * rowH;
-                                // Cumulative delta is a running total, so its
-                                // SIGN says almost nothing — a whole session
-                                // comes out one colour. What a reader wants
-                                // from that row is which way it just moved, so
-                                // it is coloured by the change from the bar
-                                // before: down is red, up or flat is green.
-                                // That change IS this bar's delta, which is
-                                // also what makes it right at a session
-                                // boundary, where the running total resets.
+                                // Cumulative delta is coloured by its own sign:
+                                // positive total is green, negative is red.
+                                // (It was once coloured by the bar's change, but
+                                // the reader wants to see which side the session
+                                // is on.)
                                 // Buy and Sell are both positive numbers, so
-                                // their sign says nothing either: a buy row is
+                                // their sign says nothing: a buy row is
                                 // the buy colour and a sell row the sell one,
                                 // always, and only the size varies.
-                                const dir = key === 'cumDelta' ? bar.delta
-                                    : key === 'buy' ? 1 : key === 'sell' ? -1 : v;
+                                const dir = key === 'buy' ? 1 : key === 'sell' ? -1 : v;
                                 ctx.fillStyle = withAlpha(dir >= 0 ? C.buy : C.sell,
                                                           0.12 + 0.5 * Math.min(1, Math.abs(v) / peak[key]));
                                 ctx.fillRect(Math.round(l), Math.round(y),
@@ -1912,7 +2247,7 @@ window.MineOrderFlow = (function () {
                     // boxes underneath them, and bare text on top of a box is
                     // two numbers in one place.
                     ctx.textAlign = 'right';
-                    const padX = 5 * hr, chipH = Math.min(rowH - 4 * vr, 15 * vr);
+                    const padX = 3 * hr, chipH = Math.min(rowH - 2 * vr, 10 * vr);
                     rows.forEach(([, label], i) => {
                         const w = ctx.measureText(label).width;
                         const right = W - 4 * hr;
@@ -2060,7 +2395,7 @@ window.MineOrderFlow = (function () {
     function apply(pane, candles, interval, settings, opts) {
         const o = opts || {};
         const s = key => (settings && key in settings) ? settings[key] : DEFAULTS[key];
-        if ((!s('of') && !s('ofSig')) || o.on === false) {
+        if ((!s('of') && !s('ofSig') && !s('ofBias')) || o.on === false) {
             attach(pane, { bars: [] });
             detachStats(pane);
             return { result: { bars: [] }, text: '', title: '' };
@@ -2110,6 +2445,11 @@ window.MineOrderFlow = (function () {
             + 'wait for the same break rather than starting a second long. Marks are what the rule would have done, stop-first '
             + 'inside a bar that held both \u2014 the bar\u2019s own delta is an estimate, so read them as a '
             + 'reading of the flow, not as fills.';
+        const biasBase = '\u0394B: holds a session bias from every bar\u2019s Max/Min Delta. The first strong bar '
+            + 'is only a candidate; a second strong bar on the same side confirms it (BUY / SELL). Smaller counter '
+            + 'bars, and bars of the other colour with a smaller extreme, do not flip it. A strong counter bar that '
+            + 'closes against the bias is a reversal candidate \u2014 its far side breaking flips the bias and '
+            + 'exits the trade.';
         const base = 'Order flow from the trade tape. Volume is the exchange\u2019s own. Most rows are '
             + 'ICICI 1-second bars with no bid/ask, so the buy/sell split is the tick test on the '
             + 'second-by-second path, unchanged seconds halved \u2014 the cumulative delta tracks a true '
@@ -2118,11 +2458,11 @@ window.MineOrderFlow = (function () {
         // is on, because a signal layer that found nothing today and one that
         // is switched off look identical on the chart otherwise.
         const nSig = s('ofSig') ? (result.signals || []).length : 0;
-        const sigTag = s('ofSig') ? ` · ΔX ${nSig}` : '';
+        const sigTag = (s('ofSig') ? ` · ΔX ${nSig}` : '') + (s('ofBias') ? ` · ΔB ${(result.bias || []).length}` : '');
         return {
             result,
             text: (result.cellsOk ? `OF · ${result.step} pt · 1s tape` : 'OF · delta only') + sigTag,
-            title: (s('ofSig') ? sigBase + ' ' : '') + (result.cellsOk ? base
+            title: (s('ofSig') ? sigBase + ' ' : '') + (s('ofBias') ? biasBase + ' ' : '') + (result.cellsOk ? base
                 : base + ' The tape is collected on the FUTURE, so on this index chart every price in '
                        + 'it sits a basis away from the candles and the price cells are not drawn. The '
                        + 'per-bar figures are bucketed by time, not price, so they are exact here.'),
@@ -2187,6 +2527,18 @@ window.MineOrderFlow = (function () {
         // on an index chart where the cells are not. It still belongs to this
         // engine — the two numbers it reads are the ones the footprint
         // computes — so it is rendered with it, under it, on all three pages.
+        { title: 'Delta Bias (ΔB)', gate: 'showOf', gateLabel: 'intraday', items: [
+            { key: 'ofBias', label: 'Delta Bias signals (confirm / reverse)', color: '#8b5cf6' },
+            { key: 'ofBiasVolPct', type: 'number', label: 'Strong bar: extreme ≥ this % of its volume', min: 0, max: 100, sub: true },
+            { key: 'ofBiasMult', type: 'number', label: '…and ≥ × the session median extreme', min: 0, max: 10, step: 0.5, sub: true },
+            { key: 'ofBiasConfirm', type: 'number', label: '2nd bar confirms at ≥ this % of the 1st', min: 0, max: 200, sub: true },
+            { key: 'ofBiasStart', type: 'number', label: 'No entry before (HHMM, e.g. 945)', min: 915, max: 1500, sub: true },
+            { key: 'ofBiasDay', type: 'number', label: 'Signal candle ≥ this % of the day\u2019s biggest extreme', min: 0, max: 100, sub: true },
+            { key: 'ofBiasFlip', type: 'number', label: 'Counter bar challenges at ≥ this % of recent peak', min: 0, max: 200, sub: true },
+            { key: 'ofBiasLook', type: 'number', label: 'Recent peak = last N bars', min: 3, max: 200, sub: true },
+            { key: 'ofBiasWait', type: 'number', label: 'Bars a 1st-bar confirmation can wait', min: 1, max: 30, sub: true },
+            { key: 'ofBiasRevWait', type: 'number', label: 'Bars a reversal candidate waits for the break', min: 1, max: 120, sub: true },
+        ] },
         { title: 'Delta Extreme Breakout (ΔX)', gate: 'showOf', gateLabel: 'intraday', items: [
             { key: 'ofSig', label: 'Delta Extreme Breakout signals', color: COLORS.sig },
             { key: 'ofSigMode', type: 'select', label: 'Entry logic', options: SIG_MODE_OPTIONS, sub: true },
@@ -2208,7 +2560,7 @@ window.MineOrderFlow = (function () {
     return {
         DEFAULTS, COLORS, SPEC, CELL_OPTIONS, CANDLE_OPTIONS, Tape,
         tfInfo, compute, attach, detach, attachStats, detachStats, apply, sessionDays,
-        buildSignals, unusualThreshold,
+        buildSignals, buildBias, unusualThreshold,
         niceStep, signRows, brief,
     };
 })();

@@ -101,7 +101,7 @@ let oipRSInterval = 'minute';
 const OIP_RS_STORAGE_KEY_INDICATORS = 'oipRS_indicators_v1';
 const OIP_RS_STORAGE_KEY_RAYS = 'oipRS_rays_v1';
 const OIP_RS_INDICATOR_CHECKBOX_IDS = [
-    'oipRSShowVwap', 'oipRSShowSupertrend', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
+    'oipRSShowVwap', 'oipRSShowSupertrend', 'oipRSStPeriod', 'oipRSStMult', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
     'oipRSShowOiChgCe', 'oipRSShowOiChgPe',
     'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
     'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo',
@@ -112,7 +112,7 @@ function oipRSSaveIndicatorState() {
     const state = {};
     OIP_RS_INDICATOR_CHECKBOX_IDS.forEach(id => {
         const el = document.getElementById(id);
-        if (el) state[id] = el.checked;
+        if (el) state[id] = el.type === 'checkbox' ? el.checked : el.value;
     });
     try { localStorage.setItem(OIP_RS_STORAGE_KEY_INDICATORS, JSON.stringify(state)); } catch (e) {}
 }
@@ -123,7 +123,7 @@ function oipRSRestoreIndicatorState() {
     if (!state) return;
     OIP_RS_INDICATOR_CHECKBOX_IDS.forEach(id => {
         const el = document.getElementById(id);
-        if (el && state[id] != null) el.checked = state[id];
+        if (el && state[id] != null) { if (el.type === 'checkbox') el.checked = state[id]; else el.value = state[id]; }
     });
 }
 
@@ -1022,6 +1022,10 @@ function oipRSInitCharts() {
         autoscaleInfoProvider: () => null
     });
     oipRSStSeries = { ce: addSt('#16a34a'), pe: addSt('#2563eb') };
+    ['oipRSStPeriod', 'oipRSStMult'].forEach(id => document.getElementById(id)?.addEventListener('change', () => {
+        oipRSSaveIndicatorState();
+        if (typeof oipRSDrawParked === 'function') oipRSDrawParked(false);
+    }));
     document.getElementById('oipRSShowSupertrend')?.addEventListener('change', (e) => {
         Object.values(oipRSStSeries).forEach(s => s?.applyOptions({ visible: e.target.checked }));
         if (e.target.checked && typeof oipRSDrawParked === 'function') oipRSDrawParked(false);
@@ -1687,7 +1691,9 @@ function oipRSDrawParked(resetZoom) {
 
     // Supertrend only while it is on — the maths walks every candle.
     if (typeof MineCPR !== 'undefined' && document.getElementById('oipRSShowSupertrend')?.checked) {
-        const { stPeriod, stMult } = MineCPR.DEFAULTS;
+        // The popup's own boxes; blank / out of range falls back to 10 / 3.
+        const stPeriod = Math.min(200, Math.max(1, parseInt(document.getElementById('oipRSStPeriod')?.value, 10) || MineCPR.DEFAULTS.stPeriod));
+        const stMult = Math.min(20, Math.max(0.1, parseFloat(document.getElementById('oipRSStMult')?.value) || MineCPR.DEFAULTS.stMult));
         oipRSStSeries.ce?.setData(MineCPR.supertrend(ceData, stPeriod, stMult, '#16a34a', '#dc2626').line);
         oipRSStSeries.pe?.setData(MineCPR.supertrend(peData, stPeriod, stMult, '#2563eb', '#f59e0b').line);
     }

@@ -150,7 +150,7 @@ let oipLotSize = 50, oipStrikeStep = 50;
 // intrinsic levels). Must match the <option selected> on #oipInterval in the Opt
 // Prem header. Two other blocks run on their own bar width: Round Strike
 // (oipRSInterval, oi_profile_round_strike.js) and the OI Profile chart itself.
-let oipInterval = '5minute';
+let oipInterval = '3minute';
 /* The OI Profile chart's OWN timeframe — #oipOIInterval in its own header, and
    nothing else's. It starts equal to oipInterval, and while the two agree the
    page behaves exactly as it always did: one request serves both blocks.
@@ -161,7 +161,7 @@ let oipInterval = '5minute';
    that half must not move. This chart is then painted from a second, INDEX-ONLY
    request at oipOIInterval (opt=false, no 30-second legs: one cheap call), and
    only this chart's own overlays are recomputed from those bars. */
-let oipOIInterval = '5minute';
+let oipOIInterval = '3minute';
 // True while the OI Profile chart is on a different bar width from Opt Prem.
 const oipTfSplit = () => oipOIInterval !== oipInterval;
 let oipStrikeCount = 15;

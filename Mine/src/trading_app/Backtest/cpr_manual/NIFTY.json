@@ -39278,8 +39278,26 @@
       "reason": "10:00 candle rejected from PDH (high 22,728, closed 22,704) -> SELL under it; SL over PDH 22,722; target CPR 22,650",
       "setup_time": "10:00",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 144.5 pts (0.636%), 09:15 candle O 22715.75 H 22752.3 L 22663.8 C 22684.8 | Trade by rule: 10:00 candle rejected from PDH (high 22,728, closed 22,704) -> SELL under it; SL over PDH 22,722; target CPR 22,650; chart replay SL 10:05 -> 10:40"
+    },
+    {
+      "date": "2026-10-15",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "Candle green near R1",
+      "boxes": "Small",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "09:15 candle opened at 22,671 and closed at PDH/R1 22,734-22,758 (22,725) \u2014 a 100-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 23.8 pts (0.105%), 09:15 candle O 22671.3 H 22737.8 L 22637.4 C 22725.1 | Trade by rule: 09:15 candle opened at 22,671 and closed at PDH/R1 22,734-22,758 (22,725) \u2014 a 100-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-14 16:15",
+  "extended_at": "2026-10-15 16:18",
   "backfilled_from": "2018-01-01"
 }
