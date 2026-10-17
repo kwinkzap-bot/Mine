@@ -445,6 +445,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const pcOptPanel    = document.getElementById('pivotConfluenceOptimisePanel');
         const wcbParamsRow  = document.getElementById('weeklyCprBreakoutParamsRow');
         if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
+        const osParamsRow   = document.getElementById('optionSellingParamsRow');
+        if (osParamsRow)   osParamsRow.style.display   = 'none';
+        const osResultsEl   = document.getElementById('osResults');
+        if (osResultsEl)   osResultsEl.style.display   = 'none';
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
@@ -591,6 +595,18 @@ document.addEventListener('DOMContentLoaded', function() {
             const wcbEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2017-01-01';
             if (wcbEnd) wcbEnd.value = localToday();
+        } else if (val === 'option_selling') {
+            if (osParamsRow) osParamsRow.style.display = 'grid';
+            // NIFTY only, on a fixed 1-minute basis: no Symbol / Timeframe.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            selectedSymbol = 'NIFTY';
+            symbolSearch.value = 'NIFTY';
+            // A year back by default — ICICI's expired-contract candles do not reach further reliably.
+            const osEnd = document.getElementById('endDate');
+            const osStart = new Date(); osStart.setFullYear(osStart.getFullYear() - 1);
+            if (startDateInput) startDateInput.value = osStart.toISOString().slice(0, 10);
+            if (osEnd) osEnd.value = localToday();
         }
 
         // "All Stocks" only exists for EMA Confluence Breakout — every other
@@ -665,7 +681,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -776,6 +792,10 @@ document.addEventListener('DOMContentLoaded', function() {
         // fetch-and-render path below.
         if (_strat === 'option_breakout') {
             await runOptionBreakout();
+            return;
+        }
+        if (_strat === 'option_selling') {
+            await runOptionSelling();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
@@ -995,6 +1015,119 @@ document.addEventListener('DOMContentLoaded', function() {
         if (reqs) line += ` · ${reqs} Breeze req${elapsed ? ' @ ' + (reqs / elapsed).toFixed(1) + '/s' : ''}`;
         if (data.stage) line += ` · ${data.stage}`;
         return line;
+    }
+
+    // ── NIFTY Option Selling — start + poll ────────────────────────────
+    // Two Breeze requests per trading day (one per leg), disk-cached once the
+    // day has settled: a year is a few minutes cold, instant warm. Own result
+    // panel — a row is one day's strangle, not a trade the shared cards fit.
+    let _osRun = 0;
+    async function runOptionSelling() {
+        const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
+        const payload = {
+            start_date:  document.getElementById('startDate')?.value,
+            end_date:    document.getElementById('endDate')?.value,
+            days,
+            entry_time:  document.getElementById('osEntryTime')?.value || '09:30',
+            exit_time:   document.getElementById('osExitTime')?.value || '10:30',
+            otm_strikes: parseInt(document.getElementById('osOtm')?.value ?? 2),
+            sl_pct:      parseFloat(document.getElementById('osSlPct')?.value || 60),
+            reentry:     document.getElementById('osReentry')?.value !== 'false',
+            lots:        Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
+        };
+        if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
+        const myRun = ++_osRun;
+        resultsArea.style.display = 'none';
+        const osRes = document.getElementById('osResults');
+        if (osRes) osRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader('Running NIFTY Option Selling', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/option-selling', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _osRun) return;
+                data = await (await fetch(`/api/backtest/option-selling/status/${taskId}`)).json();
+                if (myRun !== _osRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Running NIFTY Option Selling',
+                    `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            renderOptionSelling(data);
+        } catch (err) {
+            if (myRun !== _osRun) return;
+            _hideOptLoader();
+            console.error('Option Selling error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderOptionSelling(data) {
+        const s = data.summary || {};
+        const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const stats = document.getElementById('osStats');
+        if (stats) stats.innerHTML = [
+            card('Days Traded', String(s.total_trades || 0), 'ac-blue',
+                 `${s.skipped_days || 0} skipped (no premiums) of ${s.days_scanned || 0}`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green', `${s.wins || 0} W / ${s.losses || 0} L`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `gross ${inr(s.total_gross_pnl_rupees || 0)} · brok ₹${Math.round(s.total_brokerage || 0).toLocaleString('en-IN')}`),
+            card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
+                 `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
+            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red'),
+            card('Stops / Re-entries', `${s.sl_hits || 0} / ${s.reentries || 0}`, 'ac-blue',
+                 `${s.otm_strikes}-OTM · SL ${s.sl_pct}% · ${s.lots}×${s.lot_size}`),
+        ].join('');
+        const prem = v => (v == null ? '—' : Number(v).toFixed(2));
+        const leg = (k, label) => [
+            { key: `${k}_strike`, label: `${label} Strike`, sortable: true, format: v => v ?? '—' },
+            { key: `${k}_entry`, label: `${label} Sold`, sortable: true, format: prem },
+            { key: `${k}_exit`, label: `${label} Exit`, sortable: true, format: prem },
+            { key: `${k}_reentry`, label: `${label} Re-sold`, sortable: true, format: prem },
+            { key: `${k}_pnl`, label: `${label} Pts`, sortable: true, format: prem, tone: DataGrid.sign },
+        ];
+        DataGrid.mountSortable('osGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'date', label: 'Date', sortable: true },
+                { key: 'weekday', label: 'Day', sortable: true },
+                { key: 'spot', label: 'Spot', sortable: true, format: v => (v || 0).toFixed(2) },
+                ...leg('ce', 'CE'), ...leg('pe', 'PE'),
+                { key: 'exit_reason', label: 'Outcome', sortable: true },
+                { key: 'pnl', label: 'Points', sortable: true, format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: s.last_breeze_error
+                ? `No days could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
+                : 'No days could be priced — no option candles for the strikes in this range',
+            defaultSort: { key: 'date', dir: 'desc' },
+        });
+        const osRes = document.getElementById('osResults');
+        if (osRes) osRes.style.display = '';
+        if (s.breeze_errors) window.showNotification(
+            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — those days are missing, not zero`, 'warning');
+        if (s.skipped_days) window.showNotification(
+            `${s.skipped_days} day${s.skipped_days === 1 ? '' : 's'} left out — no ICICI option candles`, 'info');
     }
 
     // ── Weekly CPR Breakout — start + poll ─────────────────────────────

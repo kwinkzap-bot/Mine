@@ -281,7 +281,7 @@ window.MineOrderFlow = (function () {
     const MIN_CELL_W_ONE = 26;              // one
     const MARK_MIN_W = 7, MARK_MIN_H = 5;   // below this a cell is heat only, no boxes
     const HEADER_PX = 9;
-    const STATS_PX = 6.5;
+    const STATS_PX = 8;
     // Every figure the per-bar header can print, in the order it stacks:
     // [field on the bar, settings key]. The header draws the ones switched on.
     const HEADER_LINES = [
@@ -302,7 +302,7 @@ window.MineOrderFlow = (function () {
     // it is — a proportional one opened at a third of the chart for four rows.
     // Set ONCE, when the pane is created: the separator is draggable, and
     // re-applying this on every redraw would pull it back from under the user.
-    const STATS_ROW_PX = 10;
+    const STATS_ROW_PX = 12;
     const statsOpenPx = rows => Math.max(1, rows) * STATS_ROW_PX;
     const STATS_MAX_SHARE = 0.35;           // never more of a short chart than this
     const STATS_GAP_PX = 0.5;                // air between two value boxes, CSS px

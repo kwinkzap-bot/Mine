@@ -34,6 +34,7 @@
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
                 <option value="weekly_cpr_breakout" selected>📐 Weekly CPR Breakout</option>
+                <option value="option_selling">💰 NIFTY Option Selling</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
@@ -689,6 +690,58 @@
                 </div>
             </div>
 
+            <!-- NIFTY Option Selling — short OTM strangle on the current weekly,
+                 each leg stopped on its own, one re-entry at cost. See
+                 Backtest/option_selling_engine.py. -->
+            <div id="optionSellingParamsRow" class="form-row" style="display:none">
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Trading Days</label>
+                    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;">
+                        <label><input type="checkbox" class="osDay" value="0" checked> Mon</label>
+                        <label><input type="checkbox" class="osDay" value="1" checked> Tue</label>
+                        <label><input type="checkbox" class="osDay" value="2"> Wed</label>
+                        <label><input type="checkbox" class="osDay" value="3"> Thu</label>
+                        <label><input type="checkbox" class="osDay" value="4" checked> Fri</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="osEntryTime">Entry Time</label>
+                    <input type="time" id="osEntryTime" value="09:30">
+                </div>
+                <div class="form-group">
+                    <label for="osExitTime" title="No target: whatever is still open is bought back at this time.">Exit Time</label>
+                    <input type="time" id="osExitTime" value="10:30">
+                </div>
+                <div class="form-group">
+                    <label for="osOtm" title="How many strikes (of 50 points) away from the ATM on the entry-time spot each leg is sold. 0 = ATM straddle.">OTM Strikes</label>
+                    <input type="number" id="osOtm" value="2" min="0" max="20" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="osSlPct" title="Each leg's stop is this % above ITS OWN entry premium (60 → 1.6× entry). Legs stop independently.">Stop Loss %</label>
+                    <input type="number" id="osSlPct" value="60" min="1" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="osReentry" title="After a leg's stop is hit, sell it again once if its premium comes back down to the original entry (at cost). The new leg has the same stop % and is not re-entered again.">Re-entry</label>
+                    <select id="osReentry">
+                        <option value="true" selected>Once, at cost</option>
+                        <option value="false">Off</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="osLots" title="Lots per leg, × NIFTY's lot size.">Lots</label>
+                    <input type="number" id="osLots" value="1" min="1" step="1">
+                </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Rule</label>
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        Sell one OTM CE and one OTM PE of the current weekly expiry at Entry Time · no target, buy
+                        back at Exit Time · each leg's stop is Stop&nbsp;Loss&nbsp;% above its own entry ·
+                        a stopped leg is sold again once when its premium falls back to the original entry.
+                        Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; run long ranges after market hours).
+                    </small>
+                </div>
+            </div>
+
             <!-- Swing Momentum params -->
             <!-- Weekly CPR Breakout — the /scanners "W CPR Open" rule traded
                  over every F&O future stock: open inside the weekly CPR, first
@@ -954,6 +1007,14 @@
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
                 </svg>
                 <p>Run backtest to see results</p>
+            </div>
+
+            <!-- NIFTY Option Selling results (own panel — rows are day-level strangles) -->
+            <div id="osResults" style="display:none;">
+                <div class="results-section">
+                    <div class="results-row results-row-6" id="osStats"></div>
+                    <div style="margin-top:8px;"><div id="osGrid"></div></div>
+                </div>
             </div>
 
             <!-- Results area (hidden until run completes) -->

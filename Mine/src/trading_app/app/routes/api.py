@@ -6936,6 +6936,221 @@ def weekly_cpr_breakout_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+# ── NIFTY option selling (short strangle) backtest ───────────────────────────
+# Sell the OTM CE + PE of the current weekly at 09:30, buy back at 10:30, each
+# leg stopped on its own at +sl% with one re-entry at cost. The rule and its
+# fill conventions are Backtest/option_selling_engine.py. Spot (for the strike)
+# is Fyers' 1-minute NIFTY; the premiums are ICICI Breeze's recorded 1-minute
+# candles, one request per contract-day, disk-cached once the day has settled.
+_OS_BROKERAGE_PER_LEG = 100        # ₹ per sold-and-bought-back leg, as _WCB_OPTION_BROKERAGE
+_os_tasks: dict = {}
+_os_tasks_lock = threading.Lock()
+
+
+def _os_hm(value, default):
+    try:
+        h, m = (int(x) for x in str(value).split(':'))
+        if 0 <= h < 24 and 0 <= m < 60:
+            return h, m
+    except ValueError:
+        pass
+    return default
+
+
+@api_bp.route('/backtest/option-selling', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_option_selling_backtest_api():
+    """Start a NIFTY short-strangle backtest; returns {'task_id'} to poll at
+    /backtest/option-selling/status/<task_id>.
+
+    Body: start_date, end_date ('YYYY-MM-DD'); days (list of weekday numbers,
+    Mon=0, default [0, 1, 4]); entry_time (default 09:30) / exit_time (10:30);
+    otm_strikes (strikes away from ATM, default 2); sl_pct (stop above each
+    leg's own entry, default 60); reentry (once, at cost, default true); lots
+    (default 1, × NIFTY's lot size)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    data = request.get_json(silent=True) or {}
+    start_date_str = data.get('start_date')
+    end_date_str = data.get('end_date')
+    try:
+        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+    if end_dt < start_dt:
+        return jsonify({'success': False, 'error': 'end_date is before start_date'}), 400
+
+    from trading_app.Backtest import option_selling_engine as ose
+    days = sorted({int(d) for d in (data.get('days') or ose.DEFAULT_DAYS) if str(d).isdigit() and 0 <= int(d) <= 4})
+    if not days:
+        return jsonify({'success': False, 'error': 'Pick at least one weekday.'}), 400
+    entry_hm = _os_hm(data.get('entry_time', '09:30'), (9, 30))
+    exit_hm = _os_hm(data.get('exit_time', '10:30'), (10, 30))
+    if exit_hm <= entry_hm:
+        return jsonify({'success': False, 'error': 'Exit time must be after entry time.'}), 400
+    try:
+        otm_strikes = min(20, max(0, int(data.get('otm_strikes', 2))))
+        sl_pct = min(500.0, max(1.0, float(data.get('sl_pct', 60))))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'otm_strikes and sl_pct must be numbers'}), 400
+    reentry = str(data.get('reentry', True)).lower() not in ('false', '0', 'no', 'off')
+    lots = max(1, int(data.get('lots', 1) or 1))
+
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    icici = get_icici_adapter()
+    if icici is None:
+        return jsonify({'success': False,
+                        'error': 'Option premiums come from ICICI Direct, which is not logged in '
+                                 '— log in to ICICI first.'}), 503
+    try:
+        lot_size = int(_fno_lot_sizes().get('NIFTY') or 65)
+    except Exception:
+        lot_size = 65
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': 0, 'traded': 0}}
+    with _os_tasks_lock:
+        _os_tasks[task_id] = task
+
+    def _run():
+        import pandas as pd
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+        try:
+            minutes = get_minute_history(fyers, _WCB_INDEX_TOKENS['NIFTY'], 'NIFTY',
+                                         start_date_str, end_date_str,
+                                         provider_tag=_provider_tag(fyers), retain=False)
+            if minutes is None or minutes.empty:
+                raise RuntimeError('No NIFTY 1-minute data from Fyers for this range.')
+            idx = minutes.index
+            if getattr(idx, 'tz', None) is not None:
+                minutes = minutes.copy()
+                minutes.index = idx.tz_localize(None)
+            sessions = sorted({ts.date() for ts in minutes.index.normalize().unique()})
+            wanted = [d for d in sessions
+                      if start_dt.date() <= d <= end_dt.date() and d.weekday() in days]
+            task['progress']['total'] = len(wanted)
+
+            # A contract-day is one Breeze request, but a failing one takes
+            # ~45 s to come back as "Something went wrong" — so days run on a
+            # small pool. The app-wide pacer still caps the request RATE; this
+            # only overlaps the waiting. Newest first: recent contracts are the
+            # ones Breeze still serves.
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            state = {'done': 0, 'skipped': 0, 'stop': False, 'errors': 0, 'last_error': None}
+            lock = threading.Lock()
+
+            def _one(day):
+                if state['stop']:
+                    return day, None
+                entry_ts = pd.Timestamp(datetime(day.year, day.month, day.day, *entry_hm))
+                spot_bars = minutes[(minutes.index >= entry_ts) & (minutes.index.date == day)]
+                expiry = ose.weekly_expiry(day, sessions)
+                if spot_bars.empty or expiry is None:
+                    return day, None
+                spot = float(spot_bars['open'].iloc[0])
+
+                def _bars(exp, strike, right):
+                    raw = icici.historical_option_minutes('NIFTY', exp, strike, right, day)
+                    if not raw:
+                        # Why Breeze came back empty — an outage reads very
+                        # differently from a contract that never traded.
+                        err = icici.last_history_error()
+                        if err:
+                            with lock:
+                                state['errors'] += 1
+                                state['last_error'] = err
+                    return ose._frame(raw)
+
+                res = ose.run_day(day, spot, expiry, _bars, entry_hm=entry_hm, exit_hm=exit_hm,
+                                  otm_strikes=otm_strikes, sl_pct=sl_pct, reentry=reentry)
+                if res is None:
+                    return day, None
+                return day, ose.trade_row(res, lots * lot_size, lots, lot_size,
+                                          _OS_BROKERAGE_PER_LEG, entry_hm, exit_hm)
+
+            rows, streak = [], 0
+            pool = ThreadPoolExecutor(max_workers=6)
+            try:
+                futs = [pool.submit(_one, d) for d in reversed(wanted)]
+                for fut in as_completed(futs):
+                    day, row = fut.result()
+                    with lock:
+                        state['done'] += 1
+                        task['progress']['done'] = state['done']
+                        if row is None:
+                            state['skipped'] += 1
+                            streak += 1
+                        else:
+                            rows.append(row)
+                            streak = 0
+                            task['progress']['traded'] = len(rows)
+                        # Nothing priced after a dozen days in a row: Breeze is
+                        # not serving these contracts (too old, or its history
+                        # endpoint is down). Stop spending requests on it.
+                        if not rows and streak >= 12:
+                            state['stop'] = True
+                            break
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+            if not rows and state['stop']:
+                raise RuntimeError(
+                    'ICICI returned no option candles for the first 12 days tried (newest first)'
+                    + (f" — Breeze said: {state['last_error']}. " if state['last_error'] else '. ')
+                    + 'Its history service may be down or not serving contracts that old; retry later '
+                      'or try a shorter, more recent range.')
+            rows.sort(key=lambda r: r['date'])
+            skipped = state['skipped']
+            task['progress']['done'] = len(wanted)
+
+            summary = ose.summarise(rows)
+            summary.update({'skipped_days': skipped, 'days_scanned': len(wanted),
+                            'breeze_errors': state['errors'], 'last_breeze_error': state['last_error'],
+                            'lots': lots, 'lot_size': lot_size, 'otm_strikes': otm_strikes,
+                            'sl_pct': sl_pct, 'reentry': reentry})
+            logger.info('[OptionSelling] %s..%s: %d days, %d traded, %d skipped',
+                        start_date_str, end_date_str, len(wanted), len(rows), skipped)
+            task['payload'] = {'trades': rows, 'summary': summary}
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[OptionSelling] run failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'os-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
+                    'progress': task['progress']})
+
+
+@api_bp.route('/backtest/option-selling/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def option_selling_status(task_id):
+    """Poll a NIFTY option-selling backtest started by the POST above."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _os_tasks_lock:
+        task = _os_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running',
+                        'progress': task['progress'], 'elapsed': elapsed})
+    with _os_tasks_lock:
+        _os_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 # Find Best Params grid for Weekly CPR Breakout. Only the target changes how a
 # trade plays out, so each stock is replayed once per target with the quality
 # filters off and direction 'both'; the CPR-width, first-hour-range and

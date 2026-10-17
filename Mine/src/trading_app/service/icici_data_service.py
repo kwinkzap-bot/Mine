@@ -1139,7 +1139,8 @@ class IciciDataServiceAdapter:
 
         # Trim the grid overshoot at the left edge back to what was asked for, so
         # aligning the chunks stays invisible to callers.
-        candles = [c for c in candles if fd <= _as_date(c['date']) <= td]
+        candles = [c for c in candles
+                   if (d := _as_date(c['date'])) is not None and fd <= d <= td]
 
         if interval in ('week', 'month'):
             candles = _group_calendar(candles, interval)
@@ -1275,13 +1276,17 @@ class IciciDataServiceAdapter:
             'right': info['right'] or '',
             'strike_price': info['strike_price'] or '',
         }
+        breeze = self.breeze
+        if breeze is None:
+            _HIST_ERROR.msg = "ICICI Breeze session not connected"
+            return []
         _rate_limiter.wait()
         # Tallied per thread so a caller that walks one contract on one thread
         # can read off exactly what that contract cost — the option backtests'
         # request budget charges these, never a cache hit.
         _HIST_ERROR.requests = getattr(_HIST_ERROR, 'requests', 0) + 1
         try:
-            resp = self.breeze.get_historical_data_v2(**kwargs)
+            resp = breeze.get_historical_data_v2(**kwargs)
         except Exception as exc:
             logger.error("[IciciAdapter] history %s [%s-%s] raised: %s",
                          info['symbol'], start, end, exc)

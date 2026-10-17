@@ -39296,8 +39296,26 @@
       "reason": "09:15 candle opened at 22,671 and closed at PDH/R1 22,734-22,758 (22,725) \u2014 a 100-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 23.8 pts (0.105%), 09:15 candle O 22671.3 H 22737.8 L 22637.4 C 22725.1 | Trade by rule: 09:15 candle opened at 22,671 and closed at PDH/R1 22,734-22,758 (22,725) \u2014 a 100-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade"
+    },
+    {
+      "date": "2026-10-16",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Wide",
+      "cpr_direction": "Asc",
+      "first_candle": "Strong big candle red near CPR",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "09:15 candle opened at 23,065 over PDH/R1 and closed under it, 09:20 small red candle -> SELL under it at 22,955, but the daily CPR 22,847-22,947 is only 8 pts under the entry, inside the 43-pt risk \u2014 no room \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 100.3 pts (0.436%), 09:15 candle O 23065.1 H 23076.55 L 22953.65 C 22955.9 | Trade by rule: 09:15 candle opened at 23,065 over PDH/R1 and closed under it, 09:20 small red candle -> SELL under it at 22,955, but the daily CPR 22,847-22,947 is only 8 pts under the entry, inside the 43-pt risk \u2014 no room \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-15 16:18",
+  "extended_at": "2026-10-16 16:29",
   "backfilled_from": "2018-01-01"
 }
