@@ -308,7 +308,9 @@ _historical_cache = HistoricalDataCache(max_size=500, default_ttl=300)
 class KiteService:
     """Optimized KiteConnect service with memory-efficient instrument caching."""
     
-    def __init__(self, kite_instance: Optional[KiteConnect] = None):
+    # Not only a KiteConnect: the data-provider adapters (Fyers, ICICI) are
+    # passed here too and duck-type the Kite read calls.
+    def __init__(self, kite_instance: Optional[Any] = None):
         self.kite: KiteConnect = kite_instance or self._create_kite_instance()
         if kite_instance is not None:
             apply_kite_proxy(self.kite)

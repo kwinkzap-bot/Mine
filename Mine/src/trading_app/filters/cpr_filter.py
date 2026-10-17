@@ -1465,6 +1465,8 @@ class CPRFilterService:
                 batch = option_keys[i:i + batch_size]
                 self._rate_limit()
                 try:
+                    if self.kite is None:
+                        raise RuntimeError('no data provider')
                     ltp_data = self.kite.ltp(batch)
                     for key, val in ltp_data.items():  # type: ignore
                         ts = str(key).replace('NFO:', '')

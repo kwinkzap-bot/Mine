@@ -33,7 +33,8 @@
                 <option value="ema_pullback">📉 EMA Confluence Breakout</option>
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
-                <option value="weekly_cpr_breakout" selected>📐 Weekly CPR Breakout</option>
+                <option value="st_bb_rsi" selected>🚀 ST + BB + RSI + R1</option>
+                <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -386,6 +387,73 @@
                 <div class="form-group form-check-group">
                     <input type="checkbox" id="pcGoldenCross">
                     <label for="pcGoldenCross" title="Additionally require the 20 EMA to be above (buy) / below (sell) the 200 EMA on the same timeframe — his golden-cross / death-cross bias.">20/200 Cross</label>
+                </div>
+            </div>
+
+            <!-- SuperTrend(10,3) + BB(20,2) + RSI>70 + close>R1, long only, bought as the
+                 ≈premium CE; no SL/Target, exits when SuperTrend breaks down.
+                 See src/trading_app/Backtest/st_bb_rsi_engine.py. -->
+            <div id="stBbRsiParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="sbrPremium">CE Premium ≈</label>
+                    <select id="sbrPremium" title="The call strike whose premium at the entry minute was nearest this. Needs an ICICI login (expired contracts).">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="sbrPriceOptions">Price on options</label>
+                    <input type="checkbox" id="sbrPriceOptions" checked title="Off = instant run in INDEX points (no Breeze). On = re-price every trade on the CE, which reads option candles and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="sbrGreen">Green candle only</label>
+                    <input type="checkbox" id="sbrGreen" title="The signal candle must close above its open.">
+                </div>
+                <div class="form-group">
+                    <label for="sbrRsi">RSI above</label>
+                    <input type="number" id="sbrRsi" value="70" min="50" max="95" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrRsiLen">RSI Length</label>
+                    <input type="number" id="sbrRsiLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrStLen">SuperTrend Length</label>
+                    <input type="number" id="sbrStLen" value="10" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrStFactor">SuperTrend Factor</label>
+                    <input type="number" id="sbrStFactor" value="2" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrBbLen">BB Length</label>
+                    <input type="number" id="sbrBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrBbMult">BB Mult</label>
+                    <input type="number" id="sbrBbMult" value="2" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrBbOffset">BB Offset</label>
+                    <input type="number" id="sbrBbOffset" value="0" min="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrEntryStart">Entry From</label>
+                    <input type="time" id="sbrEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="sbrEntryEnd">Entry Until</label>
+                    <input type="time" id="sbrEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="sbrExitCutoff">Square-off</label>
+                    <input type="time" id="sbrExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="sbrMaxTrades">Max Trades / Day</label>
+                    <input type="number" id="sbrMaxTrades" value="1" min="1" max="10" step="1">
                 </div>
             </div>
 
@@ -979,6 +1047,19 @@
                 </div>
                 <div class="opt-table-wrap">
                     <div id="wcbOptGrid"></div>
+                </div>
+            </div>
+
+            <div id="optionSellingOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">💰 NIFTY Option Selling Best Params</h4>
+                        <button id="osRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="osOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="osOptGrid"></div>
                 </div>
             </div>
 

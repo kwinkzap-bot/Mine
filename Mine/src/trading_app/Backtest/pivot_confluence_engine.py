@@ -81,6 +81,7 @@ VWAP into a cumulative average of the session's typical price — the same serie
 TradingView shows on a spot index chart.
 """
 
+from typing import Optional
 import numpy as np
 import pandas as pd
 import logging
@@ -139,7 +140,7 @@ class PivotConfluenceEngine:
         sl_mode: str = 'candle',
         sl_points: float = 0.0,
         max_sl_points: float = 0.0,
-        trail_points: float = None,
+        trail_points: Optional[float] = None,
         entry_windows: str = 'both',
         entry_start: str = '09:30',
         morning_end: str = '09:45',
@@ -728,7 +729,7 @@ def _opt_score(s: dict) -> float:
 
 def optimise_pivot_confluence(df, exit_cutoff: str = '15:15',
                               max_trades_per_day: int = 2,
-                              trail_points: float = None,
+                              trail_points: Optional[float] = None,
                               max_sl_points: float = 0.0,
                               min_trades: int = 5) -> list:
     """

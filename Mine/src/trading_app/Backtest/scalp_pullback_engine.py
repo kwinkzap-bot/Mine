@@ -62,6 +62,7 @@ Deliberately NOT implemented (the video mentions them, the engine cannot):
     P&L is in spot points; the UI converts to rupees via the lot value.
 """
 
+from typing import Optional
 import numpy as np
 import pandas as pd
 import logging
@@ -108,7 +109,7 @@ class ScalpPullbackEngine:
         ema_slow: int = 20,
         touch_level: str = 'ema20',
         rr_ratio: float = 2.0,
-        trail_points: float = None,
+        trail_points: Optional[float] = None,
         max_sl_points: float = 30.0,
         max_trades_per_day: int = 3,
         entry_cutoff: str = '11:30',
@@ -751,7 +752,7 @@ def _opt_score(s: dict) -> float:
 
 
 def optimise_scalp_pullback(df, exit_cutoff: str = '15:15',
-                            max_trades_per_day: int = 3, trail_points: float = None,
+                            max_trades_per_day: int = 3, trail_points: Optional[float] = None,
                             min_trades: int = 5) -> list:
     """
     Sweep (SL:Target x EMA touch x direction x SL-hunt x entry cut-off x max SL).

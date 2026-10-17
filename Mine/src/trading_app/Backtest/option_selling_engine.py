@@ -63,43 +63,41 @@ def simulate_leg(bars: pd.DataFrame, entry_ts: pd.Timestamp, exit_ts: pd.Timesta
     """One short leg through its session. None when it never had an entry.
 
     Returns {'fills': [{'entry', 'exit', 'entry_time', 'exit_time', 'reason'}],
-    'pnl' (points, short), 'stops', 'reentered'}.
-    """
-    window = bars[(bars.index >= entry_ts) & (bars.index < exit_ts)]
-    if window.empty or window.index[0] - entry_ts > MAX_ENTRY_LAG:
+    'pnl' (points, short), 'stops', 'reentered'}. Walks numpy arrays — the
+    best-params sweep calls this tens of thousands of times."""
+    idx = bars.index
+    lo = int(idx.searchsorted(entry_ts, side='left'))
+    hi = int(idx.searchsorted(exit_ts, side='left'))
+    if hi <= lo or idx[lo] - entry_ts > MAX_ENTRY_LAG:
         return None
+    op = bars['open'].to_numpy()
+    hg = bars['high'].to_numpy()
+    lw = bars['low'].to_numpy()
+    cl = bars['close'].to_numpy()
     mult = 1.0 + sl_pct / 100.0
 
     # The time-exit price: the exit minute's open, else the last print before.
-    if exit_ts in bars.index:
-        time_exit = float(bars.at[exit_ts, 'open'])
-    else:
-        before = bars[bars.index < exit_ts]
-        time_exit = float(before['close'].iloc[-1])
+    time_exit = float(op[hi]) if hi < len(idx) and idx[hi] == exit_ts else float(cl[hi - 1])
 
-    def walk(start_pos: int, entry_price: float, entry_time) -> Dict:
-        """Sell at `entry_price` and follow it from bar `start_pos` on."""
+    def walk(start: int, entry_price: float) -> Dict:
+        """Sell at `entry_price` and follow it from bar `start` on."""
         sl = entry_price * mult
-        for pos in range(start_pos, len(window)):
-            row = window.iloc[pos]
-            if row['high'] >= sl:
-                return {'entry': entry_price, 'entry_time': entry_time,
-                        'exit': max(sl, float(row['open'])),     # a gap fills at the open
-                        'exit_time': window.index[pos], 'reason': 'SL hit', 'pos': pos}
-        return {'entry': entry_price, 'entry_time': entry_time, 'exit': time_exit,
+        for pos in range(start, hi):
+            if hg[pos] >= sl:
+                return {'entry': entry_price, 'entry_time': idx[start],
+                        'exit': max(sl, float(op[pos])),          # a gap fills at the open
+                        'exit_time': idx[pos], 'reason': 'SL hit', 'pos': pos}
+        return {'entry': entry_price, 'entry_time': idx[start], 'exit': time_exit,
                 'exit_time': exit_ts, 'reason': 'Time exit', 'pos': None}
 
-    first_entry = float(window.iloc[0]['open'])
-    first = walk(0, first_entry, window.index[0])
+    first_entry = float(op[lo])
+    first = walk(lo, first_entry)
     fills = [first]
     if reentry and first['reason'] == 'SL hit':
         # Back down to cost, strictly after the bar that stopped it.
-        for pos in range(first['pos'] + 1, len(window)):
-            row = window.iloc[pos]
-            if row['low'] <= first_entry:
-                fill = min(float(row['open']), first_entry)
-                second = walk(pos, fill, window.index[pos])
-                fills.append(second)
+        for pos in range(first['pos'] + 1, hi):
+            if lw[pos] <= first_entry:
+                fills.append(walk(pos, min(float(op[pos]), first_entry)))
                 break
     for f in fills:
         f.pop('pos', None)
@@ -226,3 +224,54 @@ def summarise(rows: List[Dict]) -> Dict:
         'reentries': sum(r['reentries'] for r in rows),
         'one_leg_days': sum(1 for r in rows if not r['complete']),
     }
+
+
+# ── Find Best Params ─────────────────────────────────────────────────────────
+OPT_OTM = (0, 1, 2, 3, 4)
+OPT_SL = (30, 40, 50, 60, 80, 100)
+OPT_REENTRY = (True, False)
+OPT_EXITS = ((10, 0), (10, 30), (11, 0), (12, 0), (15, 15))
+MAX_OPT_OTM = max(OPT_OTM)
+
+
+def sweep(sessions: List[Dict], lots: int, lot_size: int, entry_hm=(9, 30),
+          brokerage_per_leg: float = 100.0, min_trades: int = 10,
+          otm_grid=OPT_OTM, sl_grid=OPT_SL, reentry_grid=OPT_REENTRY,
+          exit_grid=OPT_EXITS) -> List[Dict]:
+    """Score every combination on already-fetched sessions.
+
+    `sessions`: [{'day', 'spot', 'expiry', 'bars': {(strike, right): frame}}].
+    Nothing here touches a broker — premiums were bought once, up front, and
+    every combo (strike distance, stop %, re-entry, exit time) is a replay of
+    them. Ranked by net ₹."""
+    out: List[Dict] = []
+    for otm in otm_grid:
+        for sl in sl_grid:
+            for re in reentry_grid:
+                for exit_hm in exit_grid:
+                    rows = []
+                    for sess in sessions:
+                        bars = sess['bars']
+                        res = run_day(sess['day'], sess['spot'], sess['expiry'],
+                                      lambda e, k, r, _b=bars: _b.get((k, r)),
+                                      entry_hm=entry_hm, exit_hm=exit_hm, otm_strikes=otm,
+                                      sl_pct=float(sl), reentry=re)
+                        if res is not None:
+                            rows.append(trade_row(res, lots * lot_size, lots, lot_size,
+                                                  brokerage_per_leg, entry_hm, exit_hm))
+                    if len(rows) < min_trades:
+                        continue
+                    s = summarise(rows)
+                    out.append({
+                        'otm_strikes': otm, 'sl_pct': sl, 'reentry': re,
+                        'exit_time': f'{exit_hm[0]:02d}:{exit_hm[1]:02d}',
+                        'total_trades': s['total_trades'], 'win_rate': s['win_rate'],
+                        'gross_pnl_rupees': s['total_gross_pnl_rupees'],
+                        'net_pnl_rupees': s['total_pnl_rupees'],
+                        'avg_pnl_rupees': round(s['total_pnl_rupees'] / s['total_trades'], 2),
+                        'profit_factor': s['profit_factor'],
+                        'max_drawdown_rupees': s['max_drawdown_rupees'],
+                        'sl_hits': s['sl_hits'], 'reentries': s['reentries'],
+                    })
+    out.sort(key=lambda r: r['net_pnl_rupees'], reverse=True)
+    return out

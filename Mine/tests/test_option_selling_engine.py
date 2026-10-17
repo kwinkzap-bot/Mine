@@ -115,3 +115,23 @@ def test_strikes_and_day_rows():
 
 def test_run_day_none_without_bars():
     assert run_day(date(2026, 10, 16), 25000, date(2026, 10, 20), lambda *a: None) is None
+
+
+def test_sweep_ranks_combos_on_preloaded_bars():
+    from trading_app.Backtest.option_selling_engine import sweep
+    exp = date(2026, 10, 20)
+    sessions = []
+    for d in range(5, 10):
+        day = date(2026, 10, d)
+        stamp = f'2026-10-{d:02d}'
+        idx = pd.date_range(f'{stamp} 09:30', f'{stamp} 15:20', freq='min')
+        mk = lambda p: pd.DataFrame({'open': p, 'high': p, 'low': p, 'close': p}, index=idx)
+        sessions.append({'day': day, 'spot': 25000, 'expiry': exp,
+                         'bars': {(25000 + 50 * k, 'CE'): mk(40.0) for k in range(0, 5)}
+                                 | {(25000 - 50 * k, 'PE'): mk(40.0) for k in range(0, 5)}})
+    res = sweep(sessions, lots=1, lot_size=65, min_trades=3,
+                otm_grid=(0, 2), sl_grid=(60,), reentry_grid=(True,), exit_grid=((10, 30),))
+    assert len(res) == 2 and all(r['total_trades'] == 5 for r in res)
+    # flat premium: no stops, zero points, only brokerage (2 legs × ₹100 × 5 days)
+    assert res[0]['gross_pnl_rupees'] == 0 and res[0]['net_pnl_rupees'] == -1000
+    assert sweep(sessions, 1, 65, min_trades=99) == []

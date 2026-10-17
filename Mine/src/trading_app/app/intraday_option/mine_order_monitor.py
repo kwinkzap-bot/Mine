@@ -92,7 +92,7 @@ def _fetch_ltp(order: dict):
         if not opt_sym:
             return None
 
-        if is_fyers:
+        if is_fyers and data_provider:
             ltp_data = data_provider.ltp([opt_sym])
             return float(ltp_data.get(opt_sym, {}).get('last_price', 0) or 0)
         else:

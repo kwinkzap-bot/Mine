@@ -299,7 +299,7 @@ def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol
 # ── Future-token cache: symbol → (token, tradingsymbol, expires_ts) ──────────
 # Eliminates repeated get_future_symbol/find_future_symbol + get_instrument_token
 # calls within the same expiry day (used by the OI-profile future-volume overlay).
-_future_token_cache: Dict[str, Any] = {}
+_future_token_cache: Dict[Any, Any] = {}
 _future_token_cache_lock = threading.Lock()
 
 def _get_cached_future_token(kite_service, data_provider, is_fyers: bool, symbol: str):
@@ -1046,13 +1046,15 @@ def get_option_ltp() -> EndpointResponse:
         if not opt_sym:
             return jsonify({'success': False, 'error': f'Option symbol not found for {symbol} {strike} {option_type}'}), 404
 
-        if is_fyers:
+        if is_fyers and data_provider:
             ltp_data = data_provider.ltp([opt_sym])
             ltp = float(ltp_data.get(opt_sym, {}).get('last_price', 0) or 0)
-        else:
+        elif effective is not None:
             instrument_key = f'NFO:{opt_sym}'
             ltp_data = effective.ltp([instrument_key])
             ltp = float(ltp_data.get(instrument_key, {}).get('last_price', 0) or 0)
+        else:
+            return jsonify({'success': False, 'error': 'Data provider not connected'}), 401
 
         return jsonify({'success': True, 'opt_symbol': opt_sym, 'ltp': ltp})
     except Exception as e:
@@ -1155,7 +1157,7 @@ def get_index_cpr_levels(provider, index_name="NIFTY"):
             dti = pd.DatetimeIndex(df.index)
 
             # Daily CPR
-            last_idx = -2 if dti[-1].date() == now.date() else -1
+            last_idx = -2 if dti[-1].date() == now.date() else -1  # pyright: ignore[reportAttributeAccessIssue]
             if len(df) >= abs(last_idx):
                 day_row = df.iloc[last_idx]
                 daily_cpr = calculate_cpr_from_ohlc(day_row['high'], day_row['low'], day_row['close'])
@@ -1164,17 +1166,17 @@ def get_index_cpr_levels(provider, index_name="NIFTY"):
             current_week_start = now - timedelta(days=now.weekday())
             prev_week_start = current_week_start - timedelta(days=7)
             prev_week_end = prev_week_start + timedelta(days=4)
-            week_df = df[(dti.date >= prev_week_start.date()) & (dti.date <= prev_week_end.date())]
+            week_df = df[(dti.date >= prev_week_start.date()) & (dti.date <= prev_week_end.date())]  # pyright: ignore[reportAttributeAccessIssue]
             if not week_df.empty:
-                weekly_cpr = calculate_cpr_from_ohlc(week_df['high'].max(), week_df['low'].min(), week_df['close'].iloc[-1])
+                weekly_cpr = calculate_cpr_from_ohlc(week_df['high'].max(), week_df['low'].min(), week_df['close'].iloc[-1])  # pyright: ignore[reportAttributeAccessIssue]
 
             # Monthly CPR
             first_current = now.replace(day=1)
             last_prev = first_current - timedelta(days=1)
             first_prev = last_prev.replace(day=1)
-            month_df = df[(dti.date >= first_prev.date()) & (dti.date <= last_prev.date())]
+            month_df = df[(dti.date >= first_prev.date()) & (dti.date <= last_prev.date())]  # pyright: ignore[reportAttributeAccessIssue]
             if not month_df.empty:
-                monthly_cpr = calculate_cpr_from_ohlc(month_df['high'].max(), month_df['low'].min(), month_df['close'].iloc[-1])
+                monthly_cpr = calculate_cpr_from_ohlc(month_df['high'].max(), month_df['low'].min(), month_df['close'].iloc[-1])  # pyright: ignore[reportAttributeAccessIssue]
 
             # 6-Month CPR
             year = now.year
@@ -1185,16 +1187,16 @@ def get_index_cpr_levels(provider, index_name="NIFTY"):
             else:
                 half_start = datetime(year, 1, 1)
                 half_end = datetime(year, 6, 30)
-            half_df = df[(dti.date >= half_start.date()) & (dti.date <= half_end.date())]
+            half_df = df[(dti.date >= half_start.date()) & (dti.date <= half_end.date())]  # pyright: ignore[reportAttributeAccessIssue]
             if not half_df.empty:
-                half_yearly_cpr = calculate_cpr_from_ohlc(half_df['high'].max(), half_df['low'].min(), half_df['close'].iloc[-1])
+                half_yearly_cpr = calculate_cpr_from_ohlc(half_df['high'].max(), half_df['low'].min(), half_df['close'].iloc[-1])  # pyright: ignore[reportAttributeAccessIssue]
 
             # Yearly CPR
             year_start = datetime(now.year - 1, 1, 1)
             year_end = datetime(now.year - 1, 12, 31)
-            year_df = df[(dti.date >= year_start.date()) & (dti.date <= year_end.date())]
+            year_df = df[(dti.date >= year_start.date()) & (dti.date <= year_end.date())]  # pyright: ignore[reportAttributeAccessIssue]
             if not year_df.empty:
-                yearly_cpr = calculate_cpr_from_ohlc(year_df['high'].max(), year_df['low'].min(), year_df['close'].iloc[-1])
+                yearly_cpr = calculate_cpr_from_ohlc(year_df['high'].max(), year_df['low'].min(), year_df['close'].iloc[-1])  # pyright: ignore[reportAttributeAccessIssue]
                 
         levels = {
             'Hourly': hourly_cpr,
@@ -3580,7 +3582,7 @@ def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_dat
         close=('close', 'last'),
         volume=('volume', 'sum'),
     )
-    resampled = resampled.dropna(subset=['open', 'close'])
+    resampled = resampled.dropna(subset=['open', 'close'])  # pyright: ignore[reportCallIssue]
     resampled.index.name = 'date'
     resampled = resampled.reset_index()
 
@@ -5032,6 +5034,193 @@ def run_pivot_confluence_backtest_api():
 
     except Exception as e:
         logger.error(f"Error in Pivot Confluence backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+_sbr_tasks: dict = {}
+_sbr_tasks_lock = threading.Lock()
+
+
+@api_bp.route('/backtest/st-bb-rsi/status/<task_id>', methods=['GET'])
+@require_user_auth
+def st_bb_rsi_status(task_id):
+    """Poll the option-pricing stage of a /backtest/st-bb-rsi run."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _sbr_tasks_lock:
+        task = _sbr_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running',
+                        'progress': task['progress'], 'elapsed': elapsed})
+    with _sbr_tasks_lock:
+        _sbr_tasks.pop(task_id, None)
+    return jsonify({'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
+@api_bp.route('/backtest/st-bb-rsi', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_st_bb_rsi_backtest_api():
+    """SuperTrend(10,3) + BB(20,2) + RSI(14) > 70 + close above R1, long only.
+
+    Bought as the ≈250-premium CALL; no target, no stop — the one exit is the
+    SuperTrend breaking down. See Backtest/st_bb_rsi_engine.py.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json() or {}
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '5minute')
+        premium        = float(data.get('premium', 250) or 250)
+        price_options  = bool(data.get('price_options', True))
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        symbol = str(symbol).strip().upper()
+        # The shared Symbol box carries over whatever the previous strategy left
+        # in it (Weekly CPR Breakout parks 'ALL STOCKS' there) — never trade that.
+        if symbol not in ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'):
+            return jsonify({'success': False,
+                            'error': f"'{symbol}' is not an index this backtest can buy options on; "
+                                     "pick NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY or SENSEX."}), 400
+
+        # Fyers, not the BACKTEST_DATA_PROVIDER default (ICICI): Breeze's index
+        # candles carry stray wicks and junk closing bars, which moved a pivot by
+        # 30 points and dropped a valid signal. Fyers' history is what the chart
+        # (TradingView, NSE) shows. Same reason the Weekly CPR backtest is on Fyers.
+        current_kite = get_fyers_adapter()
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+        import pandas as pd
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+        from trading_app.Backtest.st_bb_rsi_engine import (
+            StBbRsiEngine, attach_option_legs, summarise)
+
+        # Minutes come from the local store, not a fresh provider pull. A closed
+        # session is fetched once and kept: Fyers' live 1-minute feed has served
+        # junk in the last minutes of recent sessions (12 Oct 15:20-15:28 carried
+        # a 22,696 high against the day's real 22,651), and that moved the next
+        # day's R1 by 30 points and dropped a valid 14:15 signal. Indicators also
+        # need a run-in, as they have on a chart, so 45 days before the start are
+        # read and only trades on/after the start are kept.
+        warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
+        minutes = get_minute_history(current_kite, instrument_token, symbol, warm_from,
+                                     end_date_str, provider_tag=_provider_tag(current_kite))
+        if minutes is None or minutes.empty:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+        # Closing-minute junk (see above) that the store's tail refresh can still
+        # pull in for the newest sessions: a bar after 15:15 spanning >0.3 % is
+        # not a real 1-minute NIFTY bar.
+        late = (minutes.index.hour * 60 + minutes.index.minute) >= 15 * 60 + 15
+        junk = late & ((minutes['high'] - minutes['low']) > 0.003 * minutes['close'])
+        n_junk = int(junk.sum())
+        if n_junk:
+            minutes = minutes[~junk]
+        mins = {'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3, '5minute': 5,
+                '10minute': 10, '15minute': 15, '30minute': 30, '60minute': 60}.get(interval, 5)
+        anchor = pd.Timedelta(hours=9, minutes=15)
+        key = (minutes.index - anchor).floor(f'{mins}min') + anchor
+        bars = minutes.groupby(key).agg(open=('open', 'first'), high=('high', 'max'),
+                                        low=('low', 'min'), close=('close', 'last'),
+                                        volume=('volume', 'sum')).dropna(subset=['open', 'close'])
+        bars.index.name = 'date'
+        candles_df = bars.reset_index()
+        candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
+        n_bars = int((bars.index >= pd.Timestamp(start_date_str)).sum())
+
+        engine = StBbRsiEngine(
+            df=candles_df,
+            rsi_period=int(data.get('rsi_period', 14) or 14),
+            rsi_level=float(data.get('rsi_level', 70) or 70),
+            st_period=int(data.get('st_period', 10) or 10),
+            st_mult=float(data.get('st_mult', 2) or 2),
+            bb_period=int(data.get('bb_period', 20) or 20),
+            bb_mult=float(data.get('bb_mult', 2) or 2),
+            bb_offset=int(data.get('bb_offset', 0) or 0),
+            entry_start=data.get('entry_start', '09:15'),
+            entry_end=data.get('entry_end', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(data.get('max_trades_per_day', 1) or 1),
+            require_green=bool(data.get('require_green', False)),
+        )
+        trades, summary = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
+        summary = summarise(trades)
+        ran = {
+            'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
+            'start_date': start_date_str, 'end_date': end_date_str,
+            'bars': n_bars, 'junk_bars_dropped': n_junk, 'first_bar': str(candles[0]['date']),
+            'last_bar': str(candles[-1]['date']),
+            'params': dict(rsi_period=engine.rsi_period, rsi_level=engine.rsi_level,
+                           st=[engine.st_period, engine.st_mult],
+                           bb=[engine.bb_period, engine.bb_mult, engine.bb_offset],
+                           entry=[data.get('entry_start', '09:15'), data.get('entry_end', '15:14')],
+                           exit_cutoff=data.get('exit_cutoff', '15:14'),
+                           max_trades_per_day=engine.max_trades_per_day,
+                           require_green=engine.require_green,
+                           premium=premium, price_options=price_options),
+            'index_signals': len(trades),
+        }
+
+        def _payload(priced_trades, option_info, warning):
+            summ = summarise(priced_trades)
+            summ['pnl_basis'] = 'option' if option_info else 'index'
+            return {
+                'success': True, 'trades': priced_trades, 'option': option_info,
+                'warning': warning, 'ran': ran,
+                'summary': {**{k: summ[k] for k in (
+                    'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
+                    'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
+                    'pnl_basis': summ['pnl_basis']},
+            }
+
+        logger.info('[ST-BB-RSI BT] %s %s %s→%s  %d bars  %d signals  options=%s',
+                    symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
+        if not (price_options and trades):
+            return jsonify(_payload(trades, None, None))
+
+        # Pricing is one Breeze request per strike probe, paced app-wide: years of
+        # trades are minutes cold, so it runs in the background and the page polls.
+        minutes_per_bar = int(''.join(ch for ch in interval if ch.isdigit()) or 5)
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': len(trades)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                priced, info = attach_option_legs(symbol, trades, premium, minutes_per_bar, _progress)
+                warn = None
+                if info['unpriced'] or info['truncated']:
+                    warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
+                            f"candles and {info['truncated']} older ones were not priced; "
+                            f"they are left out of the totals.")
+                task['payload'] = _payload(priced, info, warn)
+                task['status'] = 'complete'
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[ST-BB-RSI BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, None, f'Option premiums unavailable ({e}); showing INDEX points.')
+                task['status'] = 'complete'
+
+        threading.Thread(target=_run, name=f'sbr-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
+    except Exception as e:
+        logger.error(f"Error in ST-BB-RSI backtest API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -6634,7 +6823,7 @@ def _wcb_token(symbol: str) -> str:
     return _WCB_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ')
 
 
-def _wcb_universe(single: str, lot_sizes: dict):
+def _wcb_universe(single: str, lot_sizes: dict) -> Tuple[Optional[List[str]], Optional[str]]:
     """(symbols, error). '' = every F&O future stock (indices are picked one
     at a time); otherwise that one stock or index."""
     stocks = sorted(s for s in lot_sizes if s not in _WCB_INDEX_TOKENS)
@@ -6674,8 +6863,8 @@ def run_weekly_cpr_breakout_backtest_api():
     if auth_error:
         return auth_error
     data = request.get_json(silent=True) or {}
-    start_date_str = data.get('start_date')
-    end_date_str = data.get('end_date')
+    start_date_str = str(data.get('start_date') or '')
+    end_date_str = str(data.get('end_date') or '')
     try:
         start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
         datetime.strptime(end_date_str, '%Y-%m-%d')
@@ -6731,7 +6920,7 @@ def run_weekly_cpr_breakout_backtest_api():
     except FileNotFoundError as e:
         return jsonify({'success': False, 'error': str(e)}), 404
     universe, err = _wcb_universe(single, lot_sizes)
-    if err:
+    if err or universe is None:
         return jsonify({'success': False, 'error': err}), 400
 
     basis = 'futures' if str(data.get('basis', 'option')).lower() == 'futures' else 'option'
@@ -6787,8 +6976,8 @@ def run_weekly_cpr_breakout_backtest_api():
                                       end_date=end_dt)
             if daily is None or daily.empty:
                 return symbol, None
-            daily = daily[['open', 'high', 'low', 'close']].astype(float)
-            daily.index = pd.to_datetime(daily.index).normalize()
+            daily = pd.DataFrame(daily[['open', 'high', 'low', 'close']].astype(float))
+            daily.index = pd.DatetimeIndex(pd.to_datetime(daily.index)).normalize()  # pyright: ignore[reportAttributeAccessIssue]
             # retain=False: 200-odd files of whole history would otherwise
             # stay in this (live trading) process's memory after the run.
             minutes = get_minute_history(fyers, token, symbol, start_date_str, end_date_str,
@@ -6947,7 +7136,7 @@ _os_tasks: dict = {}
 _os_tasks_lock = threading.Lock()
 
 
-def _os_hm(value, default):
+def _os_hm(value, default: Tuple[int, int]) -> Tuple[int, int]:
     try:
         h, m = (int(x) for x in str(value).split(':'))
         if 0 <= h < 24 and 0 <= m < 60:
@@ -6973,8 +7162,8 @@ def run_option_selling_backtest_api():
     if auth_error:
         return auth_error
     data = request.get_json(silent=True) or {}
-    start_date_str = data.get('start_date')
-    end_date_str = data.get('end_date')
+    start_date_str = str(data.get('start_date') or '')
+    end_date_str = str(data.get('end_date') or '')
     try:
         start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
@@ -7028,11 +7217,12 @@ def run_option_selling_backtest_api():
                                          provider_tag=_provider_tag(fyers), retain=False)
             if minutes is None or minutes.empty:
                 raise RuntimeError('No NIFTY 1-minute data from Fyers for this range.')
-            idx = minutes.index
-            if getattr(idx, 'tz', None) is not None:
+            idx = pd.DatetimeIndex(minutes.index)
+            if idx.tz is not None:
                 minutes = minutes.copy()
                 minutes.index = idx.tz_localize(None)
-            sessions = sorted({ts.date() for ts in minutes.index.normalize().unique()})
+                idx = pd.DatetimeIndex(minutes.index)
+            sessions = sorted({ts.date() for ts in idx.normalize().unique()})  # pyright: ignore[reportAttributeAccessIssue]
             wanted = [d for d in sessions
                       if start_dt.date() <= d <= end_dt.date() and d.weekday() in days]
             task['progress']['total'] = len(wanted)
@@ -7050,11 +7240,11 @@ def run_option_selling_backtest_api():
                 if state['stop']:
                     return day, None
                 entry_ts = pd.Timestamp(datetime(day.year, day.month, day.day, *entry_hm))
-                spot_bars = minutes[(minutes.index >= entry_ts) & (minutes.index.date == day)]
+                spot_bars = minutes[(idx >= entry_ts) & (idx.date == day)]  # pyright: ignore[reportAttributeAccessIssue]
                 expiry = ose.weekly_expiry(day, sessions)
                 if spot_bars.empty or expiry is None:
                     return day, None
-                spot = float(spot_bars['open'].iloc[0])
+                spot = float(spot_bars['open'].iloc[0])  # pyright: ignore[reportAttributeAccessIssue]
 
                 def _bars(exp, strike, right):
                     raw = icici.historical_option_minutes('NIFTY', exp, strike, right, day)
@@ -7076,7 +7266,9 @@ def run_option_selling_backtest_api():
                                           _OS_BROKERAGE_PER_LEG, entry_hm, exit_hm)
 
             rows, streak = [], 0
-            pool = ThreadPoolExecutor(max_workers=6)
+            # 3, not more: the Breeze v2 history endpoint is reported to error
+            # under heavier concurrency (breeze-historical-options advises 1-3).
+            pool = ThreadPoolExecutor(max_workers=3)
             try:
                 futs = [pool.submit(_one, d) for d in reversed(wanted)]
                 for fut in as_completed(futs):
@@ -7151,6 +7343,165 @@ def option_selling_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+@api_bp.route('/backtest/option-selling/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_option_selling_optimise_api():
+    """Find Best Params for the NIFTY short strangle; returns {'task_id'} to
+    poll at /backtest/option-selling/optimise/status/<task_id>.
+
+    Sweeps OTM strikes × stop % × re-entry × exit time
+    (option_selling_engine.sweep) on the days, entry time and lots the page
+    has set. The premiums of ATM..ATM±4 strikes are fetched once per day
+    (cached on disk once settled) and every combo is a replay of them, so a
+    range costs up to 10 Breeze requests a day on a cold cache — keep it to a
+    few months and run it after market hours."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    data = request.get_json(silent=True) or {}
+    try:
+        start_dt = datetime.strptime(data.get('start_date'), '%Y-%m-%d')
+        end_dt = datetime.strptime(data.get('end_date'), '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+    if end_dt < start_dt:
+        return jsonify({'success': False, 'error': 'end_date is before start_date'}), 400
+    from trading_app.Backtest import option_selling_engine as ose
+    days = sorted({int(d) for d in (data.get('days') or ose.DEFAULT_DAYS) if str(d).isdigit() and 0 <= int(d) <= 4})
+    if not days:
+        return jsonify({'success': False, 'error': 'Pick at least one weekday.'}), 400
+    entry_hm = _os_hm(data.get('entry_time', '09:30'), (9, 30))
+    lots = max(1, int(data.get('lots', 1) or 1))
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    icici = get_icici_adapter()
+    if icici is None:
+        return jsonify({'success': False,
+                        'error': 'Option premiums come from ICICI Direct, which is not logged in '
+                                 '— log in to ICICI first.'}), 503
+    try:
+        lot_size = int(_fno_lot_sizes().get('NIFTY') or 65)
+    except Exception:
+        lot_size = 65
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': 0, 'traded': 0}}
+    with _os_tasks_lock:
+        _os_tasks[task_id] = task
+
+    def _run():
+        import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+        try:
+            minutes = get_minute_history(fyers, _WCB_INDEX_TOKENS['NIFTY'], 'NIFTY',
+                                         data['start_date'], data['end_date'],
+                                         provider_tag=_provider_tag(fyers), retain=False)
+            if minutes is None or minutes.empty:
+                raise RuntimeError('No NIFTY 1-minute data from Fyers for this range.')
+            if getattr(minutes.index, 'tz', None) is not None:
+                minutes = minutes.copy()
+                minutes.index = minutes.index.tz_localize(None)
+            all_days = sorted({ts.date() for ts in minutes.index.normalize().unique()})
+            wanted = [d for d in all_days
+                      if start_dt.date() <= d <= end_dt.date() and d.weekday() in days]
+            task['progress']['total'] = len(wanted)
+            state = {'done': 0, 'stop': False, 'errors': 0, 'last_error': None}
+            lock = threading.Lock()
+
+            def _one(day):
+                if state['stop']:
+                    return None
+                entry_ts = pd.Timestamp(datetime(day.year, day.month, day.day, *entry_hm))
+                spot_bars = minutes[(minutes.index >= entry_ts) & (minutes.index.date == day)]
+                expiry = ose.weekly_expiry(day, all_days)
+                if spot_bars.empty or expiry is None:
+                    return None
+                spot = float(spot_bars['open'].iloc[0])
+                atm = ose.atm_strike(spot)
+                bars = {}
+                for k in range(-ose.MAX_OPT_OTM, ose.MAX_OPT_OTM + 1):
+                    # CE needs ATM..ATM+4 strikes, PE ATM-4..ATM.
+                    for right, ok in (('CE', k >= 0), ('PE', k <= 0)):
+                        if not ok:
+                            continue
+                        strike = atm + k * ose.NIFTY_STRIKE_STEP
+                        raw = icici.historical_option_minutes('NIFTY', expiry, strike, right, day)
+                        if not raw:
+                            err = icici.last_history_error()
+                            if err:
+                                with lock:
+                                    state['errors'] += 1
+                                    state['last_error'] = err
+                            continue
+                        frame = ose._frame(raw)
+                        if frame is not None and not frame.empty:
+                            bars[(strike, right)] = frame
+                if not bars:
+                    return None
+                return {'day': day, 'spot': spot, 'expiry': expiry, 'bars': bars}
+
+            sessions, streak = [], 0
+            pool = ThreadPoolExecutor(max_workers=3)
+            try:
+                futs = [pool.submit(_one, d) for d in reversed(wanted)]
+                for fut in as_completed(futs):
+                    sess = fut.result()
+                    with lock:
+                        state['done'] += 1
+                        task['progress']['done'] = state['done']
+                        if sess is None:
+                            streak += 1
+                        else:
+                            sessions.append(sess)
+                            streak = 0
+                            task['progress']['traded'] = len(sessions)
+                        if not sessions and streak >= 8:
+                            state['stop'] = True
+                            break
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+            if not sessions:
+                raise RuntimeError(
+                    'ICICI returned no option candles'
+                    + (f" — Breeze said: {state['last_error']}. " if state['last_error'] else '. ')
+                    + 'Its history service may be down; retry on a weekday after market hours.')
+            sessions.sort(key=lambda r: r['day'])
+            task['progress']['stage'] = 'scoring'
+            results = ose.sweep(sessions, lots, lot_size, entry_hm=entry_hm,
+                                brokerage_per_leg=_OS_BROKERAGE_PER_LEG,
+                                min_trades=min(10, max(1, len(sessions) // 2)))
+            task['payload'] = {
+                'results': results[:50], 'best': results[0] if results else None,
+                'total': len(results), 'days_priced': len(sessions),
+                'days_scanned': len(wanted), 'breeze_errors': state['errors'],
+                'last_breeze_error': state['last_error'],
+                'total_combos_tested': (len(ose.OPT_OTM) * len(ose.OPT_SL)
+                                        * len(ose.OPT_REENTRY) * len(ose.OPT_EXITS)),
+            }
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[OptionSellingOptimise] failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'os-opt-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
+                    'progress': task['progress']})
+
+
+@api_bp.route('/backtest/option-selling/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def option_selling_optimise_status(task_id):
+    """Poll a Find Best Params run started by the POST above."""
+    return option_selling_status(task_id)
+
+
 # Find Best Params grid for Weekly CPR Breakout. Only the target changes how a
 # trade plays out, so each stock is replayed once per target with the quality
 # filters off and direction 'both'; the CPR-width, first-hour-range and
@@ -7182,7 +7533,8 @@ def weekly_cpr_breakout_optimise():
     if auth_error:
         return auth_error
     data = request.get_json(silent=True) or {}
-    start_date_str, end_date_str = data.get('start_date'), data.get('end_date')
+    start_date_str = str(data.get('start_date') or '')
+    end_date_str = str(data.get('end_date') or '')
     try:
         start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
@@ -7217,7 +7569,7 @@ def weekly_cpr_breakout_optimise():
     except FileNotFoundError as e:
         return jsonify({'success': False, 'error': str(e)}), 404
     universe, err = _wcb_universe(single, lot_sizes)
-    if err:
+    if err or universe is None:
         return jsonify({'success': False, 'error': err}), 400
     basis = 'futures' if str(data.get('basis', 'option')).lower() == 'futures' else 'option'
     basis_note = None
@@ -7259,14 +7611,14 @@ def weekly_cpr_breakout_optimise():
             daily = get_daily_history(fyers, token, f'fyers__{symbol}', daily_days, end_date=end_dt)
             if daily is None or daily.empty:
                 return symbol, None
-            daily = daily[['open', 'high', 'low', 'close']].astype(float)
-            daily.index = pd.to_datetime(daily.index).normalize()
+            daily = pd.DataFrame(daily[['open', 'high', 'low', 'close']].astype(float))
+            daily.index = pd.DatetimeIndex(pd.to_datetime(daily.index)).normalize()  # pyright: ignore[reportAttributeAccessIssue]
             minutes = get_minute_history(fyers, token, symbol, start_date_str, end_date_str,
                                          provider_tag=tag, retain=False)
             if minutes is None or minutes.empty:
                 return symbol, None
             qty = lots * int(lot_sizes.get(symbol) or 1)
-            days = trading_days_of(minutes) if pricer else None
+            days = trading_days_of(minutes) if pricer else []
             out = {}
             for rr in _WCB_OPT_RR:
                 trades = run_symbol(daily.sort_index(), minutes, start_date_str, end_date_str,
@@ -7292,7 +7644,7 @@ def weekly_cpr_breakout_optimise():
                 out[rr] = rows
             return symbol, out
 
-        per_rr = {rr: [] for rr in _WCB_OPT_RR}
+        per_rr: Dict[float, Any] = {rr: [] for rr in _WCB_OPT_RR}
         used, done = 0, 0
         try:
             with ThreadPoolExecutor(max_workers=6) as pool:
@@ -8081,7 +8433,7 @@ def delete_order_record(order_id: str) -> EndpointResponse:
                 settled = MineOrderStore.get_order(order_id).get('status')
                 if settled not in MineOrderStore.EDITABLE_STATUSES:
                     return jsonify({'success': False, 'gone': True, 'status': settled,
-                                    'error': f'Already {settled.lower()} at the broker — '
+                                    'error': f'Already {str(settled or "closed").lower()} at the broker — '
                                              f'removed from the open list',
                                     'summary': broker_result.get('summary', [])}), 409
                 return jsonify({'success': False,
@@ -8148,7 +8500,7 @@ def update_order_price(order_id: str) -> EndpointResponse:
                 settled = MineOrderStore.get_order(order_id).get('status')
                 if settled not in MineOrderStore.EDITABLE_STATUSES:
                     return jsonify({'success': False, 'gone': True, 'status': settled,
-                                    'error': f'Already {settled.lower()} at the broker — '
+                                    'error': f'Already {str(settled or "closed").lower()} at the broker — '
                                              f'removed from the open list',
                                     'summary': result.get('summary', [])}), 409
                 return jsonify({'success': False, 'error': result.get('error'),
@@ -8279,7 +8631,7 @@ def _broker_order_legs(broker_legs):
     return legs
 
 
-def _broker_client(broker, instance, username, session_data):
+def _broker_client(broker, instance, username, session_data) -> Tuple[Optional[str], Any]:
     """Build an authenticated client for one already-configured broker instance.
 
     Returns (kind, client) where kind is one of kite/fyers/dhan/kotak, or
@@ -8706,7 +9058,7 @@ def _reconcile_open_orders(username, session_data, order_id=None, force=False):
         if not status or status == order.get('status') or status == 'OPEN':
             continue
 
-        updates = {'status': status}
+        updates: Dict[str, Any] = {'status': status}
         if status == 'EXECUTED':
             updates['executed_at'] = int(_time.time() * 1000)
             if avg_price:
@@ -8842,12 +9194,12 @@ def _place_exit_leg(kind, client, pos, side, qty):
             from trading_app.service.kite_order_services import KiteService
             ids.append(KiteService(kite_instance=client)._safe_place_order(
                 variety='regular',
-                exchange=raw.get('exchange'),
+                exchange=raw.get('exchange') or '',
                 tradingsymbol=raw.get('tradingsymbol') or sym,
                 transaction_type=side,
                 quantity=chunk,
                 order_type='MARKET',
-                product=raw.get('product'),
+                product=raw.get('product') or '',
                 market_protection=-1,
             ))
         elif kind == 'fyers':
@@ -8893,7 +9245,9 @@ def _accepted_legs(order):
     legs = [leg for leg in (order.get('broker_order_ids') or []) if isinstance(leg, dict)]
     out = []
     for leg in legs:
-        res = leg.get('result') if isinstance(leg.get('result'), dict) else leg
+        res = leg.get('result')
+        if not isinstance(res, dict):
+            res = leg
         if not res.get('success'):
             continue
         broker = (leg.get('broker') or leg.get('broker_type') or '').strip().lower()
@@ -11826,7 +12180,7 @@ def oi_profile_candles() -> EndpointResponse:
 # ~12 times a session per symbol instead of once, which is nothing against the
 # app-wide rate budget, and the next-day band tracks the day closely enough to
 # be worth looking at.
-_cpr_width_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_cpr_width_cache: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
 _cpr_width_cache_lock = threading.Lock()
 _CPR_WIDTH_MAX_CACHE = 200
 _CPR_WIDTH_CACHE_TTL = 300      # seconds
@@ -12223,7 +12577,7 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         # no "small diff" strike, so report the failure instead of selecting
         # strikes by some other means. The frontend keeps the current dropdown
         # selection when this returns success=False.
-        if base_strike is None:
+        if base_strike is None or base_ce_close is None or base_pe_close is None:
             logger.warning(
                 f'[PremStrikes] {symbol}: no usable prev-day CE/PE closes '
                 f'(idx_close={idx_close}, ATM={atm})'
@@ -12530,8 +12884,8 @@ def _rs_day_vwap_bias(candles: list) -> Optional[str]:
     if len(day_order) < 4:
         return None
     today = day_order[-1]
-    prev3 = [final_vwap.get(d) for d in day_order[-4:-1]]
-    if any(v is None for v in prev3):
+    prev3 = [v for v in (final_vwap.get(d) for d in day_order[-4:-1]) if v is not None]
+    if len(prev3) < 3:
         return None
     today_open = next((c['open'] for c in candles if day_of(c) == today), None)
     if today_open is None:
@@ -13166,12 +13520,15 @@ def oi_profile_round_strike() -> EndpointResponse:
         # August contract that was actually being traded.
         def historical_future_leg(root, fut_expiry, label, inter):
             def produce():
-                res = _icici.historical_future(
+                icici = _icici
+                if icici is None:
+                    raise RuntimeError('ICICI is not connected')
+                res = icici.historical_future(
                     root, fut_expiry, from_date.strftime('%Y-%m-%d'),
                     to_date.strftime('%Y-%m-%d'), inter,
                     exchange_code=_rs_option_exchange(root))
                 if not res:
-                    raise RuntimeError(_icici.last_history_error() or 'no candles returned')
+                    raise RuntimeError(icici.last_history_error() or 'no candles returned')
                 return res
             out = _rs_cached(('rs-fut-exp', root, inter, fetch_days, expiry_raw, as_of_raw),
                              _hist_ttl, produce)
@@ -13218,8 +13575,11 @@ def oi_profile_round_strike() -> EndpointResponse:
         # index bar / OI snapshot below instead.
         def _live_ltp():
             try:
-                quote = _data_provider.ltp([index_token]) or {}
-                return float((quote.get(index_token) or {}).get('last_price') or 0)
+                if _data_provider is None:
+                    return 0.0
+                key = str(index_token)
+                quote = _data_provider.ltp([key]) or {}
+                return float((quote.get(key) or {}).get('last_price') or 0)
             except Exception as exc:
                 logger.debug(f'[RoundStrike] LTP failed for {index_token}: {exc}')
                 return 0.0
@@ -13715,7 +14075,7 @@ def get_portfolio_all() -> EndpointResponse:
                 apply_kite_proxy(kite)
                 kite.set_access_token(token)
                 try:
-                    pos_resp = kite.positions()
+                    pos_resp: Any = kite.positions()
                     net = pos_resp.get('net', [])
                     day = pos_resp.get('day', [])
                     seen = {}
@@ -13731,9 +14091,10 @@ def get_portfolio_all() -> EndpointResponse:
                 except Exception as e:
                     result['positions_error'] = str(e)
                 try:
+                    _kite_holdings: Any = kite.holdings()
                     result['holdings'] = [
                         _normalize_holding(h, 'zerodha')
-                        for h in kite.holdings()
+                        for h in _kite_holdings
                         if h.get('quantity', 0) != 0
                     ]
                 except Exception as e:
@@ -13930,8 +14291,8 @@ def place_portfolio_cnc_order() -> EndpointResponse:
                 access_token=conf.get('access_token', ''),
                 client_id=conf.get('client_id', ''),
             )
-            if not sec_id:
-                sec_id = svc.get_security_id(symbol) or ''
+            # DhanOrderService has no equity symbol -> security-id lookup, so the
+            # caller must supply it.
             if not sec_id:
                 return jsonify({'success': False, 'error': f'Could not resolve Dhan security ID for {symbol}'}), 400
             exch_seg = 'BSE_EQ' if exchange == 'BSE' else 'NSE_EQ'
@@ -13954,7 +14315,7 @@ def place_portfolio_cnc_order() -> EndpointResponse:
             svc = FyersOrderService(
                 access_token=conf.get('access_token', ''),
                 app_id=conf.get('app_id', ''),
-                secret=conf.get('secret', ''),
+                secret_key=conf.get('secret', ''),
             )
             exch_prefix = 'BSE' if exchange == 'BSE' else 'NSE'
             # Strip existing exchange prefix if symbol already has one
@@ -13976,12 +14337,7 @@ def place_portfolio_cnc_order() -> EndpointResponse:
 
         elif broker_type == 'kotak':
             from trading_app.service.kotak_order_services import KotakOrderService
-            svc = KotakOrderService(
-                consumer_key=conf.get('consumer_key', ''),
-                trading_token=conf.get('trading_token', ''),
-                trading_sid=conf.get('trading_sid', ''),
-                base_url=conf.get('base_url', 'https://gw-napi.kotaksecurities.com'),
-            )
+            svc = KotakOrderService(access_token=conf.get('trading_token', ''))
             exch_seg = 'bse_cm' if exchange == 'BSE' else 'nse_cm'
             kotak_order_type = 'LMT' if order_type == 'LIMIT' else 'MKT'
             result = svc.place_order(
@@ -14284,7 +14640,7 @@ def swing_trade_stocks():
         raw = yf.download(yf_symbols, start=str(start), end=str(today + timedelta(days=1)),
                           interval='1d', auto_adjust=True, progress=False, threads=True)
 
-        if raw.empty:
+        if raw is None or raw.empty:
             return jsonify({'success': False, 'error': 'No data returned from yfinance'}), 502
 
         if len(yf_symbols) == 1:
@@ -14299,8 +14655,8 @@ def swing_trade_stocks():
 
         def lookup(days_ago: int) -> pd.Series:
             target = pd.Timestamp(today - timedelta(days=days_ago))
-            available = close_df.index[close_df.index <= target]
-            if len(available) == 0:
+            available = list(close_df.index[close_df.index <= target])  # pyright: ignore[reportArgumentType]
+            if not available:
                 return pd.Series(dtype=float)
             return close_df.loc[available[-1]]
 
@@ -14584,8 +14940,10 @@ def get_active_contracts():
         return jsonify({'success': False, 'error': 'No data provider available'}), 401
 
     if not hasattr(provider, 'instruments'):
-        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
-        provider = FyersDataServiceAdapter(fyers_instance=None)
+        # The configured provider has no instrument list; the Fyers adapter does.
+        provider = get_fyers_adapter()
+        if provider is None:
+            return jsonify({'success': False, 'error': 'No data provider available'}), 401
 
     import datetime as _dt
     from itertools import groupby as _groupby
@@ -14601,7 +14959,7 @@ def get_active_contracts():
     all_expiries_raw = sorted(set(
         i['expiry'] for i in all_instruments
         if i.get('name', '').strip().upper() == underlying
-        and i.get('expiry') is not None and i.get('expiry') >= today
+        and i.get('expiry') is not None and i['expiry'] >= today
     ))
     monthly_set = set()
     for _k, grp in _groupby(all_expiries_raw, key=lambda d: (d.year, d.month)):
@@ -14618,7 +14976,7 @@ def get_active_contracts():
     filtered = [
         i for i in all_instruments
         if i.get('name', '').strip().upper() == underlying
-        and i.get('expiry') is not None and i.get('expiry') >= today
+        and i.get('expiry') is not None and i['expiry'] >= today
         and i['expiry'].isoformat() == active_expiry
         and (type_filter == 'ALL' or i.get('instrument_type', '').upper() == type_filter)
         and (not strike_filter or str(int(float(i.get('strike', 0) or 0))) == strike_filter)
@@ -14656,7 +15014,7 @@ def get_active_contracts():
             for i in range(0, len(tokens), batch_size):
                 batch = tokens[i:i + batch_size]
                 _rate_limiter.wait()
-                resp = provider.fyers.quotes(data={'symbols': ','.join(batch)})
+                resp: Any = provider.fyers.quotes(data={'symbols': ','.join(batch)})
                 if resp and resp.get('s') == 'ok':
                     for item in resp.get('d', []):
                         n = item.get('n', '')
@@ -14925,7 +15283,7 @@ def _sm_compute_today_rankings(index_name: str):
                           interval='1d', auto_adjust=True, progress=False, threads=False)
         if raw is None or raw.empty:
             return None
-        return (raw[['Close']].copy().rename(columns={'Close': symbols[0]})
+        return (raw[['Close']].copy().rename(columns={'Close': symbols[0]})  # pyright: ignore[reportCallIssue]
                 if len(symbols) == 1 else raw['Close'].copy())
 
     close_df = _download(yf_symbols)
@@ -14944,7 +15302,7 @@ def _sm_compute_today_rankings(index_name: str):
     # three passes, until nothing is left or a pass recovers nothing.
     for _ in range(3):
         missing = [y for y in yf_symbols
-                   if y not in close_df.columns or not close_df[y].notna().any()]
+                   if y not in close_df.columns or not close_df[y].notna().any()]  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
         if not missing:
             break
         recovered = False
@@ -14958,7 +15316,7 @@ def _sm_compute_today_rankings(index_name: str):
             if retry_df is None:
                 continue
             for y in chunk:
-                if y in retry_df.columns and retry_df[y].notna().any():
+                if y in retry_df.columns and retry_df[y].notna().any():  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
                     close_df[y] = retry_df[y]
                     recovered = True
         close_df = close_df.sort_index()
@@ -14973,7 +15331,7 @@ def _sm_compute_today_rankings(index_name: str):
     def _lookup(days_ago):
         tgt  = pd.Timestamp(today - timedelta(days=days_ago))
         avail = close_df.index[close_df.index <= tgt]
-        return close_df.loc[avail[-1]] if len(avail) else pd.Series(dtype=float)
+        return close_df.loc[avail[-1]] if len(avail) else pd.Series(dtype=float)  # pyright: ignore[reportArgumentType, reportIndexIssue]
 
     latest  = close_df.iloc[-1]
     mo3_ago = _lookup(91)
@@ -15031,7 +15389,7 @@ def _sm_compute_today_rankings(index_name: str):
     return ranked, close_df, no_data
 
 
-def _sm_rankings_cached(index_name: str, with_no_data: bool = False):
+def _sm_rankings_cached(index_name: str, with_no_data: bool = False) -> Any:
     """Return today's rankings, using a 15-min in-memory cache to avoid repeated full downloads.
 
     With with_no_data=True returns (ranked, no_data) so callers can tell a symbol
@@ -15144,7 +15502,7 @@ def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: s
                 # fallback, so a rejection here is reported rather than retried
                 # at some other price.
                 oid = svc.place_order(order_type=svc.ORDER_TYPE_LIMIT,
-                                      price=float(limit_price), **common)
+                                      price=float(limit_price or 0), **common)
                 return (oid, None)
             try:
                 # Try a plain MARKET order first via the SDK (no special permission).
@@ -15356,8 +15714,10 @@ def _sm_current_prices(symbols: list) -> dict:
             import yfinance as yf
             px = yf.download([f'{s}.NS' for s in missing], period='5d', interval='1d',
                              auto_adjust=True, progress=False, threads=False)
+            if px is None:
+                raise RuntimeError('yfinance returned no data')
             closes = (px['Close'] if len(missing) > 1
-                      else px[['Close']].rename(columns={'Close': f'{missing[0]}.NS'}))
+                      else px[['Close']].rename(columns={'Close': f'{missing[0]}.NS'}))  # pyright: ignore[reportCallIssue]
             for s in missing:
                 col = closes.get(f'{s}.NS')
                 if col is not None:
@@ -15668,7 +16028,7 @@ def sm_live_place_orders(config_id):
                     'attempted': len(pending)})
 
 
-def _sm_compute_rebalance(config: dict):
+def _sm_compute_rebalance(config: dict) -> Tuple[Any, Any, Optional[str]]:
     """Work out the rebalance plan for a live config from today's rankings.
 
     Returns (sells, buys, error) where:
@@ -15908,7 +16268,7 @@ def sm_live_rebalance_manual(config_id):
     by_sym  = {e['symbol']: e for e in entries}
     when    = str(body.get('date') or datetime.today().strftime('%Y-%m-%d'))
 
-    def _rows(key):
+    def _rows(key) -> Tuple[Any, Optional[str]]:
         out = []
         for r in (body.get(key) or []):
             sym = str(r.get('symbol') or '').strip().upper()
@@ -16333,8 +16693,10 @@ def sm_live_signal(config_id):
             try:
                 px     = yf.download(yf_syms, period='5d', interval='1d',
                                      auto_adjust=True, progress=False, threads=False)
+                if px is None:
+                    raise RuntimeError('yfinance returned no data')
                 closes = (px['Close'] if len(yf_syms) > 1
-                          else px[['Close']].rename(columns={'Close': yf_syms[0]}))
+                          else px[['Close']].rename(columns={'Close': yf_syms[0]}))  # pyright: ignore[reportCallIssue]
                 for e in live_entries:
                     col = closes.get(f"{e['symbol']}.NS")
                     if col is not None:
@@ -16730,8 +17092,8 @@ def get_finance_summary():
     session, so check_auth() (which needs a live Zerodha/Fyers provider)
     would wrongly lock the tab out whenever the market login is stale.
     """
+    from trading_app.service.finance_service import FinanceService, FinanceConfigError
     try:
-        from trading_app.service.finance_service import FinanceService, FinanceConfigError
         force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
         resp = jsonify(FinanceService.get_dashboard(force=force))
         # The sheet is hand-edited during the day and the URL never changes,
@@ -16791,6 +17153,8 @@ def time_and_sales() -> EndpointResponse:
         root = (request.args.get('root') or 'NIFTY').upper()
         try:
             provider = get_data_provider(user='Mine')
+            if provider is None:
+                raise RuntimeError('no data provider')
             contracts = provider.list_future_contracts(root) or []
         except Exception as e:
             logger.warning(f"[TimeAndSales] contract list failed for {root}: {e}")

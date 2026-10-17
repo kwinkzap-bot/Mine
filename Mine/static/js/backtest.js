@@ -444,9 +444,13 @@ document.addEventListener('DOMContentLoaded', function() {
         const pcLotRow      = document.getElementById('pivotConfluenceLotRow');
         const pcOptPanel    = document.getElementById('pivotConfluenceOptimisePanel');
         const wcbParamsRow  = document.getElementById('weeklyCprBreakoutParamsRow');
+        const sbrParamsRow  = document.getElementById('stBbRsiParamsRow');
+        if (sbrParamsRow)  sbrParamsRow.style.display  = 'none';
         if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
         const osParamsRow   = document.getElementById('optionSellingParamsRow');
         if (osParamsRow)   osParamsRow.style.display   = 'none';
+        const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
+        if (osOptPanel)    osOptPanel.style.display    = 'none';
         const osResultsEl   = document.getElementById('osResults');
         if (osResultsEl)   osResultsEl.style.display   = 'none';
         if (smParamsRow)   smParamsRow.style.display   = 'none';
@@ -480,7 +484,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -582,6 +586,21 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2017-01-01';
             updatePcInvestment();
 
+        } else if (val === 'st_bb_rsi') {
+            // Index signal, ≈250 CE leg; lots/lot value reuse the Pivot Confluence boxes.
+            // The Symbol box keeps whatever the last strategy left in it
+            // (Weekly CPR Breakout parks ALL STOCKS there): this one trades an index.
+            if (!['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'].includes((symbolSearch.value || '').toUpperCase())) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (sbrParamsRow) sbrParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2019-04-01';
+            updatePcInvestment();
+
         } else if (val === 'weekly_cpr_breakout') {
             if (wcbParamsRow) wcbParamsRow.style.display = 'grid';
             // The shared Symbol box, with ALL STOCKS (every F&O future stock)
@@ -681,7 +700,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'st_bb_rsi', 'weekly_cpr_breakout', 'option_selling'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -903,6 +922,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (pcTrail) payload.trail_points = parseFloat(pcTrail);
             }
 
+            // SuperTrend + BB + RSI + R1, bought as the ≈250 CE; exit on SuperTrend break
+            if (strat === 'st_bb_rsi') {
+                endpoint = '/api/backtest/st-bb-rsi';
+                payload.interval      = document.getElementById('interval')?.value || '3minute';
+                payload.premium       = parseFloat(document.getElementById('sbrPremium')?.value || 250);
+                payload.price_options = document.getElementById('sbrPriceOptions')?.checked ?? true;
+                payload.rsi_period    = parseInt(document.getElementById('sbrRsiLen')?.value || 14);
+                payload.st_period     = parseInt(document.getElementById('sbrStLen')?.value || 10);
+                payload.st_mult       = parseFloat(document.getElementById('sbrStFactor')?.value || 2);
+                payload.bb_period     = parseInt(document.getElementById('sbrBbLen')?.value || 20);
+                payload.bb_mult       = parseFloat(document.getElementById('sbrBbMult')?.value || 2);
+                payload.bb_offset     = parseInt(document.getElementById('sbrBbOffset')?.value || 0);
+                payload.require_green = document.getElementById('sbrGreen')?.checked ?? false;
+                payload.rsi_level     = parseFloat(document.getElementById('sbrRsi')?.value || 70);
+                payload.entry_start   = document.getElementById('sbrEntryStart')?.value || '09:15';
+                payload.entry_end     = document.getElementById('sbrEntryEnd')?.value || '15:14';
+                payload.exit_cutoff   = document.getElementById('sbrExitCutoff')?.value || '15:14';
+                payload.max_trades_per_day = parseInt(document.getElementById('sbrMaxTrades')?.value || 1);
+            }
+
             // 30-Min Opening Fakeout breakdown/breakout
             if (strat === 'thirty_min_fakeout') {
                 endpoint = '/api/backtest/thirty-min-fakeout';
@@ -966,10 +1005,40 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(payload)
             });
 
-            const data = await response.json();
+            let data = await response.json();
+
+            // ST + BB + RSI + R1: signals come back at once, the option legs are
+            // priced in the background (Breeze, paced) and polled here.
+            if (data.success && data.task_id && strat === 'st_bb_rsi') {
+                const taskId = data.task_id;
+                const t0 = Date.now();
+                while (true) {
+                    _showOptLoader('Pricing the ≈' + payload.premium + ' CE legs',
+                        'starting…');
+                    await new Promise(r => setTimeout(r, 2000));
+                    const st = await (await fetch(`/api/backtest/st-bb-rsi/status/${taskId}`)).json();
+                    if (st.status === 'running') {
+                        const p = st.progress || {};
+                        _showOptLoader('Pricing the ≈' + payload.premium + ' CE legs',
+                            `${p.done || 0} / ${p.total || 0} trades · ${st.elapsed || Math.round((Date.now() - t0) / 1000)}s`);
+                        continue;
+                    }
+                    data = st;
+                    break;
+                }
+                _hideOptLoader();
+            }
 
             if (data.success) {
                 if (data.warning) window.showNotification(data.warning, 'warning');
+                if (data.ran) {
+                    const r = data.ran;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars `
+                        + `(${r.first_bar.slice(0, 10)} … ${r.last_bar.slice(0, 10)}) · `
+                        + `${r.index_signals} signals · RSI ${r.params.rsi_period}>${r.params.rsi_level}, `
+                        + `ST ${r.params.st.join('/')}, BB ${r.params.bb.join('/')}`, 'info');
+                }
                 // Otherwise the gate is invisible: the run just shows fewer
                 // trades with nothing saying why.
                 const rrSkipped = data.summary?.rr_skipped || 0;
@@ -1687,7 +1756,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
-        const isPc   = strategySelect && strategySelect.value === 'pivot_confluence';
+        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_bb_rsi');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
@@ -3727,7 +3796,111 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'scalp_pullback') runSpOptimise(false);
         else if (strat === 'pivot_confluence') runPcOptimise(false);
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
+        else if (strat === 'option_selling') runOsOptimise(false);
     });
+
+    // ── NIFTY Option Selling — Find Best Params ─────────────────────────
+    // Sweeps OTM strikes × stop % × re-entry × exit time (300 combos) over the
+    // days / entry time / lots / dates the page has set. Premiums for ATM..±4
+    // strikes are bought once per day; every combo replays them, so the cost is
+    // the fetch (up to 10 ICICI requests a day cold), not the combos.
+    let _osOptRun = 0;
+    const OS_OPT_COLS = [
+        { label: '#',            key: null,            fmt: (r, i) => i + 1 },
+        { label: 'OTM Strikes',  key: 'otm_strikes',   fmt: r => r.otm_strikes === 0 ? 'ATM' : `${r.otm_strikes} (${r.otm_strikes * 50} pts)` },
+        { label: 'Stop Loss',    key: 'sl_pct',        fmt: r => `${r.sl_pct}%` },
+        { label: 'Re-entry',     key: 'reentry',       fmt: r => r.reentry ? 'Once, at cost' : 'Off' },
+        { label: 'Exit',         key: 'exit_time',     fmt: r => r.exit_time },
+        { label: 'Days',         key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',         key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Total P&L (gross)', key: 'gross_pnl_rupees', fmt: r => _rs(r.gross_pnl_rupees || 0) },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
+        { label: 'Avg / Day',    key: 'avg_pnl_rupees', fmt: r => _rs(r.avg_pnl_rupees) },
+        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
+        { label: 'Stops',        key: 'sl_hits',       fmt: r => r.sl_hits },
+        { label: '',             key: null,            fmt: () => '' },   // Use button
+    ];
+
+    function applyOsOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('osOtm', String(r.otm_strikes));
+        set('osSlPct', String(r.sl_pct));
+        set('osReentry', r.reentry ? 'true' : 'false');
+        set('osExitTime', r.exit_time);
+        if (window.showNotification) window.showNotification(
+            `Applied: ${r.otm_strikes === 0 ? 'ATM' : r.otm_strikes + ' OTM'} · SL ${r.sl_pct}% · `
+            + `re-entry ${r.reentry ? 'on' : 'off'} · exit ${r.exit_time} · Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
+    }
+
+    function renderOsOptResults(data) {
+        const panel     = document.getElementById('optionSellingOptimisePanel');
+        const metaEl    = document.getElementById('osOptMeta');
+        const recalcBtn = document.getElementById('osRecalcOptBtn');
+        if (metaEl) metaEl.textContent =
+            `${data.total_combos_tested} combos · ${data.total} scored · ${data.days_priced}/${data.days_scanned} days priced (ICICI)`
+            + (data.breeze_errors ? ` · ${data.breeze_errors} ICICI requests failed` : '');
+        _mountSingleOptGrid('osOptGrid', data.results || [], OS_OPT_COLS, 'net_pnl_rupees', applyOsOptResult);
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyOsOptResult(data.best);
+    }
+
+    async function runOsOptimise(recalculate) {
+        const panel     = document.getElementById('optionSellingOptimisePanel');
+        const recalcBtn = document.getElementById('osRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
+        if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const osRes = document.getElementById('osResults');
+        if (osRes) osRes.style.display = 'none';
+        const myRun = ++_osOptRun;
+        const done = () => { if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/option-selling/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    start_date: document.getElementById('startDate')?.value,
+                    end_date:   document.getElementById('endDate')?.value,
+                    days,
+                    entry_time: document.getElementById('osEntryTime')?.value || '09:30',
+                    lots:       Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
+                }),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2500));
+                if (myRun !== _osOptRun) return;
+                data = await (await fetch(`/api/backtest/option-selling/optimise/status/${taskId}`)).json();
+                if (myRun !== _osOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Finding best params…', p.stage === 'scoring'
+                    ? `Scoring 300 combos · ${data.elapsed || 0}s`
+                    : `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            renderOsOptResults(data);
+        } catch (err) {
+            if (myRun !== _osOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('Option Selling optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
+    const osRecalcBtn = document.getElementById('osRecalcOptBtn');
+    if (osRecalcBtn) osRecalcBtn.addEventListener('click', () => runOsOptimise(true));
 
     // ── Weekly CPR Breakout — Find Best Params ──────────────────────────
     // Sweeps Target × W CPR Width × Min 1H Range × Direction (192 combos)
