@@ -5037,6 +5037,46 @@ def run_pivot_confluence_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interval):
+    """(minutes, bars_df, junk_dropped, bars_from_start) for the ST + BB + RSI backtest.
+
+    Shared by the run and the Find Best Params sweep so both read the same candles.
+    Returns (None, None, 0, 0) when the store has nothing."""
+    import pandas as pd
+    from trading_app.Backtest.minute_candle_store import get_minute_history
+    # Minutes come from the local store, not a fresh provider pull. A closed
+    # session is fetched once and kept: Fyers' live 1-minute feed has served
+    # junk in the last minutes of recent sessions (12 Oct 15:20-15:28 carried
+    # a 22,696 high against the day's real 22,651), and that moved the next
+    # day's R1 by 30 points and dropped a valid 14:15 signal. Indicators also
+    # need a run-in, as they have on a chart, so 45 days before the start are
+    # read and only trades on/after the start are kept.
+    warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
+    minutes = get_minute_history(provider, token, symbol, warm_from,
+                                 end_date_str, provider_tag=_provider_tag(provider))
+    if minutes is None or minutes.empty:
+        return None, None, 0, 0
+    # Closing-minute junk (see above) that the store's tail refresh can still
+    # pull in for the newest sessions: a bar after 15:15 spanning >0.3 % is
+    # not a real 1-minute NIFTY bar.
+    late = (minutes.index.hour * 60 + minutes.index.minute) >= 15 * 60 + 15
+    junk = late & ((minutes['high'] - minutes['low']) > 0.003 * minutes['close'])
+    n_junk = int(junk.sum())
+    if n_junk:
+        minutes = minutes[~junk]
+    mins = {'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3, '5minute': 5,
+            '10minute': 10, '15minute': 15, '30minute': 30, '60minute': 60}.get(interval, 5)
+    anchor = pd.Timedelta(hours=9, minutes=15)
+    key = (minutes.index - anchor).floor(f'{mins}min') + anchor
+    bars = minutes.groupby(key).agg(open=('open', 'first'), high=('high', 'max'),
+                                    low=('low', 'min'), close=('close', 'last'),
+                                    volume=('volume', 'sum')).dropna(subset=['open', 'close'])
+    bars.index.name = 'date'
+    candles_df = bars.reset_index()
+    n_bars = int((bars.index >= pd.Timestamp(start_date_str)).sum())
+    return minutes, candles_df, n_junk, n_bars
+
+
 _sbr_tasks: dict = {}
 _sbr_tasks_lock = threading.Lock()
 
@@ -5061,6 +5101,98 @@ def st_bb_rsi_status(task_id):
     return jsonify({'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+_sbr_opt_tasks: dict = {}
+_sbr_opt_lock = threading.Lock()
+
+
+@api_bp.route('/backtest/st-bb-rsi/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_st_bb_rsi_optimise():
+    """Find Best Params for ST + BB + RSI + R1/S1: sweep direction, RSI level,
+    SuperTrend length/factor, BB multiplier, green-candle filter and entry start
+    on INDEX points (Backtest/st_bb_rsi_engine.optimise_st_bb_rsi). Backgrounded;
+    poll /backtest/st-bb-rsi/optimise/status/<task_id>."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data = request.get_json() or {}
+        symbol = str(data.get('symbol', 'NIFTY')).strip().upper()
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+        interval = data.get('interval', '3minute')
+        if not start_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        if symbol not in ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'):
+            return jsonify({'success': False, 'error': f"'{symbol}' is not an index this backtest supports."}), 400
+        provider = get_fyers_adapter()      # Fyers, as the run itself (see run_st_bb_rsi_backtest_api)
+        if provider is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+        token = _sp_instrument_token(provider, symbol)
+        knobs = dict(
+            rsi_period=int(data.get('rsi_period', 14) or 14),
+            bb_period=int(data.get('bb_period', 20) or 20),
+            bb_offset=int(data.get('bb_offset', 0) or 0),
+            entry_end=data.get('entry_end', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(data.get('max_trades_per_day', 1) or 1),
+        )
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
+        with _sbr_opt_lock:
+            _sbr_opt_tasks[task_id] = task
+
+        def _run():
+            try:
+                from trading_app.Backtest.st_bb_rsi_engine import optimise_st_bb_rsi
+                _, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
+                                                    end_date_str, interval)
+                if bars is None:
+                    task.update(status='error', error='No historical data found for the given range')
+                    return
+
+                def _progress(done, total):
+                    task['progress'] = {'done': done, 'total': total}
+
+                res = optimise_st_bb_rsi(bars, progress=_progress, from_date=start_date_str, **knobs)
+                task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
+                                   'start_date': start_date_str, 'end_date': end_date_str,
+                                   'bars': n_bars, **res}
+                task['status'] = 'complete'
+            except Exception as e:      # noqa: BLE001
+                logger.error('[ST-BB-RSI OPT] %s', e, exc_info=True)
+                task.update(status='error', error=str(e))
+
+        threading.Thread(target=_run, name=f'sbropt-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+    except Exception as e:
+        logger.error(f'Error in ST-BB-RSI optimise API: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/st-bb-rsi/optimise/status/<task_id>', methods=['GET'])
+@require_user_auth
+def run_st_bb_rsi_optimise_status(task_id):
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _sbr_opt_lock:
+        task = _sbr_opt_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task['progress'],
+                        'elapsed': elapsed})
+    with _sbr_opt_lock:
+        _sbr_opt_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 @api_bp.route('/backtest/st-bb-rsi', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -5081,6 +5213,14 @@ def run_st_bb_rsi_backtest_api():
         interval       = data.get('interval', '5minute')
         premium        = float(data.get('premium', 250) or 250)
         price_options  = bool(data.get('price_options', True))
+        # Compounding (off by default): every trade sized from the running balance —
+        # see Backtest/st_bb_rsi_engine.apply_compounding. Needs the option legs.
+        compounding    = bool(data.get('compounding', False))
+        start_capital  = float(data.get('start_capital', 25000) or 25000)
+        per_lot        = float(data.get('per_lot', 25000) or 25000)
+        max_lots       = int(data.get('max_lots', 27) or 27)
+        fixed_lots     = max(1, int(data.get('lots', 1) or 1))      # the Lots box, when not compounding
+        lot_value      = float(data.get('lot_value', 0) or 0)       # ₹ per premium point = lot size
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -5105,39 +5245,13 @@ def run_st_bb_rsi_backtest_api():
         import pandas as pd
         from trading_app.Backtest.minute_candle_store import get_minute_history
         from trading_app.Backtest.st_bb_rsi_engine import (
-            StBbRsiEngine, attach_option_legs, summarise)
+            StBbRsiEngine, attach_option_legs, summarise, apply_compounding)
 
-        # Minutes come from the local store, not a fresh provider pull. A closed
-        # session is fetched once and kept: Fyers' live 1-minute feed has served
-        # junk in the last minutes of recent sessions (12 Oct 15:20-15:28 carried
-        # a 22,696 high against the day's real 22,651), and that moved the next
-        # day's R1 by 30 points and dropped a valid 14:15 signal. Indicators also
-        # need a run-in, as they have on a chart, so 45 days before the start are
-        # read and only trades on/after the start are kept.
-        warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
-        minutes = get_minute_history(current_kite, instrument_token, symbol, warm_from,
-                                     end_date_str, provider_tag=_provider_tag(current_kite))
-        if minutes is None or minutes.empty:
+        minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval)
+        if minutes is None:
             return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
-        # Closing-minute junk (see above) that the store's tail refresh can still
-        # pull in for the newest sessions: a bar after 15:15 spanning >0.3 % is
-        # not a real 1-minute NIFTY bar.
-        late = (minutes.index.hour * 60 + minutes.index.minute) >= 15 * 60 + 15
-        junk = late & ((minutes['high'] - minutes['low']) > 0.003 * minutes['close'])
-        n_junk = int(junk.sum())
-        if n_junk:
-            minutes = minutes[~junk]
-        mins = {'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3, '5minute': 5,
-                '10minute': 10, '15minute': 15, '30minute': 30, '60minute': 60}.get(interval, 5)
-        anchor = pd.Timedelta(hours=9, minutes=15)
-        key = (minutes.index - anchor).floor(f'{mins}min') + anchor
-        bars = minutes.groupby(key).agg(open=('open', 'first'), high=('high', 'max'),
-                                        low=('low', 'min'), close=('close', 'last'),
-                                        volume=('volume', 'sum')).dropna(subset=['open', 'close'])
-        bars.index.name = 'date'
-        candles_df = bars.reset_index()
         candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
-        n_bars = int((bars.index >= pd.Timestamp(start_date_str)).sum())
 
         engine = StBbRsiEngine(
             df=candles_df,
@@ -5153,6 +5267,7 @@ def run_st_bb_rsi_backtest_api():
             exit_cutoff=data.get('exit_cutoff', '15:14'),
             max_trades_per_day=int(data.get('max_trades_per_day', 1) or 1),
             require_green=bool(data.get('require_green', False)),
+            direction=str(data.get('direction', 'long')),
         )
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -5168,21 +5283,29 @@ def run_st_bb_rsi_backtest_api():
                            entry=[data.get('entry_start', '09:15'), data.get('entry_end', '15:14')],
                            exit_cutoff=data.get('exit_cutoff', '15:14'),
                            max_trades_per_day=engine.max_trades_per_day,
-                           require_green=engine.require_green,
-                           premium=premium, price_options=price_options),
+                           require_green=engine.require_green, direction=engine.direction,
+                           premium=premium, price_options=price_options,
+                           compounding=compounding),
             'index_signals': len(trades),
         }
 
         def _payload(priced_trades, option_info, warning):
             summ = summarise(priced_trades)
             summ['pnl_basis'] = 'option' if option_info else 'index'
+            extra = {}
+            if option_info:
+                # Always booked in rupees here (Total, brokerage, Net), compounding or not.
+                extra = apply_compounding(
+                    priced_trades, lot_value or option_info.get('lot') or 65,
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
             return {
                 'success': True, 'trades': priced_trades, 'option': option_info,
                 'warning': warning, 'ran': ran,
                 'summary': {**{k: summ[k] for k in (
                     'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
                     'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
-                    'pnl_basis': summ['pnl_basis']},
+                    'pnl_basis': summ['pnl_basis'], **extra},
             }
 
         logger.info('[ST-BB-RSI BT] %s %s %s→%s  %d bars  %d signals  options=%s',
@@ -5193,6 +5316,7 @@ def run_st_bb_rsi_backtest_api():
         # Pricing is one Breeze request per strike probe, paced app-wide: years of
         # trades are minutes cold, so it runs in the background and the page polls.
         minutes_per_bar = int(''.join(ch for ch in interval if ch.isdigit()) or 5)
+        sessions = sorted(set(minutes.index.date))      # trading days, straight from the stored candles
         task_id = uuid.uuid4().hex
         task = {'status': 'running', 'started': _time.time(),
                 'progress': {'done': 0, 'total': len(trades)}}
@@ -5203,7 +5327,8 @@ def run_st_bb_rsi_backtest_api():
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
             try:
-                priced, info = attach_option_legs(symbol, trades, premium, minutes_per_bar, _progress)
+                priced, info = attach_option_legs(symbol, trades, premium, minutes_per_bar, _progress,
+                                                   calendar=sessions)
                 warn = None
                 if info['unpriced'] or info['truncated']:
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "

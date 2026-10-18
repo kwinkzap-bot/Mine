@@ -621,7 +621,7 @@ def _plus_minutes(hhmm: str, mins: int) -> str:
 
 def legs_at(symbol: str, trades: List[Dict[str, Any]],
             premium: Optional[float] = None, span_min: int = 1,
-            source: str = 'spot') -> Dict[str, Any]:
+            source: str = 'spot', trading_days: Optional[List[date]] = None) -> Dict[str, Any]:
     """Price one option leg per trade in `trades`.
 
     Each trade: {'date': 'YYYY-MM-DD', 'side': 'BUY'|'SELL', 'level': float,
@@ -648,7 +648,11 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
 
     fetch_option = _option_minutes_fetcher(symbol)        # fail before any fetch
     days = sorted({date.fromisoformat(t['date']) for t in trades})
-    trading_days = _trading_days(symbol, days[0], days[-1])
+    # A caller pricing many chunks reads the calendar ONCE and hands it in: every
+    # call otherwise re-reads it from Fyers, and parallel chunks tripped its
+    # 50-requests-a-minute cap, leaving whole stretches of trades unpriced.
+    if trading_days is None:
+        trading_days = _trading_days(symbol, days[0], days[-1])
     lot = lot_size(symbol)
     # The chart's own 1-minute path, for placing each leg at the minute the
     # trade happened. One fetch for the whole span, cached like everything

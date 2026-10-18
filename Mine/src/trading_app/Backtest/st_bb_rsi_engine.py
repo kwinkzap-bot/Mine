@@ -144,13 +144,16 @@ def supertrend(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 # ── Engine ─────────────────────────────────────────────────────────────────────
 
 class StBbRsiEngine:
+    """Signals and exits on the index. Indicator series are computed once per
+    (period, multiplier) and kept, so a parameter sweep (`optimise`) pays for each
+    SuperTrend / band set a single time and only re-runs the cheap simulation."""
 
     def __init__(self, df: pd.DataFrame, rsi_period: int = 14, rsi_level: float = 70.0,
                  bb_period: int = 20, bb_mult: float = 2.0, bb_offset: int = 0,
                  st_period: int = 10, st_mult: float = 2.0,
                  entry_start: str = '09:15', entry_end: str = '15:14',
                  exit_cutoff: str = '15:14', max_trades_per_day: int = 1,
-                 require_green: bool = False):
+                 require_green: bool = False, direction: str = 'long'):
         self.df = df.copy()
         self.rsi_period = max(2, int(rsi_period))
         self.rsi_level = float(rsi_level)
@@ -164,7 +167,10 @@ class StBbRsiEngine:
         self.exit_cutoff = _parse_hhmm(exit_cutoff, 15 * 60 + 14)
         self.max_trades_per_day = max(1, int(max_trades_per_day))
         self.require_green = bool(require_green)
+        self.direction = direction if direction in ('long', 'short', 'both') else 'long'
         self._prepare()
+        self._base_cache: Optional[Dict[str, Any]] = None
+        self._ind_cache: Dict[tuple, Any] = {}
 
     def _prepare(self):
         if not pd.api.types.is_datetime64_any_dtype(self.df.index):
@@ -175,95 +181,260 @@ class StBbRsiEngine:
         self.df = self.df.sort_index()
         self.df = self.df[~self.df.index.duplicated(keep='last')]
 
+    # ── Series that do not depend on any swept knob ───────────────────────────
+
+    def _base(self) -> Dict[str, Any]:
+        if self._base_cache is None:
+            df = self.df
+            idx = df.index
+            date_key = pd.Series(idx.date, index=idx)
+            daily = df.groupby(date_key).agg(d_high=('high', 'max'), d_low=('low', 'min'),
+                                             d_close=('close', 'last'))
+            pdh, pdl, pdc = (daily[k].shift(1) for k in ('d_high', 'd_low', 'd_close'))
+            pivot = (pdh + pdl + pdc) / 3.0
+            day_id = (idx.year * 10000 + idx.month * 100 + idx.day).to_numpy()
+            bounds = np.flatnonzero(np.diff(day_id)) + 1
+            starts = np.concatenate(([0], bounds))
+            ends = np.concatenate((bounds, [len(df)])) - 1
+            self._base_cache = {
+                'o': df['open'].to_numpy(dtype=float), 'h': df['high'].to_numpy(dtype=float),
+                'l': df['low'].to_numpy(dtype=float), 'c': df['close'].to_numpy(dtype=float),
+                'r1': date_key.map(2 * pivot - pdl).to_numpy(dtype=float),
+                's1': date_key.map(2 * pivot - pdh).to_numpy(dtype=float),
+                'tmin': (idx.hour * 60 + idx.minute).to_numpy(),
+                'ts': idx.strftime('%Y-%m-%d %H:%M:%S').to_numpy(),
+                'starts': starts, 'ends': ends,
+            }
+        return self._base_cache
+
+    def _ind(self, kind: str, *key):
+        k = (kind,) + key
+        if k not in self._ind_cache:
+            b = self._base()
+            if kind == 'rsi':
+                self._ind_cache[k] = rsi(b['c'], key[0])
+            elif kind == 'bb':
+                up, _, lo = bollinger(b['c'], key[0], key[1], key[2])
+                self._ind_cache[k] = (up, lo)
+            else:
+                self._ind_cache[k] = supertrend(b['h'], b['l'], b['c'], key[0], key[1])
+        return self._ind_cache[k]
+
+    # ── Simulation ────────────────────────────────────────────────────────────
+
     def run(self) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         if self.df.empty:
             return [], summarise([])
-        df = self.df
-        o, h, l, c = (df[k].to_numpy(dtype=float) for k in ('open', 'high', 'low', 'close'))
-        idx = df.index
-        date_key = pd.Series(idx.date, index=idx)
-
-        rsi_v = rsi(c, self.rsi_period)
-        bb_up, _, _ = bollinger(c, self.bb_period, self.bb_mult, self.bb_offset)
-        st_line, st_dir = supertrend(h, l, c, self.st_period, self.st_mult)
-
-        daily = df.groupby(date_key).agg(d_high=('high', 'max'), d_low=('low', 'min'),
-                                         d_close=('close', 'last'))
-        pdh, pdl, pdc = (daily[k].shift(1) for k in ('d_high', 'd_low', 'd_close'))
-        pivot = (pdh + pdl + pdc) / 3.0
-        r1 = (2 * pivot - pdl)
-        r1_bar = date_key.map(r1).to_numpy(dtype=float)
-
-        tmin = (idx.hour * 60 + idx.minute).to_numpy()
-        ts = idx.strftime('%Y-%m-%d %H:%M:%S').to_numpy()
-        day_id = (idx.year * 10000 + idx.month * 100 + idx.day).to_numpy()
-
-        with np.errstate(invalid='ignore'):
-            signal = ((rsi_v > self.rsi_level) & (c > bb_up) & (st_dir == 1)
-                      & np.isfinite(st_line) & (c > r1_bar))
-            if self.require_green:                      # signal candle closes above its open
-                signal = signal & (c > o)
-
-        trades: List[Dict[str, Any]] = []
-        n = len(df)
-        start = 0
-        while start < n:
-            end = start
-            while end + 1 < n and day_id[end + 1] == day_id[start]:
-                end += 1
-            trades.extend(self._day(start, end, o, c, signal, st_dir, st_line,
-                                    rsi_v, bb_up, r1_bar, tmin, ts))
-            start = end + 1
+        trades = self.simulate()
         return trades, summarise(trades)
 
-    def _day(self, a, b, o, c, signal, st_dir, st_line, rsi_v, bb_up, r1_bar, tmin, ts):
+    def simulate(self, **over) -> List[Dict[str, Any]]:
+        """Trades for this engine's settings, any of which `over` replaces."""
+        P = dict(rsi_period=self.rsi_period, rsi_level=self.rsi_level, bb_period=self.bb_period,
+                 bb_mult=self.bb_mult, bb_offset=self.bb_offset, st_period=self.st_period,
+                 st_mult=self.st_mult, entry_start=self.entry_start, entry_end=self.entry_end,
+                 exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
+                 require_green=self.require_green, direction=self.direction)
+        P.update(over)
+        b = self._base()
+        o, c, tmin = b['o'], b['c'], b['tmin']
+        rsi_v = self._ind('rsi', P['rsi_period'])
+        bb_up, bb_lo = self._ind('bb', P['bb_period'], P['bb_mult'], P['bb_offset'])
+        st_line, st_dir = self._ind('st', P['st_period'], P['st_mult'])
+
+        # +1 = long signal, -1 = short signal, 0 = none. The short side is the exact
+        # mirror: RSI below (100 - level), close under the LOWER band, SuperTrend on
+        # the down side, close under S1 (2P - PDH); an optional red candle.
+        with np.errstate(invalid='ignore'):
+            long_sig = ((rsi_v > P['rsi_level']) & (c > bb_up) & (st_dir == 1)
+                        & np.isfinite(st_line) & (c > b['r1']))
+            short_sig = ((rsi_v < 100.0 - P['rsi_level']) & (c < bb_lo) & (st_dir == -1)
+                         & np.isfinite(st_line) & (c < b['s1']))
+        if P['require_green']:                          # candle closes WITH the trade
+            long_sig = long_sig & (c > o)
+            short_sig = short_sig & (c < o)
+        if P['direction'] == 'long':
+            short_sig = np.zeros(len(c), dtype=bool)
+        elif P['direction'] == 'short':
+            long_sig = np.zeros(len(c), dtype=bool)
+        window = (tmin >= P['entry_start']) & (tmin < P['entry_end'])
+        signal = np.where(long_sig, 1, np.where(short_sig, -1, 0)) * window
+        cand = np.flatnonzero(signal)                   # only these bars can start a trade
+        lv = {'bb_up': bb_up, 'bb_lo': bb_lo, 'r1': b['r1'], 's1': b['s1']}
+
+        trades: List[Dict[str, Any]] = []
+        if not len(cand):
+            return trades
+        starts, ends = b['starts'], b['ends']
+        day_of = np.searchsorted(starts, cand, side='right') - 1
+        for d in np.unique(day_of):
+            a_, b_ = int(starts[d]), int(ends[d])
+            idxs = cand[day_of == d]
+            trades.extend(self._day(a_, b_, idxs, o, c, signal, st_dir, st_line, rsi_v, lv,
+                                    tmin, b['ts'], P))
+        return trades
+
+    def _day(self, a, b, idxs, o, c, signal, st_dir, st_line, rsi_v, lv, tmin, ts, P):
         out = []
-        i = a
-        while i < b and len(out) < self.max_trades_per_day:
-            if not (signal[i] and self.entry_start <= tmin[i] < self.entry_end):
-                i += 1
+        free_from = a                                   # a new trade cannot start before the last one ended
+        for i in idxs:
+            if len(out) >= P['max_trades_per_day']:
+                break
+            if i < free_from or i >= b:
                 continue
             e = i + 1                                   # filled at the next open
-            if tmin[e] >= self.exit_cutoff:
+            if tmin[e] >= P['exit_cutoff']:
                 break
+            is_long = signal[i] == 1
+            exit_flip = -1 if is_long else 1             # SuperTrend turning against the trade
             entry = o[e]
             exit_k, exit_px, reason = b, c[b], 'EOD Exit'
             for k in range(e, b + 1):
-                if k > e and tmin[k] >= self.exit_cutoff:
+                if k > e and tmin[k] >= P['exit_cutoff']:
                     exit_k, exit_px, reason = k, o[k], 'Time Exit'
                     break
-                if st_dir[k] == -1:                      # SuperTrend broke down on this close
-                    if k < b and tmin[k + 1] < self.exit_cutoff:
-                        exit_k, exit_px, reason = k + 1, o[k + 1], 'SuperTrend Down'
+                if st_dir[k] == exit_flip:               # SuperTrend broke against us on this close
+                    name = 'SuperTrend Down' if is_long else 'SuperTrend Up'
+                    if k < b and tmin[k + 1] < P['exit_cutoff']:
+                        exit_k, exit_px, reason = k + 1, o[k + 1], name
                     else:
-                        exit_k, exit_px, reason = k, c[k], 'SuperTrend Down'
+                        exit_k, exit_px, reason = k, c[k], name
                     break
-            pnl = exit_px - entry
+            pnl = (exit_px - entry) if is_long else (entry - exit_px)
             out.append({
-                'entry_time': ts[e], 'exit_time': ts[exit_k],
-                'type': 'Long', 'pattern': 'ST+BB+RSI+R1',
+                'entry_time': ts[e],
+                # A square-off is a clock event, not a candle one: Quantman sells at
+                # 15:14 itself, not at the open of the next 3-minute bar (15:15).
+                'exit_time': (ts[exit_k][:11] + f"{P['exit_cutoff'] // 60:02d}:{P['exit_cutoff'] % 60:02d}:00"
+                              if reason == 'Time Exit' else ts[exit_k]),
+                'type': 'Long' if is_long else 'Short',
+                'pattern': 'ST+BB+RSI+R1' if is_long else 'ST+BB+RSI+S1',
                 'entry_price': round(float(entry), 2), 'exit_price': round(float(exit_px), 2),
                 'sl_price': None, 'target_price': None,
                 'pnl': round(float(pnl), 2),
                 'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
                 'exit_reason': reason,
                 'signal': {'rsi': round(float(rsi_v[i]), 1), 'close': round(float(c[i]), 2),
-                           'bb_upper': round(float(bb_up[i]), 2),
+                           'bb_band': round(float((lv['bb_up'] if is_long else lv['bb_lo'])[i]), 2),
                            'supertrend': round(float(st_line[i]), 2),
-                           'r1': round(float(r1_bar[i]), 2)},
+                           'pivot_level': round(float((lv['r1'] if is_long else lv['s1'])[i]), 2)},
             })
-            i = max(exit_k, e) + 1
+            free_from = max(exit_k, e) + 1
         return out
 
 
+# ── Find best params ───────────────────────────────────────────────────────────
+
+# Swept knobs. RSI period, BB period/offset, the session window's end, square-off
+# and trades per day are the page's own values and are not varied.
+_GRID_DIRECTION = ('long', 'short', 'both')
+_GRID_RSI = (60, 65, 70, 75, 80)
+_GRID_ST_MULT = (1.5, 2.0, 2.5, 3.0)
+_GRID_ST_PERIOD = (7, 10, 14)
+_GRID_BB_MULT = (1.5, 2.0, 2.5)
+_GRID_GREEN = (False, True)
+_GRID_START = ('09:15', '09:30')
+MIN_TRADES = 30          # a handful of lucky trades is not a result
+
+
+def grid_size() -> int:
+    return (len(_GRID_DIRECTION) * len(_GRID_RSI) * len(_GRID_ST_MULT) * len(_GRID_ST_PERIOD)
+            * len(_GRID_BB_MULT) * len(_GRID_GREEN) * len(_GRID_START))
+
+
+def optimise_st_bb_rsi(df: pd.DataFrame, rsi_period: int = 14, bb_period: int = 20, bb_offset: int = 0,
+                       entry_end: str = '15:14', exit_cutoff: str = '15:14', max_trades_per_day: int = 1,
+                       top: int = 25, progress=None, from_date: str = '') -> Dict[str, Any]:
+    """Sweep the grid above on INDEX points and return the best combinations.
+
+    Ranked on total index points among combinations with at least MIN_TRADES
+    trades. Index points, not option premiums: pricing a combination on the
+    option means a Breeze read per trade, which a 2,000-combination sweep cannot
+    afford, so treat the board as a shortlist and confirm a pick with a normal run
+    on the option. Every row also carries its points over the most recent 30 % of
+    the sessions (`recent_pnl`) — a combination that only ever worked early on
+    shows up there."""
+    eng = StBbRsiEngine(df, rsi_period=rsi_period, bb_period=bb_period, bb_offset=bb_offset,
+                        entry_end=entry_end, exit_cutoff=exit_cutoff,
+                        max_trades_per_day=max_trades_per_day)
+    days = sorted({str(t)[:10] for t in eng._base()['ts'] if str(t)[:10] >= from_date})
+    cut = days[int(len(days) * 0.7)] if days else ''
+    total = grid_size()
+    rows: List[Dict[str, Any]] = []
+    done = 0
+    for st_period in _GRID_ST_PERIOD:
+        for st_mult in _GRID_ST_MULT:
+            eng._ind('st', st_period, st_mult)                 # paid once for every combination below
+            for bb_mult in _GRID_BB_MULT:
+                for rsi_level in _GRID_RSI:
+                    for direction in _GRID_DIRECTION:
+                        for green in _GRID_GREEN:
+                            for start in _GRID_START:
+                                trades = eng.simulate(
+                                    st_period=st_period, st_mult=st_mult, bb_mult=bb_mult,
+                                    rsi_level=rsi_level, direction=direction, require_green=green,
+                                    entry_start=_parse_hhmm(start, 9 * 60 + 15))
+                                if from_date:          # the run-in before the start only warms indicators
+                                    trades = [t for t in trades if t['entry_time'][:10] >= from_date]
+                                done += 1
+                                if len(trades) < MIN_TRADES:
+                                    continue
+                                sm = summarise(trades)
+                                sm.update(direction=direction, rsi_level=rsi_level, st_mult=st_mult,
+                                          st_period=st_period, bb_mult=bb_mult, require_green=green,
+                                          entry_start=start,
+                                          recent_pnl=round(sum(t['pnl'] for t in trades
+                                                               if t['entry_time'][:10] >= cut), 2))
+                                rows.append(sm)
+            if progress:
+                progress(done, total)
+    rows.sort(key=lambda r: r['total_pnl'], reverse=True)
+    return {'total_combos_tested': total, 'qualified': len(rows), 'results': rows[:top],
+            'best': rows[0] if rows else None, 'recent_from': cut, 'min_trades': MIN_TRADES}
+
+
 # ── Option leg ─────────────────────────────────────────────────────────────────
+
+def _listed_expiries(symbol: str, after) -> List[Any]:
+    """Expiries of `symbol` still listed in the Fyers NFO master, dated after
+    `after`. The newest sessions' contracts expire BEYOND the candles we hold, so
+    there is no calendar to snap a holiday against: the generated Tuesday 20 Oct
+    2026 was a market holiday and the contract actually trading expired on Monday
+    the 19th, which Breeze/Fyers have no such 20 Oct contract for — those trades
+    came back unpriced. The master lists the real dates."""
+    try:
+        from datetime import date as _d
+        from trading_app.service.provider_logic import get_fyers_adapter
+        fy = get_fyers_adapter()
+        if fy is None:
+            return []
+        out = set()
+        for i in fy.instruments('NFO'):
+            if str(i.get('name') or '').upper() == symbol.upper() and i.get('expiry'):
+                e = i['expiry'] if isinstance(i['expiry'], _d) else _d.fromisoformat(str(i['expiry'])[:10])
+                if e > after:
+                    out.add(e)
+        return sorted(out)
+    except Exception as e:      # noqa: BLE001 — the listing is a refinement, not a requirement
+        logger.warning('[ST-BB-RSI] listed expiries unavailable: %s', e)
+        return []
+
 
 def _stamp_to_hhmm(stamp: str) -> str:
     return stamp[11:16]
 
 
+def _prior_minute(stamp: str) -> str:
+    """HH:MM of the minute BEFORE `stamp`. An order placed at 09:18:00 fills at
+    the price the market had when 09:18 began — the CLOSE of the 09:17 bar. Read
+    off a 389-trade sample of Quantman's own fills this matches to the paisa 31
+    times in 36; the close of the 09:18 bar (what this used to read) is a minute
+    into the future and was 4.3 points off on average, 2.8 on exits."""
+    return (datetime.strptime(stamp[11:16], '%H:%M') - timedelta(minutes=1)).strftime('%H:%M')
+
+
 def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float = 250.0,
-                       bar_minutes: int = 5, progress=None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                       bar_minutes: int = 5, progress=None, calendar=None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Re-price each index trade on the ≈`premium` CE. Returns (priced trades,
     info). A priced trade keeps its index move in `index_*` and carries the
     premium points in `pnl`; a trade whose leg could not be priced is dropped
@@ -279,22 +450,31 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
 
     def exit_minute(t):
         # An exit on the final bar of the session has no "next open"; use its last minute.
-        hhmm = _stamp_to_hhmm(t['exit_time'])
-        return hhmm
+        return _prior_minute(t['exit_time'])
 
     reqs = []
     for n, t in enumerate(work):
-        reqs.append({'key': n, 'date': t['entry_time'][:10], 'side': 'BUY',
-                     'level': t['entry_price'], 'entry_time': _stamp_to_hhmm(t['entry_time']),
+        reqs.append({'key': n, 'date': t['entry_time'][:10], 'side': 'BUY' if t.get('type') != 'Short' else 'SELL',
+                     'level': t['entry_price'], 'entry_time': _prior_minute(t['entry_time']),
                      'exit_time': exit_minute(t), 'exit_price': t['exit_price']})
     # Breeze meters requests app-wide, so threads cannot beat that pace on a cold
     # run — but each strike probe also spends most of its time waiting on the
     # network, and a warm (disk-cached) run is CPU/IO bound. Small chunks across
     # a few workers hide that latency; map() keeps the trades in order.
     chunks = [reqs[i:i + _CHUNK] for i in range(0, len(reqs), _CHUNK)]
+    from datetime import date as _date
+    days = sorted({_date.fromisoformat(r['date']) for r in reqs})
+    # The sessions come from the caller's own candles when it has them: asking
+    # Fyers for a daily history failed under its 50-requests-a-minute cap, and a
+    # calendar with holes picked the wrong expiry (a Jan 2022 trade priced on
+    # the 10 Mar contract), leaving whole years unpriced.
+    if not calendar:
+        calendar = cos._trading_days(symbol, days[0], days[-1])
+    calendar = sorted(set(calendar) | set(_listed_expiries(symbol, max(calendar))))
     results = []
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-        futures = [pool.submit(cos.legs_at, symbol, ch, premium=premium, span_min=1)
+        futures = [pool.submit(cos.legs_at, symbol, ch, premium=premium, span_min=1,
+                               trading_days=calendar)
                    for ch in chunks]
         for n, fut in enumerate(futures, 1):
             results.append(fut.result())
@@ -322,6 +502,65 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
             strike=leg['strike'], option_type=leg['option_type'], expiry=leg['expiry'],
         ))
     return priced, info
+
+
+# ── Compounding ────────────────────────────────────────────────────────────────
+
+def brokerage_for(lots: int) -> float:
+    """Round-trip brokerage for NIFTY options by lot count — the same table the
+    Backtest page uses (calcBrokeragePerTrade in static/js/backtest.js)."""
+    table = {1: 103, 2: 158, 3: 213, 4: 268, 5: 330}
+    return float(table[lots]) if lots <= 5 else 330.0 + (lots - 5) * 62.0
+
+
+def apply_compounding(trades: List[Dict[str, Any]], lot_size: int, start_capital: float = 25000.0,
+                      per_lot: float = 25000.0, max_lots: int = 27,
+                      fixed_lots: Optional[int] = None) -> Dict[str, Any]:
+    """Size every trade from the account's running balance.
+
+    The account starts at `start_capital` and carries `per_lot` of capital per lot,
+    so 25,000 buys 1 lot, and once the balance reaches 50,000 the next trade is
+    2 lots, 75,000 → 3, and so on; a losing run steps the size back down, never
+    below 1 lot. The balance moves by each trade's NET rupees (premium points ×
+    lot size × lots, less brokerage), booked in order, so a trade is sized from
+    what the trades before it earned. With `fixed_lots` every trade is that many
+    lots instead (no compounding) but is still booked in rupees, brokerage taken
+    off, so the page's Total / Brokerage / Net all come from one place. Mutates `trades` (adds lots, gross_pnl_rupees,
+    brokerage, pnl_rupees, balance_after) and returns the ₹ summary fields."""
+    per_lot = max(1.0, float(per_lot))
+    balance = float(start_capital)
+    peak = balance
+    max_dd = 0.0
+    gross_total = brok_total = 0.0
+    wins_rs: List[float] = []
+    losses_rs: List[float] = []
+    max_seen = 1
+    for t in sorted(trades, key=lambda x: x['entry_time']):
+        lots = int(fixed_lots) if fixed_lots else int(max(1, min(max_lots, balance // per_lot)))
+        gross = t['pnl'] * lot_size * lots
+        brok = brokerage_for(lots)
+        net = gross - brok
+        balance += net
+        peak = max(peak, balance)
+        max_dd = max(max_dd, peak - balance)
+        gross_total += gross
+        brok_total += brok
+        (wins_rs if net > 0 else losses_rs).append(net)
+        max_seen = max(max_seen, lots)
+        t.update(lots=lots, gross_pnl_rupees=round(gross, 2), brokerage=round(brok, 2),
+                 pnl_rupees=round(net, 2), balance_after=round(balance, 2))
+    gp, gl = sum(wins_rs), abs(sum(losses_rs))
+    return {
+        'server_rupees': True, 'compounding': not fixed_lots,
+        'start_capital': float(start_capital), 'per_lot': per_lot,
+        'lot_size': lot_size, 'max_lots_used': max_seen, 'final_balance': round(balance, 2),
+        'total_gross_pnl_rupees': round(gross_total, 2), 'total_brokerage': round(brok_total, 2),
+        'total_pnl_rupees': round(balance - start_capital, 2),
+        'max_drawdown_rupees': round(max_dd, 2),
+        'avg_win_rupees': round(gp / len(wins_rs), 2) if wins_rs else 0.0,
+        'avg_loss_rupees': round(-gl / len(losses_rs), 2) if losses_rs else 0.0,
+        'profit_factor_rupees': round(gp / gl, 2) if gl > 0 else (999.0 if gp > 0 else 0.0),
+    }
 
 
 # ── Summary ────────────────────────────────────────────────────────────────────

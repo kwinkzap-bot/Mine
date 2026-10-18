@@ -450,6 +450,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const osParamsRow   = document.getElementById('optionSellingParamsRow');
         if (osParamsRow)   osParamsRow.style.display   = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
+        const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
+        if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
         if (osOptPanel)    osOptPanel.style.display    = 'none';
         const osResultsEl   = document.getElementById('osResults');
         if (osResultsEl)   osResultsEl.style.display   = 'none';
@@ -484,7 +486,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || val === 'st_bb_rsi') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -934,6 +936,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.bb_period     = parseInt(document.getElementById('sbrBbLen')?.value || 20);
                 payload.bb_mult       = parseFloat(document.getElementById('sbrBbMult')?.value || 2);
                 payload.bb_offset     = parseInt(document.getElementById('sbrBbOffset')?.value || 0);
+                payload.direction     = document.getElementById('sbrDirection')?.value || 'long';
+                payload.lots          = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value     = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding   = document.getElementById('sbrCompound')?.checked ?? false;
+                payload.start_capital = parseFloat(document.getElementById('sbrCapital')?.value || 25000);
+                payload.per_lot       = parseFloat(document.getElementById('sbrPerLot')?.value || 25000);
                 payload.require_green = document.getElementById('sbrGreen')?.checked ?? false;
                 payload.rsi_level     = parseFloat(document.getElementById('sbrRsi')?.value || 70);
                 payload.entry_start   = document.getElementById('sbrEntryStart')?.value || '09:15';
@@ -1013,13 +1021,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
-                    _showOptLoader('Pricing the ≈' + payload.premium + ' CE legs',
+                    _showOptLoader('Pricing the ≈' + payload.premium + ' option legs',
                         'starting…');
                     await new Promise(r => setTimeout(r, 2000));
                     const st = await (await fetch(`/api/backtest/st-bb-rsi/status/${taskId}`)).json();
                     if (st.status === 'running') {
                         const p = st.progress || {};
-                        _showOptLoader('Pricing the ≈' + payload.premium + ' CE legs',
+                        _showOptLoader('Pricing the ≈' + payload.premium + ' option legs',
                             `${p.done || 0} / ${p.total || 0} trades · ${st.elapsed || Math.round((Date.now() - t0) / 1000)}s`);
                         continue;
                     }
@@ -1802,12 +1810,16 @@ document.addEventListener('DOMContentLoaded', function() {
         // For the multi-symbol scans this is the GROSS figure (before
         // brokerage) — the dedicated Net P&L (₹) card below is what actually
         // subtracts it. Points would be meaningless summed across symbols.
-        const pnl    = isMultiSymbol ? (summary.total_gross_pnl_rupees ?? 0) : (summary.total_pnl ?? 0);
+        const rsTotal = isMultiSymbol || !!summary.server_rupees;
+        const pnl    = isMultiSymbol ? (summary.total_gross_pnl_rupees ?? 0)
+                     : (summary.server_rupees ? (summary.total_gross_pnl_rupees ?? 0) : (summary.total_pnl ?? 0));
         const pnlEl  = document.getElementById('statTotalPnl');
-        pnlEl.textContent = (pnl >= 0 ? '+' : '') + (isMultiSymbol ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
+        pnlEl.textContent = (pnl >= 0 ? '+' : '') + (rsTotal ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
         pnlEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
         const pnlUnitEl = document.getElementById('statTotalPnlUnit');
-        if (pnlUnitEl) pnlUnitEl.textContent = isMultiSymbol
+        if (pnlUnitEl) pnlUnitEl.textContent = summary.server_rupees
+            ? `total profit, before brokerage · ${Number(summary.total_pnl).toFixed(2)} premium pts`
+            : isMultiSymbol
             ? `gross, before brokerage · ${summary.total_trades || 0} entries`
             : ((isScOption || isOb) ? 'option premium points' : 'points');
 
@@ -1837,7 +1849,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (ddEl)    ddEl.textContent    = '₹' + Math.round(
                 (isEma && summary.max_drawdown_rupees != null)
                     ? Math.abs(summary.max_drawdown_rupees)
-                    : Math.abs(dd) * vLotVal * vLots).toLocaleString('en-IN');
+                    : summary.server_rupees && summary.max_drawdown_rupees != null
+                        ? Math.abs(summary.max_drawdown_rupees)
+                        : Math.abs(dd) * vLotVal * vLots).toLocaleString('en-IN');
 
             const ddDatesEl = document.getElementById('statMaxDDDates');
             if (ddDatesEl) ddDatesEl.textContent = '';
@@ -1846,7 +1860,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // own lot size, priced on the future, with the carry-forward rolls
             // and their brokerage already counted. Reading it off the Lot Value
             // box would quietly disagree with the trades table below it.
-            const emaServerRs    = isEma && summary.futures_priced;
+            const emaServerRs    = (isEma && summary.futures_priced) || !!summary.server_rupees;
             const totalBrokerage = emaServerRs
                 ? (summary.total_brokerage || 0)
                 : (isEma ? EMA_BROKERAGE_PER_ORDER * 2 : calcBrokeragePerTrade(vLots)) * (summary.total_trades || 0);
@@ -1861,7 +1875,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const netSubEl = document.getElementById('statNetRsSub');
             if (netSubEl) {
                 let sub = 'brok: ₹' + Math.round(totalBrokerage).toLocaleString('en-IN');
-                if (emaServerRs) {
+                if (summary.server_rupees) {
+                    sub = `gross ₹${Math.round(summary.total_gross_pnl_rupees).toLocaleString('en-IN')} − brokerage ₹${Math.round(summary.total_brokerage).toLocaleString('en-IN')}`;
+                    sub += summary.compounding
+                        ? ` · compounding ₹${Math.round(summary.start_capital).toLocaleString('en-IN')} → ₹${Math.round(summary.final_balance).toLocaleString('en-IN')} · up to ${summary.max_lots_used} lots`
+                        : ` · ${summary.max_lots_used} lot${summary.max_lots_used === 1 ? '' : 's'} a trade`;
+                } else if (emaServerRs) {
                     sub += ` · ${summary.total_orders || 0} orders`;
                     if (summary.total_rolls) sub += ` (incl. ${summary.total_rolls} roll${summary.total_rolls > 1 ? 's' : ''})`;
                     sub += ` · ${summary.qty || 0} qty/entry`;
@@ -1986,10 +2005,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // A single-symbol EMA run is sized server-side too now, so its trades
         // carry their own pnl_rupees — same as a multi-symbol scan's, and read
         // directly rather than re-derived from the Lots / Lot Value boxes.
-        const directRupees = isMultiSymbol || !!(isEma && summary.futures_priced);
-        const investment2 = (isMultiSymbol || (isEma && summary.capital_per_trade))
-            ? (summary.capital_per_trade || 100000)
-            : lots2 * 50000;
+        const directRupees = isMultiSymbol || !!(isEma && summary.futures_priced) || !!summary.server_rupees;
+        const investment2 = summary.server_rupees
+            ? summary.start_capital
+            : (isMultiSymbol || (isEma && summary.capital_per_trade))
+                ? (summary.capital_per_trade || 100000)
+                : lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 
         // Store for period tab re-renders
@@ -2672,7 +2693,19 @@ document.addEventListener('DOMContentLoaded', function() {
             // stays last and is now the premium's.
             const pnlCol = columns[columns.length - 1];
             columns = [...columns.slice(0, -1), ...SC_OPTION_COLS,
-                       { ...pnlCol, label: 'Opt P&L' }];
+                       { ...pnlCol, label: 'Opt P&L' },
+                       ...(lastData.summary.server_rupees ? [
+                           { key: 'lots', label: 'Lots', sortable: true },
+                           { key: 'gross_pnl_rupees', label: 'Total P&L (₹)', sortable: true,
+                             format: DataGrid.inr, tone: DataGrid.sign },
+                           { key: 'brokerage', label: 'Brokerage (₹)', sortable: true,
+                             format: DataGrid.inr },
+                           { key: 'pnl_rupees', label: 'Net P&L (₹)', sortable: true, strong: true,
+                             format: DataGrid.inr, tone: DataGrid.sign },
+                           ...(lastData.summary.compounding ? [
+                               { key: 'balance_after', label: 'Balance (₹)', sortable: true,
+                                 format: DataGrid.inr }] : []),
+                       ] : [])];
         }
         DataGrid.mountSortable('tradesGrid', {
             rows: lastData.trades,
@@ -3797,7 +3830,110 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'pivot_confluence') runPcOptimise(false);
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
         else if (strat === 'option_selling') runOsOptimise(false);
+        else if (strat === 'st_bb_rsi') runSbrOptimise();
     });
+
+    // ── ST + BB + RSI + R1/S1 — Find Best Params ────────────────────────
+    // 2,160 combinations (direction × RSI level × SuperTrend length/factor × BB
+    // multiplier × green-candle × entry start) scored on INDEX points in about a
+    // minute — the option leg is not priced per combination (a Breeze read per
+    // trade is far too dear for a sweep), so the board is a shortlist: pick a row
+    // and run the normal backtest to see it on the option.
+    let _sbrOptRun = 0;
+    const SBR_OPT_COLS = [
+        { label: '#',          key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Side',       key: 'direction',     fmt: r => ({ long: 'Long (CE)', short: 'Short (PE)', both: 'Both' })[r.direction] || r.direction },
+        { label: 'RSI',        key: 'rsi_level',     fmt: r => r.direction === 'long' ? `> ${r.rsi_level}` : (r.direction === 'short' ? `< ${100 - r.rsi_level}` : `> ${r.rsi_level} / < ${100 - r.rsi_level}`) },
+        { label: 'SuperTrend', key: 'st_mult',       fmt: r => `${r.st_period} / ${r.st_mult}` },
+        { label: 'BB Mult',    key: 'bb_mult',       fmt: r => r.bb_mult },
+        { label: 'Green',      key: 'require_green', fmt: r => r.require_green ? 'Yes' : 'No' },
+        { label: 'From',       key: 'entry_start',   fmt: r => r.entry_start },
+        { label: 'Trades',     key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',       key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Total (index pts)', key: 'total_pnl', fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.total_pnl >= 0 ? '+' : ''}${(r.total_pnl ?? 0).toFixed(0)}</span>` },
+        { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => `<span class="${r.recent_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.recent_pnl >= 0 ? '+' : ''}${(r.recent_pnl ?? 0).toFixed(0)}</span>` },
+        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
+        { label: '',           key: null,            fmt: () => '' },   // Use button
+    ];
+
+    function applySbrOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('sbrDirection', r.direction);
+        set('sbrRsi', r.rsi_level);
+        set('sbrStLen', r.st_period);
+        set('sbrStFactor', r.st_mult);
+        set('sbrBbMult', r.bb_mult);
+        set('sbrEntryStart', r.entry_start);
+        const g = document.getElementById('sbrGreen'); if (g) g.checked = !!r.require_green;
+        if (window.showNotification) window.showNotification(
+            `Applied: ${r.direction} · RSI ${r.rsi_level} · ST ${r.st_period}/${r.st_mult} · BB ×${r.bb_mult}`
+            + `${r.require_green ? ' · green only' : ''} · from ${r.entry_start} — press BACKTEST to see it on the option`, 'success');
+    }
+
+    function renderSbrOptResults(data) {
+        const panel  = document.getElementById('stBbRsiOptimisePanel');
+        const metaEl = document.getElementById('sbrOptMeta');
+        if (metaEl) metaEl.textContent =
+            `${data.total_combos_tested} combos · ${data.qualified} with ≥ ${data.min_trades} trades · `
+            + `${data.symbol} ${data.interval} · ${data.start_date} → ${data.end_date} · ranked on index points, `
+            + `"recent" = since ${data.recent_from}`;
+        _mountSingleOptGrid('sbrOptGrid', data.results || [], SBR_OPT_COLS, 'total_pnl', applySbrOptResult);
+        if (panel) panel.style.display = '';
+    }
+
+    async function runSbrOptimise() {
+        const optimBtn = document.getElementById('runOptimiseBtn');
+        const origText = optimBtn ? optimBtn.textContent : '';
+        const panel    = document.getElementById('stBbRsiOptimisePanel');
+        if (optimBtn) { optimBtn.textContent = '⏳ Running…'; optimBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_sbrOptRun;
+        const done = () => { if (optimBtn) { optimBtn.textContent = origText; optimBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        const num = (id, d) => parseFloat(document.getElementById(id)?.value || d);
+        try {
+            const resp = await fetch('/api/backtest/st-bb-rsi/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol:     (symbolSearch.value || 'NIFTY').trim().toUpperCase(),
+                    start_date: document.getElementById('startDate')?.value,
+                    end_date:   document.getElementById('endDate')?.value,
+                    interval:   document.getElementById('interval')?.value || '3minute',
+                    rsi_period: parseInt(num('sbrRsiLen', 14)),
+                    bb_period:  parseInt(num('sbrBbLen', 20)),
+                    bb_offset:  parseInt(num('sbrBbOffset', 0)),
+                    entry_end:  document.getElementById('sbrEntryEnd')?.value || '15:14',
+                    exit_cutoff: document.getElementById('sbrExitCutoff')?.value || '15:14',
+                    max_trades_per_day: parseInt(num('sbrMaxTrades', 1)),
+                }),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _sbrOptRun) return;
+                data = await (await fetch(`/api/backtest/st-bb-rsi/optimise/status/${taskId}`)).json();
+                if (myRun !== _sbrOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Finding best params…', p.total
+                    ? `${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            renderSbrOptResults(data);
+        } catch (err) {
+            if (myRun !== _sbrOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('ST+BB+RSI optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
 
     // ── NIFTY Option Selling — Find Best Params ─────────────────────────
     // Sweeps OTM strikes × stop % × re-entry × exit time (300 combos) over the
