@@ -5137,7 +5137,7 @@ def run_st_bb_rsi_optimise():
             bb_offset=int(data.get('bb_offset', 0) or 0),
             entry_end=data.get('entry_end', '15:14'),
             exit_cutoff=data.get('exit_cutoff', '15:14'),
-            max_trades_per_day=int(data.get('max_trades_per_day', 1) or 1),
+            max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
         )
         task_id = uuid.uuid4().hex
         task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
@@ -5265,9 +5265,9 @@ def run_st_bb_rsi_backtest_api():
             entry_start=data.get('entry_start', '09:15'),
             entry_end=data.get('entry_end', '15:14'),
             exit_cutoff=data.get('exit_cutoff', '15:14'),
-            max_trades_per_day=int(data.get('max_trades_per_day', 1) or 1),
+            max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
             require_green=bool(data.get('require_green', False)),
-            direction=str(data.get('direction', 'long')),
+            direction=str(data.get('direction', 'both')),
         )
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades

@@ -397,9 +397,9 @@
                 <div class="form-group">
                     <label for="sbrDirection">Direction</label>
                     <select id="sbrDirection" title="Long buys a CE when RSI is above the level, the close is above the upper BB and R1 and SuperTrend is up. Short is the mirror and buys a PE: RSI below (100 - level), close under the lower BB and S1, SuperTrend down. Both takes whichever fires first, one trade a day.">
-                        <option value="long" selected>Long (CE)</option>
+                        <option value="long">Long (CE)</option>
                         <option value="short">Short (PE)</option>
-                        <option value="both">Both</option>
+                        <option value="both" selected>Both</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -473,7 +473,7 @@
                 </div>
                 <div class="form-group">
                     <label for="sbrMaxTrades">Max Trades / Day</label>
-                    <input type="number" id="sbrMaxTrades" value="1" min="1" max="10" step="1">
+                    <input type="number" id="sbrMaxTrades" value="2" min="1" max="10" step="1">
                 </div>
             </div>
 

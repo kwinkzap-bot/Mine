@@ -936,7 +936,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.bb_period     = parseInt(document.getElementById('sbrBbLen')?.value || 20);
                 payload.bb_mult       = parseFloat(document.getElementById('sbrBbMult')?.value || 2);
                 payload.bb_offset     = parseInt(document.getElementById('sbrBbOffset')?.value || 0);
-                payload.direction     = document.getElementById('sbrDirection')?.value || 'long';
+                payload.direction     = document.getElementById('sbrDirection')?.value || 'both';
                 payload.lots          = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
                 payload.lot_value     = parseFloat(document.getElementById('pcLotValue')?.value || 65);
                 payload.compounding   = document.getElementById('sbrCompound')?.checked ?? false;
@@ -947,7 +947,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.entry_start   = document.getElementById('sbrEntryStart')?.value || '09:15';
                 payload.entry_end     = document.getElementById('sbrEntryEnd')?.value || '15:14';
                 payload.exit_cutoff   = document.getElementById('sbrExitCutoff')?.value || '15:14';
-                payload.max_trades_per_day = parseInt(document.getElementById('sbrMaxTrades')?.value || 1);
+                payload.max_trades_per_day = parseInt(document.getElementById('sbrMaxTrades')?.value || 2);
             }
 
             // 30-Min Opening Fakeout breakdown/breakout
@@ -3906,7 +3906,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     bb_offset:  parseInt(num('sbrBbOffset', 0)),
                     entry_end:  document.getElementById('sbrEntryEnd')?.value || '15:14',
                     exit_cutoff: document.getElementById('sbrExitCutoff')?.value || '15:14',
-                    max_trades_per_day: parseInt(num('sbrMaxTrades', 1)),
+                    max_trades_per_day: parseInt(num('sbrMaxTrades', 2)),
                 }),
             });
             let data = await resp.json();
