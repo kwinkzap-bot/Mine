@@ -491,6 +491,25 @@ Load-bearing:
 
 Tests: `tests/test_st_bb_rsi_live.py`, `tests/test_st_bb_rsi_engine.py`.
 
+### BANKNIFTY and SENSEX copies (2026-10-18)
+
+The same algo runs on three indices as three independent algos — own tab (`ST + BB + RSI
+NIFTY / BANKNIFTY / SENSEX`), thread, state/history files, Live/Paper toggle and flags. Only
+the symbol and the premium differ (≈250 / 500 / 800, the Backtest page's per-symbol choice).
+`algo/st_bb_rsi/st_bb_rsi_algo.py` carries a `Profile` per index; the tab is one template
+(`algo_stbb.html`) and one script (`algo_stbb.js`) keyed by tab. Paper by default:
+
+```
+STBB_BN_MODE / STBB_BN_ENABLED / STBB_BN_PREMIUM(500) / STBB_BN_DIRECTION / STBB_BN_MAX_TRADES   # BANKNIFTY
+STBB_SX_*      (SENSEX, premium 800, options on BFO)
+BROKER_N_STBB_BN_ACTIVE / BROKER_N_STBB_BN_LOTS      # per account, zerodha/fyers only — NOT the NIFTY flags
+BROKER_N_STBB_SX_ACTIVE / BROKER_N_STBB_SX_LOTS
+```
+
+Dispatcher strategies are `stbb` / `stbb_bn` / `stbb_sx` (`_STBB_FLAGS` in `api.py`), routes
+`/api/algo/st-bb-rsi-banknifty/*` and `/st-bb-rsi-sensex/*`. One `stbb_start` / `stbb_watchdog`
+job pair starts all three. The live order path of BANKNIFTY/SENSEX has never been exercised.
+
 ## Removed algos
 
 The EMA RTP live algo (five timeframe variants, `algo/rtp_railway_track/`)

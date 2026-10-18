@@ -1,4 +1,11 @@
-"""ST + BB + RSI + R1/S1 — the Backtest page's strategy as a live NIFTY options algo.
+"""ST + BB + RSI + R1/S1 — the Backtest page's strategy as a live index-options algo,
+one instance per index (NIFTY, BANKNIFTY, SENSEX — see ``PROFILES``).
+
+Each index is its OWN algo: its own tab, thread, state and history files, mode toggle
+and flags (``STBB_*`` for NIFTY, ``STBB_BN_*`` BANKNIFTY, ``STBB_SX_*`` SENSEX, and
+``BROKER_N_<prefix>_ACTIVE`` / ``_LOTS`` per account). They differ only in the symbol and
+the premium bought (≈250 / 500 / 800, the Backtest page's choice per symbol). Below,
+"STBB_*" is the NIFTY spelling of every setting.
 
 The rule is ``Backtest/st_bb_rsi_engine.py`` (its ``signals`` is called as-is),
 decided one closed 3-minute candle at a time by ``service/st_bb_rsi_live_engine.py``.
@@ -55,6 +62,28 @@ HISTORY_FILE = os.path.join(_DIR, 'st_bb_rsi_trades_history.json')
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 SYMBOL = 'NIFTY'
+
+
+class Profile:
+    """What differs between the three algos: the index, the env-variable prefix, the
+    premium default, the files, the exchange the options trade on."""
+
+    def __init__(self, symbol, key, pfx, premium, instrument, tag, label):
+        self.symbol, self.key, self.pfx = symbol, key, pfx
+        self.premium, self.instrument = premium, instrument
+        self.tag, self.label = tag, label                  # log tag, human title
+
+    def state_file(self) -> str:
+        return STATE_FILE if self.key == 'stbb' else os.path.join(_DIR, f'st_bb_rsi_{self.symbol.lower()}_state.json')
+
+    def history_file(self) -> str:
+        return HISTORY_FILE if self.key == 'stbb' else os.path.join(_DIR, f'st_bb_rsi_{self.symbol.lower()}_trades_history.json')
+
+
+NIFTY = Profile('NIFTY', 'stbb', 'STBB', 250, 'NFO', 'STBB', 'ST+BB+RSI NIFTY')
+BANKNIFTY = Profile('BANKNIFTY', 'stbb_bn', 'STBB_BN', 500, 'NFO', 'STBB-BN', 'ST+BB+RSI BANKNIFTY')
+SENSEX = Profile('SENSEX', 'stbb_sx', 'STBB_SX', 800, 'BFO', 'STBB-SX', 'ST+BB+RSI SENSEX')
+PROFILES = {pr.symbol: pr for pr in (NIFTY, BANKNIFTY, SENSEX)}
 _POLL_SECS = 5
 _BAR_LAG = timedelta(minutes=eng.BAR_MINUTES, seconds=5)     # a candle is read 5 s after it closes
 _OPEN_MIN = 9 * 60 + 15
@@ -68,8 +97,8 @@ _STALE_SECS = 150                     # an entry candle older than this at the m
 _instances: Dict[str, 'StBbRsiAlgo'] = {}
 
 
-def get_instance(username: str) -> Optional['StBbRsiAlgo']:
-    return _instances.get(username)
+def get_instance(username: str, p: Profile = NIFTY) -> Optional['StBbRsiAlgo']:
+    return _instances.get(f'{p.key}:{username}')
 
 
 def _now() -> datetime:
@@ -99,34 +128,34 @@ def _num(username, name, default: float) -> float:
         return float(default)
 
 
-def mode(username) -> str:
-    return 'live' if _uvar(username, 'STBB_MODE', 'paper').lower() == 'live' else 'paper'
+def mode(username, p: Profile = NIFTY) -> str:
+    return 'live' if _uvar(username, f'{p.pfx}_MODE', 'paper').lower() == 'live' else 'paper'
 
 
-def direction(username) -> str:
-    v = _uvar(username, 'STBB_DIRECTION', 'both').lower()
+def direction(username, p: Profile = NIFTY) -> str:
+    v = _uvar(username, f'{p.pfx}_DIRECTION', 'both').lower()
     return v if v in ('long', 'short', 'both') else 'both'
 
 
-def settings(username) -> Dict[str, Any]:
+def settings(username, p: Profile = NIFTY) -> Dict[str, Any]:
     return {
-        'mode': mode(username),
-        'premium': _num(username, 'STBB_PREMIUM', 250),
-        'direction': direction(username),
-        'max_trades': max(1, int(_num(username, 'STBB_MAX_TRADES', 2))),
-        'rsi_level': _num(username, 'STBB_RSI_LEVEL', 70),
-        'rsi_len': int(_num(username, 'STBB_RSI_LEN', 14)),
-        'st_len': int(_num(username, 'STBB_ST_LEN', 10)),
-        'st_mult': _num(username, 'STBB_ST_MULT', 2),
-        'bb_len': int(_num(username, 'STBB_BB_LEN', 20)),
-        'bb_mult': _num(username, 'STBB_BB_MULT', 2),
-        'require_green': _flag(username, 'STBB_REQUIRE_GREEN', 'false'),
-        'backstop_pct': _num(username, 'STBB_BACKSTOP_PCT', 0),
-        'enabled': _uvar(username, 'STBB_ENABLED', 'true').lower() != 'false',
+        'mode': mode(username, p),
+        'premium': _num(username, f'{p.pfx}_PREMIUM', p.premium),
+        'direction': direction(username, p),
+        'max_trades': max(1, int(_num(username, f'{p.pfx}_MAX_TRADES', 2))),
+        'rsi_level': _num(username, f'{p.pfx}_RSI_LEVEL', 70),
+        'rsi_len': int(_num(username, f'{p.pfx}_RSI_LEN', 14)),
+        'st_len': int(_num(username, f'{p.pfx}_ST_LEN', 10)),
+        'st_mult': _num(username, f'{p.pfx}_ST_MULT', 2),
+        'bb_len': int(_num(username, f'{p.pfx}_BB_LEN', 20)),
+        'bb_mult': _num(username, f'{p.pfx}_BB_MULT', 2),
+        'require_green': _flag(username, f'{p.pfx}_REQUIRE_GREEN', 'false'),
+        'backstop_pct': _num(username, f'{p.pfx}_BACKSTOP_PCT', 0),
+        'enabled': _uvar(username, f'{p.pfx}_ENABLED', 'true').lower() != 'false',
     }
 
 
-def accounts(username) -> List[Dict[str, Any]]:
+def accounts(username, p: Profile = NIFTY) -> List[Dict[str, Any]]:
     """The accounts a live entry reaches: typed, active, BROKER_N_STBB_ACTIVE, and a
     broker this app can hold a stop at. ``lots`` is BROKER_N_STBB_LOTS (None when
     unset — such an account is refused, never guessed)."""
@@ -136,10 +165,10 @@ def accounts(username) -> List[Dict[str, Any]]:
         b_type = _uvar(username, f'BROKER_{i}_TYPE').lower()
         if not b_type or not is_broker_active(username, i):
             continue
-        if not _flag(username, f'BROKER_{i}_STBB_ACTIVE'):
+        if not _flag(username, f'BROKER_{i}_{p.pfx}_ACTIVE'):
             continue
         try:
-            lots = int(_uvar(username, f'BROKER_{i}_STBB_LOTS')) or None
+            lots = int(_uvar(username, f'BROKER_{i}_{p.pfx}_LOTS')) or None
         except (TypeError, ValueError):
             lots = None
         out.append({'instance': i, 'type': b_type, 'lots': lots,
@@ -150,39 +179,45 @@ def accounts(username) -> List[Dict[str, Any]]:
 
 # ── the record ────────────────────────────────────────────────────────────
 
-def load_history() -> List[Dict[str, Any]]:
+def load_history(p: Profile = NIFTY) -> List[Dict[str, Any]]:
     try:
-        with open(HISTORY_FILE) as f:
+        with open(p.history_file()) as f:
             rows = json.load(f)
         return rows if isinstance(rows, list) else []
     except Exception:
         return []
 
 
-def _append_history(row: Dict[str, Any]) -> None:
-    rows = load_history()
+def _append_history(row: Dict[str, Any], p: Profile = NIFTY) -> None:
+    rows = load_history(p)
     rows.append(row)
-    tmp = HISTORY_FILE + '.tmp'
+    hf = p.history_file()
+    tmp = hf + '.tmp'
     with open(tmp, 'w') as f:
         json.dump(rows, f, indent=2, default=str)
-    os.replace(tmp, HISTORY_FILE)
+    os.replace(tmp, hf)
 
 
-def paper_lots(username) -> int:
+def _accts(username, p: Profile = NIFTY) -> List[Dict[str, Any]]:
+    return accounts(username) if p is NIFTY else accounts(username, p)
+
+
+def paper_lots(username, p: Profile = NIFTY) -> int:
     """A paper trade's size: the lots flag (BROKER_N_STBB_LOTS) of the first account
     flagged for this algo, so a paper day is sized like the live one would be — and
     1 lot when no account is flagged. Paper has no sizing settings of its own."""
-    for a in accounts(username):
+    for a in _accts(username, p):
         if a.get('lots'):
             return int(a['lots'])
     return 1
 
 
 class StBbRsiAlgo:
-    """One thread per user; one NIFTY day at a time."""
+    """One thread per user per index; one day at a time."""
 
-    def __init__(self, username: str):
+    def __init__(self, username: str, profile: Profile = NIFTY):
         self.username = username
+        self.p = profile
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -192,15 +227,15 @@ class StBbRsiAlgo:
 
     def start(self) -> None:
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name='StBbRsiAlgoThread')
+        self._thread = threading.Thread(target=self._loop, daemon=True, name=f'StBbRsiAlgoThread-{self.p.symbol}')
         self._thread.start()
-        _instances[self.username] = self
-        logger.info('[STBB] thread started')
+        _instances[f'{self.p.key}:{self.username}'] = self
+        logger.info(f'[{self.p.tag}] thread started')
 
     def stop(self) -> None:
         self._stop_event.set()
-        _instances.pop(self.username, None)
-        logger.info('[STBB] stop requested')
+        _instances.pop(f'{self.p.key}:{self.username}', None)
+        logger.info(f'[{self.p.tag}] stop requested')
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -209,7 +244,7 @@ class StBbRsiAlgo:
 
     def _load_state(self, today: str) -> Dict[str, Any]:
         try:
-            with open(STATE_FILE) as f:
+            with open(self.p.state_file()) as f:
                 st = json.load(f)
             if st.get('day', {}).get('date') == today:
                 return st
@@ -219,16 +254,17 @@ class StBbRsiAlgo:
 
     def _save_state(self) -> None:
         with self._lock:
-            tmp = STATE_FILE + '.tmp'
+            sf = self.p.state_file()
+            tmp = sf + '.tmp'
             try:
                 with open(tmp, 'w') as f:
                     json.dump(self.state, f, indent=2, default=str)
-                os.replace(tmp, STATE_FILE)
+                os.replace(tmp, sf)
             except Exception as e:
-                logger.error(f'[STBB] state save failed: {e}')
+                logger.error(f'[{self.p.tag}] state save failed: {e}')
 
     def _note(self, text: str) -> None:
-        logger.info(f'[STBB] {text}')
+        logger.info(f'[{self.p.tag}] {text}')
         self.state.setdefault('log', []).append({'t': _hhmm(_now()), 'text': text})
         self.state['log'] = self.state['log'][-200:]
 
@@ -239,7 +275,7 @@ class StBbRsiAlgo:
         the junk-filtered and 09:15-anchored resample the backtest uses, with the
         candle still forming dropped."""
         from trading_app.service import multichart_service as mc
-        adapter, fy = mc.provider(), mc.resolve_symbol(SYMBOL)
+        adapter, fy = mc.provider(), mc.resolve_symbol(self.p.symbol)
         raw = adapter.historical_data(fy, (today - timedelta(days=_PRIOR_DAYS)).isoformat(),
                                       today.isoformat(), 'minute', use_cache=False) or []
         if not raw:
@@ -266,16 +302,16 @@ class StBbRsiAlgo:
     def _spot(self) -> Optional[float]:
         from trading_app.app.routes.order_placement_api import _spot
         try:
-            v = _spot(SYMBOL)
+            v = _spot(self.p.symbol)
             return float(v) if v else None
         except Exception as e:
-            logger.debug(f'[STBB] spot unavailable: {e}')
+            logger.debug(f'[{self.p.tag}] spot unavailable: {e}')
             return None
 
     def _premium(self, strike: int, option_type: str) -> Optional[float]:
         from trading_app.app.routes.order_placement_api import option_ltp
         try:
-            v = option_ltp(SYMBOL, int(strike), option_type)
+            v = option_ltp(self.p.symbol, int(strike), option_type)
             return float(v) if v else None
         except Exception:
             return None
@@ -283,7 +319,7 @@ class StBbRsiAlgo:
     def _chain_step(self) -> int:
         from trading_app.app.routes.order_placement_api import _chain_meta
         try:
-            return int((_chain_meta(SYMBOL) or {}).get('step') or 50)
+            return int((_chain_meta(self.p.symbol) or {}).get('step') or 50)
         except Exception:
             return 50
 
@@ -305,17 +341,17 @@ class StBbRsiAlgo:
                 try:
                     self.tick(now)
                 except Exception as e:
-                    logger.error(f'[STBB] tick failed: {e}', exc_info=True)
+                    logger.error(f'[{self.p.tag}] tick failed: {e}', exc_info=True)
                 self._stop_event.wait(_POLL_SECS)
         finally:
-            _instances.pop(self.username, None)
+            _instances.pop(f'{self.p.key}:{self.username}', None)
 
     def tick(self, now: datetime) -> None:
         today = now.date()
         if not self.state or self.state['day']['date'] != today.isoformat():
             self.state = self._load_state(today.isoformat())
         day = self.state['day']
-        s = settings(self.username)
+        s = settings(self.username, self.p)
         events: List[Dict[str, Any]] = []
 
         # Closed candles: any that closed since the last look, oldest first, so a
@@ -376,7 +412,7 @@ class StBbRsiAlgo:
         try:
             rows = leg_fills(rec, self.username, _session(self.username))
         except Exception as e:
-            logger.debug(f'[STBB] fills of {record_id} unavailable: {e}')
+            logger.debug(f'[{self.p.tag}] fills of {record_id} unavailable: {e}')
             return None
         if not rows:
             return None
@@ -408,7 +444,7 @@ class StBbRsiAlgo:
                                    exit_reason='backstop SL-M filled at the broker')
                         self._note(f"#{t['n']} {leg['name']}: the backstop SL-M FILLED at the broker "
                                    f"({f[1]}) — the position is flat")
-                        self._alert('stbb_exit', f"ST+BB+RSI — backstop filled at {leg['name']}",
+                        self._alert('stbb_exit', f"{self.p.label} — backstop filled at {leg['name']}",
                                     f'sold at {f[1]}', t)
                         changed = True
                 if not leg.get('open') and leg.get('exit_record') and not leg.get('exit_confirmed'):
@@ -456,7 +492,7 @@ class StBbRsiAlgo:
                      for k, v in legs.items()},
             'pnl': round(gross, 2), 'charges': round(charges, 2), 'net': round(gross - charges, 2),
             'unconfirmed': bool(pending) or None,
-        })
+        }, self.p)
         self._note(f"#{t['n']}: booked ₹{gross - charges:,.0f} net (₹{gross:,.0f} − ₹{charges:,.0f} charges)"
                    + (' (fills not all confirmed)' if pending else ''))
         return True
@@ -479,7 +515,7 @@ class StBbRsiAlgo:
                 t.update(status='missed', legs={})
                 self._note(f"{label}: signal at {t['signal_bar'][11:16]} was found while the algo was not "
                            f"watching — missed, not traded")
-                self._alert('stbb_order_failed', 'ST+BB+RSI — entry missed',
+                self._alert('stbb_order_failed', f'{self.p.label} — entry missed',
                             f"{label}: signal at {t['signal_bar'][11:16]} was stale", t)
                 return
             self._enter(t, now, s)
@@ -487,7 +523,7 @@ class StBbRsiAlgo:
             self._leave(t, ev, now)
 
     def _enter(self, t: Dict[str, Any], now: datetime, s: Dict[str, Any]) -> None:
-        t['mode'] = mode(self.username)                  # the toggle as it stands at the entry
+        t['mode'] = mode(self.username, self.p)                  # the toggle as it stands at the entry
         opt_type = eng.option_type(t)
         spot = self._spot()
         t['index_entry'] = spot or t['signal']['close']
@@ -498,23 +534,23 @@ class StBbRsiAlgo:
         if not pick:
             t.update(status='failed', legs={}, error='no option quote — the leg could not be priced')
             self._note(f"#{t['n']}: {t['type']} signal but NO OPTION QUOTE — no leg")
-            self._alert('stbb_order_failed', 'ST+BB+RSI — no option quote', t['error'], t)
+            self._alert('stbb_order_failed', f'{self.p.label} — no option quote', t['error'], t)
             return
-        t['option'] = {'symbol': SYMBOL, 'strike': pick['strike'], 'type': opt_type, 'quoted': pick['premium']}
+        t['option'] = {'symbol': self.p.symbol, 'strike': pick['strike'], 'type': opt_type, 'quoted': pick['premium']}
         t['legs'] = self._enter_live(t, s) if t['mode'] == 'live' else self._enter_paper(t, s)
         filled = [l for l in t['legs'].values() if l.get('open')]
         if not filled:
             t['status'] = 'failed'
-        self._note(f"#{t['n']} {t['type']}: RSI {t['signal']['rsi']} → BUY NIFTY {pick['strike']} {opt_type} "
+        self._note(f"#{t['n']} {t['type']}: RSI {t['signal']['rsi']} → BUY {self.p.symbol} {pick['strike']} {opt_type} "
                    f"≈{pick['premium']} — "
                    + (', '.join(f"{l['name']} {l['lots']} lot(s) @ {l.get('entry')}" for l in filled)
                       or 'NOTHING FILLED'))
         self._alert('stbb_fill' if filled else 'stbb_order_failed',
-                    f"ST+BB+RSI {'entry' if filled else 'entry FAILED'} — NIFTY {pick['strike']} {opt_type}",
-                    f"{t['type']} · {t['mode']} · NIFTY {t['index_entry']:,.0f}", t)
+                    f"{self.p.label} {'entry' if filled else 'entry FAILED'} — {self.p.symbol} {pick['strike']} {opt_type}",
+                    f"{t['type']} · {t['mode']} · {self.p.symbol} {t['index_entry']:,.0f}", t)
 
     def _enter_paper(self, t, s) -> Dict[str, Any]:
-        lots = paper_lots(self.username)
+        lots = paper_lots(self.username, self.p)
         px = self._premium(t['option']['strike'], t['option']['type']) or t['option']['quoted']
         return {'paper': {'name': 'Paper', 'instance': 0, 'lots': lots, 'entry': px, 'open': True}}
 
@@ -525,34 +561,34 @@ class StBbRsiAlgo:
         from trading_app.app.utils.mine_order_store import MineOrderStore
 
         legs: Dict[str, Any] = {}
-        lot_size = resolve_standard_lot(SYMBOL)
+        lot_size = resolve_standard_lot(self.p.symbol)
         if not lot_size:
-            t['error'] = 'NIFTY lot size unavailable — no order sent'
-            self._alert('stbb_order_failed', 'ST+BB+RSI — entry refused', t['error'], t)
+            t['error'] = f'{self.p.symbol} lot size unavailable — no order sent'
+            self._alert('stbb_order_failed', f'{self.p.label} — entry refused', t['error'], t)
             return legs
         opt = t['option']
         session_data = _session(self.username)
-        accts = accounts(self.username)
+        accts = _accts(self.username, self.p)
         if not accts:
-            t['error'] = 'no account has BROKER_N_STBB_ACTIVE=true'
-            self._alert('stbb_order_failed', 'ST+BB+RSI — no account to trade', t['error'], t)
+            t['error'] = f'no account has BROKER_N_{self.p.pfx}_ACTIVE=true'
+            self._alert('stbb_order_failed', f'{self.p.label} — no account to trade', t['error'], t)
         for a in accts:
             key = str(a['instance'])
             if not a['stoppable'] or not a['lots']:
                 legs[key] = {'name': a['name'], 'instance': a['instance'], 'open': False,
-                             'error': 'not zerodha/fyers' if not a['stoppable'] else 'BROKER_N_STBB_LOTS unset'}
+                             'error': 'not zerodha/fyers' if not a['stoppable'] else f'BROKER_N_{self.p.pfx}_LOTS unset'}
                 continue
             lots = a['lots']            # BROKER_N_STBB_LOTS — the account's own flag, nothing computed
             summary, qty, prices = [], 0, []
             for chunk in lot_chunks(lots):
                 try:
                     res = _dispatch_order_to_brokers(
-                        symbol=SYMBOL, strike=opt['strike'], option_type=opt['type'], action='BUY',
-                        strategy='stbb', username=self.username, session_data=session_data,
+                        symbol=self.p.symbol, strike=opt['strike'], option_type=opt['type'], action='BUY',
+                        strategy=self.p.key, username=self.username, session_data=session_data,
                         lots_for=lambda _i, _n=chunk: _n,
                         gate=lambda i, _b, _w=a['instance']: i == _w)
                 except Exception as e:
-                    logger.error(f"[STBB] entry at {a['name']} failed: {e}", exc_info=True)
+                    logger.error(f"[{self.p.tag}] entry at {a['name']} failed: {e}", exc_info=True)
                     res = {'success': False, 'summary': [], 'error': str(e)}
                 for b in res.get('summary') or []:
                     summary.append(b)
@@ -563,11 +599,11 @@ class StBbRsiAlgo:
                             prices.append(float(r['price']))
             entry = round(sum(prices) / len(prices), 2) if prices else self._premium(opt['strike'], opt['type'])
             rec = MineOrderStore.add_order({
-                'mode': 'broker', 'symbol': SYMBOL, 'strike': opt['strike'], 'option_type': opt['type'],
+                'mode': 'broker', 'symbol': self.p.symbol, 'strike': opt['strike'], 'option_type': opt['type'],
                 'action': 'BUY', 'strategy': OP_STRATEGY, 'order_type': 'MARKET', 'type': 'MARKET',
-                'instrument': 'NFO', 'price': 0.0, 'quantity': qty, 'entry_price': entry,
+                'instrument': self.p.instrument, 'price': 0.0, 'quantity': qty, 'entry_price': entry,
                 'status': 'EXECUTED' if qty else 'REJECTED', 'username': self.username,
-                'source': 'stbb', 'signal_id': self._signal_id(t), 'leg': 'ENTRY',
+                'source': self.p.key, 'signal_id': self._signal_id(t), 'leg': 'ENTRY',
                 'executed_at': int(_time.time() * 1000) if qty else None,
                 'broker_order_ids': summary,
             })
@@ -581,13 +617,13 @@ class StBbRsiAlgo:
                 trigger = round(entry * (1 - pct / 100.0), 1) if pct > 0 and entry else None
                 sl_id = None
                 if trigger and trigger > 0.05:
-                    signal = {'id': self._signal_id(t), 'symbol': SYMBOL, 'strike': opt['strike'],
+                    signal = {'id': self._signal_id(t), 'symbol': self.p.symbol, 'strike': opt['strike'],
                               'option_type': opt['type'], 'action': 'BUY', 'lot_size': lot_size}
                     sl_id = _place_stop_leg(signal, a['instance'], qty // lot_size, trigger,
-                                            self.username, session_data, source='stbb')
+                                            self.username, session_data, source=self.p.key)
                 leg.update(backstop=trigger, sl_record=sl_id)
                 if trigger and trigger > 0.05 and not sl_id:
-                    self._alert('stbb_order_failed', f"ST+BB+RSI — no backstop SL at {a['name']}",
+                    self._alert('stbb_order_failed', f"{self.p.label} — no backstop SL at {a['name']}",
                                 f'the SL-M at {trigger} was refused; the SuperTrend exit still applies', t)
             else:
                 leg['error'] = next(((b.get('result') or {}).get('error') for b in summary
@@ -614,7 +650,7 @@ class StBbRsiAlgo:
         self._note(f"#{t['n']} {t['type']}: {ev['reason']} at {t['exit_time']} — index "
                    f"{t.get('index_exit') or 0:,.0f}" + (f", premium {exit_px}" if exit_px else ''))
         self._alert('stbb_exit', f"ST+BB+RSI exit — {ev['reason']}",
-                    f"{t['type']} · NIFTY {opt['strike'] if opt else '—'} {opt['type'] if opt else ''} · "
+                    f"{t['type']} · {self.p.symbol} {opt['strike'] if opt else '—'} {opt['type'] if opt else ''} · "
                     f"₹{pnl:,.0f}", t)
         t['flat_at'] = _time.time()
         if 'paper' in legs:
@@ -624,7 +660,7 @@ class StBbRsiAlgo:
         if leg.get('qty'):
             return int(leg['qty'])
         from trading_app.app.routes.api import resolve_standard_lot
-        return int(leg.get('lots') or 1) * int(resolve_standard_lot(SYMBOL) or 65)
+        return int(leg.get('lots') or 1) * int(resolve_standard_lot(self.p.symbol) or 65)
 
     def _exit_live(self, t, leg, exit_px) -> Dict[str, Any]:
         """Cancel the backstop (if any) and sell what this account still holds, scoped
@@ -639,13 +675,13 @@ class StBbRsiAlgo:
                 lambda: [o for o in MineOrderStore.get_today_orders() if o.get('id') in ids],
                 log_tag=f"STBB {self._signal_id(t)} {leg['name']}", max_qty=int(leg.get('qty') or 0))
         except Exception as e:
-            logger.error(f"[STBB] exit at {leg['name']} failed: {e}", exc_info=True)
-            self._alert('stbb_order_failed', f"ST+BB+RSI — EXIT FAILED at {leg['name']}",
+            logger.error(f"[{self.p.tag}] exit at {leg['name']} failed: {e}", exc_info=True)
+            self._alert('stbb_order_failed', f"{self.p.label} — EXIT FAILED at {leg['name']}",
                         f'{e} — square it off by hand', t)
             return {'exit_error': str(e)}
         errs = res.get('errors') or []
         if errs:
-            self._alert('stbb_order_failed', f"ST+BB+RSI — exit refused at {leg['name']}", str(errs[0]), t)
+            self._alert('stbb_order_failed', f"{self.p.label} — exit refused at {leg['name']}", str(errs[0]), t)
             return {'exit_error': str(errs[0])}
         exits = [ex for ex in (res.get('exits') or []) if int(ex.get('instance') or 0) == int(leg['instance'])]
         if not exits:
@@ -657,11 +693,11 @@ class StBbRsiAlgo:
         from trading_app.app.routes.order_placement_api import OP_STRATEGY
         ex = exits[0]
         rec = MineOrderStore.add_order({
-            'mode': 'broker', 'symbol': SYMBOL, 'strike': t['option']['strike'],
+            'mode': 'broker', 'symbol': self.p.symbol, 'strike': t['option']['strike'],
             'option_type': t['option']['type'], 'action': ex.get('side') or 'SELL',
-            'strategy': OP_STRATEGY, 'order_type': 'MARKET', 'type': 'MARKET', 'instrument': 'NFO',
+            'strategy': OP_STRATEGY, 'order_type': 'MARKET', 'type': 'MARKET', 'instrument': self.p.instrument,
             'price': None, 'quantity': sum(int(e.get('quantity') or 0) for e in exits),
-            'status': 'OPEN', 'username': self.username, 'source': 'stbb',
+            'status': 'OPEN', 'username': self.username, 'source': self.p.key,
             'signal_id': self._signal_id(t), 'leg': 'EXIT',
             'broker_order_ids': [{'broker': e.get('broker'), 'instance': leg['instance'], 'order_id': oid,
                                   'success': True, 'quantity': int(e.get('quantity') or 0)}
@@ -670,7 +706,7 @@ class StBbRsiAlgo:
         return {'exit': exit_px, 'open': False, 'exit_record': rec['id']}
 
     def _signal_id(self, t) -> str:
-        return f"stbb-{self.state['day']['date']}-{t['n']}"
+        return f"{self.p.key}-{self.state['day']['date']}-{t['n']}"
 
     def _alert(self, category, title, summary, t=None) -> None:
         if not _flag(self.username, 'STBB_NOTIFY', 'true'):
@@ -681,7 +717,7 @@ class StBbRsiAlgo:
                                          default=str))
             create_notification(category=category, title=title, summary=(summary or '')[:200], data=data)
         except Exception as e:
-            logger.error(f'[STBB] notification failed: {e}')
+            logger.error(f'[{self.p.tag}] notification failed: {e}')
         if not _flag(self.username, 'STBB_TELEGRAM', 'true'):
             return
         token, chat = _uvar(self.username, 'TELEGRAM_BOT_TOKEN'), _uvar(self.username, 'TELEGRAM_CHAT_ID')
@@ -693,21 +729,21 @@ class StBbRsiAlgo:
                 from trading_app.service.telegram_service import TelegramService
                 TelegramService(token=token, chat_id=chat).send_text(f'{title}\n{summary}')
             except Exception as e:
-                logger.error(f'[STBB] Telegram alert failed: {e}')
+                logger.error(f'[{self.p.tag}] Telegram alert failed: {e}')
         threading.Thread(target=_send, daemon=True, name='StBbRsiNotify').start()
 
 
-def ensure_running(username: str, source: str = '') -> bool:
+def ensure_running(username: str, source: str = '', p: Profile = NIFTY) -> bool:
     """Start the thread for the session if it is enabled and not running."""
-    if not settings(username)['enabled']:
+    if not (settings(username) if p is NIFTY else settings(username, p))['enabled']:
         return False
     now = _now()
     mins = now.hour * 60 + now.minute
     if now.weekday() >= 5 or not (9 * 60 <= mins < _HARD_STOP_MIN):
         return False
-    inst = get_instance(username)
+    inst = get_instance(username, p)
     if inst and inst.is_running():
         return False
-    logger.info(f'[STBB {source}] starting thread for {username}')
-    StBbRsiAlgo(username).start()
+    logger.info(f'[{p.tag} {source}] starting thread for {username}')
+    StBbRsiAlgo(username, p).start()
     return True

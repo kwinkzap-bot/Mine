@@ -6,7 +6,7 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade changes
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'stbb', 'ema-confluence', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'stbb', 'stbb-bn', 'stbb-sx', 'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -455,9 +455,8 @@ function algoSwitch(tab) {
     } else if (tab === 'cpr') {
         _cprFetchStatus();
         _cprFetchHistory();
-    } else if (tab === 'stbb') {
-        _stbbFetchStatus();
-        _stbbFetchHistory();
+    } else if (tab === 'stbb' || tab === 'stbb-bn' || tab === 'stbb-sx') {
+        _stbbActivate(tab);
     } else if (tab === 'ema-confluence') {
         _emacFetchStatus();
         _emacFetchHistory();

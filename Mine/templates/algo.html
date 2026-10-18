@@ -23,7 +23,9 @@
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle (Paper)</button>
         <button class="ag-tab"        id="algo-tab-tmf"             onclick="algoSwitch('tmf')">30-Min Fakeout</button>
         <button class="ag-tab"        id="algo-tab-cpr"             onclick="algoSwitch('cpr')">CPR Logic</button>
-        <button class="ag-tab"        id="algo-tab-stbb"            onclick="algoSwitch('stbb')">ST + BB + RSI</button>
+        <button class="ag-tab"        id="algo-tab-stbb"            onclick="algoSwitch('stbb')">ST + BB + RSI NIFTY</button>
+        <button class="ag-tab"        id="algo-tab-stbb-bn"         onclick="algoSwitch('stbb-bn')">ST + BB + RSI BANKNIFTY</button>
+        <button class="ag-tab"        id="algo-tab-stbb-sx"         onclick="algoSwitch('stbb-sx')">ST + BB + RSI SENSEX</button>
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
@@ -221,7 +223,9 @@
     {% include 'algo_tmf.html' %}
 
     {% include 'algo_cpr.html' %}
-    {% include 'algo_stbb.html' %}
+    {% with key='stbb', p='stbb', symbol='NIFTY', pfx='STBB' %}{% include 'algo_stbb.html' %}{% endwith %}
+    {% with key='stbb-bn', p='stbbbn', symbol='BANKNIFTY', pfx='STBB_BN' %}{% include 'algo_stbb.html' %}{% endwith %}
+    {% with key='stbb-sx', p='stbbsx', symbol='SENSEX', pfx='STBB_SX' %}{% include 'algo_stbb.html' %}{% endwith %}
 
     {% include 'algo_ema_confluence.html' %}
 

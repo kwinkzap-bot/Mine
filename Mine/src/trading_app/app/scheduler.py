@@ -849,7 +849,13 @@ class MarketScheduler:
             if not self.is_trading_day():
                 return
             from trading_app.algo.st_bb_rsi import st_bb_rsi_algo
-            st_bb_rsi_algo.ensure_running(self._algo_username(), source=source)
+            # NIFTY, BANKNIFTY and SENSEX are three algos on one pair of jobs; each has
+            # its own <prefix>_ENABLED, so one failing or stopped never holds up another.
+            for prof in st_bb_rsi_algo.PROFILES.values():
+                try:
+                    st_bb_rsi_algo.ensure_running(self._algo_username(), source=source, p=prof)
+                except Exception as e:
+                    logger.error(f"[{prof.tag} {source}] ensure_running failed: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"[STBB {source}] _ensure_stbb_running failed: {e}", exc_info=True)
 

@@ -9627,6 +9627,10 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     return {**result, 'strategy': strategy}
 
 
+# strategy key -> env prefix of the ST + BB + RSI algos (NIFTY, BANKNIFTY, SENSEX).
+_STBB_FLAGS = {'stbb': 'STBB', 'stbb_bn': 'STBB_BN', 'stbb_sx': 'STBB_SX'}
+
+
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
                                quantity=None, tradingsymbol_override=None, expiry_override=None,
                                limit_price=None, sec_id=None, lots_for=None, gate=None):
@@ -9679,6 +9683,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     # 'stbb' is the ST + BB + RSI algo, which exits on the SuperTrend itself — a flat
     # stop here would be a second order on the sell side.
     _auto_sl = _auto_sl and strategy != 'stbb'
+    # The BANKNIFTY / SENSEX copies of that algo, each under its own flag prefix.
+    _auto_sl = _auto_sl and strategy not in _STBB_FLAGS
 
     # A manual SELL closes the position — kill any running auto-exit monitors for this
     # strike so an orphaned monitor can't fire another SELL later.
@@ -9727,11 +9733,12 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): CPR_ACTIVE not enabled")
                 continue
 
-        # The ST + BB + RSI algo, under its own flag: BROKER_N_STBB_ACTIVE.
-        if strategy == 'stbb':
-            raw_active = UserEnvManager.get_user_var(username, f'BROKER_{i}_STBB_ACTIVE', 'false').strip().lower()
+        # The ST + BB + RSI algos, each under its own flag: BROKER_N_STBB_ACTIVE (NIFTY),
+        # BROKER_N_STBB_BN_ACTIVE (BANKNIFTY), BROKER_N_STBB_SX_ACTIVE (SENSEX).
+        if strategy in _STBB_FLAGS:
+            raw_active = UserEnvManager.get_user_var(username, f'BROKER_{i}_{_STBB_FLAGS[strategy]}_ACTIVE', 'false').strip().lower()
             if raw_active not in ('true', '1', 'yes'):
-                logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): STBB_ACTIVE not enabled")
+                logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): {_STBB_FLAGS[strategy]}_ACTIVE not enabled")
                 continue
 
         # The caller's own narrowing, applied after every flag: a gate can
@@ -9761,8 +9768,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             return {'success': False, 'error': 'No broker is enabled for the Order Placement page. Set BROKER_N_OP_ACTIVE=true in .env'}
         elif strategy == 'cpr':
             return {'success': False, 'error': 'No broker is enabled for CPR Logic. Set BROKER_N_CPR_ACTIVE=true in .env'}
-        elif strategy == 'stbb':
-            return {'success': False, 'error': 'No broker is enabled for ST + BB + RSI. Set BROKER_N_STBB_ACTIVE=true in .env'}
+        elif strategy in _STBB_FLAGS:
+            return {'success': False, 'error': f'No broker is enabled for ST + BB + RSI ({strategy}). Set BROKER_N_{_STBB_FLAGS[strategy]}_ACTIVE=true in .env'}
         else:
             return {'success': False, 'error': 'No active broker found. Set BROKER_N_ACTIVE=true in .env'}
 
@@ -9804,8 +9811,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 # must never fall through to a default lot count below.
                 return {'success': False, 'error': 'CPR Logic orders are sized by the caller'}, 400
 
-        if strategy == 'stbb':
-            stbb_active = UserEnvManager.get_user_var(username, f'BROKER_{_active_instance}_STBB_ACTIVE', 'false').lower().strip() in ('true', '1', 'yes')
+        if strategy in _STBB_FLAGS:
+            stbb_active = UserEnvManager.get_user_var(username, f'BROKER_{_active_instance}_{_STBB_FLAGS[strategy]}_ACTIVE', 'false').lower().strip() in ('true', '1', 'yes')
             if not stbb_active:
                 return {'success': False, 'error': f'ST + BB + RSI orders for {broker} are DISABLED in config'}, 403
             if lots_for is None:
@@ -10865,138 +10872,146 @@ def algo_cpr_stop() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@api_bp.route('/algo/st-bb-rsi/status', methods=['GET'])
-@csrf.exempt
-@limiter.exempt
-@require_user_auth
-def algo_stbb_status() -> EndpointResponse:
-    """The ST + BB + RSI algo today: settings, every trade with its option leg, the
-    log, and whether live orders would go out right now (mode live AND an account
-    with BROKER_N_STBB_ACTIVE and BROKER_N_STBB_LOTS)."""
-    try:
+def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str) -> None:
+    """The five /algo/<path>/* routes of one ST + BB + RSI algo. NIFTY keeps its
+    original paths and endpoint names; BANKNIFTY and SENSEX are the same handlers over
+    their own profile (own thread, files, STBB_BN_* / STBB_SX_* settings)."""
+
+    def _prof():
         from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as sb
-        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        return sb, sb.PROFILES[symbol]
+
+    def _user():
+        return session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+    def status() -> EndpointResponse:
+        """The algo today: settings, every trade with its option leg, the log, and
+        whether live orders would go out right now (mode live AND an account with
+        BROKER_N_<prefix>_ACTIVE and BROKER_N_<prefix>_LOTS)."""
         try:
-            with open(sb.STATE_FILE) as _f:
-                state = json.load(_f)
-        except Exception:
-            state = {}
-        inst = sb.get_instance(username)
-        st = sb.settings(username)
-        accts = sb.accounts(username)
-        hist = sb.load_history()
-        return jsonify({
-            'success': True,
-            'running': bool(inst and inst.is_running()),
-            'settings': st,
-            'accounts': accts,
-            'live_armed': st['mode'] == 'live' and any(a['stoppable'] and a['lots'] for a in accts),
-            'state': inst.state if inst and inst.state else state,
-            'paper_lots': sb.paper_lots(username),
-            'history_count': len(hist),
-        })
-    except Exception as e:
-        logger.error(f'[stbb/status] {e}', exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+            sb, pr = _prof()
+            username = _user()
+            try:
+                with open(pr.state_file()) as _f:
+                    state = json.load(_f)
+            except Exception:
+                state = {}
+            inst = sb.get_instance(username, pr)
+            st = sb.settings(username, pr)
+            accts = sb.accounts(username, pr)
+            return jsonify({
+                'success': True,
+                'symbol': symbol,
+                'flag_prefix': pr.pfx,
+                'running': bool(inst and inst.is_running()),
+                'settings': st,
+                'accounts': accts,
+                'live_armed': st['mode'] == 'live' and any(a['stoppable'] and a['lots'] for a in accts),
+                'state': inst.state if inst and inst.state else state,
+                'paper_lots': sb.paper_lots(username, pr),
+                'history_count': len(sb.load_history(pr)),
+            })
+        except Exception as e:
+            logger.error(f'[{path}/status] {e}', exc_info=True)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    def settings_save() -> EndpointResponse:
+        """Save the tab's choices: mode (paper/live), direction (long/short/both),
+        max_trades and premium. Each is read at the next entry, so nothing needs a
+        restart. A position already open keeps the mode it was entered with. Sizing is
+        not a setting here: it is BROKER_N_<prefix>_LOTS at each account flagged
+        BROKER_N_<prefix>_ACTIVE."""
+        try:
+            from trading_app.app.utils.user_env import UserEnvManager
+            _, pr = _prof()
+            username = _user()
+            data = request.get_json(silent=True) or {}
+            saves = {}
+            for key, var, allowed in (('mode', f'{pr.pfx}_MODE', ('paper', 'live')),
+                                      ('direction', f'{pr.pfx}_DIRECTION', ('long', 'short', 'both'))):
+                if key in data:
+                    v = str(data[key]).strip().lower()
+                    if v not in allowed:
+                        return jsonify({'success': False, 'error': f"{key} must be one of {', '.join(allowed)}"}), 400
+                    saves[var] = v
+            for key, var, lo, hi in (('max_trades', f'{pr.pfx}_MAX_TRADES', 1, 10),
+                                     ('premium', f'{pr.pfx}_PREMIUM', 20, 5000)):
+                if key in data:
+                    try:
+                        n = int(data[key])
+                    except (TypeError, ValueError):
+                        return jsonify({'success': False, 'error': f'{key} must be a whole number'}), 400
+                    if not lo <= n <= hi:
+                        return jsonify({'success': False, 'error': f'{key} must be {lo}-{hi}'}), 400
+                    saves[var] = str(n)
+            for var, val in saves.items():
+                if not UserEnvManager.save_user_var(username, var, val):
+                    return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500
+            if f'{pr.pfx}_MODE' in saves:
+                logger.warning(f"[{path}/settings] {username} switched {pr.label} to {saves[f'{pr.pfx}_MODE'].upper()}")
+            return jsonify({'success': True, 'saved': saves})
+        except Exception as e:
+            logger.error(f'[{path}/settings] {e}', exc_info=True)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    def history() -> EndpointResponse:
+        """Every closed trade of this algo, paper and live, newest first."""
+        try:
+            sb, pr = _prof()
+            rows = list(reversed(sb.load_history(pr)))
+            return jsonify({'success': True, 'trades': rows, 'count': len(rows)})
+        except Exception as e:
+            logger.error(f'[{path}/history] {e}', exc_info=True)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    def start() -> EndpointResponse:
+        """Start the thread and keep it starting every day (<prefix>_ENABLED)."""
+        try:
+            from trading_app.app.utils.user_env import UserEnvManager
+            sb, pr = _prof()
+            username = _user()
+            UserEnvManager.save_user_var(username, f'{pr.pfx}_ENABLED', 'true')
+            started = sb.ensure_running(username, source='start-button', p=pr)
+            inst = sb.get_instance(username, pr)
+            return jsonify({'success': True, 'running': bool(inst and inst.is_running()),
+                            'message': f'{pr.label} started' if started else
+                                       f'{pr.label} enabled — it runs 09:00-15:30 on trading days'})
+        except Exception as e:
+            logger.error(f'[{path}/start] {e}', exc_info=True)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    def stop() -> EndpointResponse:
+        """Stop the thread and keep it stopped until Start. A live position it holds is
+        NOT squared off by this — close it from the Order Placement strip."""
+        try:
+            from trading_app.app.utils.user_env import UserEnvManager
+            sb, pr = _prof()
+            username = _user()
+            UserEnvManager.save_user_var(username, f'{pr.pfx}_ENABLED', 'false')
+            inst = sb.get_instance(username, pr)
+            if inst and inst.is_running():
+                inst.stop()
+            return jsonify({'success': True, 'message': f'{pr.label} stopped'})
+        except Exception as e:
+            logger.error(f'[{path}/stop] {e}', exc_info=True)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    for fn, name, suffix, method in ((status, 'status', 'status', 'GET'),
+                                     (settings_save, 'settings', 'settings', 'POST'),
+                                     (history, 'history', 'history', 'GET'),
+                                     (start, 'start', 'start', 'POST'),
+                                     (stop, 'stop', 'stop', 'POST')):
+        endpoint = f'algo_{endpoint_suffix}_{name}'
+        fn.__name__ = endpoint
+        view = require_user_auth(fn)
+        view = limiter.exempt(view)
+        view = csrf.exempt(view)
+        api_bp.route(f'/algo/{path}/{suffix}', methods=[method], endpoint=endpoint)(view)
 
 
-@api_bp.route('/algo/st-bb-rsi/settings', methods=['POST'])
-@csrf.exempt
-@limiter.exempt
-@require_user_auth
-def algo_stbb_settings() -> EndpointResponse:
-    """Save the tab's choices: mode (paper/live), direction (long/short/both), max_trades
-    and premium. Each is read at the next entry, so nothing needs a restart. A position
-    already open keeps the mode it was entered with. Sizing is not a setting here: it is
-    BROKER_N_STBB_LOTS at each account flagged BROKER_N_STBB_ACTIVE."""
-    try:
-        from trading_app.app.utils.user_env import UserEnvManager
-        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        data = request.get_json(silent=True) or {}
-        saves = {}
-        for key, var, allowed in (('mode', 'STBB_MODE', ('paper', 'live')),
-                                  ('direction', 'STBB_DIRECTION', ('long', 'short', 'both'))):
-            if key in data:
-                v = str(data[key]).strip().lower()
-                if v not in allowed:
-                    return jsonify({'success': False, 'error': f"{key} must be one of {', '.join(allowed)}"}), 400
-                saves[var] = v
-        for key, var, lo, hi in (('max_trades', 'STBB_MAX_TRADES', 1, 10),
-                                 ('premium', 'STBB_PREMIUM', 20, 2000)):
-            if key in data:
-                try:
-                    n = int(data[key])
-                except (TypeError, ValueError):
-                    return jsonify({'success': False, 'error': f'{key} must be a whole number'}), 400
-                if not lo <= n <= hi:
-                    return jsonify({'success': False, 'error': f'{key} must be {lo}-{hi}'}), 400
-                saves[var] = str(n)
-        for var, val in saves.items():
-            if not UserEnvManager.save_user_var(username, var, val):
-                return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500
-        if 'STBB_MODE' in saves:
-            logger.warning(f"[stbb/settings] {username} switched ST+BB+RSI to {saves['STBB_MODE'].upper()}")
-        return jsonify({'success': True, 'saved': saves})
-    except Exception as e:
-        logger.error(f'[stbb/settings] {e}', exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/algo/st-bb-rsi/history', methods=['GET'])
-@csrf.exempt
-@limiter.exempt
-@require_user_auth
-def algo_stbb_history() -> EndpointResponse:
-    """Every closed ST + BB + RSI trade, paper and live, newest first."""
-    try:
-        from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as sb
-        rows = list(reversed(sb.load_history()))
-        return jsonify({'success': True, 'trades': rows, 'count': len(rows)})
-    except Exception as e:
-        logger.error(f'[stbb/history] {e}', exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/algo/st-bb-rsi/start', methods=['POST'])
-@csrf.exempt
-@limiter.exempt
-@require_user_auth
-def algo_stbb_start() -> EndpointResponse:
-    """Start the thread and keep it starting every day (STBB_ENABLED)."""
-    try:
-        from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as sb
-        from trading_app.app.utils.user_env import UserEnvManager
-        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        UserEnvManager.save_user_var(username, 'STBB_ENABLED', 'true')
-        started = sb.ensure_running(username, source='start-button')
-        inst = sb.get_instance(username)
-        return jsonify({'success': True, 'running': bool(inst and inst.is_running()),
-                        'message': 'ST + BB + RSI started' if started else
-                                   'ST + BB + RSI enabled — it runs 09:00-15:30 on trading days'})
-    except Exception as e:
-        logger.error(f'[stbb/start] {e}', exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/algo/st-bb-rsi/stop', methods=['POST'])
-@csrf.exempt
-@limiter.exempt
-@require_user_auth
-def algo_stbb_stop() -> EndpointResponse:
-    """Stop the thread and keep it stopped until Start. A live position it holds is
-    NOT squared off by this — close it from the Order Placement strip."""
-    try:
-        from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as sb
-        from trading_app.app.utils.user_env import UserEnvManager
-        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
-        UserEnvManager.save_user_var(username, 'STBB_ENABLED', 'false')
-        inst = sb.get_instance(username)
-        if inst and inst.is_running():
-            inst.stop()
-        return jsonify({'success': True, 'message': 'ST + BB + RSI stopped'})
-    except Exception as e:
-        logger.error(f'[stbb/stop] {e}', exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+_register_stbb_routes('st-bb-rsi', 'NIFTY', 'stbb')
+_register_stbb_routes('st-bb-rsi-banknifty', 'BANKNIFTY', 'stbb_bn')
+_register_stbb_routes('st-bb-rsi-sensex', 'SENSEX', 'stbb_sx')
 
 
 @api_bp.route('/algo/ema-confluence/status', methods=['GET'])
