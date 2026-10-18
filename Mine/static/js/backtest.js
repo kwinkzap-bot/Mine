@@ -738,6 +738,28 @@ document.addEventListener('DOMContentLoaded', function() {
         applyStrategyStatusFilter();
     }
 
+    // ST + BB + RSI "Option Premium ≈" choices follow the symbol: NIFTY-sized by default,
+    // BANKNIFTY centred on 500, SENSEX on 800. The symbol box is also set from code
+    // (no event), so a light poll catches every change.
+    const SBR_PREMIUMS = {
+        DEFAULT:   { list: [150, 200, 250, 300], def: 250 },
+        BANKNIFTY: { list: [300, 400, 500, 600], def: 500 },
+        SENSEX:    { list: [500, 650, 800, 1000], def: 800 },
+    };
+    let _sbrPremiumKey = null;
+    function syncSbrPremium() {
+        const sel = document.getElementById('sbrPremium');
+        if (!sel || !symbolSearch) return;
+        const sym = (symbolSearch.value || '').toUpperCase();
+        const key = sym.includes('BANKNIFTY') ? 'BANKNIFTY' : sym.includes('SENSEX') ? 'SENSEX' : 'DEFAULT';
+        if (key === _sbrPremiumKey) return;
+        _sbrPremiumKey = key;
+        const cfg = SBR_PREMIUMS[key];
+        sel.innerHTML = cfg.list.map(v => `<option value="${v}"${v === cfg.def ? ' selected' : ''}>${v}</option>`).join('');
+    }
+    syncSbrPremium();
+    setInterval(syncSbrPremium, 400);
+
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
         // Set initial state

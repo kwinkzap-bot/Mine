@@ -52,8 +52,24 @@ STRIKE_STEP = {'NIFTY': 50, 'BANKNIFTY': 100, 'FINNIFTY': 50, 'MIDCPNIFTY': 25, 
 BROKERAGE = 100.0   # ₹ per trade, taken off every ₹/lot figure; `pnl` in points stays gross
 LOT_SIZE = {'NIFTY': 65, 'BANKNIFTY': 30, 'FINNIFTY': 65, 'MIDCPNIFTY': 120, 'SENSEX': 20}
 EXPIRY_CADENCE = {'NIFTY': 'weekly', 'SENSEX': 'weekly'}      # the rest are monthly-only
-WEEKLY_SINCE = {'NIFTY': date(2019, 2, 11)}   # NIFTY weekly options were listed from here; before it only the monthly contract existed
+WEEKLY_SINCE = {'NIFTY': date(2019, 2, 11), 'SENSEX': date(2023, 5, 15)}   # NIFTY weekly options were listed from here; before it only the monthly contract existed
 OPTION_EXCHANGE = {'SENSEX': 'BFO'}
+# BSE runs its own expiry weekday, never NSE's: Friday, then Tuesday from 2025-01-01,
+# then Thursday from 2025-09-01 (the live BFO master lists Thursdays). Reading SENSEX
+# off NSE's Tuesday regime asked Breeze for contracts that never existed — every leg
+# came back unpriced and the backtest returned zero trades.
+_BSE_WEEKDAY_REGIMES = [(date(1900, 1, 1), 4), (date(2025, 1, 1), 1), (date(2025, 9, 1), 3)]
+
+
+def expiry_weekday(symbol: str, day: date) -> Optional[int]:
+    """The symbol's own expiry weekday on `day`; None = NSE's regime table."""
+    if (symbol or '').upper() != 'SENSEX':
+        return None
+    wd = _BSE_WEEKDAY_REGIMES[0][1]
+    for cutover, w in _BSE_WEEKDAY_REGIMES:
+        if cutover <= day:
+            wd = w
+    return wd
 
 MIN_PREMIUM = 0.05            # an estimate never goes below the tick
 PREMIUM_CHOICES = (150, 200, 250, 300)   # the page's premium targets
@@ -90,7 +106,7 @@ def contract(symbol: str, day: date, trade: str, entry: float,
     cadence = EXPIRY_CADENCE.get(symbol.upper(), 'monthly')
     if cadence == 'weekly' and day < WEEKLY_SINCE.get(symbol.upper(), date.min):
         cadence = 'monthly'                    # 2018: there was no weekly contract to buy
-    expiry = expiry_on_or_after(day, trading_days, cadence)
+    expiry = expiry_on_or_after(day, trading_days, cadence, expiry_weekday(symbol, day))
     if expiry is None:
         return None
     return {'strike': int(round(entry / step) * step),

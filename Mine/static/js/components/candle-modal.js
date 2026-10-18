@@ -95,7 +95,7 @@
     // TradingView's own candle colours, which is what the reference chart is
     // showing — not this app's --color-pos/neg, which are tuned for text in
     // a grid and read far heavier as a wall of candle bodies.
-    const UP = '#089981';
+    const UP = '#1b9981';
     const DOWN = '#f23645';
 
     const escape = (s) => (global.DataGrid ? global.DataGrid.escape(s) : String(s == null ? '' : s));

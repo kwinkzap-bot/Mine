@@ -1167,7 +1167,7 @@ window.TradingViewChart = (function () {
         };
         const back = () => {
             const b = lastBar(), o = series.options() || {};
-            const up = opts.upColor || o.upColor || '#26a69a', down = opts.downColor || o.downColor || '#ef5350';
+            const up = opts.upColor || o.upColor || '#1b9981', down = opts.downColor || o.downColor || '#f23645';
             return b && b.close < b.open ? down : up;
         };
         let requestUpdate = null, price = '', text = '', lastText = null;
