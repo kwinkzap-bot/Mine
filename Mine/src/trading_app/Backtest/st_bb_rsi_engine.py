@@ -228,23 +228,27 @@ class StBbRsiEngine:
         trades = self.simulate()
         return trades, summarise(trades)
 
-    def simulate(self, **over) -> List[Dict[str, Any]]:
-        """Trades for this engine's settings, any of which `over` replaces."""
+    def _params(self, over: Dict[str, Any]) -> Dict[str, Any]:
         P = dict(rsi_period=self.rsi_period, rsi_level=self.rsi_level, bb_period=self.bb_period,
                  bb_mult=self.bb_mult, bb_offset=self.bb_offset, st_period=self.st_period,
                  st_mult=self.st_mult, entry_start=self.entry_start, entry_end=self.entry_end,
                  exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
                  require_green=self.require_green, direction=self.direction)
         P.update(over)
+        return P
+
+    def signals(self, **over) -> Dict[str, Any]:
+        """Per bar: +1 long signal, -1 short signal, 0 none (before the entry window
+        is applied), plus the series a decision needs. The short side is the exact
+        mirror: RSI below (100 - level), close under the LOWER band, SuperTrend on
+        the down side, close under S1 (2P - PDH); an optional red candle. Shared by
+        the backtest (`simulate`) and the live algo, so the two cannot drift."""
+        P = self._params(over)
         b = self._base()
-        o, c, tmin = b['o'], b['c'], b['tmin']
+        o, c = b['o'], b['c']
         rsi_v = self._ind('rsi', P['rsi_period'])
         bb_up, bb_lo = self._ind('bb', P['bb_period'], P['bb_mult'], P['bb_offset'])
         st_line, st_dir = self._ind('st', P['st_period'], P['st_mult'])
-
-        # +1 = long signal, -1 = short signal, 0 = none. The short side is the exact
-        # mirror: RSI below (100 - level), close under the LOWER band, SuperTrend on
-        # the down side, close under S1 (2P - PDH); an optional red candle.
         with np.errstate(invalid='ignore'):
             long_sig = ((rsi_v > P['rsi_level']) & (c > bb_up) & (st_dir == 1)
                         & np.isfinite(st_line) & (c > b['r1']))
@@ -257,10 +261,20 @@ class StBbRsiEngine:
             short_sig = np.zeros(len(c), dtype=bool)
         elif P['direction'] == 'short':
             long_sig = np.zeros(len(c), dtype=bool)
+        return {'signal': np.where(long_sig, 1, np.where(short_sig, -1, 0)), 'rsi': rsi_v,
+                'st_line': st_line, 'st_dir': st_dir,
+                'lv': {'bb_up': bb_up, 'bb_lo': bb_lo, 'r1': b['r1'], 's1': b['s1']}}
+
+    def simulate(self, **over) -> List[Dict[str, Any]]:
+        """Trades for this engine's settings, any of which `over` replaces."""
+        P = self._params(over)
+        b = self._base()
+        o, c, tmin = b['o'], b['c'], b['tmin']
+        sg = self.signals(**over)
+        rsi_v, st_line, st_dir, lv = sg['rsi'], sg['st_line'], sg['st_dir'], sg['lv']
         window = (tmin >= P['entry_start']) & (tmin < P['entry_end'])
-        signal = np.where(long_sig, 1, np.where(short_sig, -1, 0)) * window
+        signal = sg['signal'] * window
         cand = np.flatnonzero(signal)                   # only these bars can start a trade
-        lv = {'bb_up': bb_up, 'bb_lo': bb_lo, 'r1': b['r1'], 's1': b['s1']}
 
         trades: List[Dict[str, Any]] = []
         if not len(cand):
@@ -298,7 +312,10 @@ class StBbRsiEngine:
                     if k < b and tmin[k + 1] < P['exit_cutoff']:
                         exit_k, exit_px, reason = k + 1, o[k + 1], name
                     else:
-                        exit_k, exit_px, reason = k, c[k], name
+                        # The flip is only known when this candle closes, which is at or
+                        # after the square-off minute: by then the clock has already
+                        # squared the trade off (the live algo does exactly that).
+                        exit_k, exit_px, reason = k, c[k], 'Time Exit'
                     break
             pnl = (exit_px - entry) if is_long else (entry - exit_px)
             out.append({

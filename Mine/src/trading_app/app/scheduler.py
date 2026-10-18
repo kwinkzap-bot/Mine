@@ -301,6 +301,26 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # ST + BB + RSI (the Backtest page's strategy run live on NIFTY options,
+        # paper by default): up at 09:05 so it is watching before the first
+        # 3-minute candle closes at 09:18, with the same watchdog shape.
+        self.scheduler.add_job(
+            self._start_stbb,
+            CronTrigger(day_of_week='mon-fri', hour=9, minute=5, second=10, timezone='Asia/Kolkata'),
+            id='stbb_start',
+            name='ST BB RSI Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+        self.scheduler.add_job(
+            self._watchdog_stbb,
+            CronTrigger(day_of_week='mon-fri', hour='9-15', minute='*/5', second=50, timezone='Asia/Kolkata'),
+            id='stbb_watchdog',
+            name='ST BB RSI Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         # Telegram calls: the channel listener comes up before the open so the
         # first call of the day is not missed, and the same watchdog shape
         # brings back either thread (listener, call engine) if it dies.
@@ -818,6 +838,27 @@ class MarketScheduler:
     def _watchdog_cpr_logic(self) -> None:
         self._ensure_cpr_running(source='Watchdog')
 
+    # ── ST + BB + RSI ────────────────────────────────────────────────────────
+
+    def _ensure_stbb_running(self, source: str = '') -> None:
+        """Start the ST + BB + RSI thread on a trading day unless the tab's Stop was
+        clicked (STBB_ENABLED=false). The window and the idempotence are
+        st_bb_rsi_algo.ensure_running's; paper vs live is decided per entry inside
+        the thread, never here."""
+        try:
+            if not self.is_trading_day():
+                return
+            from trading_app.algo.st_bb_rsi import st_bb_rsi_algo
+            st_bb_rsi_algo.ensure_running(self._algo_username(), source=source)
+        except Exception as e:
+            logger.error(f"[STBB {source}] _ensure_stbb_running failed: {e}", exc_info=True)
+
+    def _start_stbb(self) -> None:
+        self._ensure_stbb_running(source='Scheduler')
+
+    def _watchdog_stbb(self) -> None:
+        self._ensure_stbb_running(source='Watchdog')
+
     # ── Telegram calls ───────────────────────────────────────────────────────
 
     def _ensure_tg_calls_running(self, source: str = '') -> None:
@@ -1149,6 +1190,7 @@ def init_scheduler(app):
         market_scheduler._ensure_tmf_running(source='Startup')
         market_scheduler._ensure_ema_confluence_running(source='Startup')
         market_scheduler._ensure_cpr_running(source='Startup')
+        market_scheduler._ensure_stbb_running(source='Startup')
         # And the Telegram-call engine, for the case this restart is exactly
         # what it has to survive: a live position with a stop resting at the
         # broker and a plan on disk that nothing is reading until this line

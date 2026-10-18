@@ -1,0 +1,76 @@
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- ST + BB + RSI panel — the Backtest page's strategy run    -->
+    <!-- live on NIFTY options. Own files: algo_stbb.html +        -->
+    <!-- static/js/algo_stbb.js; the thread is algo/st_bb_rsi/.    -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-stbb-panel">
+
+    <div class="ag-header">
+        <span class="ag-title">ST + BB + RSI</span>
+        <span id="stbbModeBadge" class="dg-badge dg-badge--warn">PAPER</span>
+        <!-- STBB_MODE, read at every entry: Paper records the option leg at its real
+             premium and sends nothing; Live buys it at every account with
+             BROKER_N_STBB_ACTIVE=true (zerodha / fyers). -->
+        <div class="rtp-period-tabs" id="stbbModeToggle" style="margin-left:0"
+             title="Paper: every entry and exit is recorded at the option's real premium — nothing is sent. Live: the option is bought at every account with BROKER_N_STBB_ACTIVE=true. Applies from the next entry; an open position keeps its mode.">
+            <button class="rtp-period-tab" data-mode="paper" onclick="_stbbSetMode('paper')">Paper</button>
+            <button class="rtp-period-tab" data-mode="live"  onclick="_stbbSetMode('live')">Live</button>
+        </div>
+        <span id="stbbRunBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="stbbRunBadgeText">Stopped</span>
+        </span>
+        <button class="ag-btn ag-btn-strikes" onclick="_stbbStart()">▶ Start</button>
+        <button class="ag-btn ag-btn-strikes" onclick="_stbbStop()">■ Stop</button>
+        <a class="ag-btn ag-btn-strikes" href="/backtest" title="The rule's backtest (ST + BB + RSI + R1)">Backtest ↗</a>
+        <span class="ag-last-upd" id="stbbLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Rule + sizing ───────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Rule &amp; Accounts</span>
+            <label class="cpr-num" title="Long buys a CALL; Short buys a PUT; Both takes whichever fires first.">Side
+                <select id="stbbDirection" onchange="_stbbSave({direction:this.value})">
+                    <option value="both">Both</option><option value="long">Long (CE)</option><option value="short">Short (PE)</option>
+                </select></label>
+            <label class="cpr-num" title="Trades a day, one open at a time">Max trades
+                <input type="number" id="stbbMaxTrades" min="1" max="10" step="1" onchange="_stbbSave({max_trades:+this.value})"></label>
+            <label class="cpr-num" title="The strike whose premium is nearest this is bought">Premium ≈
+                <input type="number" id="stbbPremium" class="cpr-num-wide" min="20" max="2000" step="10" onchange="_stbbSave({premium:+this.value})"></label>
+        </div>
+        <div class="ag-card-body">
+            <div id="stbbSizing" style="margin-bottom:8px;font-size:11px;color:var(--ag-text-3)"></div><div class="ag-grid" id="stbbAccounts"><div class="ag-empty">…</div></div>
+            <div id="stbbRule" style="margin-top:8px;font-size:11px;color:var(--ag-text-3)"></div></div>
+    </div>
+
+    <!-- ── Today ───────────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Today</span>
+            <span id="stbbSpot" style="margin-left:12px;font-size:11px;color:var(--ag-text-3)"></span>
+            <span class="ag-card-hdr-actions" style="margin-left:auto">
+                <button class="ag-btn ag-btn-strikes" onclick="_stbbFetchStatus()">↻ Refresh</button>
+            </span>
+        </div>
+        <div class="ag-card-body">
+            <div id="stbbTrades"><div class="ag-empty">No signal yet today</div></div>
+            <div class="cpr-log" id="stbbLog"></div>
+        </div>
+    </div>
+
+    <!-- ── History ─────────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Trade History</span>
+            <div class="rtp-period-tabs" id="stbbBookTabs" style="margin-left:12px">
+                <button class="rtp-period-tab active" data-book="all"   onclick="_stbbSetBook('all')">All</button>
+                <button class="rtp-period-tab"        data-book="paper" onclick="_stbbSetBook('paper')">Paper</button>
+                <button class="rtp-period-tab"        data-book="live"  onclick="_stbbSetBook('live')">Live</button>
+            </div>
+            <span id="stbbHistSummary" style="margin-left:auto;font-size:11px;font-weight:700"></span>
+        </div>
+        <div id="stbbHistBody"><div class="ag-empty">No completed trades</div></div>
+    </div>
+
+    </div><!-- #algo-stbb-panel -->

@@ -13,7 +13,7 @@ engine, four brokers. Treat every change as touching real orders.
 
 **Never call `create_app()` outside the real app.** It runs
 `init_extensions` → `init_scheduler` (`app/__init__.py:27` →
-`extensions.py:96` → `scheduler.py:978`), which registers 19 cron jobs and
+`extensions.py:96` → `scheduler.py:978`), which registers 21 cron jobs and
 immediately restarts the live algos. A test or REPL that imports it during
 market hours places real orders. Tests build a bare `Flask()` instead — see
 `tests/route_app.py`.
@@ -61,7 +61,7 @@ few seconds later. Booting it out is the real stop, and `bootstrap` puts it
 back.
 
 A restart takes ~8s to serve again and re-runs `init_scheduler`, so it
-re-registers the 19 cron jobs and **restarts the live algos** — the same reason
+re-registers the 21 cron jobs and **restarts the live algos** — the same reason
 `create_app()` is dangerous. Verify afterwards:
 
 ```bash
@@ -435,6 +435,61 @@ Two things are load-bearing:
 
 Order failures raise `ema_confluence_order_failed` (bell + Telegram) once per
 symbol per day. Tests: `tests/test_ema_confluence_live.py`.
+
+## ST + BB + RSI live algo
+
+The Backtest page's **ST + BB + RSI + R1** strategy run live on NIFTY options —
+the **ST + BB + RSI** tab on /algo (`templates/algo_stbb.html`,
+`static/js/algo_stbb.js`), the thread `algo/st_bb_rsi/st_bb_rsi_algo.py`, the
+brain `service/st_bb_rsi_live_engine.py`, routes `/api/algo/st-bb-rsi/{status,
+settings,history,start,stop}`, jobs `stbb_start` 09:05 + `stbb_watchdog` (and
+startup recovery). Added 2026-10-18, **paper by default**:
+
+```
+STBB_MODE=paper                 # live = real orders; the tab's toggle, read at each ENTRY
+STBB_ENABLED=true               # the tab's Start/Stop (scheduler honours it)
+STBB_DIRECTION=both             # long = CE on the long signal, short = PE on the mirror
+STBB_MAX_TRADES=2               # a day, one open at a time
+STBB_PREMIUM=250                # the strike nearest this premium is bought
+STBB_BACKSTOP_PCT=0             # optional broker SL-M this % below the fill; 0 = none (the default)
+BROKER_N_STBB_ACTIVE=true       # per account, with BROKER_N_ACTIVE; zerodha/fyers only
+BROKER_N_STBB_LOTS=1            # per account, THE size of a live order; an account without it is refused, never guessed
+```
+
+Load-bearing:
+
+* **One rule, two drivers.** The signals are `StBbRsiEngine.signals` — the very
+  function the backtest simulates with — and `on_bar` reads the LAST closed
+  3-minute candle of the history it is handed. Replayed candle by candle over the
+  last 25 sessions it reproduces the backtest's trades exactly (long: 10 / 10,
+  both: 21 / 21, every entry and exit). Keep it that way: change the rule in the
+  engine, never copy it.
+* **The trade is on the index; the order is an option.** A long signal buys the
+  ≈250 CE of the front weekly, a short signal the ≈250 PE, at market. **There is
+  no target and no stop** — the exit is a later candle's close putting SuperTrend
+  against the trade, or the 15:14 square-off. A live position therefore has no
+  protection if this app is down; `STBB_BACKSTOP_PCT` is the opt-in floor.
+* **A signal read late is missed, not traded** (`_STALE_SECS` 150): a restart
+  catching up the morning records the entry as `missed`. Only exits are acted on
+  for old candles.
+* **Candles** are 1-minute Fyers bars (last 14 days, `use_cache=False`) resampled
+  to 3 minutes anchored on 09:15 with the backtest's closing-minute junk filter —
+  Fyers/Breeze have served junk bars at 15:20+ that moved a pivot and dropped a
+  signal. A candle is read 3 min 5 s after it opens.
+* **`strategy='stbb'` in `_dispatch_order_to_brokers`** routes on
+  `BROKER_N_STBB_ACTIVE` only, has no automatic `entry − 20` stop and refuses to
+  size itself, exactly as `'cpr'` (tests/test_st_bb_rsi_live.py). The `_auto_sl`
+  line for the other strategies is asserted verbatim by other tests: add to it on
+  its own line, never edit it.
+* **Sizing is the flag, nothing computed.** A live order is `BROKER_N_STBB_LOTS` lots at
+  each account with `BROKER_N_STBB_ACTIVE=true`; a paper trade takes the first flagged
+  account's lots, or 1. Fixed/compound lot modes were removed on 2026-10-18 (the
+  *Backtest* page still has its Compounding box; that is a backtest feature only).
+* **The books are the broker's**: live legs book at the order book's real fills
+  (`leg_fills`); history rows carry gross, charges (the Backtest page's per-lot
+  brokerage table) and net.
+
+Tests: `tests/test_st_bb_rsi_live.py`, `tests/test_st_bb_rsi_engine.py`.
 
 ## Removed algos
 
