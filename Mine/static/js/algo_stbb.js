@@ -15,8 +15,13 @@ const _stbbEl = (c, id) => document.getElementById(c.p + id);
 
 function _stbbClearTimers() { Object.values(_STBB).forEach(c => { clearTimeout(c.timer); c.timer = null; }); }
 
-// Called by algoSwitch for any of the three tabs.
-function _stbbActivate(key) { _stbbFetchStatus(key); _stbbFetchHistory(key); }
+// Called by algoSwitch for any of the three sub-tabs. All three indices load (and keep
+// refreshing) together, so switching between them shows data already in the DOM instead
+// of waiting on a fresh fetch. `key` is only the one the user is looking at.
+const _stbbGroupOpen = () => Object.keys(_STBB).some(k => document.getElementById('algo-' + k + '-panel')?.classList.contains('active'));
+function _stbbActivate(key) {
+    Object.keys(_STBB).forEach(k => { _stbbFetchStatus(k); _stbbFetchHistory(k); });
+}
 
 function _stbbEsc(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -35,7 +40,7 @@ function _stbbFetchStatus(key) {
         .then(d => { if (d.success) _stbbRender(c, key, d); })
         .catch(() => {})
         .finally(() => {
-            if (document.getElementById('algo-' + key + '-panel')?.classList.contains('active'))
+            if (_stbbGroupOpen())
                 c.timer = setTimeout(() => _stbbFetchStatus(key), 5000);
         });
 }
