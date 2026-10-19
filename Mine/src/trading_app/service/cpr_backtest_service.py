@@ -1183,16 +1183,88 @@ def _intraday_by_session(raw: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
     return by
 
 
+def _bars_from_store(symbol: str, first: date, last: date) -> Optional[tuple]:
+    """(daily, intraday-by-session) built from the local 1-minute store instead of
+    ~100 sequential Fyers requests (years of 5-minute chunks, each paced and rate
+    limited: minutes cold, and nothing at all once the day's quota is gone). Closed
+    sessions never change, so the store is the same data kept. Only the sessions
+    after the store's last day are fetched — Zerodha, then Fyers, then ICICI, the
+    chain the live algos read. None when the store has no file for the symbol."""
+    import pandas as pd
+    from trading_app.Backtest import minute_candle_store as store
+    key = store._cache_key('fyers', symbol.upper())
+    entry = store._mem.get(key) or store._load_disk(key)
+    if not entry or entry['df'].empty:
+        return None
+    m = entry['df']
+    start = pd.Timestamp(first - timedelta(days=CANDLE_HISTORY_SESSIONS * 2))
+    stored_last = m.index[-1].date()
+    if m.index[0] > start + pd.Timedelta(days=7):
+        return None                                  # the store does not reach back far enough
+    m = m[m.index >= start]
+    if stored_last < last:
+        from trading_app.service import multichart_service as mc
+        try:
+            raw = mc.algo_provider().historical_data(
+                mc.resolve_symbol(symbol), (stored_last - timedelta(days=1)).isoformat(),
+                last.isoformat(), 'minute', use_cache=False) or []
+        except Exception as e:
+            logger.warning(f'[CPR backtest] tail after {stored_last} unavailable: {e}')
+            raw = []
+        if raw:
+            t = pd.DataFrame(raw)
+            t['date'] = pd.to_datetime(t['date'])
+            t = t.set_index('date').sort_index()
+            if getattr(t.index, 'tz', None) is not None:
+                t.index = t.index.tz_localize(None)
+            m = pd.concat([m, t[['open', 'high', 'low', 'close', 'volume']]])
+            m = m[~m.index.duplicated(keep='last')].sort_index()
+    m = m[m.index < pd.Timestamp(last) + pd.Timedelta(days=1)]
+    mins = m.index.hour * 60 + m.index.minute
+    # Closing-minute junk the store can carry for recent sessions (see api._sbr_load_bars).
+    m = m[~((mins >= 15 * 60 + 15) & ((m['high'] - m['low']) > 0.003 * m['close']))]
+    mins = m.index.hour * 60 + m.index.minute
+    m = m[(mins >= 9 * 60 + 15) & (mins < 15 * 60 + 30)]
+    anchor = pd.Timedelta(hours=9, minutes=15)
+    bar5 = m.groupby((m.index - anchor).floor('5min') + anchor).agg(
+        open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
+        close=('close', 'last'), volume=('volume', 'sum')).dropna(subset=['open', 'close'])
+    intraday: Dict[str, List[Dict[str, Any]]] = {}
+    days = bar5.index.strftime('%Y-%m-%d')
+    times = bar5.index.strftime('%H:%M')
+    for d, tm, o, h, l, c, v in zip(days, times, bar5['open'], bar5['high'], bar5['low'],
+                                    bar5['close'], bar5['volume']):
+        intraday.setdefault(d, []).append({'time': tm, 'open': float(o), 'high': float(h), 'low': float(l),
+                                           'close': float(c), 'volume': float(v or 0)})
+    g = m.groupby(m.index.date)
+    day = pd.DataFrame({'open': g['open'].first(), 'high': g['high'].max(),
+                        'low': g['low'].min(), 'close': g['close'].last()})
+    daily_from = first - timedelta(days=(WIDTH_HISTORY_SESSIONS + CANDLE_HISTORY_SESSIONS) * 2 + 14)
+    daily = [{'date': d, 'open': float(r.open), 'high': float(r.high), 'low': float(r.low),
+              'close': float(r.close)} for d, r in day.iterrows() if d >= daily_from]
+    return daily, intraday
+
+
 def fetch_bars(symbol: str, first: date, last: date, fresh: bool = False) -> tuple:
     """(daily, intraday-by-session) covering the manual sheet's dates, with
     enough daily history in front for the averages and the previous week.
     `fresh` skips the hour-long cache — for `extend`, whose whole point is
     the session that closed since the page last looked."""
     from trading_app.service import multichart_service as mc
+    last = min(last, date.today())
+    # Also for `fresh`: the store holds closed sessions, and its tail (the session that
+    # just closed) is fetched uncached through Zerodha-first, so Update still works
+    # once Fyers' daily request cap is gone.
+    try:
+        got = _bars_from_store(symbol, first, last)
+    except Exception as e:
+        logger.warning(f'[CPR backtest] local store read failed, using the provider: {e}')
+        got = None
+    if got and got[1]:
+        return got
     adapter = mc.provider()
     fy_symbol = mc.resolve_symbol(symbol)
     today = date.today()
-    last = min(last, today)
 
     daily_from = first - timedelta(days=(WIDTH_HISTORY_SESSIONS + CANDLE_HISTORY_SESSIONS) * 2 + 14)
     daily_raw = adapter.historical_data(fy_symbol, daily_from.isoformat(), last.isoformat(),

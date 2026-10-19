@@ -435,11 +435,21 @@ ss3 = ss1 - (high - low)
 // Future CPR - Projected into the next session
 rr4 = pivot * 3 + (high - 3 * low)
 ss4 = pivot * 3 - (3 * high - low)
-[ftime_pivot, ftime_bc, ftime_tc, ftime_r1, ftime_r2, ftime_r3, ftime_r4, ftime_s1, ftime_s2, ftime_s3, ftime_s4] = request.security(syminfo.tickerid, timeframe, [pivot[0], bc[0], tc[0], rr1[0], rr2[0], rr3[0], rr4[0], ss1[0], ss2[0], ss3[0], ss4[0]], lookahead=barmerge.lookahead_on)
-ftime_pdh = request.security(syminfo.tickerid, timeframe, high[0], lookahead=barmerge.lookahead_on)
-ftime_pdl = request.security(syminfo.tickerid, timeframe, low[0], lookahead=barmerge.lookahead_on)
+ftime_pivot = request.security(syminfo.tickerid, timeframe, pivot, lookahead=barmerge.lookahead_on)
+ftime_bc = request.security(syminfo.tickerid, timeframe, bc, lookahead=barmerge.lookahead_on)
+ftime_tc = request.security(syminfo.tickerid, timeframe, tc, lookahead=barmerge.lookahead_on)
+ftime_r1 = request.security(syminfo.tickerid, timeframe, rr1, lookahead=barmerge.lookahead_on)
+ftime_r2 = request.security(syminfo.tickerid, timeframe, rr2, lookahead=barmerge.lookahead_on)
+ftime_r3 = request.security(syminfo.tickerid, timeframe, rr3, lookahead=barmerge.lookahead_on)
+ftime_r4 = request.security(syminfo.tickerid, timeframe, rr4, lookahead=barmerge.lookahead_on)
+ftime_s1 = request.security(syminfo.tickerid, timeframe, ss1, lookahead=barmerge.lookahead_on)
+ftime_s2 = request.security(syminfo.tickerid, timeframe, ss2, lookahead=barmerge.lookahead_on)
+ftime_s3 = request.security(syminfo.tickerid, timeframe, ss3, lookahead=barmerge.lookahead_on)
+ftime_s4 = request.security(syminfo.tickerid, timeframe, ss4, lookahead=barmerge.lookahead_on)
+ftime_pdh = request.security(syminfo.tickerid, timeframe, high, lookahead=barmerge.lookahead_on)
+ftime_pdl = request.security(syminfo.tickerid, timeframe, low, lookahead=barmerge.lookahead_on)
 
-ftime_close = request.security(syminfo.tickerid, timeframe, close[0], lookahead=barmerge.lookahead_on)
+ftime_close = request.security(syminfo.tickerid, timeframe, close, lookahead=barmerge.lookahead_on)
 
 var line f_p = na, var line f_bc = na, var line f_tc = na
 var line f_r1 = na, var line f_r2 = na, var line f_r3 = na, var line f_r4 = na

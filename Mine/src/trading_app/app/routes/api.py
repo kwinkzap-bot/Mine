@@ -5052,7 +5052,19 @@ def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interv
     # need a run-in, as they have on a chart, so 45 days before the start are
     # read and only trades on/after the start are kept.
     warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
-    minutes = get_minute_history(provider, token, symbol, warm_from,
+    # The store files these minutes under the provider's tag. Only the missing tail
+    # (today, usually) is ever fetched, and it goes through the same chain the live
+    # algos read — Zerodha, then Fyers, then ICICI — so Fyers hitting its daily request
+    # cap no longer leaves today silently out of the run.
+    class _TailChain:
+        def __init__(self, fyers):
+            from trading_app.service.multichart_service import ZerodhaFirstHistory
+            self._chain = ZerodhaFirstHistory(fyers)
+
+        def historical_data(self, instrument_token, from_date, to_date, interval, **kw):
+            return self._chain.historical_data(instrument_token, from_date, to_date, interval, **kw)
+
+    minutes = get_minute_history(_TailChain(provider), token, symbol, warm_from,
                                  end_date_str, provider_tag=_provider_tag(provider))
     if minutes is None or minutes.empty:
         return None, None, 0, 0
@@ -5272,6 +5284,14 @@ def run_st_bb_rsi_backtest_api():
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
         summary = summarise(trades)
+        # Say so when the newest sessions the range asks for could not be loaded, rather
+        # than quietly running on what the store had.
+        _want = min(pd.Timestamp(end_date_str).date(), datetime.now().date())
+        while _want.weekday() >= 5:
+            _want -= timedelta(days=1)
+        _have = pd.Timestamp(candles[-1]['date']).date()
+        data_warning = (f"Candles end at {_have:%d %b}; {_want:%d %b} could not be loaded (data provider "
+                        f"limit or outage), so it is not in this run.") if _have < _want else None
         ran = {
             'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
             'start_date': start_date_str, 'end_date': end_date_str,
@@ -5311,7 +5331,7 @@ def run_st_bb_rsi_backtest_api():
         logger.info('[ST-BB-RSI BT] %s %s %s→%s  %d bars  %d signals  options=%s',
                     symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
         if not (price_options and trades):
-            return jsonify(_payload(trades, None, None))
+            return jsonify(_payload(trades, None, data_warning))
 
         # Pricing is one Breeze request per strike probe, paced app-wide: years of
         # trades are minutes cold, so it runs in the background and the page polls.
@@ -5334,12 +5354,12 @@ def run_st_bb_rsi_backtest_api():
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
                             f"candles and {info['truncated']} older ones were not priced; "
                             f"they are left out of the totals.")
-                task['payload'] = _payload(priced, info, warn)
+                task['payload'] = _payload(priced, info, ' '.join(w for w in (warn, data_warning) if w) or None)
                 task['status'] = 'complete'
             except Exception as e:     # no ICICI login / Breeze down: keep the index result
                 logger.warning('[ST-BB-RSI BT] option pricing failed: %s', e)
                 task['payload'] = _payload(
-                    trades, None, f'Option premiums unavailable ({e}); showing INDEX points.')
+                    trades, None, ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.', data_warning) if w))
                 task['status'] = 'complete'
 
         threading.Thread(target=_run, name=f'sbr-{task_id[:6]}', daemon=True).start()

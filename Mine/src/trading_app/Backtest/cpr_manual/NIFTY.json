@@ -39314,8 +39314,26 @@
       "reason": "09:15 candle opened at 23,065 over PDH/R1 and closed under it, 09:20 small red candle -> SELL under it at 22,955, but the daily CPR 22,847-22,947 is only 8 pts under the entry, inside the 43-pt risk \u2014 no room \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 100.3 pts (0.436%), 09:15 candle O 23065.1 H 23076.55 L 22953.65 C 22955.9 | Trade by rule: 09:15 candle opened at 23,065 over PDH/R1 and closed under it, 09:20 small red candle -> SELL under it at 22,955, but the daily CPR 22,847-22,947 is only 8 pts under the entry, inside the 43-pt risk \u2014 no room \u2014 no trade"
+    },
+    {
+      "date": "2026-10-19",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Medium",
+      "cpr_direction": "Asc",
+      "first_candle": "In decision candle(doji) near Prev High",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "No candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 76.2 pts (0.329%), 09:15 candle O 23150.85 H 23175.25 L 23074.6 C 23153.25 | Trade by rule: no candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-16 16:29",
+  "extended_at": "2026-10-19 16:54",
   "backfilled_from": "2018-01-01"
 }
