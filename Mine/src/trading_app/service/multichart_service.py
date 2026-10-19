@@ -98,6 +98,13 @@ _KITE_INDEX_TOKENS = {
 }
 
 
+class _NoFallback:
+    """Stands in for the Fyers adapter when none is logged in."""
+
+    def historical_data(self, *a, **kw):
+        raise ProviderUnavailable('Fyers login required - no symbol-based data provider is available.')
+
+
 class ZerodhaFirstHistory:
     """historical_data(fyers_symbol, ...) read from Zerodha, then from Fyers.
 
@@ -142,6 +149,8 @@ class ZerodhaFirstHistory:
             from trading_app.service.provider_logic import get_kite, _kite_serves_history
             kite = get_kite(instance=1)
             if kite is None or not _kite_serves_history(kite):
+                logger.warning(f'Zerodha history unavailable for {symbol} {interval} '
+                               f"({'no BROKER_1 session' if kite is None else 'history probe refused'}) - using Fyers")
                 return None
             rows = kite.historical_data(token, f'{from_date} 00:00:00', f'{to_date} 23:59:59', interval)
             out = []
@@ -160,7 +169,14 @@ def algo_provider() -> Any:
     """What the live CPR / ST+BB+RSI algos read candles from: Zerodha first,
     Fyers if that fails. Falls back to the plain provider when Fyers is the
     only thing logged in."""
-    return ZerodhaFirstHistory(provider())
+    try:
+        fyers = provider()
+    except ProviderUnavailable as exc:
+        # No Fyers login must not take Zerodha down with it: Kite serves the
+        # three indices on its own, so the algos keep their candles.
+        logger.warning(f'[algo_provider] {exc} - reading Zerodha only')
+        fyers = _NoFallback()
+    return ZerodhaFirstHistory(fyers)
 
 
 def _speaks_symbols(adapter: Any) -> bool:

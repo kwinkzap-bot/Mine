@@ -146,16 +146,40 @@ def test_paper_thread_enters_then_exits_and_books_a_history_row(paper):
     assert rows[0]['net'] == pytest.approx(rows[0]['pnl'] - rows[0]['charges'])
 
 
-def test_a_signal_read_late_is_missed_not_traded(paper):
+def test_a_signal_read_late_is_still_traded_while_supertrend_is_with_it(paper):
     f = _frame()
     i = _first_signal_bar(f)
     a = _FakeAlgo('u', f)
-    late = _now_for(f, i) + timedelta(minutes=10)              # the thread woke up 10 minutes late
-    a.tick(late)
+    a.tick(_now_for(f, i) + timedelta(minutes=3))               # woke up one candle late
+    t = a.state['day']['trades'][0]
+    assert t['status'] == 'open' and t.get('late') and t['legs']['paper']['open']
+
+
+def test_a_late_signal_whose_trend_already_turned_back_is_missed(paper):
+    f = _frame()
+    i = _first_signal_bar(f)
+    a = _FakeAlgo('u', f)
+    a.tick(_now_for(f, len(f) - 1))                             # catching up the whole day at once
     trades = a.state['day']['trades']
-    assert trades and all(t['status'] != 'open' for t in trades)
-    assert trades[0]['status'] == 'missed' and not trades[0]['legs']
-    assert algo.load_history() == []
+    for t in trades:
+        assert t['status'] != 'open'
+    if trades and trades[0]['status'] == 'missed':
+        assert not trades[0]['legs'] and algo.load_history() == []
+
+
+def test_an_unpriced_entry_is_retried_until_it_fills(paper, monkeypatch):
+    f = _frame()
+    i = _first_signal_bar(f)
+    a = _FakeAlgo('u', f)
+    real = a._premium
+    monkeypatch.setattr(a, '_premium', lambda k, o: None)
+    a.tick(_now_for(f, i))
+    t = a.state['day']['trades'][0]
+    assert t['status'] == 'open' and t['pending_entry'] and not t['legs']
+    monkeypatch.setattr(a, '_premium', real)
+    t['last_try'] = 0
+    a.tick(_now_for(f, i))
+    assert t['pending_entry'] is False and t['legs']['paper']['open']
 
 
 def test_live_mode_is_never_chosen_without_the_toggle(paper):

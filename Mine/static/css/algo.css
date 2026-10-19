@@ -2215,3 +2215,15 @@ body.ocean-theme .sm-gl-overlay {
 .cpr-log { margin-top: 10px; max-height: 180px; overflow-y: auto; font-size: 11px; line-height: 1.55; color: var(--ag-text-2); font-family: ui-monospace, Menlo, monospace; }
 .cpr-log b { color: var(--ag-text-3); font-weight: 600; margin-right: 6px; }
 .cpr-num input.cpr-num-wide { width: 84px; }
+
+/* ── Sub-tabs (ST + BB + RSI → NIFTY / BANKNIFTY / SENSEX): underline style, one step
+   below the top tab bar so the two levels read as different things. ───────────── */
+.ag-subtabs { display: flex; gap: 4px; margin: 2px 0 10px; border-bottom: 1px solid var(--ag-border); }
+.ag-subtab {
+    position: relative; padding: 8px 16px 9px; margin-bottom: -1px;
+    font: 600 12px/1 inherit; letter-spacing: .04em; color: var(--ag-text-3);
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    border-radius: 6px 6px 0 0; cursor: pointer; transition: color .15s, background .15s, border-color .15s;
+}
+.ag-subtab:hover { color: var(--ag-text); background: var(--ag-row-hover); }
+.ag-subtab.active { color: var(--ag-accent); border-bottom-color: var(--ag-accent); background: var(--ag-surface); }

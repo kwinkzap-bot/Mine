@@ -469,9 +469,12 @@ Load-bearing:
   no target and no stop** — the exit is a later candle's close putting SuperTrend
   against the trade, or the 15:14 square-off. A live position therefore has no
   protection if this app is down; `STBB_BACKSTOP_PCT` is the opt-in floor.
-* **A signal read late is missed, not traded** (`_STALE_SECS` 150): a restart
-  catching up the morning records the entry as `missed`. Only exits are acted on
-  for old candles.
+* **A signal read late is still traded** (changed 2026-10-19): there is no target
+  or stop, so a trade whose SuperTrend is still with it is still the trade. A restart
+  catching up the morning enters at the current price (`late: true`) unless the same
+  catch-up also carries its SuperTrend exit, then it is `missed`. An entry that is
+  unpriced or refused by every broker stays `open` with `pending_entry` and is
+  retried every 10 s, 6 tries (`_ENTRY_TRIES`); never retried once any qty filled.
 * **Candles** are 1-minute Fyers bars (last 14 days, `use_cache=False`) resampled
   to 3 minutes anchored on 09:15 with the backtest's closing-minute junk filter —
   Fyers/Breeze have served junk bars at 15:20+ that moved a pivot and dropped a

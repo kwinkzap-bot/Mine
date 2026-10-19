@@ -5,6 +5,12 @@
     <!-- ════════════════════════════════════════════════════════ -->
     <div class="ag-panel" id="algo-{{ key }}-panel">
 
+    <div class="ag-subtabs">
+        <button class="ag-subtab{% if key == 'stbb' %} active{% endif %}" onclick="algoSwitch('stbb')">NIFTY</button>
+        <button class="ag-subtab{% if key == 'stbb-bn' %} active{% endif %}" onclick="algoSwitch('stbb-bn')">BANKNIFTY</button>
+        <button class="ag-subtab{% if key == 'stbb-sx' %} active{% endif %}" onclick="algoSwitch('stbb-sx')">SENSEX</button>
+    </div>
+
     <div class="ag-header">
         <span class="ag-title">ST + BB + RSI · {{ symbol }}</span>
         <span id="{{ p }}ModeBadge" class="dg-badge dg-badge--warn">PAPER</span>

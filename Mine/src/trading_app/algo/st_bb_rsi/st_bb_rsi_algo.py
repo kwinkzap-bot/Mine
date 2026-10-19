@@ -92,7 +92,9 @@ _PRIOR_DAYS = 14                      # calendar days of 1-minute history: indic
 _STOPPABLE = ('zerodha', 'kite', 'fyers')
 _SYNC_SECS = 15
 _BOOK_WAIT_SECS = 120
-_STALE_SECS = 150                     # an entry candle older than this at the moment of reading is missed, not traded
+_STALE_SECS = 150                     # an entry candle older than this at the moment of reading is a LATE entry
+_ENTRY_TRIES = 6                      # a refused / unpriced entry is retried this many times (every _RETRY_SECS)
+_RETRY_SECS = 10
 
 _instances: Dict[str, 'StBbRsiAlgo'] = {}
 
@@ -375,10 +377,13 @@ class StBbRsiAlgo:
                     for ev in eng.on_bar(day, bars.iloc[:k + 1], dict(s, **self._window())):
                         ev['stale'] = stale
                         events.append(ev)
+        events = self._drop_round_trips(events)
         events += eng.time_exits(day, _hhmm(now), self._window()['exit_cutoff'])
 
         for ev in events:
             self._act(ev, now, s)
+        if self._retry_entries(now, s):
+            events.append({'event': 'retry'})
         synced = self._sync_live_legs(now)
         if any(t['status'] == 'open' for t in day['trades']):
             self.state['spot'] = self._spot() or self.state.get('spot')     # a quote only while something is open
@@ -386,6 +391,36 @@ class StBbRsiAlgo:
             self._save_state()
         else:
             self.state['updated'] = _hhmm(now)
+
+    @staticmethod
+    def _drop_round_trips(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """A late entry is still taken — unless the very same catch-up also carries
+        that trade's exit (SuperTrend already turned back): then the whole move is
+        history, so it is recorded as missed and no order goes out."""
+        out = list(events)
+        for ev in events:
+            if ev['event'] == 'entry' and ev.get('stale'):
+                t = ev['trade']
+                if any(x['event'] == 'exit' and x['trade'] is t for x in events):
+                    t.update(status='missed', legs={})
+                    out = [x for x in out if x['trade'] is not t]
+        return out
+
+    def _retry_entries(self, now: datetime, s: Dict[str, Any]) -> bool:
+        """An entry that was refused or could not be priced is not given up on: the
+        trade stays 'open' without legs and the order is tried again, until it fills,
+        the tries run out, or SuperTrend ends the trade (the normal exit)."""
+        if _hhmm(now) >= self._window()['exit_cutoff']:
+            return False
+        did = False
+        for t in self.state['day']['trades']:
+            if t['status'] != 'open' or not t.get('pending_entry'):
+                continue
+            if _time.time() - t.get('last_try', 0) < _RETRY_SECS:
+                continue
+            self._enter(t, now, s)
+            did = True
+        return did
 
     @staticmethod
     def _window() -> Dict[str, str]:
@@ -509,15 +544,12 @@ class StBbRsiAlgo:
         label = f"#{t['n']} {t['type']}"
         if kind == 'entry':
             if ev.get('stale'):
-                # A signal read off a candle that closed minutes ago — the thread was
-                # down, or this is a restart catching up the morning. That move has
-                # happened; an order now would buy it late. Recorded, not traded.
-                t.update(status='missed', legs={})
-                self._note(f"{label}: signal at {t['signal_bar'][11:16]} was found while the algo was not "
-                           f"watching — missed, not traded")
-                self._alert('stbb_order_failed', f'{self.p.label} — entry missed',
-                            f"{label}: signal at {t['signal_bar'][11:16]} was stale", t)
-                return
+                # Found late (the thread was down, or a restart is catching up). The
+                # strategy has no target or stop — it rides until SuperTrend turns — so
+                # a signal whose trend is still intact is still the trade: taken now.
+                t['late'] = True
+                self._note(f"{label}: signal at {t['signal_bar'][11:16]} was found late — "
+                           f"SuperTrend still with it, entering now")
             self._enter(t, now, s)
         elif kind == 'exit' and t['status'] == 'open':
             self._leave(t, ev, now)
@@ -528,19 +560,35 @@ class StBbRsiAlgo:
         spot = self._spot()
         t['index_entry'] = spot or t['signal']['close']
         t['entry_time'] = _hhmm(now)
+        t['attempts'] = int(t.get('attempts') or 0) + 1
+        t['last_try'] = _time.time()
+        last_try = t['attempts'] >= _ENTRY_TRIES
         from trading_app.service import cpr_live_engine as cpr_eng
         pick = cpr_eng.pick_strike(lambda k: self._premium(k, opt_type), t['index_entry'],
                                    self._chain_step(), opt_type, s['premium'])
         if not pick:
-            t.update(status='failed', legs={}, error='no option quote — the leg could not be priced')
-            self._note(f"#{t['n']}: {t['type']} signal but NO OPTION QUOTE — no leg")
-            self._alert('stbb_order_failed', f'{self.p.label} — no option quote', t['error'], t)
+            t.update(legs={}, error='no option quote — the leg could not be priced')
+            if last_try:
+                t.update(status='failed', pending_entry=False)
+                self._alert('stbb_order_failed', f'{self.p.label} — no option quote', t['error'], t)
+            else:
+                t['pending_entry'] = True
+            self._note(f"#{t['n']}: {t['type']} signal but NO OPTION QUOTE — "
+                       + ('gave up' if last_try else f"retrying (try {t['attempts']}/{_ENTRY_TRIES})"))
             return
         t['option'] = {'symbol': self.p.symbol, 'strike': pick['strike'], 'type': opt_type, 'quoted': pick['premium']}
         t['legs'] = self._enter_live(t, s) if t['mode'] == 'live' else self._enter_paper(t, s)
         filled = [l for l in t['legs'].values() if l.get('open')]
         if not filled:
-            t['status'] = 'failed'
+            if last_try or any(l.get('qty') for l in t['legs'].values()):
+                t.update(status='failed', pending_entry=False)
+            else:
+                t['pending_entry'] = True           # nothing reached a broker: try again next round
+                self._note(f"#{t['n']}: entry not placed — retrying (try {t['attempts']}/{_ENTRY_TRIES})")
+                return
+        else:
+            t['pending_entry'] = False
+            t.pop('error', None)
         self._note(f"#{t['n']} {t['type']}: RSI {t['signal']['rsi']} → BUY {self.p.symbol} {pick['strike']} {opt_type} "
                    f"≈{pick['premium']} — "
                    + (', '.join(f"{l['name']} {l['lots']} lot(s) @ {l.get('entry')}" for l in filled)
@@ -649,9 +697,11 @@ class StBbRsiAlgo:
         pnl = sum(float(l.get('pnl') or 0) for l in legs.values())
         self._note(f"#{t['n']} {t['type']}: {ev['reason']} at {t['exit_time']} — index "
                    f"{t.get('index_exit') or 0:,.0f}" + (f", premium {exit_px}" if exit_px else ''))
-        self._alert('stbb_exit', f"ST+BB+RSI exit — {ev['reason']}",
-                    f"{t['type']} · {self.p.symbol} {opt['strike'] if opt else '—'} {opt['type'] if opt else ''} · "
-                    f"₹{pnl:,.0f}", t)
+        if legs:
+            self._alert('stbb_exit', f"ST+BB+RSI exit — {ev['reason']}",
+                        f"{t['type']} · {self.p.symbol} {opt['strike'] if opt else '—'} {opt['type'] if opt else ''} · "
+                        f"₹{pnl:,.0f}", t)
+        t['pending_entry'] = False
         t['flat_at'] = _time.time()
         if 'paper' in legs:
             self._book_if_settled(t)

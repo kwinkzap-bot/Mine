@@ -433,7 +433,10 @@ function _algoSetStrikeMode(algo, sel) {
 function algoSwitch(tab) {
     _ALGO_TABS.forEach(t => {
         document.getElementById('algo-' + t + '-panel').classList.toggle('active', t === tab);
-        document.getElementById('algo-tab-'  + t).classList.toggle('active', t === tab);
+        // the three ST + BB + RSI indices share one top tab ('stbb'), with sub-tabs inside
+        const btn = document.getElementById('algo-tab-' + (t.startsWith('stbb') ? 'stbb' : t));
+        const on = t.startsWith('stbb') ? tab.startsWith('stbb') : t === tab;
+        if (btn) btn.classList.toggle('active', on);
     });
     history.replaceState(null, '', '#' + tab);
     clearTimeout(_scStatusTimer);
