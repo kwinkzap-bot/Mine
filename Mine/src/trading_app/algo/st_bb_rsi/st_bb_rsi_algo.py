@@ -275,7 +275,7 @@ class StBbRsiAlgo:
         the junk-filtered and 09:15-anchored resample the backtest uses, with the
         candle still forming dropped."""
         from trading_app.service import multichart_service as mc
-        adapter, fy = mc.provider(), mc.resolve_symbol(self.p.symbol)
+        adapter, fy = mc.algo_provider(), mc.resolve_symbol(self.p.symbol)
         raw = adapter.historical_data(fy, (today - timedelta(days=_PRIOR_DAYS)).isoformat(),
                                       today.isoformat(), 'minute', use_cache=False) or []
         if not raw:

@@ -91,6 +91,78 @@ def provider() -> Any:
     return adapter
 
 
+_KITE_INDEX_TOKENS = {
+    'NSE:NIFTY50-INDEX': 256265,
+    'NSE:NIFTYBANK-INDEX': 260105,
+    'BSE:SENSEX-INDEX': 265,
+}
+
+
+class ZerodhaFirstHistory:
+    """historical_data(fyers_symbol, ...) read from Zerodha, then from Fyers.
+
+    The live CPR and ST+BB+RSI algos address the index by Fyers symbol. Kite
+    wants a token, so the three indices are mapped here; anything Kite cannot
+    answer (unmapped symbol, no history add-on, dead token, empty reply) goes
+    to the Fyers adapter exactly as before.
+    """
+
+    def __init__(self, fyers_adapter: Any):
+        self._fyers = fyers_adapter
+
+    def __getattr__(self, name):
+        return getattr(self._fyers, name)
+
+    def historical_data(self, symbol, from_date, to_date, interval, **kw):
+        rows = self._from_kite(symbol, from_date, to_date, interval)
+        if rows:
+            return rows
+        try:
+            rows = self._fyers.historical_data(symbol, from_date, to_date, interval, **kw)
+        except Exception as exc:
+            logger.warning(f'Fyers history failed for {symbol} {interval} - trying ICICI: {exc}')
+            rows = None
+        if rows:
+            return rows
+        try:
+            from trading_app.service.provider_logic import get_icici_adapter
+            icici = get_icici_adapter()
+            if icici is not None:
+                return icici.historical_data(symbol, from_date, to_date, interval, **kw)
+        except Exception as exc:
+            logger.warning(f'ICICI history failed for {symbol} {interval}: {exc}')
+        return rows or []
+
+    @staticmethod
+    def _from_kite(symbol, from_date, to_date, interval):
+        token = _KITE_INDEX_TOKENS.get(symbol)
+        if token is None:
+            return None
+        try:
+            from trading_app.service.provider_logic import get_kite, _kite_serves_history
+            kite = get_kite(instance=1)
+            if kite is None or not _kite_serves_history(kite):
+                return None
+            rows = kite.historical_data(token, f'{from_date} 00:00:00', f'{to_date} 23:59:59', interval)
+            out = []
+            for r in rows or []:
+                d = r.get('date')
+                if getattr(d, 'tzinfo', None) is not None:
+                    d = d.replace(tzinfo=None)
+                out.append({**r, 'date': d})
+            return out
+        except Exception as exc:
+            logger.warning(f'Zerodha history failed for {symbol} {interval} - using Fyers: {exc}')
+            return None
+
+
+def algo_provider() -> Any:
+    """What the live CPR / ST+BB+RSI algos read candles from: Zerodha first,
+    Fyers if that fails. Falls back to the plain provider when Fyers is the
+    only thing logged in."""
+    return ZerodhaFirstHistory(provider())
+
+
 def _speaks_symbols(adapter: Any) -> bool:
     """Fyers and ICICI take 'NSE:SBIN-EQ'; Kite wants a numeric token."""
     name = adapter.__class__.__name__
