@@ -1477,6 +1477,12 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
         const optParam = indexOnly ? '&opt=false&include_30s=false' : '';
         const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${reqInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${srcParam}${optParam}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
 
+        // The 09:18 ATM CE OI strikes are a separate, cheap request that does not
+        // depend on the candles — start it now and await it where it is used, so
+        // the two round trips overlap instead of queueing.
+        const _atmCeOiDate = (window.oipReplayMode && oipElems.startDate?.value) ? oipElems.startDate.value : null;
+        const atmCeOiReady = oipFetchAtmCeOiStrikes(oipSymbol, oipStrikeStep, _atmCeOiDate);
+
         const res = await fetch(url);
         const data = await res.json();
 
@@ -1577,8 +1583,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
 
             // 9:18 ATM CE OI lines — always compute & cache (kept ready);
             // oipDrawAtmCeOiLines() only renders when the checkbox is on.
-            const _atmCeOiDate = (window.oipReplayMode && oipElems.startDate?.value) ? oipElems.startDate.value : null;
-            await oipFetchAtmCeOiStrikes(oipSymbol, oipStrikeStep, _atmCeOiDate);
+            await atmCeOiReady;
             if (paintIndexChart) oipDrawAtmCeOiLines();
             oipUpdateAtmCeOiBiasCard(oipCurrentPrice);
         }

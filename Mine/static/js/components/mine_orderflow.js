@@ -281,7 +281,7 @@ window.MineOrderFlow = (function () {
     const MIN_CELL_W_ONE = 26;              // one
     const MARK_MIN_W = 7, MARK_MIN_H = 5;   // below this a cell is heat only, no boxes
     const HEADER_PX = 9;
-    const STATS_PX = 8;
+    const STATS_PX = 13;
     // Every figure the per-bar header can print, in the order it stacks:
     // [field on the bar, settings key]. The header draws the ones switched on.
     const HEADER_LINES = [
@@ -302,7 +302,7 @@ window.MineOrderFlow = (function () {
     // it is — a proportional one opened at a third of the chart for four rows.
     // Set ONCE, when the pane is created: the separator is draggable, and
     // re-applying this on every redraw would pull it back from under the user.
-    const STATS_ROW_PX = 12;
+    const STATS_ROW_PX = 20;
     const statsOpenPx = rows => Math.max(1, rows) * STATS_ROW_PX;
     const STATS_MAX_SHARE = 0.35;           // never more of a short chart than this
     const STATS_GAP_PX = 0.5;                // air between two value boxes, CSS px
@@ -2197,7 +2197,16 @@ window.MineOrderFlow = (function () {
                             peak[key] = 1;
                             for (const bar of bars) peak[key] = Math.max(peak[key], Math.abs(bar[key]));
                         }
-                        const showText = cellW >= 22 * hr && rowH >= (STATS_PX + 1) * vr;
+                        // The biggest size the widest ordinary label ("-8.0K") fits
+                        // in this slot at, up to STATS_PX — so the figures are as large
+                        // as the bar spacing allows rather than vanishing the moment
+                        // the larger font stops fitting.
+                        const fontOf = px => `${Math.round(px)}px Inter, system-ui, sans-serif`;
+                        ctx.font = fontOf(100);
+                        const wPerPx = ctx.measureText('-8.0K').width / 100;
+                        const fitPx = Math.min(STATS_PX * vr, (cellW - 2 * hr) / wPerPx, (rowH - gapY) * 0.85);
+                        const showText = fitPx >= 7 * vr;
+                        ctx.font = fontOf(Math.max(1, fitPx));
                         for (const bar of bars) {
                             const cx = xOf(bar.x, bar.time);
                             if (cx === null) continue;
@@ -2232,6 +2241,8 @@ window.MineOrderFlow = (function () {
                         }
                     }
 
+                    ctx.font = `${Math.round(STATS_PX * vr)}px Inter, system-ui, sans-serif`;   // row names: full size
+
                     // The row rules, so the rows read as rows even where
                     // a bar has no box to fill — over the boxes, and the same
                     // one pixel the boxes leave for them.
@@ -2247,7 +2258,7 @@ window.MineOrderFlow = (function () {
                     // boxes underneath them, and bare text on top of a box is
                     // two numbers in one place.
                     ctx.textAlign = 'right';
-                    const padX = 3 * hr, chipH = Math.min(rowH - 2 * vr, 10 * vr);
+                    const padX = 3 * hr, chipH = Math.min(rowH - 2 * vr, (STATS_PX + 2) * vr);
                     rows.forEach(([, label], i) => {
                         const w = ctx.measureText(label).width;
                         const right = W - 4 * hr;

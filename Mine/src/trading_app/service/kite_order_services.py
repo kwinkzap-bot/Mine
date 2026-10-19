@@ -1130,7 +1130,49 @@ class KiteService:
         if access_token: kite.set_access_token(access_token)
         return kite
 
+    # Refusals that repeating cannot cure — a window over the interval's cap, a
+    # missing history add-on, a dead token. Retrying them only burned the 1 s
+    # sleeps: three 30-second legs each failed three times on every OI Profile
+    # refresh (~4 s) for an answer that was the same each time.
+    _HISTORY_NO_RETRY = ('InputException', 'PermissionException', 'TokenException')
+
+    # Kite's cap on one historical_data window, in days, per interval. A longer
+    # request is refused outright ("interval exceeds max limit: 100 days"), so a
+    # long one is cut into consecutive windows and stitched back together.
+    _HISTORY_MAX_DAYS = {
+        'minute': 60, '2minute': 60, '3minute': 100, '4minute': 100, '5minute': 100,
+        '10minute': 100, '15minute': 200, '30minute': 200, '60minute': 400, 'day': 2000,
+    }
+
     def _historical_with_retry(self, instrument_token: Union[int, str], from_date, to_date, interval: str, retries: int = 3) -> List[Dict[str, Any]]:
+        cap = self._HISTORY_MAX_DAYS.get(interval)
+        if (cap and isinstance(from_date, datetime) and isinstance(to_date, datetime)
+                and (to_date - from_date).days >= cap):
+            step = timedelta(days=cap - 2)
+            out: List[Dict[str, Any]] = []
+            seen = set()
+            start = from_date
+            while start < to_date:
+                end = min(start + step, to_date)
+                for bar in self._historical_window(instrument_token, start, end, interval, retries) or []:
+                    key = bar.get('date')
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(bar)
+                start = end
+            return out
+        return self._historical_window(instrument_token, from_date, to_date, interval, retries)
+
+    def _historical_window(self, instrument_token: Union[int, str], from_date, to_date, interval: str, retries: int = 3) -> List[Dict[str, Any]]:
+        # Kite serves 30-second bars for at most 2 calendar days per request
+        # ("interval exceeds max limit: 2 days"); the OI Profile asks for the
+        # whole chart window. Ask for what Kite will give — today and the day
+        # before — rather than for nothing.
+        if interval == '30second' and isinstance(from_date, datetime) and isinstance(to_date, datetime):
+            floor = (to_date - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+            if from_date < floor:
+                from_date = floor
+
         # Apply rate limiting
         _global_rate_limiter.wait()
         
@@ -1144,7 +1186,8 @@ class KiteService:
                 _historical_cache.set(instrument_token, str(from_date), str(to_date), interval, data)
                 return data
             except Exception as e:
-                if attempt == retries - 1: raise e
+                if attempt == retries - 1 or type(e).__name__ in self._HISTORY_NO_RETRY:
+                    raise e
                 time.sleep(1)
         return []
 

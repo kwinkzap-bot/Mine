@@ -285,3 +285,18 @@ def test_a_locked_leg_prices_its_target_where_it_was_reached_and_its_exit_later(
     leg = ops.option_leg(tm, {'strike': 22350, 'option_type': 'CE'}, spot, opt, 65, sim)
     assert leg['target_time'] == '14:30' and leg['target'] == 290.0
     assert leg['exit'] == 364.25 and leg['pnl'] == round(364.25 - 201.95, 2)
+
+
+def test_a_derived_expiry_past_the_last_session_is_replaced_by_the_exchanges_listed_one(monkeypatch):
+    """2026-10-20 was derived as the weekly expiry; Dussehra shut the exchange and the
+    listed one was Mon 19 Oct. Nothing after the last session can be snapped for a holiday."""
+    from datetime import date
+    from trading_app.service import cpr_option_service as svc
+    days = [date(2026, 10, d) for d in (13, 14, 15, 16, 19)]
+    monkeypatch.setattr(svc, '_live_expiry', lambda symbol, day: date(2026, 10, 19))
+    con = svc.contract('NIFTY', date(2026, 10, 14), 'SELL', 22700.0, days)
+    assert con['expiry'] == '2026-10-19'
+    monkeypatch.setattr(svc, '_live_expiry', lambda symbol, day: None)      # no list: the derived date stands
+    assert svc.contract('NIFTY', date(2026, 10, 14), 'SELL', 22700.0, days)['expiry'] == '2026-10-20'
+    settled = svc.contract('NIFTY', date(2026, 10, 12), 'SELL', 22700.0, days)   # before the last session: never asked
+    assert settled['expiry'] == '2026-10-13'

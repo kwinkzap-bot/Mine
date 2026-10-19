@@ -1837,3 +1837,60 @@ def test_exit_tuning_moves_the_stop_and_restrikes_the_target():
     s = rule.tune_exit(dict(p, trade='SELL', target=60.0, sl=120.0), '09:15 closed inside the CPR')
     assert s['sl'] == 130.0 and s['target'] == 55.0
     assert rule.tune_exit(p, 'some other setup') is p
+
+
+# 19 Oct 2026: CPR 23,031.82-23,108.04, the 10:30 candle poked over TC and closed back inside, under the VWAP.
+_VW_LV = {'bc': 23031.82, 'tc': 23108.04, 'pdh': 23149.85, 'pdl': 22913.8, 's1': 22990.02, 's2': 22833.88,
+          's3': 22753.97, 'r1': 23226.07, 'r2': 23305.98, 'r3': 23462.12}
+
+
+def _vw_bars(c1030):
+    flat = lambda t, o, h, l, c: {'time': t, 'open': o, 'high': h, 'low': l, 'close': c}
+    bars = [flat('09:15', 23100.0, 23110.0, 23085.0, 23095.0), flat('09:20', 23095.0, 23100.0, 23080.0, 23090.0)]
+    bars += [flat(f'{h:02d}:{m:02d}', 23085.0, 23100.0, 23075.0, 23090.0)
+             for h in range(9, 11) for m in range(0, 60, 5) if '09:25' <= f'{h:02d}:{m:02d}' < '10:30']
+    return bars + [c1030]
+
+
+def test_vwap_cpr_rejection_sells_the_failed_push_over_the_cpr_top():
+    from trading_app.service.cpr_trade_rule import vwap_cpr_rejection
+    c = {'time': '10:30', 'open': 23104.35, 'high': 23124.5, 'low': 23075.15, 'close': 23080.0}
+    bars = _vw_bars(c)
+    got = vwap_cpr_rejection({'levels': _VW_LV}, bars)
+    assert got is not None
+    trade, why, i = got
+    assert bars[i]['time'] == '10:30'
+    assert trade['trade'] == 'SELL' and trade['entry'] == 23074.0 and trade['sl'] == 23126.0
+    assert 'VWAP' in why
+
+
+def test_vwap_cpr_rejection_needs_every_leg_of_the_pattern():
+    from trading_app.service.cpr_trade_rule import vwap_cpr_rejection
+    base = {'time': '10:30', 'open': 23104.35, 'high': 23124.5, 'low': 23075.15, 'close': 23080.0}
+    for bad in (dict(base, high=23106.0),                      # never got over TC
+                dict(base, close=23115.0, open=23085.0),       # closed outside the CPR / green
+                dict(base, close=23098.0),                     # not a close near the low
+                dict(base, high=23099.0, close=23080.0),       # high under the VWAP: never crossed it
+                ):
+        assert vwap_cpr_rejection({'levels': _VW_LV}, _vw_bars(bad)) is None
+    late = dict(base, time='11:05')
+    assert vwap_cpr_rejection({'levels': _VW_LV}, _vw_bars(late)[:-1] + [late]) is None
+
+
+def test_vwap_cpr_rejection_needs_a_body_bigger_than_the_previous_candles():
+    from trading_app.service.cpr_trade_rule import vwap_cpr_rejection
+    c = {'time': '10:30', 'open': 23104.35, 'high': 23124.5, 'low': 23075.15, 'close': 23080.0}   # body 24.35
+    bars = _vw_bars(c)
+    assert vwap_cpr_rejection({'levels': _VW_LV}, bars) is not None
+    bars[-2] = dict(bars[-2], open=23060.0, close=23095.0)                  # previous body 35: the signal is the smaller
+    assert vwap_cpr_rejection({'levels': _VW_LV}, bars) is None
+
+
+def test_vwap_cpr_rejection_needs_the_extreme_ten_points_past_the_previous_candles():
+    from trading_app.service.cpr_trade_rule import vwap_cpr_rejection
+    c = {'time': '10:30', 'open': 23104.35, 'high': 23124.5, 'low': 23075.15, 'close': 23080.0}
+    bars = _vw_bars(c)
+    bars[-2] = dict(bars[-2], high=23116.0)                                # 8.5 pts past it: under the buffer
+    assert vwap_cpr_rejection({'levels': _VW_LV}, bars) is None
+    bars[-2] = dict(bars[-2], high=23114.5)                                # exactly 10
+    assert vwap_cpr_rejection({'levels': _VW_LV}, bars) is not None

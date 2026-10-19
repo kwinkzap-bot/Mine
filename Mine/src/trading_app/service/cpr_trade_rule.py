@@ -385,6 +385,11 @@ VWAP_STOP_PCT = 0.1      # a VWAP within this % under the rejection candle's low
 VWAP_GAP_PCT = 0.02      # ... and one nearer than this to the setup candle's extreme is not in the trigger's way at all (~5 pts)
 FAR_BOX_PCT = 0.4        # a narrow CPR with both boxes at least this % of price away (and FAR_BOX_RATIO x its height) ...
 FAR_BOX_RATIO = 5        # ... is too thin to trade against: entries come from the boxes only (14 Jan 2026)
+VWAP_CPR_REJECTION = True    # the switch (2026-10-19)
+VWAP_REJECT_FROM = '10:00'   # the CPR/VWAP rejection is read from here (the opening hour's VWAP is a few candles old) ...
+VWAP_REJECT_UNTIL = '11:00'  # ... up to here — it deliberately ignores the QUIET lull, being a trade of its own
+VWAP_REJECT_BUFFER = 10.0    # the signal candle's high (low) is at least this many points past the previous candle's
+VWAP_REJECT_CLOSE = 0.3      # 'strong' close: within this share of the candle's range of its low (high, for the BUY)
 RULE_TAG = 'Trade by rule'
 
 
@@ -2018,6 +2023,67 @@ def squeeze_fade(chart, bars):
     return None
 
 
+def session_vwap(bars, k):
+    """The session VWAP through bar k as the chart draws it: typical price
+    weighted by volume, or — an index carries none, and Fyers' NIFTY history
+    has none before mid-2025 — every bar weighted the same."""
+    has_volume = any((b.get('volume') or 0) > 0 for b in bars)
+    pv = tot = 0.0
+    for b in bars[:k + 1]:
+        w = (b.get('volume') or 0) if has_volume else 1
+        pv += (b['high'] + b['low'] + b['close']) / 3 * w
+        tot += w
+    return pv / tot if tot else None
+
+
+def vwap_cpr_rejection(chart, bars):
+    """The CPR edge rejected through the VWAP — the day's trade when no other
+    setup fired. A candle that pokes OVER the daily CPR's top (TC) but closes
+    back inside it, red, closing near its low, whose high is over the previous
+    candle's high by VWAP_REJECT_BUFFER points (the push that failed), a body bigger than the previous candle's, and which crossed the session VWAP —
+    high above it, close below — is a SELL under its low, SL over its high,
+    target 1:2. The mirror: under BC, closing back
+    inside, green near its high, a low under the previous low, VWAP crossed
+    upward -> BUY over its high. VWAP_REJECT_FROM to VWAP_REJECT_UNTIL, so it
+    stands in the 10:30-11:30 lull that refuses the other setups (19 Oct 2026:
+    the 10:30 candle 23,075-23,124 over TC 23,108, closed 23,080 inside the CPR
+    under the VWAP -> SELL 23,074, SL 23,126)."""
+    lv = chart['levels']
+    for i in range(1, len(bars)):
+        b, prev = bars[i], bars[i - 1]
+        if b['time'] > VWAP_REJECT_UNTIL:
+            break
+        rng = b['high'] - b['low']
+        if b['time'] < VWAP_REJECT_FROM or rng <= 0 or not lv['bc'] <= b['close'] <= lv['tc']:
+            continue
+        vw = session_vwap(bars, i)
+        if vw is None:
+            continue
+        pos = (b['close'] - b['low']) / rng
+        sell = (b['high'] > lv['tc'] and b['close'] < b['open'] and b['high'] >= prev['high'] + VWAP_REJECT_BUFFER
+                and pos <= VWAP_REJECT_CLOSE and b['high'] > vw > b['close']
+                and abs(b['close'] - b['open']) > abs(prev['close'] - prev['open']))
+        buy = (b['low'] < lv['bc'] and b['close'] > b['open'] and b['low'] <= prev['low'] - VWAP_REJECT_BUFFER
+               and pos >= 1 - VWAP_REJECT_CLOSE and b['low'] < vw < b['close']
+               and abs(b['close'] - b['open']) > abs(prev['close'] - prev['open']))
+        if not (sell or buy):
+            continue
+        if sell:
+            entry, sl = math.floor(b['low'] - 1), math.ceil(b['high'] + 1.5)
+            target = entry - TREND_RR * (sl - entry)
+            why = (f"{b['time']} candle ({b['low']:,.0f}-{b['high']:,.0f}) poked over the CPR top {lv['tc']:,.0f} past the previous high "
+                   f"{prev['high']:,.0f}, closed {b['close']:,.0f} back inside it and under the VWAP {vw:,.0f} -> SELL under it; "
+                   f"SL over its high; target 1:{TREND_RR:g}")
+            return ({'trade': 'SELL', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, i)
+        entry, sl = math.ceil(b['high'] + 1), math.floor(b['low'] - 1.5)
+        target = entry + TREND_RR * (entry - sl)
+        why = (f"{b['time']} candle ({b['low']:,.0f}-{b['high']:,.0f}) poked under the CPR bottom {lv['bc']:,.0f} past the previous low "
+               f"{prev['low']:,.0f}, closed {b['close']:,.0f} back inside it and over the VWAP {vw:,.0f} -> BUY over it; "
+               f"SL under its low; target 1:{TREND_RR:g}")
+        return ({'trade': 'BUY', 'entry': float(entry), 'target': float(round(target)), 'sl': float(sl)}, why, i)
+    return None
+
+
 def propose_all(chart, bars):
     """`_propose_all_core`'s trades — and, on a SQUEEZED day where it ends
     with no trade for any reason, the box fade back to the CPR (`squeeze_fade`) as the
@@ -2063,7 +2129,15 @@ def _propose_all_core(chart, bars):
         if brk:
             p, why, i = brk
     if not p:
-        return [(None, why, None, None)]
+        rej = vwap_cpr_rejection(chart, bars) if VWAP_CPR_REJECTION else None
+        if not rej:
+            return [(None, why, None, None)]
+        p, why, i = rej
+        p, why = cap_risk(p, why)
+        if abs(p['entry'] - p['sl']) < MIN_STOP:
+            return [(None, f"{why} — the stop is only {abs(p['entry'] - p['sl']):.0f} pts, under {MIN_STOP:.0f}: noise — no trade", None, None)]
+        sim, used = simulate(bars[i:], tune_exit(p, why))
+        return [(used, why, i, sim)]
     if p:
         if QUIET_FROM <= bars[i]['time'] < QUIET_TO:
             return [(None, f"{why} — set up at {bars[i]['time']}, in the {QUIET_FROM}-{QUIET_TO} lull — no trade", None, None)]

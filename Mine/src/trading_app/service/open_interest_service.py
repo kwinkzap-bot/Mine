@@ -518,7 +518,9 @@ class OpenInterestService:
         """Save today's ATM IV for a symbol to the history table (once per day)."""
         try:
             today = datetime.now().date().isoformat()
-            with sqlite3.connect(self.db_path) as conn:
+            # Best effort, once a day: it must not hold a chain response for the
+            # default 5 s busy-wait while the recorder has the file locked.
+            with sqlite3.connect(self.db_path, timeout=0.5) as conn:
                 conn.execute(
                     'INSERT OR REPLACE INTO atm_iv_history (date, symbol, atm_iv) VALUES (?, ?, ?)',
                     (today, symbol, atm_iv)
@@ -2008,8 +2010,13 @@ class OpenInterestService:
                 
                 # Fetch quotes in batches - use Fyers max limit (50) for speed
                 is_fyers = self._is_fyers
-                batch_size = 50 if is_fyers else 25
-                batch_delay = 0.2 if is_fyers else 0.5
+                # Kite's quote() takes up to 500 instruments a call (208 in 0.11 s,
+                # measured); 25 per call with a 0.5 s pause cost ~4.6 s for one
+                # NIFTY chain. Anything that is neither Fyers nor KiteConnect
+                # keeps the old conservative size.
+                is_kite = type(self.kite).__name__ == 'KiteConnect'
+                batch_size = 50 if is_fyers else (500 if is_kite else 25)
+                batch_delay = 0.2 if is_fyers else (1.0 if is_kite else 0.5)
                 
                 for i in range(0, len(all_tokens), batch_size):
                     batch = all_tokens[i:i + batch_size]

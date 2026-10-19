@@ -96,6 +96,29 @@ def lot_size(symbol: str) -> int:
     return LOT_SIZE.get((symbol or '').upper(), 65)
 
 
+def _live_expiry(symbol: str, day: date) -> Optional[date]:
+    """The nearest expiry on or after `day` that Zerodha still lists for the
+    symbol's options, or None (no session, or nothing listed)."""
+    try:
+        from trading_app.service.provider_logic import get_kite
+        kite = get_kite(instance=1)
+        if kite is None:
+            return None
+        exchange = OPTION_EXCHANGE.get(symbol.upper(), 'NFO')
+        hit = _kite_nfo.get(exchange)
+        if not hit or time.time() - hit[0] > 6 * 3600:
+            hit = (time.time(), kite.instruments(exchange))
+            _kite_nfo[exchange] = hit
+        root = symbol.upper()
+        dates = {i['expiry'] for i in hit[1]
+                 if str(i.get('name') or '').strip().upper() == root and i.get('instrument_type') in ('CE', 'PE')
+                 and i.get('expiry') and i['expiry'] >= day}
+        return min(dates) if dates else None
+    except Exception as e:      # noqa: BLE001 — the derived date stands
+        logger.warning(f'[CPR options] live expiry list unavailable: {e}')
+        return None
+
+
 def contract(symbol: str, day: date, trade: str, entry: float,
              trading_days: List[date]) -> Optional[Dict[str, Any]]:
     """The contract the trade would be placed on: ATM to the entry level,
@@ -109,6 +132,12 @@ def contract(symbol: str, day: date, trade: str, entry: float,
     expiry = expiry_on_or_after(day, trading_days, cadence, expiry_weekday(symbol, day))
     if expiry is None:
         return None
+    if trading_days and expiry > max(trading_days):
+        # A date past the last session cannot be snapped for holidays — nothing after it is
+        # known. The exchange's own list can: 2026-10-20 (Dussehra) was derived as the weekly
+        # expiry and the real one was Mon 19 Oct, so the leg looked up a contract that
+        # does not exist.
+        expiry = _live_expiry(symbol, day) or expiry
     return {'strike': int(round(entry / step) * step),
             'option_type': 'CE' if trade == 'BUY' else 'PE',
             'expiry': expiry.isoformat()}
@@ -289,6 +318,16 @@ def _trading_days(symbol: str, first: date, last: date) -> List[date]:
     one request over seven years comes back cut short, and every trade past
     the cut then has no expiry to snap to ("no contract")."""
     from trading_app.service import multichart_service as mc
+    # The local 1-minute store holds every closed session: no request at all. Until 2026-10-19
+    # this read Fyers' daily candles only, so once Fyers' 5,000-requests/day cap was gone the
+    # list came back empty, no expiry could be snapped to, and every leg said "no contract".
+    try:
+        got = cpr_bt._bars_from_store(symbol, first, min(last + timedelta(days=7), date.today()))
+    except Exception as e:      # noqa: BLE001 — the provider below is the fallback
+        logger.warning(f'[CPR options] trading days from the store failed: {e}')
+        got = None
+    if got and got[0]:
+        return sorted({b['date'] for b in got[0]})
     adapter = mc.provider()
     fy = mc.resolve_symbol(symbol)
     start, end = first - timedelta(days=7), min(last + timedelta(days=7), date.today())
@@ -304,11 +343,40 @@ def _trading_days(symbol: str, first: date, last: date) -> List[date]:
 
 
 def _spot_minutes(symbol: str, first: date, last: date) -> Dict[str, List[Dict[str, Any]]]:
-    """1-minute index bars by session, from the charts' provider."""
+    """1-minute index bars by session: the local store for every session it holds,
+    the charts' provider for the rest (Zerodha first — Fyers' daily cap, 5,000 a
+    day, is gone by the afternoon and took every leg of an unread session with it)."""
     from trading_app.service import multichart_service as mc
-    adapter = mc.provider()
-    fy_symbol = mc.resolve_symbol(symbol)
     out: Dict[str, List[Dict[str, Any]]] = {}
+    stored_last = None
+    try:
+        import pandas as pd
+        from trading_app.Backtest import minute_candle_store as store
+        key = store._cache_key('fyers', symbol.upper())
+        entry = store._mem.get(key) or store._load_disk(key)
+        if entry and not entry['df'].empty:
+            m = entry['df']
+            stored_last = m.index[-1].date()
+            m = m[(m.index >= pd.Timestamp(first)) & (m.index < pd.Timestamp(last) + pd.Timedelta(days=1))]
+            mins = m.index.hour * 60 + m.index.minute
+            m = m[(mins >= 9 * 60 + 15) & (mins < 15 * 60 + 30)]
+            for ts, o_, h_, l_, c_, v_ in zip(m.index, m['open'], m['high'], m['low'], m['close'], m['volume']):
+                out.setdefault(ts.strftime('%Y-%m-%d'), []).append(
+                    {'time': ts.strftime('%H:%M'), 'open': float(o_), 'high': float(h_), 'low': float(l_),
+                     'close': float(c_), 'volume': float(v_ or 0)})
+    except Exception as e:      # noqa: BLE001 — the provider below is the fallback
+        logger.warning(f'[CPR options] index minutes from the store failed: {e}')
+        out, stored_last = {}, None
+    if stored_last is not None and stored_last >= last:
+        return out
+    if stored_last is not None:
+        first = max(first, stored_last)
+        out.pop(stored_last.isoformat(), None)              # re-read whole: the store's last day may be partial
+    try:
+        adapter = mc.algo_provider()
+    except Exception:       # noqa: BLE001
+        adapter = mc.provider()
+    fy_symbol = mc.resolve_symbol(symbol)
     start = first
     while start <= last:
         end = min(start + timedelta(days=cpr_bt.INTRADAY_CHUNK_DAYS - 1), last)
@@ -336,12 +404,49 @@ def _option_minutes_fetcher(symbol: str) -> Callable[[Dict[str, Any], date], Lis
         if not bars:
             # Breeze serves a session's option candles only after the day has been
             # loaded overnight — the Update button's own session (2026-10-14) always
-            # came back empty, "no option bars". A contract that is still listed is
-            # on Fyers, which has today's bars at once.
-            bars = _fyers_option_minutes(symbol, con, day, exchange)
+            # came back empty, "no option bars" — and it serves NO contract that is still
+            # listed (2026-10-19: every 20-Oct weekly came back empty, the 13-Oct one
+            # had 375 bars). A listed contract is on Zerodha, then Fyers (capped at
+            # 5,000 requests a day, spent by the afternoon).
+            bars = _kite_option_minutes(symbol, con, day, exchange) or _fyers_option_minutes(symbol, con, day, exchange)
         return bars
 
     return fetch
+
+
+_kite_nfo: Dict[str, Any] = {}
+
+
+def _kite_option_minutes(symbol: str, con: Dict[str, Any], day: date,
+                         exchange: str) -> List[Dict[str, Any]]:
+    """One session of 1-minute bars for a still-listed option from Zerodha, or
+    [] when Kite has no such contract (expired — Breeze serves those) or no
+    history. Breeze serves a contract only after it has expired, so for the
+    weekly still running Kite is the source that needs no daily quota."""
+    try:
+        from trading_app.service.provider_logic import get_kite, _kite_serves_history
+        kite = get_kite(instance=1)
+        if kite is None or not _kite_serves_history(kite):
+            return []
+        hit = _kite_nfo.get(exchange)
+        if not hit or time.time() - hit[0] > 6 * 3600:
+            hit = (time.time(), kite.instruments(exchange))
+            _kite_nfo[exchange] = hit
+        expiry = date.fromisoformat(con['expiry'])
+        want, root = str(con['option_type']).upper(), symbol.upper()
+        token = next((i['instrument_token'] for i in hit[1]
+                      if i.get('instrument_type') == want and i.get('expiry') == expiry
+                      and str(i.get('name') or '').strip().upper() == root
+                      and abs(float(i.get('strike', -1)) - float(con['strike'])) < 0.5), None)
+        if not token:
+            return []
+        raw = kite.historical_data(token, f'{day.isoformat()} 09:00:00', f'{day.isoformat()} 15:35:00', 'minute')
+        rows = [{**r, 'date': r['date'].replace(tzinfo=None) if getattr(r.get('date'), 'tzinfo', None) else r['date']}
+                for r in raw or []]
+        return cpr_bt._intraday_by_session(rows).get(day.isoformat(), [])
+    except Exception as e:      # noqa: BLE001 — a fallback must never break the grid
+        logger.warning(f"[CPR options] Kite fallback {con.get('strike')}{con.get('option_type')} {day}: {e}")
+        return []
 
 
 def _fyers_option_minutes(symbol: str, con: Dict[str, Any], day: date,
@@ -505,7 +610,15 @@ def _leg_is_fresh(e: Optional[Dict[str, Any]]) -> bool:
     leg = e['leg']
     if leg.get('pnl') is not None or (leg.get('result') in (None, 'No fill') and not leg.get('error')):
         return True
-    return time.time() - e.get('saved', 0) < LEG_RETRY_DAYS * 86400
+    saved = e.get('saved', 0)
+    try:
+        # Breeze serves no contract that is still listed: an error saved before the expiry
+        # passed is asked again, on the corrected expiry if the calendar had it wrong.
+        if leg.get('error') and leg.get('expiry') and datetime.fromtimestamp(saved, cpr_bt.IST).date() <= date.fromisoformat(leg['expiry']):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return time.time() - saved < LEG_RETRY_DAYS * 86400
 
 
 def _load_legs_cache(symbol: str) -> Dict[str, Any]:

@@ -10,8 +10,6 @@ function oipRayDisarmAll() {
 }
 
 window.oipInitSecondaryCharts = function() {
-    // Opt Prem block is commented out of the template (see OIP_OPT_PREM in oi_profile.js).
-    if (!OIP_OPT_PREM) return;
     const elInt = document.getElementById('oipIntrinsicChart');
 
     function syncCrosshair(sourceChart, targetChart, param, targetSeries) {
@@ -33,7 +31,10 @@ window.oipInitSecondaryCharts = function() {
         } catch(e) {}
     }
 
-    if (elInt && typeof TradingViewChart !== 'undefined') {
+    // Opt Prem charts are commented out of the template (see OIP_OPT_PREM in
+    // oi_profile.js). Only that block is skipped: the drag-resize grips at the
+    // bottom of this function serve the OI Profile and Round Strike boxes too.
+    if (OIP_OPT_PREM && elInt && typeof TradingViewChart !== 'undefined') {
         oipIntrinsicChart = TradingViewChart.create({
             containerId: 'oipIntrinsicChart', data: [], type: 'COMBINED',
             isCombined: true, timeframe: oipInterval, options: { height: 575 },
