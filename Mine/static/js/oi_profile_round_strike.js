@@ -90,9 +90,9 @@ let oipRSCurrentCEStrike = null, oipRSCurrentPEStrike = null;
 // oi_profile.js's oipInterval, which drives every other chart on the page from
 // the Opt Prem header. The two are independent: this block is the live 1-second
 // view and tends to sit on a fast timeframe, while the rest of the page only
-// reloads on Refresh All and defaults to 5m. Must match the <option selected>
+// reloads on Refresh All and defaults to 5m. This block defaults to 3m. Must match the <option selected>
 // on that dropdown.
-let oipRSInterval = 'minute';
+let oipRSInterval = '3minute';
 
 // ── Persistence (localStorage) — indicator show/hide + drawn rays survive a
 // page refresh. Indicator state is restored before charts/series are

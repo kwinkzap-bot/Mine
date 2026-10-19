@@ -85,7 +85,7 @@
                                 </label>
                                 <label class="oip-ind-item"
                                     title="Supertrend on the CE and PE strike candles — CE green/red, PE blue/amber">
-                                    <input type="checkbox" id="oipRSShowSupertrend"><span>Supertrend</span>
+                                    <input type="checkbox" id="oipRSShowSupertrend" checked><span>Supertrend</span>
                                 </label>
                                 <label class="oip-ind-item oip-ind-sub-item"
                                     title="Supertrend ATR length and factor (default 10 and 3)">
@@ -137,7 +137,7 @@
                                      Nifty Vol Fut colours above, so it carries no swatches of its own. -->
                                 <label class="oip-ind-item"
                                     title="BANKNIFTY current-expiry future volume, in its own band at the top of the pane">
-                                    <input type="checkbox" id="oipRSShowBnfVolume"><span>Banknifty Vol Fut</span>
+                                    <input type="checkbox" id="oipRSShowBnfVolume" checked><span>Banknifty Vol Fut</span>
                                 </label>
                                 <!-- Vol Direction Color — one page-wide flag; the same checkbox appears in
                                      every Indicator popup. Off, the volume overlays drop the up/down split
@@ -365,9 +365,9 @@
                         <select id="oipRSInterval" class="oip-select oip-select--xs"
                             title="Round Strike timeframe (this block only)">
                             <option value="30second">30s</option>
-                            <option value="minute" selected>1m</option>
+                            <option value="minute">1m</option>
                             <option value="2minute">2m</option>
-                            <option value="3minute">3m</option>
+                            <option value="3minute" selected>3m</option>
                             <option value="5minute">5m</option>
                             <option value="15minute">15m</option>
                             <option value="30minute">30m</option>
@@ -832,6 +832,13 @@
              title="Drag to resize the OI Profile chart · double-click to reset"></div>
     </div>
 
+    {# ── Opt Prem block DISABLED (2026-10-19) ─────────────────────────────────
+       The whole Opt Prem section (TF, strike mode, Opt Indicator, Ray tools,
+       Combined / CE Only / PE Only charts) is commented out below, as a Jinja
+       comment so it can hold HTML comments. Its JS is switched off by
+       OIP_OPT_PREM in oi_profile.js. Only what the rest of the page still
+       reads is kept below: the hidden inputs the loader uses.
+       Original block follows.
         <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
     <div class="oip-container">
 
@@ -1160,8 +1167,15 @@
         </div>
 
     </div>
+    #}
+    {# Refresh All button removed too. Hidden inputs the loader still reads: #}
+    <div hidden>
+        <input type="hidden" id="oipIntrinsicView" value="index">
+        <input type="hidden" id="oipStep" value="50">
+        <input type="hidden" id="oipMultiplier" value="3">
+    </div>
 
-
+    {# Strike Logic popup (explained the Opt Prem strike modes) — disabled with the Opt Prem block.
     <!-- Strike Logic popup modal — explains how each Opt Prem strike mode
          (Prem. Str. / Custom / CE & PE) picks its CE/PE strike. Static text,
          reuses the OI Bar modal's chrome in its smaller --info variant since
@@ -1196,6 +1210,7 @@
             </div>
         </div>
     </div>
+    #}
 
     <!-- OI Bar popup modal -->
     <div id="oipOIBarModal" class="oip-modal-overlay hidden">

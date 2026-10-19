@@ -151,6 +151,11 @@ let oipLotSize = 50, oipStrikeStep = 50;
 // Prem header. Two other blocks run on their own bar width: Round Strike
 // (oipRSInterval, oi_profile_round_strike.js) and the OI Profile chart itself.
 let oipInterval = '3minute';
+// Opt Prem block (Combined / CE Only / PE Only charts, strike mode, Opt Indicator,
+// Ray tools) is commented out of oi_profile.html as of 2026-10-19. While this is
+// false the OI Profile chart follows its OWN TF (#oipOIInterval) and the loader
+// skips the option-chart paths. Flip it back only together with that template block.
+const OIP_OPT_PREM = false;
 /* The OI Profile chart's OWN timeframe — #oipOIInterval in its own header, and
    nothing else's. It starts equal to oipInterval, and while the two agree the
    page behaves exactly as it always did: one request serves both blocks.
@@ -1416,6 +1421,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
         // own dropdown. With them apart, a full pass serves the Opt Prem block
         // only and hands this chart over to the index-only pass it fires at the
         // end; the index-only pass serves this chart alone.
+        if (!OIP_OPT_PREM) oipInterval = oipOIInterval;   // one bar width: the OI chart's own
         const tfSplit = oipTfSplit();
         const reqInterval = indexOnly ? oipOIInterval : oipInterval;
         const paintIndexChart = indexOnly || !tfSplit;
@@ -1582,7 +1588,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, indexOnly = 
             if (oipElems.spotLow) oipElems.spotLow.value = data.intrinsic.spot_low;
         }
 
-        if (oipIntrinsicChart) {
+        if (oipIntrinsicChart || !OIP_OPT_PREM) {
             if (view === 'index') {
                 if (oipElems.itmCE) if (oipElems.itmCE) oipElems.itmCE.textContent = 'NIFTY';
                 if (oipElems.itmPE) if (oipElems.itmPE) oipElems.itmPE.textContent = 'Index';

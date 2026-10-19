@@ -10,6 +10,8 @@ function oipRayDisarmAll() {
 }
 
 window.oipInitSecondaryCharts = function() {
+    // Opt Prem block is commented out of the template (see OIP_OPT_PREM in oi_profile.js).
+    if (!OIP_OPT_PREM) return;
     const elInt = document.getElementById('oipIntrinsicChart');
 
     function syncCrosshair(sourceChart, targetChart, param, targetSeries) {
