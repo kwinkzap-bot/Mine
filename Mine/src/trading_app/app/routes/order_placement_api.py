@@ -414,6 +414,16 @@ def option_quote(symbol: str, strike: int, option_type: str) -> dict:
             logger.warning(f"[OrderPlacement API] {symbol} {strike}{option_type}: no tradingsymbol "
                            f"from the {'Fyers' if is_fyers else 'Kite'} master — no quote")
             return out
+        if not is_fyers:
+            # Streamed quote first (KITE_WS_QUOTES): no 1 req/s REST slot spent.
+            # None — flag off, no tick yet, stale tick — falls through to REST.
+            from trading_app.service.kite_ticker_feed import ws_quote
+            streamed = ws_quote(effective, _token)
+            if streamed:
+                out['last_price'] = float(streamed['last_price'] or 0) or None
+                out['high'] = float(streamed.get('high') or 0) or None
+                out['low'] = float(streamed.get('low') or 0) or None
+                return out
         key = opt_sym if is_fyers else f'NFO:{opt_sym}'
         # Same request the old ltp() made, and in the same rate-limiter lane:
         # the adapters' ltp() is quote(priority=PRIORITY_CHART) with the range

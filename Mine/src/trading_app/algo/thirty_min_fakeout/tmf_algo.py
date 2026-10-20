@@ -511,14 +511,45 @@ class TMFAlgo:
             logger.warning(f"[TMF] {symbol}: today-candle fetch failed: {e}")
             return None
 
+    def _kite_stream_ltps(self, provider: Any, symbols: List[str]) -> Dict[str, float]:
+        """Streamed last prices for the stocks the Kite WebSocket already has.
+
+        ``KITE_WS_QUOTES`` off, a stock with no token, no tick yet or a stale
+        one are all simply absent from the result — the caller prices those
+        over REST, so this can only ever add speed, never remove a price.
+        """
+        from trading_app.service.kite_ticker_feed import enabled, ws_quote
+        if not enabled():
+            return {}
+        out: Dict[str, float] = {}
+        try:
+            svc = getattr(self, '_kite_token_svc', None)
+            if svc is None or svc.kite is not provider:
+                from trading_app.service.kite_order_services import KiteService
+                svc = self._kite_token_svc = KiteService(kite_instance=provider)
+            for sym in symbols:
+                tok = svc.get_instrument_token(sym)
+                q = ws_quote(provider, tok) if tok else None
+                if q and q.get('last_price'):
+                    out[sym] = float(q['last_price'])
+        except Exception as e:
+            logger.warning(f"[TMF] Kite stream LTP unavailable, using REST: {e}")
+        return out
+
     def _get_ltp_batch(self, provider: Any, symbols: List[str], is_symbol_provider: bool) -> Dict[str, float]:
+        result: Dict[str, float] = {}
+        if not is_symbol_provider:
+            # Kite: take what the WebSocket has (no REST slot spent), REST the rest.
+            result = self._kite_stream_ltps(provider, symbols)
+            symbols = [s for s in symbols if s not in result]
+            if not symbols:
+                return result
         tokens = [f'NSE:{s}-EQ' if is_symbol_provider else s for s in symbols]
         try:
             data = provider.ltp(tokens) or {}
         except Exception as e:
             logger.warning(f"[TMF] batch LTP fetch failed: {e}")
-            return {}
-        result = {}
+            return result
         for sym, tok in zip(symbols, tokens):
             v = data.get(tok, {})
             lp = v.get('last_price') if isinstance(v, dict) else None
