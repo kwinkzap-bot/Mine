@@ -92,12 +92,12 @@ _QUOTE_LOCK = threading.Lock()
 # How old a cached quote may be and still be served WITHOUT contacting Breeze.
 # The entries were always timestamped; until 2026-09-07 the timestamp was only
 # ever read on the failure path, so every caller paid a fresh request even when
-# another thread had just fetched the same symbol a moment earlier. Six algo
-# threads (RTP x5 + Second Candle) poll the NIFTY spot on a 1s loop, which on
+# another thread had just fetched the same symbol a moment earlier. The algo
+# threads (then five RTP variants + Second Candle) poll the NIFTY spot on a 1s loop, which on
 # its own demanded ~360 req/min against Breeze's published 100/min — the
 # per-second pacer above queues the excess rather than dropping it, so quotes
 # reached the algos badly delayed AND the daily quota was exhausted by 11:05.
-# 1s is shorter than the fastest consumer's bar (RTP's 30s), so no algo loses
+# 1s is shorter than the fastest consumer's bar (30s, the fastest then), so no algo loses
 # freshness it was actually getting.
 _QUOTE_TTL_SEC = 1.0
 

@@ -233,7 +233,7 @@ def cpr_logic():
 @require_user_auth
 @login_required
 def algo():
-    """Live Algo trading page (EMA RTP / 2nd candle / swing momentum)."""
+    """Live Algo trading page (2nd candle / swing momentum / TMF / EMA Confluence / CPR / ST+BB+RSI)."""
     return render_template('algo.html')
 
 

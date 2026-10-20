@@ -105,7 +105,7 @@ Gating (see env/Mine.env):
                                           cannot fill until the market opens.
   EMA_CONFLUENCE_ACTIVE = true/false   — gates entries (paper fills); the
                                           thread always scans/logs regardless
-                                          (same convention as TMF/RTP).
+                                          (same convention as TMF).
   EMA_CONFLUENCE_MODE   = paper (default) | live
                                         paper: fills are simulated at the
                                           future's LTP, nothing reaches a
@@ -196,8 +196,8 @@ _POLL_SECS = 15          # daily-swing strategy — no need for an aggressive po
 # ...and for the same reason the marks it polls need not be a second old. On
 # ICICI every non-option quote is one Breeze request, so sweeping ~18 armed
 # futures AND their underlyings every _POLL_SECS demanded ~144 req/min on its
-# own — more than Breeze's whole published 100/min budget, which starved RTP
-# and Second Candle of the NIFTY spot and burned the daily quota before noon.
+# own — more than Breeze's whole published 100/min budget, which starved the
+# other algos, Second Candle among them, of the NIFTY spot and burned the daily quota before noon.
 # A minute-old mark is far inside the tolerance of a strategy whose levels come
 # off DAILY candles. Providers that don't accept the argument are unaffected.
 _QUOTE_MAX_AGE_SECS = 60

@@ -523,7 +523,7 @@ RTP strategy on `/backtest`. Two things kept the name: the shared optimiser
 cache is still `app/utils/rtp_opt_cache.json` (2nd-Candle / Scalp / Pivot
 sweeps write it), and `#rtpStatsRow` is still the id of the shared Row-2
 stat cards. The per-user `EMA_RTP_*` / `RTP_*_STRIKE_MODE` /
-`BROKER_N_RTP_*` variables in `.users.json` are now dead and read by
-nothing. EMA Confluence (`algo/ema_confluence/`) was **not**
+`BROKER_N_RTP_*` variables were dropped from `env/Mine.env` on 2026-10-20
+(backup `scratch/Mine.env.bak-20261020-rtp`); nothing reads them. EMA Confluence (`algo/ema_confluence/`) was **not**
 removed — it is a separate algo and still runs (see "EMA Confluence live
 mode" above).

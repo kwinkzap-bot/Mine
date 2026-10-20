@@ -33,7 +33,7 @@ That is a *reconstruction*, not exchange data, which is why:
   - `FyersDataServiceAdapter.historical_data()` only merges them when the
     caller passes `allow_synthetic=True`.
 
-Only the chart/display endpoints opt in. The live algos (RTP, Second Candle,
+Only the chart/display endpoints opt in. The live algos (Second Candle,
 TMF, EMA Confluence) keep the default and never see these bars — they must
 not place real orders off prices we interpolated.
 """

@@ -49,7 +49,7 @@ Gating (see env/Mine.env):
                                           signals regardless of this flag
                                           (so watching it run costs
                                           nothing); only ORDER PLACEMENT is
-                                          gated by it, mirroring RTP/SC.
+                                          gated by it, mirroring SC.
   BROKER_<N>_TMF_ACTIVE=true           — per broker index, alongside the
                                           existing BROKER_<N>_ACTIVE and
                                           BROKER_<N>_TYPE=zerodha. Only
@@ -91,8 +91,8 @@ Known live/backtest divergences that remain by nature (not bugs):
   - The backtest checks a bar's High/Low for SL/Target/trigger crossings
     (catches any touch within the bar); the live watch loop instead polls
     last-traded-price every _POLL_SECS seconds — a brief intra-poll spike
-    through a level can be missed, the same tolerance RTP already accepts
-    for its own per-second spot polling.
+    through a level can be missed, the same tolerance the other live algos accept
+    for their own spot polling.
   - The backtest's Target is the day's FULL session Low/High (hindsight);
     live can only use the session Low/High up to the entry fill, so live
     targets are nearer and its winners are smaller.
