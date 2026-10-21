@@ -88,12 +88,61 @@ class OptionDataUnavailable(Exception):
     """No Breeze session to read option candles from."""
 
 
+_stock_specs: Dict[str, Any] = {}
+
+
+def stock_spec(symbol: str) -> Optional[Dict[str, Any]]:
+    """{'lot': int, 'step': float} for an F&O stock, read off the Fyers NFO master
+    (the contracts still listed): the lot size is the listed one and the strike step
+    is the smallest gap between the strikes of its nearest expiry. None when the
+    symbol has no listed options (not an F&O stock, or no Fyers session). The
+    master only shows TODAY's lot and strike ladder, so an old trade is priced on
+    those — an approximation the backtest says so about."""
+    root = (symbol or '').upper()
+    hit = _stock_specs.get(root)
+    if hit and time.time() - hit[0] < 6 * 3600:
+        return hit[1]
+    spec = None
+    try:
+        from trading_app.service.provider_logic import get_fyers_adapter
+        fy = get_fyers_adapter()
+        if fy is not None:
+            rows = [i for i in fy.instruments('NFO')
+                    if str(i.get('name') or '').strip().upper() == root
+                    and i.get('instrument_type') in ('CE', 'PE') and i.get('expiry')]
+            if rows:
+                nearest = min(i['expiry'] for i in rows)
+                strikes = sorted({float(i['strike']) for i in rows if i['expiry'] == nearest and i.get('strike')})
+                gaps = [b - a for a, b in zip(strikes, strikes[1:]) if b - a > 0]
+                spec = {'lot': int(rows[0].get('lot_size') or 1),
+                        'step': min(gaps) if gaps else 1.0}
+    except Exception as e:      # noqa: BLE001 — no spec just means "not an F&O stock" to the caller
+        logger.warning(f'[CPR options] stock spec for {root} unavailable: {e}')
+    if spec:
+        _stock_specs[root] = (time.time(), spec)
+    return spec
+
+
+def is_index(symbol: str) -> bool:
+    return (symbol or '').upper() in STRIKE_STEP
+
+
 def strike_step(symbol: str) -> float:
-    return STRIKE_STEP.get((symbol or '').upper(), 50)
+    root = (symbol or '').upper()
+    if root not in STRIKE_STEP:
+        spec = stock_spec(root)
+        if spec:
+            return spec['step']
+    return STRIKE_STEP.get(root, 50)
 
 
 def lot_size(symbol: str) -> int:
-    return LOT_SIZE.get((symbol or '').upper(), 65)
+    root = (symbol or '').upper()
+    if root not in LOT_SIZE:
+        spec = stock_spec(root)
+        if spec:
+            return spec['lot']
+    return LOT_SIZE.get(root, 65)
 
 
 def _live_expiry(symbol: str, day: date) -> Optional[date]:

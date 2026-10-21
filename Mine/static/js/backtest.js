@@ -591,8 +591,9 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (val === 'st_bb_rsi') {
             // Index signal, ≈250 CE leg; lots/lot value reuse the Pivot Confluence boxes.
             // The Symbol box keeps whatever the last strategy left in it
-            // (Weekly CPR Breakout parks ALL STOCKS there): this one trades an index.
-            if (!['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'].includes((symbolSearch.value || '').toUpperCase())) {
+            // (Weekly CPR Breakout parks ALL STOCKS there): this one trades one symbol —
+            // an index, or an F&O stock on its ATM option.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
                 selectedSymbol = 'NIFTY';
                 symbolSearch.value = 'NIFTY';
             }
@@ -949,6 +950,13 @@ document.addEventListener('DOMContentLoaded', function() {
             // SuperTrend + BB + RSI + R1, bought as the ≈250 CE; exit on SuperTrend break
             if (strat === 'st_bb_rsi') {
                 endpoint = '/api/backtest/st-bb-rsi';
+                // An index buys its ≈premium weekly option; an F&O stock buys the ATM monthly one
+                // (the server prices it and ignores the premium box). ALL STOCKS is not one symbol.
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
                 payload.interval      = document.getElementById('interval')?.value || '3minute';
                 payload.premium       = parseFloat(document.getElementById('sbrPremium')?.value || 250);
                 payload.price_options = document.getElementById('sbrPriceOptions')?.checked ?? true;
@@ -966,6 +974,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.per_lot       = parseFloat(document.getElementById('sbrPerLot')?.value || 25000);
                 payload.require_green = document.getElementById('sbrGreen')?.checked ?? false;
                 payload.rsi_level     = parseFloat(document.getElementById('sbrRsi')?.value || 70);
+                payload.rsi_lower     = parseFloat(document.getElementById('sbrRsiLower')?.value || 30);
                 payload.entry_start   = document.getElementById('sbrEntryStart')?.value || '09:15';
                 payload.entry_end     = document.getElementById('sbrEntryEnd')?.value || '15:14';
                 payload.exit_cutoff   = document.getElementById('sbrExitCutoff')?.value || '15:14';
@@ -1066,7 +1075,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     window.showNotification(
                         `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars `
                         + `(${r.first_bar.slice(0, 10)} … ${r.last_bar.slice(0, 10)}) · `
-                        + `${r.index_signals} signals · RSI ${r.params.rsi_period}>${r.params.rsi_level}, `
+                        + `${r.index_signals} signals · RSI ${r.params.rsi_period} >${r.params.rsi_level} / <${r.params.rsi_lower}, `
                         + `ST ${r.params.st.join('/')}, BB ${r.params.bb.join('/')}`, 'info');
                 }
                 // Otherwise the gate is invisible: the run just shows fewer
@@ -2447,6 +2456,14 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
     ];
 
+    // Weekday of the entry — read off the entry date itself, so it sorts with it.
+    const DAY_COL = { label: 'Day', sortable: true,
+        sortValue: t => new Date(t.entry_time).getTime(),
+        format: (_, t) => {
+            const d = new Date(t.entry_time);
+            return isNaN(d) ? '--' : d.toLocaleDateString('en-IN', { weekday: 'short' });
+        } };
+
     // The multi-symbol scans (30-Min Fakeout across every F&O futures
     // stock/index, EMA Confluence Breakout across All Stocks) size every
     // entry server-side — Symbol/Quantity columns the single-symbol
@@ -2714,7 +2731,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Leg / premiums / index P&L go in front of the P&L column, which
             // stays last and is now the premium's.
             const pnlCol = columns[columns.length - 1];
-            columns = [...columns.slice(0, -1), ...SC_OPTION_COLS,
+            columns = [columns[0], DAY_COL, ...columns.slice(1, -1), ...SC_OPTION_COLS,
                        { ...pnlCol, label: 'Opt P&L' },
                        ...(lastData.summary.server_rupees ? [
                            { key: 'lots', label: 'Lots', sortable: true },
@@ -3883,6 +3900,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('sbrDirection', r.direction);
         set('sbrRsi', r.rsi_level);
+        set('sbrRsiLower', 100 - r.rsi_level);     // the optimiser sweeps the mirror
         set('sbrStLen', r.st_period);
         set('sbrStFactor', r.st_mult);
         set('sbrBbMult', r.bb_mult);

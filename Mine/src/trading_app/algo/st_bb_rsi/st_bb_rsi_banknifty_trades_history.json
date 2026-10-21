@@ -13,27 +13,27 @@
       "pivot_level": 55804.17,
       "pivot": "R1"
     },
-    "index_entry": 55772.85,
+    "index_entry": 55846.8,
     "entry_time": "09:36",
     "index_exit": 55657.0,
     "exit_time": "09:51",
     "result": "SuperTrend Down",
-    "strike": 55600,
+    "strike": 55800,
     "option_type": "CE",
     "legs": {
       "paper": {
         "name": "Paper",
         "lots": 1,
         "qty": 30,
-        "entry": 616.8,
-        "exit": 510.75,
-        "pnl": -3181.5,
+        "entry": 495.65,
+        "exit": 397.95,
+        "pnl": -2931.0,
         "exit_reason": null
       }
     },
-    "pnl": -3181.5,
+    "pnl": -2931.0,
     "charges": 103.0,
-    "net": -3284.5,
+    "net": -3034.0,
     "unconfirmed": null
   },
   {
@@ -50,27 +50,27 @@
       "pivot_level": 55251.57,
       "pivot": "S1"
     },
-    "index_entry": 55459.3,
+    "index_entry": 55220.65,
     "entry_time": "11:22",
     "index_exit": 54910.95,
     "exit_time": "12:57",
     "result": "SuperTrend Up",
-    "strike": 55700,
+    "strike": 55400,
     "option_type": "PE",
     "legs": {
       "paper": {
         "name": "Paper",
         "lots": 1,
-        "qty": null,
-        "entry": 522.0,
-        "exit": 868.45,
-        "pnl": 10393.5,
+        "qty": 30,
+        "entry": 497.0,
+        "exit": 662.85,
+        "pnl": 4975.5,
         "exit_reason": null
       }
     },
-    "pnl": 10393.5,
+    "pnl": 4975.5,
     "charges": 103.0,
-    "net": 10290.5,
+    "net": 4872.5,
     "unconfirmed": null
   }
 ]

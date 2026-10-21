@@ -153,10 +153,13 @@ class StBbRsiEngine:
                  st_period: int = 10, st_mult: float = 2.0,
                  entry_start: str = '09:15', entry_end: str = '15:14',
                  exit_cutoff: str = '15:14', max_trades_per_day: int = 1,
-                 require_green: bool = False, direction: str = 'long'):
+                 require_green: bool = False, direction: str = 'long',
+                 rsi_lower: Optional[float] = None):
         self.df = df.copy()
         self.rsi_period = max(2, int(rsi_period))
         self.rsi_level = float(rsi_level)
+        # The short side's RSI line; unset it is the mirror, 100 - rsi_level.
+        self.rsi_lower = float(rsi_lower) if rsi_lower is not None else 100.0 - self.rsi_level
         self.bb_period = max(2, int(bb_period))
         self.bb_mult = float(bb_mult)
         self.bb_offset = int(bb_offset or 0)
@@ -229,12 +232,14 @@ class StBbRsiEngine:
         return trades, summarise(trades)
 
     def _params(self, over: Dict[str, Any]) -> Dict[str, Any]:
-        P = dict(rsi_period=self.rsi_period, rsi_level=self.rsi_level, bb_period=self.bb_period,
+        P = dict(rsi_period=self.rsi_period, rsi_level=self.rsi_level, rsi_lower=self.rsi_lower, bb_period=self.bb_period,
                  bb_mult=self.bb_mult, bb_offset=self.bb_offset, st_period=self.st_period,
                  st_mult=self.st_mult, entry_start=self.entry_start, entry_end=self.entry_end,
                  exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
                  require_green=self.require_green, direction=self.direction)
         P.update(over)
+        if 'rsi_level' in over and 'rsi_lower' not in over:     # a swept upper line keeps the mirror
+            P['rsi_lower'] = 100.0 - P['rsi_level']
         return P
 
     def signals(self, **over) -> Dict[str, Any]:
@@ -252,7 +257,7 @@ class StBbRsiEngine:
         with np.errstate(invalid='ignore'):
             long_sig = ((rsi_v > P['rsi_level']) & (c > bb_up) & (st_dir == 1)
                         & np.isfinite(st_line) & (c > b['r1']))
-            short_sig = ((rsi_v < 100.0 - P['rsi_level']) & (c < bb_lo) & (st_dir == -1)
+            short_sig = ((rsi_v < P['rsi_lower']) & (c < bb_lo) & (st_dir == -1)
                          & np.isfinite(st_line) & (c < b['s1']))
         if P['require_green']:                          # candle closes WITH the trade
             long_sig = long_sig & (c > o)

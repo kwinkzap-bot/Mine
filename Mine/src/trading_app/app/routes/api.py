@@ -5239,10 +5239,17 @@ def run_st_bb_rsi_backtest_api():
         symbol = str(symbol).strip().upper()
         # The shared Symbol box carries over whatever the previous strategy left
         # in it (Weekly CPR Breakout parks 'ALL STOCKS' there) — never trade that.
-        if symbol not in ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'):
-            return jsonify({'success': False,
-                            'error': f"'{symbol}' is not an index this backtest can buy options on; "
-                                     "pick NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY or SENSEX."}), 400
+        # An index trades its ≈premium weekly; an F&O stock trades the ATM monthly
+        # (stocks have no weekly contract and no premium target on the page).
+        from trading_app.service import cpr_option_service as _cos
+        is_stock = not _cos.is_index(symbol)
+        if is_stock:
+            if _cos.stock_spec(symbol) is None:
+                return jsonify({'success': False,
+                                'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                         "pick an F&O stock or NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY or SENSEX."}), 400
+            premium = 0.0
+            lot_value = 0.0        # the stock's own lot, read by attach_option_legs
 
         # Fyers, not the BACKTEST_DATA_PROVIDER default (ICICI): Breeze's index
         # candles carry stray wicks and junk closing bars, which moved a pivot by
@@ -5269,6 +5276,7 @@ def run_st_bb_rsi_backtest_api():
             df=candles_df,
             rsi_period=int(data.get('rsi_period', 14) or 14),
             rsi_level=float(data.get('rsi_level', 70) or 70),
+            rsi_lower=float(data['rsi_lower']) if data.get('rsi_lower') not in (None, '') else None,
             st_period=int(data.get('st_period', 10) or 10),
             st_mult=float(data.get('st_mult', 2) or 2),
             bb_period=int(data.get('bb_period', 20) or 20),
@@ -5297,7 +5305,7 @@ def run_st_bb_rsi_backtest_api():
             'start_date': start_date_str, 'end_date': end_date_str,
             'bars': n_bars, 'junk_bars_dropped': n_junk, 'first_bar': str(candles[0]['date']),
             'last_bar': str(candles[-1]['date']),
-            'params': dict(rsi_period=engine.rsi_period, rsi_level=engine.rsi_level,
+            'params': dict(rsi_period=engine.rsi_period, rsi_level=engine.rsi_level, rsi_lower=engine.rsi_lower,
                            st=[engine.st_period, engine.st_mult],
                            bb=[engine.bb_period, engine.bb_mult, engine.bb_offset],
                            entry=[data.get('entry_start', '09:15'), data.get('entry_end', '15:14')],
@@ -5347,7 +5355,7 @@ def run_st_bb_rsi_backtest_api():
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
             try:
-                priced, info = attach_option_legs(symbol, trades, premium, minutes_per_bar, _progress,
+                priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
                                                    calendar=sessions)
                 warn = None
                 if info['unpriced'] or info['truncated']:
