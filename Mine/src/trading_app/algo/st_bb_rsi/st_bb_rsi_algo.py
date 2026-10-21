@@ -301,7 +301,36 @@ class StBbRsiAlgo:
         cutoff = pd.Timestamp(now.replace(tzinfo=None) - _BAR_LAG)
         return bars[bars.index <= cutoff]
 
+    def _kite(self):
+        """The Kite session the orders go through — the first flagged account's, else
+        instance 1. Pricing off the broker that fills the order keeps the strike picked
+        and the premium booked on one contract and one feed: DATA_PROVIDER=FYERS served
+        stale spot and option quotes once its 5,000/day cap was hit (2026-10-21: NIFTY spot
+        22,971 against a real ~22,750, a 23200 PE quoted 263 that filled at 503; SENSEX
+        got no quote at all)."""
+        try:
+            from trading_app.app.routes.api import get_kite
+            for a in _accts(self.username, self.p):
+                if a.get('stoppable'):
+                    k = get_kite(user=self.username, instance=a['instance'])
+                    if k:
+                        return k
+            return get_kite(user=self.username, instance=1)
+        except Exception as e:
+            logger.debug(f'[{self.p.tag}] no Kite session: {e}')
+            return None
+
     def _spot(self) -> Optional[float]:
+        from trading_app.service.strategy_signal_service import SYMBOL_CONFIG
+        kite = self._kite()
+        key = (SYMBOL_CONFIG.get(self.p.symbol) or {}).get('kite_key')
+        if kite and key:
+            try:
+                v = float(((kite.ltp([key]) or {}).get(key) or {}).get('last_price') or 0)
+                if v:
+                    return v
+            except Exception as e:
+                logger.debug(f'[{self.p.tag}] Kite spot unavailable: {e}')
         from trading_app.app.routes.order_placement_api import _spot
         try:
             v = _spot(self.p.symbol)
@@ -310,7 +339,34 @@ class StBbRsiAlgo:
             logger.debug(f'[{self.p.tag}] spot unavailable: {e}')
             return None
 
+    def _kite_premiums(self, strikes: List[int], option_type: str) -> Dict[int, float]:
+        """One Kite ltp call for a whole ladder of strikes: {strike: last price}.
+        BFO for SENSEX, NFO otherwise. Empty when Kite cannot answer."""
+        kite = self._kite()
+        if not kite:
+            return {}
+        try:
+            from trading_app.service.kite_order_services import KiteService
+            svc = KiteService(kite_instance=kite)
+            ex = 'BFO' if self.p.symbol == 'SENSEX' else 'NFO'
+            keys = {}
+            for k in strikes:
+                sym = svc.get_option_symbol(self.p.symbol, k, option_type)
+                if sym:
+                    keys[f'{ex}:{sym}'] = k
+            if not keys:
+                return {}
+            got = kite.ltp(list(keys)) or {}
+            return {k: float(got[key]['last_price']) for key, k in keys.items()
+                    if float((got.get(key) or {}).get('last_price') or 0) > 0}
+        except Exception as e:
+            logger.warning(f'[{self.p.tag}] Kite option quotes unavailable: {e}')
+            return {}
+
     def _premium(self, strike: int, option_type: str) -> Optional[float]:
+        got = self._kite_premiums([int(strike)], option_type)
+        if got:
+            return got[int(strike)]
         from trading_app.app.routes.order_placement_api import option_ltp
         try:
             v = option_ltp(self.p.symbol, int(strike), option_type)
@@ -387,10 +443,33 @@ class StBbRsiAlgo:
         synced = self._sync_live_legs(now)
         if any(t['status'] == 'open' for t in day['trades']):
             self.state['spot'] = self._spot() or self.state.get('spot')     # a quote only while something is open
-        if events or synced:
+            marked = self._mark_open(day)
+        else:
+            marked = False
+        if events or synced or marked:
             self._save_state()
         else:
             self.state['updated'] = _hhmm(now)
+
+    def _mark_open(self, day: Dict[str, Any]) -> bool:
+        """The running P&L of every open leg, so the Today table has a number before the
+        exit: ``ltp`` is the premium now and ``mtm`` is (ltp − entry) × qty. True when a
+        mark moved."""
+        changed = False
+        for t in day['trades']:
+            opt = t.get('option')
+            if t['status'] != 'open' or not opt:
+                continue
+            px = self._premium(opt['strike'], opt['type'])
+            if not px:
+                continue
+            for leg in (t.get('legs') or {}).values():
+                if leg.get('open') and leg.get('entry') is not None:
+                    mtm = round((px - leg['entry']) * self._qty(leg), 2)
+                    if leg.get('ltp') != px or leg.get('mtm') != mtm:
+                        leg.update(ltp=px, mtm=mtm)
+                        changed = True
+        return changed
 
     @staticmethod
     def _drop_round_trips(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -564,8 +643,11 @@ class StBbRsiAlgo:
         t['last_try'] = _time.time()
         last_try = t['attempts'] >= _ENTRY_TRIES
         from trading_app.service import cpr_live_engine as cpr_eng
-        pick = cpr_eng.pick_strike(lambda k: self._premium(k, opt_type), t['index_entry'],
-                                   self._chain_step(), opt_type, s['premium'])
+        step = self._chain_step()
+        atm = int(round(t['index_entry'] / step) * step)
+        ladder = self._kite_premiums([atm + i * step for i in range(-13, 14)], opt_type)
+        pick = cpr_eng.pick_strike(lambda k: ladder.get(k) if ladder else self._premium(k, opt_type),
+                                   t['index_entry'], step, opt_type, s['premium'])
         if not pick:
             t.update(legs={}, error='no option quote — the leg could not be priced')
             if last_try:

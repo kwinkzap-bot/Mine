@@ -484,6 +484,11 @@ Load-bearing:
   size itself, exactly as `'cpr'` (tests/test_st_bb_rsi_live.py). The `_auto_sl`
   line for the other strategies is asserted verbatim by other tests: add to it on
   its own line, never edit it.
+* **Priced off Kite, not `DATA_PROVIDER`** (2026-10-21). Spot, the strike ladder (one
+  `ltp` call, NFO/BFO) and every premium come from the flagged account's Kite session —
+  the broker that fills. With Fyers over its 5,000/day cap the old path served stale
+  quotes: NIFTY spot 22,971 vs ~22,750 real, a 23200 PE quoted 263 that filled at 503,
+  and SENSEX had no quote at all.
 * **Sizing is the flag, nothing computed.** A live order is `BROKER_N_STBB_LOTS` lots at
   each account with `BROKER_N_STBB_ACTIVE=true`; a paper trade takes the first flagged
   account's lots, or 1. Fixed/compound lot modes were removed on 2026-10-18 (the

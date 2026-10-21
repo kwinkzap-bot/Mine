@@ -85,12 +85,12 @@ const _STBB_STATUS = { open: ['In trade', 'info'], closed: ['Closed', 'neutral']
 function _stbbRenderTrades(c, trades) {
     const rows = trades.map(t => {
         const legs = Object.values(t.legs || {});
-        const pnl = legs.reduce((a, l) => a + (l.pnl || 0), 0);
+        const pnl = legs.reduce((a, l) => a + (l.pnl != null ? l.pnl : (l.mtm || 0)), 0);
         return Object.assign({}, t, {
             leg: t.option ? `${c.sym} ${t.option.strike} ${t.option.type}` : '—',
             lots: legs.map(l => `${l.name}: ${l.lots ?? '—'}`).join(', ') || '—',
-            prem: legs.length ? legs.map(l => `${_stbbNum(l.entry)} → ${l.exit != null ? _stbbNum(l.exit) : '…'}`).join(', ') : '—',
-            pnl_inr: legs.some(l => l.pnl != null) ? pnl : null,
+            prem: legs.length ? legs.map(l => `${_stbbNum(l.entry)} → ${l.exit != null ? _stbbNum(l.exit) : (l.ltp != null ? _stbbNum(l.ltp) + ' (live)' : '…')}`).join(', ') : '—',
+            pnl_inr: legs.some(l => l.pnl != null || l.mtm != null) ? pnl : null,
         });
     });
     _stbbEl(c, 'Trades').innerHTML = DataGrid.render({

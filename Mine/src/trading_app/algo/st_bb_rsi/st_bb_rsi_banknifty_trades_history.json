@@ -24,16 +24,16 @@
       "paper": {
         "name": "Paper",
         "lots": 1,
-        "qty": null,
-        "entry": 535.25,
-        "exit": 535.25,
-        "pnl": 0.0,
+        "qty": 30,
+        "entry": 616.8,
+        "exit": 510.75,
+        "pnl": -3181.5,
         "exit_reason": null
       }
     },
-    "pnl": 0.0,
+    "pnl": -3181.5,
     "charges": 103.0,
-    "net": -103.0,
+    "net": -3284.5,
     "unconfirmed": null
   }
 ]
