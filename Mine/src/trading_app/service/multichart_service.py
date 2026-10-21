@@ -404,6 +404,69 @@ def chart_symbol(adapter: Any, symbol: str, source: str) -> tuple:
     return (fut, 'future') if fut else (spot, 'spot')
 
 
+# ── bounded, single-flight broker fetches ────────────────────────────────
+
+CANDLES_DEADLINE = 20.0   # seconds a history read waits for the broker
+LIVE_DEADLINE = 6.0       # the 2 s poll's wait before it serves the last good bars
+CANDLES_TTL = 20.0        # a finished answer is reused this long (day bars: x15)
+
+_live_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix='mc-live')
+_aux_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix='mc-aux')
+_flight_lock = threading.Lock()
+_flight: Dict[tuple, Dict[str, Any]] = {}   # key -> {'resp', 'at', 'future'}
+
+
+def _flight_done(key: tuple, fut: Any) -> None:
+    try:
+        resp = fut.result()
+    except Exception:
+        resp = None
+    with _flight_lock:
+        st = _flight.setdefault(key, {})
+        if st.get('future') is fut:
+            st['future'] = None
+        if resp is not None:
+            st['resp'] = resp
+            st['at'] = _time.monotonic()
+
+
+def _flight_last(key: tuple) -> Optional[Dict[str, Any]]:
+    with _flight_lock:
+        return (_flight.get(key) or {}).get('resp')
+
+
+def _bounded(key: tuple, fn, deadline: float, ttl: float = 0.0):
+    """Run ``fn`` on a worker with one fetch per ``key`` in flight.
+
+    Returns ``(result, timed_out)``. ``ttl`` > 0 reuses a finished answer that
+    young without a broker call. On timeout the fetch keeps running and files
+    its answer for the next caller; ``result`` is None. Exceptions from ``fn``
+    propagate to the caller.
+
+    Fyers answers a rate-limited history call by sleeping 1-6 s and retrying up
+    to five times per call, so an unbounded request could sit for a minute and
+    a half — and a client that retried only added to the queue behind it.
+    """
+    now = _time.monotonic()
+    with _flight_lock:
+        st = _flight.setdefault(key, {})
+        if ttl and st.get('resp') is not None and now - st.get('at', 0.0) < ttl:
+            return st['resp'], False
+        fut = st.get('future')
+        started = fut is None or fut.done()
+        if started:
+            fut = _live_pool.submit(fn)
+            st['future'] = fut
+    if started:
+        # Outside the lock: a future that is already done runs the callback
+        # inline, and the callback takes the same (non-reentrant) lock.
+        fut.add_done_callback(lambda f, k=key: _flight_done(k, f))
+    try:
+        return fut.result(timeout=deadline), False
+    except FuturesTimeout:
+        return None, True
+
+
 def candles(symbol: str, interval: str, daily_from: Optional[str] = None,
             source: str = 'spot') -> Dict[str, Any]:
     """History for one pane plus the daily bars its CPR anchors on.
@@ -413,10 +476,51 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None,
     week has to be inside the set for any as-of date it offers, not just
     the last DAILY_LOOKBACK_DAYS. Multichart and the OI Profile main chart
     leave it unset.
+
+    The broker read is bounded (CANDLES_DEADLINE) and shared: a slow Fyers
+    answers with the last good set marked ``stale`` — or, with nothing yet,
+    an empty one carrying the reason — while the fetch finishes in the
+    background and the next call is served from it.
     """
     if interval not in INTERVALS:
         raise BadRequest(f'Unsupported interval: {interval!r}')
-    adapter = provider()
+    adapter = provider()      # resolved on the request thread, for its session
+    key = ('candles', symbol.upper(), interval, daily_from, source)
+    ttl = CANDLES_TTL * (15 if interval == 'day' else 1)
+    try:
+        resp, timed_out = _bounded(
+            key, lambda: _candles_fetch(adapter, symbol, interval, daily_from, source),
+            CANDLES_DEADLINE, ttl)
+    except (BadRequest, ProviderUnavailable):
+        raise
+    except Exception as exc:
+        last = _flight_last(key)
+        if last and last.get('candles'):
+            return dict(last, stale=True, fetch_error=f'fetch failed: {exc}')
+        raise
+    if not timed_out:
+        return resp
+    why = f'broker slow (>{CANDLES_DEADLINE:g}s) — retry in a moment'
+    last = _flight_last(key)
+    if last and last.get('candles'):
+        return dict(last, stale=True, fetch_error=why)
+    return {
+        'success': True, 'symbol': symbol.upper(), 'source_requested': source,
+        'interval': interval, 'seconds': INTERVALS[interval][1], 'candles': [],
+        'daily': [], 'future_volume': [], 'fetch_error': why, 'stale': True,
+    }
+
+
+def _candles_fetch(adapter: Any, symbol: str, interval: str, daily_from: Optional[str],
+                   source: str) -> Dict[str, Any]:
+    """History for one pane plus the daily bars its CPR anchors on.
+
+    `daily_from` (YYYY-MM-DD) widens the daily rows back to that date: the
+    Replay page pivots on whatever day it is playing, so its previous day /
+    week has to be inside the set for any as-of date it offers, not just
+    the last DAILY_LOOKBACK_DAYS. Multichart and the OI Profile main chart
+    leave it unset.
+    """
     fy_symbol, used = chart_symbol(adapter, symbol, source)
     lookback, _secs = INTERVALS[interval]
 
@@ -432,6 +536,14 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None,
     start = today - timedelta(days=lookback)
     if interval == 'day' and daily_start < start:
         start = daily_start          # the daily pane's own bars are the daily rows
+    # The future's volume is independent of the spot bars, so it goes out at
+    # the same time instead of queueing behind them (two serial Fyers calls,
+    # each able to wait out its own rate-limit retries, were most of a 90 s
+    # response). When the chart IS the future it needs no second call at all.
+    vol_future = None
+    if used != 'future':
+        vol_future = _aux_pool.submit(_future_volume, adapter, symbol.upper(), start.isoformat(),
+                                      today.isoformat(), interval, HISTORY_CACHE_TTL)
     raw = adapter.historical_data(
         fy_symbol, start.isoformat(), today.isoformat(), interval,
         use_cache=True, cache_ttl=HISTORY_CACHE_TTL, allow_synthetic=True,
@@ -443,15 +555,11 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None,
         today.isoformat(), 'day', use_cache=True, cache_ttl=300.0,
     ) if interval != 'day' else raw
 
-    # Charting the future already fetched the volume the histogram wants —
-    # asking for the same series again would be a second broker request for
-    # bars we are holding.
     bars = _to_bars(raw, intraday=interval != 'day')
     if used == 'future':
         fut_symbol, fut_volume = fy_symbol, _volume_rows(bars)
     else:
-        fut_symbol, fut_volume = _future_volume(adapter, symbol.upper(), start.isoformat(),
-                                                today.isoformat(), interval, HISTORY_CACHE_TTL)
+        fut_symbol, fut_volume = vol_future.result()
 
     return {
         'success': True,
@@ -504,75 +612,35 @@ def _live_fetch(adapter: Any, symbol: str, source: str) -> Dict[str, Any]:
     }
 
 
-LIVE_DEADLINE = 6.0     # seconds a poll waits for the broker before serving the last good bars
-
-_live_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix='mc-live')
-_live_lock = threading.Lock()
-_live_state: Dict[tuple, Dict[str, Any]] = {}   # (SYMBOL, source) -> {'resp', 'future'}
-
-
-def _live_done(key: tuple, fut: Any) -> None:
-    try:
-        resp = fut.result()
-    except Exception:
-        resp = None
-    with _live_lock:
-        st = _live_state.setdefault(key, {})
-        if st.get('future') is fut:
-            st['future'] = None
-        if resp is not None:
-            st['resp'] = resp
-
-
-def _live_stale(key: tuple, why: str) -> Optional[Dict[str, Any]]:
-    with _live_lock:
-        last = (_live_state.get(key) or {}).get('resp')
-    if not last or not last.get('candles'):
-        return None
-    return dict(last, stale=True, fetch_error=why)
-
-
 def live(symbol: str, source: str = 'spot') -> Dict[str, Any]:
     """Today's 1-minute bars — the page's poll target.
 
-    The broker fetch runs on a worker and a poll waits at most LIVE_DEADLINE
-    for it. Fyers answers a rate-limited history call by sleeping 1-6 s and
-    retrying up to five times per call (more for a malformed reply), and this
-    endpoint makes two such calls, so one poll could sit for 40 s — and the
-    2 s timer kept launching more behind it, each retrying and feeding the
-    very limit that slowed it. Now one fetch per (symbol, source) is in flight
-    at a time; a poll that cannot get a fresh answer in time serves the last
-    good bars (``stale: true``) and the slow fetch finishes in the background.
+    The broker fetch is bounded (LIVE_DEADLINE) and single-flight per
+    (symbol, source) — see ``_bounded``. A poll that cannot get a fresh answer
+    in time serves the last good bars (``stale: true``).
     """
-    adapter = provider()      # resolved here, on the request thread, for its session
-    key = (symbol.upper(), source)
-    with _live_lock:
-        st = _live_state.setdefault(key, {})
-        fut = st.get('future')
-        started = fut is None or fut.done()
-        if started:
-            fut = _live_pool.submit(_live_fetch, adapter, symbol, source)
-            st['future'] = fut
-    if started:
-        # Outside the lock: a future that is already done runs the callback
-        # inline, and the callback takes the same (non-reentrant) lock.
-        fut.add_done_callback(lambda f, k=key: _live_done(k, f))
+    adapter = provider()      # resolved on the request thread, for its session
+    key = ('live', symbol.upper(), source)
     try:
-        return fut.result(timeout=LIVE_DEADLINE)
-    except FuturesTimeout:
-        why = f'broker slow (>{LIVE_DEADLINE:g}s) — showing the last bars'
-        return _live_stale(key, why) or {
-            'success': True, 'symbol': symbol.upper(), 'source_requested': source,
-            'candles': [], 'future_volume': [], 'ltp': None, 'market_open': market_open(),
-            'fetch_error': why, 'stale': True, 'ts': int(datetime.now().timestamp()),
-        }
+        resp, timed_out = _bounded(key, lambda: _live_fetch(adapter, symbol, source), LIVE_DEADLINE)
     except (BadRequest, ProviderUnavailable):
         raise
     except Exception as exc:
-        stale = _live_stale(key, f'fetch failed: {exc}')
-        if stale:
-            return stale
+        last = _flight_last(key)
+        if last and last.get('candles'):
+            return dict(last, stale=True, fetch_error=f'fetch failed: {exc}')
         raise
+    if not timed_out:
+        return resp
+    why = f'broker slow (>{LIVE_DEADLINE:g}s) — showing the last bars'
+    last = _flight_last(key)
+    if last and last.get('candles'):
+        return dict(last, stale=True, fetch_error=why)
+    return {
+        'success': True, 'symbol': symbol.upper(), 'source_requested': source,
+        'candles': [], 'future_volume': [], 'ltp': None, 'market_open': market_open(),
+        'fetch_error': why, 'stale': True, 'ts': int(datetime.now().timestamp()),
+    }
 
 
 _mh_cache: Dict[str, Any] = {'value': None, 'ts': 0.0}

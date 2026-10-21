@@ -385,7 +385,7 @@ def test_live_slow_broker_serves_last_good_bars_then_recovers(monkeypatch):
     import threading
     from trading_app.service import multichart_service as ms
 
-    ms._live_state.clear()
+    ms._flight.clear()
     gate = threading.Event()
     calls = []
     good = {'success': True, 'candles': [{'time': 1, 'close': 5}], 'ltp': 5,
@@ -410,14 +410,14 @@ def test_live_slow_broker_serves_last_good_bars_then_recovers(monkeypatch):
     gate.set()
     import time; time.sleep(0.3)
     assert ms.live('NIFTY', 'spot')['ltp'] == 6           # recovered, fresh again
-    ms._live_state.clear()
+    ms._flight.clear()
 
 
 def test_live_slow_with_nothing_cached_returns_empty_not_a_hang(monkeypatch):
     import threading
     from trading_app.service import multichart_service as ms
 
-    ms._live_state.clear()
+    ms._flight.clear()
     gate = threading.Event()
     monkeypatch.setattr(ms, 'provider', lambda: object())
     monkeypatch.setattr(ms, '_live_fetch', lambda a, s, so: gate.wait(5) or {'success': True})
@@ -425,4 +425,67 @@ def test_live_slow_with_nothing_cached_returns_empty_not_a_hang(monkeypatch):
     out = ms.live('NIFTY', 'spot')
     assert out['success'] and out['candles'] == [] and out['stale'] and out['fetch_error']
     gate.set()
-    ms._live_state.clear()
+    ms._flight.clear()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_flight():
+    """Answers are reused across calls by design; tests must not share them."""
+    from trading_app.service import multichart_service as ms
+    ms._flight.clear()
+    yield
+    ms._flight.clear()
+
+
+# ── /candles deadline, reuse and the parallel volume leg ──────────────────
+
+def test_candles_slow_broker_returns_in_bounded_time_then_serves_from_it(monkeypatch):
+    import threading, time
+    from trading_app.service import multichart_service as ms
+
+    gate = threading.Event()
+    calls = []
+
+    def fetch(adapter, symbol, interval, daily_from, source):
+        calls.append(1)
+        gate.wait(5)                      # Fyers sleeping through its retries
+        return {'success': True, 'candles': [{'time': 1}], 'daily': [], 'fetch_error': None}
+
+    monkeypatch.setattr(ms, 'provider', lambda: object())
+    monkeypatch.setattr(ms, '_candles_fetch', fetch)
+    monkeypatch.setattr(ms, 'CANDLES_DEADLINE', 0.2)
+
+    t = time.time()
+    first = ms.candles('NIFTY', 'day')
+    assert time.time() - t < 2 and first['stale'] and first['candles'] == [] and first['fetch_error']
+    ms.candles('NIFTY', 'day')
+    assert len(calls) == 1                # the second call joined the first fetch
+    gate.set()
+    time.sleep(0.3)
+    done = ms.candles('NIFTY', 'day')     # filed by the background fetch
+    assert done['candles'] == [{'time': 1}] and not done.get('stale')
+    ms.candles('NIFTY', 'day')
+    assert len(calls) == 1                # within the TTL: no broker call
+
+
+def test_candles_future_volume_is_fetched_alongside_the_spot_bars(monkeypatch):
+    import threading
+    from trading_app.service import multichart_service as ms
+
+    both = threading.Barrier(2, timeout=3)      # only passes if both run at once
+
+    class Adapter:
+        def historical_data(self, *a, **kw):
+            both.wait()
+            return []
+
+    monkeypatch.setattr(ms, 'chart_symbol', lambda ad, sym, src: ('NSE:NIFTY50-INDEX', 'spot'))
+    monkeypatch.setattr(ms, '_fetch_error', lambda ad: None)
+
+    def fut_vol(adapter, root, start, end, interval, ttl):
+        both.wait()
+        return 'NSE:NIFTYFUT', []
+
+    monkeypatch.setattr(ms, '_future_volume', fut_vol)
+    out = ms._candles_fetch(Adapter(), 'NIFTY', 'day', None, 'spot')
+    assert out['future_symbol'] == 'NSE:NIFTYFUT'
