@@ -252,14 +252,7 @@ window.oipInitSecondaryCharts = function() {
                 (typeof oipTfSplit === 'function' && oipTfSplit()) ? null : oipOIChart;
 
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
-                // Round Strike pairs with this chart (see its own subscription): a drag
-                // there reaches here with the active id 'rs', so the rest follow too.
-                const _act = window._oipActiveChartId;
-                if (window._oipDataRefreshing || (_act !== 'index' && _act !== 'rs') || !oipOIChartReady || !oipIntChartReady) return;
-                if (_act === 'index' && typeof oipRSChart !== 'undefined' && oipRSChart?.chart
-                    && typeof oipRSInterval !== 'undefined' && typeof oipInterval !== 'undefined') {
-                    try { window._oipSyncTimeScale(oipOIChart, oipRSChart.chart, oipRSInterval === oipInterval); } catch (e) {}
-                }
+                if (window._oipDataRefreshing || window._oipActiveChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
                 if (!oiPanPartner()) return;
                 syncRange(oipOIChart, [
                     oipIntrinsicChart?.chart,

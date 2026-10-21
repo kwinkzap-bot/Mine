@@ -13900,6 +13900,15 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         future_ltp = executor.submit(_live_ltp) if (_is_symbol_provider and _data_provider) else None
 
+        # Kite has no LTP quote path here (see above), so its Price pill used to
+        # lag by the index-bar cache. KITE_WS_QUOTES streams the index tick
+        # instead: no REST slot, fresh every second. 0.0 (flag off, no tick yet,
+        # stale) falls through to the bar/OI chain exactly as before.
+        stream_price = 0.0
+        if not _is_symbol_provider and _data_provider is not None:
+            from trading_app.service.kite_ticker_feed import ws_price
+            stream_price = ws_price(_data_provider, index_token)
+
         # ── Slow-moving sections (see the TTL table above) ──
         def _index_derived():
             # One daily candle for the as-of day gives the same session open the
@@ -14036,7 +14045,7 @@ def oi_profile_round_strike() -> EndpointResponse:
         # Price: live quote first, then the index's own last bar (up to the
         # 10-second index cache old), then the OI snapshot (up to a minute old).
         price = (future_ltp.result() if future_ltp else 0) \
-            or index_derived.get('last_close') or oi_data.get('current_price') or 0
+            or stream_price or index_derived.get('last_close') or oi_data.get('current_price') or 0
 
         # ATM = the listed strike nearest to that price, taken from the OI chain
         # (the same rule the stats strip has always used).

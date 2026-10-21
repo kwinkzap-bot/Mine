@@ -99,3 +99,16 @@ def test_new_login_replaces_old_socket(monkeypatch):
     kf.get_feed(B())
     assert stopped == [fa] and list(kf._feeds) == ['b']
     kf._feeds.clear()
+
+
+def test_ws_price_is_zero_without_a_tick_and_a_float_with_one(monkeypatch):
+    monkeypatch.setenv('KITE_WS_QUOTES', 'true')
+    monkeypatch.setattr(kf.KiteTickerFeed, '_make_ticker',
+                        lambda self: FakeTicker('k', 't'))
+    kf._feeds.clear()
+
+    class K: api_key, access_token = 'k', 'tok-px'
+    assert kf.ws_price(K(), 256265) == 0.0
+    kf._feeds['tok-px']._on_ticks(None, [_tick(256265, 23012.5)])
+    assert kf.ws_price(K(), 256265) == 23012.5
+    kf._feeds.clear()

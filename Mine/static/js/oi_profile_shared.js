@@ -164,35 +164,11 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-/* ── Round Strike ⇄ OI Profile chart sync ─────────────────────────────────────
-   oi_profile_round_strike.js only wires its zoom/pan and crosshair hover when
-   these two helpers exist at the moment it builds the chart. On /oi-profile
-   _oipSyncTimeScale was never defined (only oi_replay.js had it) and
-   _oipSyncCrosshair is assigned late from oi_profile_init.js, so the Round
-   Strike chart neither followed a drag nor showed the hover line. Defined here,
-   loaded before both, only if absent (oi_replay.js carries the same pair). */
-if (typeof window !== 'undefined' && typeof window._oipSyncTimeScale !== 'function') {
-    window._oipSyncTimeScale = (sourceChart, targetChart, sameBarWidth) => {
-        if (!sourceChart || !targetChart || window.__oipTsSyncing) return;
-        window.__oipTsSyncing = true;
-        try {
-            const src = sourceChart.timeScale(), dst = targetChart.timeScale();
-            if (sameBarWidth) {
-                const barSpacing = src.options().barSpacing;
-                if (barSpacing) {
-                    dst.applyOptions({ barSpacing });
-                    dst.scrollToPosition(src.scrollPosition(), false);
-                }
-            } else {
-                const range = src.getVisibleRange();
-                if (range && range.from != null && range.to != null) dst.setVisibleRange(range);
-            }
-        } catch (e) {
-        } finally {
-            window.__oipTsSyncing = false;
-        }
-    };
-}
+/* ── Round Strike ⇄ OI Profile crosshair sync ─────────────────────────────────
+   oi_profile_round_strike.js only wires its hover when _oipSyncCrosshair exists
+   at the moment it builds the chart, and oi_profile_init.js assigns it late.
+   Defined here (loaded before both), only if absent. Zoom/pan is deliberately
+   NOT synced between Round Strike and the OI Profile chart. */
 if (typeof window !== 'undefined' && typeof window._oipSyncCrosshair !== 'function') {
     window._oipSyncCrosshair = (sourceChart, targetChart, param, targetSeries) => {
         if (!targetChart || !targetSeries) return;

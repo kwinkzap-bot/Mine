@@ -181,3 +181,12 @@ def ws_quote(kite, instrument_token, max_age: float = DEFAULT_MAX_AGE) -> Option
     except Exception as exc:
         logger.warning(f"[KiteWS] unavailable, using REST: {exc}")
         return None
+
+
+def ws_price(kite, instrument_token, max_age: float = DEFAULT_MAX_AGE) -> float:
+    """Streamed last price, or 0.0 when there is none (flag off, no tick, stale)."""
+    q = ws_quote(kite, instrument_token, max_age)
+    try:
+        return float((q or {}).get('last_price') or 0)
+    except (TypeError, ValueError):
+        return 0.0
