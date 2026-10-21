@@ -117,7 +117,26 @@
         const old = oipOILastCandles;
         if (!old || !old.length) return false;
 
-        const today = rebucket(minuteBars);
+        // The feed (Fyers) rebuilds today's bars locally from ~4 s quote samples
+        // whenever its history comes back empty or rate-limited — flat
+        // open=high=low=close bars, with holes where no sample landed — and
+        // flags them `synthetic`. This chart's history comes from another broker
+        // (OI_PROFILE_DATA_PROVIDER), so painting those over bars it already
+        // holds for today turned a correct chart into a sparse one after the
+        // first tick. Reconstructed bars are only used when the chart has no
+        // bars for today at all (their banner then says so).
+        let droppedSynthetic = false;
+        const realMinutes = minuteBars.filter(b => !b.synthetic);
+        if (realMinutes.length !== minuteBars.length) {
+            const dayStart = MineCPR.sessionStart(minuteBars[0].time);
+            if (old[old.length - 1].time >= dayStart) {
+                minuteBars = realMinutes;
+                droppedSynthetic = true;
+            }
+            if (!minuteBars.length) return false;
+        }
+
+        let today = rebucket(minuteBars);
         if (!today.length) return false;
 
         const firstT = today[0].time;
@@ -128,6 +147,12 @@
         if (cut === 0 && old[0].time > firstT) return false;
 
         const oldToday = old.slice(cut);
+        // Bars the chart already holds that are newer than the last real one in
+        // the feed stay: the feed only gave up its reconstructed tail.
+        if (droppedSynthetic) {
+            const lastT = today[today.length - 1].time;
+            today = today.concat(oldToday.filter(b => b.time > lastT));
+        }
         const merged = old.slice(0, cut).concat(today);
 
         // series.update() may only touch the last bar or append one. Anything
