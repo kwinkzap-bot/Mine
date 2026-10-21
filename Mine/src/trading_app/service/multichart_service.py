@@ -24,6 +24,7 @@ open. Same convention as `_oip_format_candles` in routes/api.py.
 
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 import time as _time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -468,7 +469,7 @@ def candles(symbol: str, interval: str, daily_from: Optional[str] = None,
     }
 
 
-def live(symbol: str, source: str = 'spot') -> Dict[str, Any]:
+def _live_fetch(adapter: Any, symbol: str, source: str) -> Dict[str, Any]:
     """Today's 1-minute bars — the page's poll target.
 
     Every pane re-buckets these into its own timeframe client-side (all NSE
@@ -476,7 +477,6 @@ def live(symbol: str, source: str = 'spot') -> Dict[str, Any]:
     what keeps four live charts at two broker requests per tick — the spot
     bars and the future's, for the volume histogram.
     """
-    adapter = provider()
     fy_symbol, used = chart_symbol(adapter, symbol, source)
     today = date.today().isoformat()
     raw = adapter.historical_data(
@@ -502,6 +502,77 @@ def live(symbol: str, source: str = 'spot') -> Dict[str, Any]:
         'fetch_error': _fetch_error(adapter) if not raw else None,
         'ts': int(datetime.now().timestamp()),
     }
+
+
+LIVE_DEADLINE = 6.0     # seconds a poll waits for the broker before serving the last good bars
+
+_live_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix='mc-live')
+_live_lock = threading.Lock()
+_live_state: Dict[tuple, Dict[str, Any]] = {}   # (SYMBOL, source) -> {'resp', 'future'}
+
+
+def _live_done(key: tuple, fut: Any) -> None:
+    try:
+        resp = fut.result()
+    except Exception:
+        resp = None
+    with _live_lock:
+        st = _live_state.setdefault(key, {})
+        if st.get('future') is fut:
+            st['future'] = None
+        if resp is not None:
+            st['resp'] = resp
+
+
+def _live_stale(key: tuple, why: str) -> Optional[Dict[str, Any]]:
+    with _live_lock:
+        last = (_live_state.get(key) or {}).get('resp')
+    if not last or not last.get('candles'):
+        return None
+    return dict(last, stale=True, fetch_error=why)
+
+
+def live(symbol: str, source: str = 'spot') -> Dict[str, Any]:
+    """Today's 1-minute bars — the page's poll target.
+
+    The broker fetch runs on a worker and a poll waits at most LIVE_DEADLINE
+    for it. Fyers answers a rate-limited history call by sleeping 1-6 s and
+    retrying up to five times per call (more for a malformed reply), and this
+    endpoint makes two such calls, so one poll could sit for 40 s — and the
+    2 s timer kept launching more behind it, each retrying and feeding the
+    very limit that slowed it. Now one fetch per (symbol, source) is in flight
+    at a time; a poll that cannot get a fresh answer in time serves the last
+    good bars (``stale: true``) and the slow fetch finishes in the background.
+    """
+    adapter = provider()      # resolved here, on the request thread, for its session
+    key = (symbol.upper(), source)
+    with _live_lock:
+        st = _live_state.setdefault(key, {})
+        fut = st.get('future')
+        started = fut is None or fut.done()
+        if started:
+            fut = _live_pool.submit(_live_fetch, adapter, symbol, source)
+            st['future'] = fut
+    if started:
+        # Outside the lock: a future that is already done runs the callback
+        # inline, and the callback takes the same (non-reentrant) lock.
+        fut.add_done_callback(lambda f, k=key: _live_done(k, f))
+    try:
+        return fut.result(timeout=LIVE_DEADLINE)
+    except FuturesTimeout:
+        why = f'broker slow (>{LIVE_DEADLINE:g}s) — showing the last bars'
+        return _live_stale(key, why) or {
+            'success': True, 'symbol': symbol.upper(), 'source_requested': source,
+            'candles': [], 'future_volume': [], 'ltp': None, 'market_open': market_open(),
+            'fetch_error': why, 'stale': True, 'ts': int(datetime.now().timestamp()),
+        }
+    except (BadRequest, ProviderUnavailable):
+        raise
+    except Exception as exc:
+        stale = _live_stale(key, f'fetch failed: {exc}')
+        if stale:
+            return stale
+        raise
 
 
 _mh_cache: Dict[str, Any] = {'value': None, 'ts': 0.0}

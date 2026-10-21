@@ -377,3 +377,52 @@ def test_index_root_futures_still_resolve(client, nse_master):
     body = client.get('/api/multichart/candles?symbol=NIFTYFPI&interval=minute&source=future').get_json()
     assert body['source'] == 'future' and body['fy_symbol'] == 'NSE:NIFTYFPI26SEPFUT'
     assert body['candles'][0]['close'] == 1290.0
+
+
+# ── /live deadline: a slow broker must not hold the poll ──────────────────
+
+def test_live_slow_broker_serves_last_good_bars_then_recovers(monkeypatch):
+    import threading
+    from trading_app.service import multichart_service as ms
+
+    ms._live_state.clear()
+    gate = threading.Event()
+    calls = []
+    good = {'success': True, 'candles': [{'time': 1, 'close': 5}], 'ltp': 5,
+            'market_open': True, 'fetch_error': None}
+
+    def fetch(adapter, symbol, source):
+        calls.append(1)
+        if len(calls) == 1:
+            return dict(good)
+        gate.wait(5)               # the rate-limited call, sleeping through its retries
+        return dict(good, ltp=6)
+
+    monkeypatch.setattr(ms, 'provider', lambda: object())
+    monkeypatch.setattr(ms, '_live_fetch', fetch)
+    monkeypatch.setattr(ms, 'LIVE_DEADLINE', 0.2)
+
+    assert ms.live('NIFTY', 'spot')['ltp'] == 5          # first poll, fresh
+    slow = ms.live('NIFTY', 'spot')                       # second poll hangs → stale
+    assert slow['stale'] is True and slow['ltp'] == 5 and 'slow' in slow['fetch_error']
+    again = ms.live('NIFTY', 'spot')                      # joins the SAME fetch
+    assert again['stale'] is True and len(calls) == 2     # no pile-up
+    gate.set()
+    import time; time.sleep(0.3)
+    assert ms.live('NIFTY', 'spot')['ltp'] == 6           # recovered, fresh again
+    ms._live_state.clear()
+
+
+def test_live_slow_with_nothing_cached_returns_empty_not_a_hang(monkeypatch):
+    import threading
+    from trading_app.service import multichart_service as ms
+
+    ms._live_state.clear()
+    gate = threading.Event()
+    monkeypatch.setattr(ms, 'provider', lambda: object())
+    monkeypatch.setattr(ms, '_live_fetch', lambda a, s, so: gate.wait(5) or {'success': True})
+    monkeypatch.setattr(ms, 'LIVE_DEADLINE', 0.1)
+    out = ms.live('NIFTY', 'spot')
+    assert out['success'] and out['candles'] == [] and out['stale'] and out['fetch_error']
+    gate.set()
+    ms._live_state.clear()
