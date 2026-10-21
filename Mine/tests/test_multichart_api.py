@@ -429,6 +429,13 @@ def test_live_slow_with_nothing_cached_returns_empty_not_a_hang(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_kite(monkeypatch):
+    """These tests assert on the fake adapter's calls; never reach a real broker."""
+    from trading_app.service import multichart_service as ms
+    monkeypatch.setattr(ms, '_kite_first', lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _fresh_flight():
     """Answers are reused across calls by design; tests must not share them."""
     from trading_app.service import multichart_service as ms
@@ -489,3 +496,12 @@ def test_candles_future_volume_is_fetched_alongside_the_spot_bars(monkeypatch):
     monkeypatch.setattr(ms, '_future_volume', fut_vol)
     out = ms._candles_fetch(Adapter(), 'NIFTY', 'day', None, 'spot')
     assert out['future_symbol'] == 'NSE:NIFTYFUT'
+
+
+def test_kite_first_wraps_only_when_enabled(monkeypatch):
+    from trading_app.service import multichart_service as ms
+    a = object()
+    assert ms._history_adapter(a) is a
+    monkeypatch.setattr(ms, '_kite_first', lambda: True)
+    w = ms._history_adapter(a)
+    assert isinstance(w, ms.ZerodhaFirstHistory) and w._fyers is a

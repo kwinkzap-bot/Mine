@@ -180,6 +180,30 @@ def algo_provider() -> Any:
     return ZerodhaFirstHistory(fyers)
 
 
+def _kite_first() -> bool:
+    """MULTICHART_KITE_FIRST (default true): read the index bars from Zerodha first.
+
+    Fyers' Standard plan is capped at 5,000 requests/day and a throttled call
+    sleeps through up to five retries, so a Fyers-only feed goes quiet (or is
+    rebuilt as flat synthetic bars) while the OI Profile's own history, which
+    already comes from Kite, keeps going — the two disagree and the live chart
+    stops following the tape. Kite-first keeps them on one tape; anything Kite
+    cannot answer (a stock, the 2-minute bar, a refused probe) still goes to
+    Fyers exactly as before.
+    """
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        v = (UserEnvManager.get_user_var('Mine', 'MULTICHART_KITE_FIRST', 'true') or 'true')
+        return v.split('#')[0].strip().lower() not in ('0', 'false', 'no', 'off')
+    except Exception:
+        return True
+
+
+def _history_adapter(adapter: Any) -> Any:
+    """The adapter the SPOT bars are read through (see _kite_first)."""
+    return ZerodhaFirstHistory(adapter) if _kite_first() else adapter
+
+
 def _speaks_symbols(adapter: Any) -> bool:
     """Fyers and ICICI take 'NSE:SBIN-EQ'; Kite wants a numeric token."""
     name = adapter.__class__.__name__
@@ -544,13 +568,14 @@ def _candles_fetch(adapter: Any, symbol: str, interval: str, daily_from: Optiona
     if used != 'future':
         vol_future = _aux_pool.submit(_future_volume, adapter, symbol.upper(), start.isoformat(),
                                       today.isoformat(), interval, HISTORY_CACHE_TTL)
-    raw = adapter.historical_data(
+    hist = _history_adapter(adapter)
+    raw = hist.historical_data(
         fy_symbol, start.isoformat(), today.isoformat(), interval,
         use_cache=True, cache_ttl=HISTORY_CACHE_TTL, allow_synthetic=True,
     )
     fetch_error = _fetch_error(adapter) if not raw else None
 
-    daily_raw = adapter.historical_data(
+    daily_raw = hist.historical_data(
         fy_symbol, daily_start.isoformat(),
         today.isoformat(), 'day', use_cache=True, cache_ttl=300.0,
     ) if interval != 'day' else raw
@@ -587,7 +612,7 @@ def _live_fetch(adapter: Any, symbol: str, source: str) -> Dict[str, Any]:
     """
     fy_symbol, used = chart_symbol(adapter, symbol, source)
     today = date.today().isoformat()
-    raw = adapter.historical_data(
+    raw = _history_adapter(adapter).historical_data(
         fy_symbol, today, today, 'minute',
         use_cache=True, cache_ttl=LIVE_CACHE_TTL, allow_synthetic=True,
     )

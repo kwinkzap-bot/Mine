@@ -118,40 +118,48 @@
         if (!old || !old.length) return false;
 
         // The feed (Fyers) rebuilds today's bars locally from ~4 s quote samples
-        // whenever its history comes back empty or rate-limited — flat
-        // open=high=low=close bars, with holes where no sample landed — and
-        // flags them `synthetic`. This chart's history comes from another broker
-        // (OI_PROFILE_DATA_PROVIDER), so painting those over bars it already
-        // holds for today turned a correct chart into a sparse one after the
-        // first tick. Reconstructed bars are only used when the chart has no
-        // bars for today at all (their banner then says so).
-        let droppedSynthetic = false;
-        const realMinutes = minuteBars.filter(b => !b.synthetic);
-        if (realMinutes.length !== minuteBars.length) {
-            const dayStart = MineCPR.sessionStart(minuteBars[0].time);
-            if (old[old.length - 1].time >= dayStart) {
-                minuteBars = realMinutes;
-                droppedSynthetic = true;
+        // whenever its history comes back empty or rate-limited (its daily cap
+        // is 5,000 requests) — flat open=high=low=close bars with holes where
+        // no sample landed, flagged `synthetic`. This chart's history comes from
+        // another broker (OI_PROFILE_DATA_PROVIDER), so replacing the bars it
+        // already holds for today with those turned a correct chart sparse after
+        // the first tick. In that case the chart's own bars stand and the feed
+        // only moves the TAIL: its minutes from the chart's last bar onward are
+        // folded into that bar (open kept; high/low widened; close = latest) and
+        // any newer buckets are appended, so the chart keeps following the tape.
+        let today, oldToday, cut;
+        const anySynthetic = minuteBars.some(b => b.synthetic);
+        const dayStart = MineCPR.sessionStart(minuteBars[0].time);
+        if (anySynthetic && old[old.length - 1].time >= dayStart) {
+            cut = old.length;
+            while (cut > 0 && old[cut - 1].time >= dayStart) cut--;
+            oldToday = old.slice(cut);
+            const lastOld = oldToday[oldToday.length - 1];
+            const newer = minuteBars.filter(b => b.time >= lastOld.time);
+            today = oldToday.slice(0, -1).concat([Object.assign({}, lastOld)]);
+            if (newer.length) {
+                for (const bar of rebucket(newer)) {
+                    const tail = today[today.length - 1];
+                    if (bar.time === tail.time) {
+                        tail.high = Math.max(tail.high, bar.high);
+                        tail.low = Math.min(tail.low, bar.low);
+                        tail.close = bar.close;
+                    } else if (bar.time > tail.time) {
+                        today.push(bar);
+                    }
+                }
             }
-            if (!minuteBars.length) return false;
-        }
+        } else {
+            today = rebucket(minuteBars);
+            if (!today.length) return false;
 
-        let today = rebucket(minuteBars);
-        if (!today.length) return false;
-
-        const firstT = today[0].time;
-        let cut = old.length;
-        while (cut > 0 && old[cut - 1].time >= firstT) cut--;
-        // The chart is showing a LATER day than the feed — a replayed/date-ranged
-        // window. Patching it with today's bars would be a lie; leave it alone.
-        if (cut === 0 && old[0].time > firstT) return false;
-
-        const oldToday = old.slice(cut);
-        // Bars the chart already holds that are newer than the last real one in
-        // the feed stay: the feed only gave up its reconstructed tail.
-        if (droppedSynthetic) {
-            const lastT = today[today.length - 1].time;
-            today = today.concat(oldToday.filter(b => b.time > lastT));
+            const firstT = today[0].time;
+            cut = old.length;
+            while (cut > 0 && old[cut - 1].time >= firstT) cut--;
+            // The chart is showing a LATER day than the feed — a replayed/date-ranged
+            // window. Patching it with today's bars would be a lie; leave it alone.
+            if (cut === 0 && old[0].time > firstT) return false;
+            oldToday = old.slice(cut);
         }
         const merged = old.slice(0, cut).concat(today);
 
