@@ -39332,8 +39332,26 @@
       "reason": "10:30 candle (23,075-23,124) poked over the CPR top 23,108 past the previous high 23,105, closed 23,080 back inside it and under the VWAP 23,092 -> SELL under it; SL over its high; target 1:2",
       "setup_time": "10:30",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 76.2 pts (0.329%), 09:15 candle O 23150.85 H 23175.25 L 23074.6 C 23153.25 | Trade by rule: no candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade | Trade by rule: 10:30 candle (23,075-23,124) poked over the CPR top 23,108 past the previous high 23,105, closed 23,080 back inside it and under the VWAP 23,092 -> SELL under it; SL over its high; target 1:2; chart replay Target 10:35 -> 12:05, target reached at 12:00 and locked (stop to the target), out at 12:05, P&L +104"
+    },
+    {
+      "date": "2026-10-21",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Medium",
+      "cpr_direction": "Dec",
+      "first_candle": "Candle green near R3(cam)",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "No candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 80.8 pts (0.353%), 09:15 candle O 23016.0 H 23063.6 L 22976.15 C 23039.2 | Trade by rule: no candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-19 20:00",
+  "extended_at": "2026-10-21 15:30",
   "backfilled_from": "2018-01-01"
 }
