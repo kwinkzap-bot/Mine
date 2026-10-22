@@ -270,7 +270,34 @@ class CPRAlgo:
         cut = _hhmm(now - _BAR_LAG)
         return [b for b in bars if b['time'] <= cut]
 
+    def _kite(self):
+        """The Kite session the orders go through — the first flagged Zerodha account's,
+        else instance 1. Strike pick and booked premium stay on the broker that fills:
+        the data provider (Fyers over its daily cap) served stale quotes — 2026-10-22 a
+        23100 PE was picked at "≈204" and filled at 481, against the ≈200 the sheet buys."""
+        try:
+            from trading_app.app.routes.api import get_kite
+            for a in cpr_accounts(self.username):
+                if a['type'] in ('zerodha', 'kite'):
+                    k = get_kite(user=self.username, instance=a['instance'])
+                    if k:
+                        return k
+            return get_kite(user=self.username, instance=1)
+        except Exception as e:
+            logger.debug(f'[CPR] no Kite session: {e}')
+            return None
+
     def _spot(self) -> Optional[float]:
+        from trading_app.service.strategy_signal_service import SYMBOL_CONFIG
+        kite = self._kite()
+        key = (SYMBOL_CONFIG.get(SYMBOL) or {}).get('kite_key')
+        if kite and key:
+            try:
+                v = float(((kite.ltp([key]) or {}).get(key) or {}).get('last_price') or 0)
+                if v:
+                    return v
+            except Exception as e:
+                logger.debug(f'[CPR] Kite spot unavailable: {e}')
         from trading_app.app.routes.order_placement_api import _spot
         try:
             v = _spot(SYMBOL)
@@ -279,7 +306,33 @@ class CPRAlgo:
             logger.debug(f'[CPR] spot unavailable: {e}')
             return None
 
+    def _kite_premiums(self, strikes: List[int], option_type: str) -> Dict[int, float]:
+        """One Kite ltp call for a whole ladder of strikes: {strike: last price}.
+        Empty when Kite cannot answer."""
+        kite = self._kite()
+        if not kite:
+            return {}
+        try:
+            from trading_app.service.kite_order_services import KiteService
+            ks = KiteService(kite_instance=kite)
+            keys = {}
+            for k in strikes:
+                sym = ks.get_option_symbol(SYMBOL, k, option_type)
+                if sym:
+                    keys[f'NFO:{sym}'] = k
+            if not keys:
+                return {}
+            got = kite.ltp(list(keys)) or {}
+            return {k: float(got[key]['last_price']) for key, k in keys.items()
+                    if float((got.get(key) or {}).get('last_price') or 0) > 0}
+        except Exception as e:
+            logger.warning(f'[CPR] Kite option quotes unavailable: {e}')
+            return {}
+
     def _premium(self, strike: int, option_type: str) -> Optional[float]:
+        got = self._kite_premiums([int(strike)], option_type)
+        if got:
+            return got[int(strike)]
         from trading_app.app.routes.order_placement_api import option_ltp
         try:
             v = option_ltp(SYMBOL, int(strike), option_type)
@@ -534,8 +587,11 @@ class CPRAlgo:
         option_type = eng.option_side(t)
         spot = self.state.get('spot') or t['fill']
         prem = settings(self.username)['premium']
-        pick = eng.pick_strike(lambda k: self._premium(k, option_type), spot, self._chain_step(),
-                               option_type, prem)
+        step = self._chain_step()
+        atm = int(round(spot / step) * step)
+        ladder = self._kite_premiums([atm + i * step for i in range(-13, 14)], option_type)
+        pick = eng.pick_strike(lambda k: ladder.get(k) if ladder else self._premium(k, option_type),
+                               spot, step, option_type, prem)
         if not pick:
             t['legs'] = {}
             t['error'] = 'no option quote — the leg could not be priced'
