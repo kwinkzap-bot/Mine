@@ -5137,8 +5137,13 @@ def run_st_bb_rsi_optimise():
         interval = data.get('interval', '3minute')
         if not start_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-        if symbol not in ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'):
-            return jsonify({'success': False, 'error': f"'{symbol}' is not an index this backtest supports."}), 400
+        # Same symbols as the run: an index, or an F&O stock (the sweep is on candle
+        # points, so it does not care which).
+        from trading_app.service import cpr_option_service as _cos
+        if not _cos.is_index(symbol) and _cos.stock_spec(symbol) is None:
+            return jsonify({'success': False,
+                            'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                     "pick an F&O stock or NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY or SENSEX."}), 400
         provider = get_fyers_adapter()      # Fyers, as the run itself (see run_st_bb_rsi_backtest_api)
         if provider is None:
             return jsonify({'success': False,
