@@ -1242,7 +1242,31 @@ def _bars_from_store(symbol: str, first: date, last: date) -> Optional[tuple]:
     daily_from = first - timedelta(days=(WIDTH_HISTORY_SESSIONS + CANDLE_HISTORY_SESSIONS) * 2 + 14)
     daily = [{'date': d, 'open': float(r.open), 'high': float(r.high), 'low': float(r.low),
               'close': float(r.close)} for d, r in day.iterrows() if d >= daily_from]
-    return daily, intraday
+    return _with_official_daily(symbol, daily, daily_from, last), intraday
+
+
+def _with_official_daily(symbol: str, daily: List[Dict[str, Any]], first: date, last: date) -> List[Dict[str, Any]]:
+    """The store's daily bars, with every session the broker's own daily history
+    covers replaced by it. The store rebuilds a day from 1-minute bars, and a session
+    whose tail came back flat keeps a stale close: 2026-10-21 closed 22,811.35 but the
+    store said 22,738.45, which moved 22 Oct's pivot, S1 and CPR, so the sheet read
+    "no trade" where the live algo (which reads the broker's daily bars) took a SELL.
+    Today's row is never replaced — it is still forming. Any failure keeps the store's."""
+    from trading_app.service import multichart_service as mc
+    try:
+        adapter, fy = mc.algo_provider(), mc.resolve_symbol(symbol)
+        official: Dict[date, Dict[str, Any]] = {}
+        start, stop = first, min(last, date.today() - timedelta(days=1))
+        while start <= stop:
+            end = min(start + timedelta(days=364), stop)
+            raw = adapter.historical_data(fy, start.isoformat(), end.isoformat(), 'day',
+                                          use_cache=True, cache_ttl=6 * 3600.0) or []
+            official.update({b['date']: b for b in _daily_rows(raw)})
+            start = end + timedelta(days=1)
+    except Exception as e:
+        logger.warning(f"[CPR backtest] official daily bars unavailable, keeping the store's: {e}")
+        return daily
+    return [official[d['date']] if d['date'] in official and d['date'] < date.today() else d for d in daily]
 
 
 def fetch_bars(symbol: str, first: date, last: date, fresh: bool = False) -> tuple:
