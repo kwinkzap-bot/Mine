@@ -141,6 +141,39 @@ def supertrend(high: np.ndarray, low: np.ndarray, close: np.ndarray,
     return line, direction
 
 
+HTF_CHOICES = ('off', '1hour', 'daily', 'weekly', 'monthly')
+# Calendar days of run-in the higher-timeframe SuperTrend needs before its first value
+# (ATR length 10 → ~10 completed periods, plus slack).
+HTF_WARMUP_DAYS = {'off': 45, '1hour': 45, 'daily': 45, 'weekly': 150, 'monthly': 400}
+
+
+def htf_direction(df: pd.DataFrame, tf: str, period: int, mult: float) -> np.ndarray:
+    """Per intraday bar: the SuperTrend direction (+1 / -1, 0 = not yet defined) of the
+    LAST COMPLETED 1-hour (NSE-anchored, 09:15-10:15 ...) / daily / weekly / monthly candle. The still-forming period is never
+    read, so a bar cannot see a close that happens later in its own day/week/month."""
+    if tf == '1hour':
+        key = (df.index - pd.Timedelta(hours=9, minutes=15)).floor('60min')
+        g = df.groupby(key).agg(high=('high', 'max'), low=('low', 'min'), close=('close', 'last'))
+        _, direction = supertrend(g['high'].to_numpy(float), g['low'].to_numpy(float),
+                                  g['close'].to_numpy(float), period, mult)
+        prev = pd.Series(direction, index=g.index).shift(1).fillna(0).astype(int)
+        return prev.reindex(key).fillna(0).astype(int).to_numpy()
+    d = df.groupby(pd.Series(df.index.normalize(), index=df.index)).agg(
+        open=('open', 'first'), high=('high', 'max'), low=('low', 'min'), close=('close', 'last'))
+    if tf == 'weekly':
+        per = d.index.to_period('W-SUN')
+    elif tf == 'monthly':
+        per = d.index.to_period('M')
+    else:
+        per = d.index.to_period('D')
+    g = d.groupby(per).agg(high=('high', 'max'), low=('low', 'min'), close=('close', 'last'))
+    _, direction = supertrend(g['high'].to_numpy(float), g['low'].to_numpy(float),
+                              g['close'].to_numpy(float), period, mult)
+    prev = pd.Series(direction, index=g.index).shift(1).fillna(0).astype(int)
+    keys = df.index.to_period({'weekly': 'W-SUN', 'monthly': 'M'}.get(tf, 'D'))
+    return prev.reindex(keys).fillna(0).astype(int).to_numpy()
+
+
 # ── Engine ─────────────────────────────────────────────────────────────────────
 
 class StBbRsiEngine:
@@ -154,8 +187,11 @@ class StBbRsiEngine:
                  entry_start: str = '09:15', entry_end: str = '15:14',
                  exit_cutoff: str = '15:14', max_trades_per_day: int = 1,
                  require_green: bool = False, direction: str = 'long',
-                 rsi_lower: Optional[float] = None):
+                 rsi_lower: Optional[float] = None, htf: str = 'off'):
         self.df = df.copy()
+        # Higher-timeframe SuperTrend gate on the trade's side (same length/factor as
+        # the entry SuperTrend): 'off' | 'daily' | 'weekly' | 'monthly'.
+        self.htf = htf if htf in HTF_CHOICES else 'off'
         self.rsi_period = max(2, int(rsi_period))
         self.rsi_level = float(rsi_level)
         # The short side's RSI line; unset it is the mirror, 100 - rsi_level.
@@ -219,6 +255,8 @@ class StBbRsiEngine:
             elif kind == 'bb':
                 up, _, lo = bollinger(b['c'], key[0], key[1], key[2])
                 self._ind_cache[k] = (up, lo)
+            elif kind == 'htf':
+                self._ind_cache[k] = htf_direction(self.df, key[0], key[1], key[2])
             else:
                 self._ind_cache[k] = supertrend(b['h'], b['l'], b['c'], key[0], key[1])
         return self._ind_cache[k]
@@ -236,7 +274,7 @@ class StBbRsiEngine:
                  bb_mult=self.bb_mult, bb_offset=self.bb_offset, st_period=self.st_period,
                  st_mult=self.st_mult, entry_start=self.entry_start, entry_end=self.entry_end,
                  exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
-                 require_green=self.require_green, direction=self.direction)
+                 require_green=self.require_green, direction=self.direction, htf=self.htf)
         P.update(over)
         if 'rsi_level' in over and 'rsi_lower' not in over:     # a swept upper line keeps the mirror
             P['rsi_lower'] = 100.0 - P['rsi_level']
@@ -259,6 +297,10 @@ class StBbRsiEngine:
                         & np.isfinite(st_line) & (c > b['r1']))
             short_sig = ((rsi_v < P['rsi_lower']) & (c < bb_lo) & (st_dir == -1)
                          & np.isfinite(st_line) & (c < b['s1']))
+        if P['htf'] != 'off':                           # trade only WITH the higher-timeframe trend
+            h_dir = self._ind('htf', P['htf'], P['st_period'], P['st_mult'])
+            long_sig = long_sig & (h_dir == 1)
+            short_sig = short_sig & (h_dir == -1)
         if P['require_green']:                          # candle closes WITH the trade
             long_sig = long_sig & (c > o)
             short_sig = short_sig & (c < o)

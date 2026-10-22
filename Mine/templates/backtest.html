@@ -394,6 +394,7 @@
                  ≈premium CE; no SL/Target, exits when SuperTrend breaks down.
                  See src/trading_app/Backtest/st_bb_rsi_engine.py. -->
             <div id="stBbRsiParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
                 <div class="form-group">
                     <label for="sbrDirection">Direction</label>
                     <select id="sbrDirection" title="Long buys a CE when RSI is above the level, the close is above the upper BB and R1 and SuperTrend is up. Short is the mirror and buys a PE: RSI below (100 - level), close under the lower BB and S1, SuperTrend down. Both takes whichever fires first, one trade a day.">
@@ -431,6 +432,8 @@
                     <label for="sbrGreen">Green candle only</label>
                     <input type="checkbox" id="sbrGreen" title="The signal candle must close above its open.">
                 </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>RSI</legend>
                 <div class="form-group">
                     <label for="sbrRsi">RSI above</label>
                     <input type="number" id="sbrRsi" value="70" min="50" max="95" step="1">
@@ -443,6 +446,8 @@
                     <label for="sbrRsiLen">RSI Length</label>
                     <input type="number" id="sbrRsiLen" value="14" min="2" step="1">
                 </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>SuperTrend</legend>
                 <div class="form-group">
                     <label for="sbrStLen">SuperTrend Length</label>
                     <input type="number" id="sbrStLen" value="10" min="1" step="1">
@@ -451,6 +456,20 @@
                     <label for="sbrStFactor">SuperTrend Factor</label>
                     <input type="number" id="sbrStFactor" value="2" min="0.1" step="0.1">
                 </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Higher-TF SuperTrend</legend>
+                <div class="form-group">
+                    <label for="sbrHtf">Timeframe</label>
+                    <select id="sbrHtf" title="Trade only WITH the higher timeframe: Long (CE) needs that timeframe's SuperTrend up, Short (PE) needs it down. Uses the same length/factor as the entry SuperTrend and the last COMPLETED 1-hour/daily/weekly/monthly candle. Weekly/Monthly load a longer run-in of candles.">
+                        <option value="off" selected>Off</option>
+                        <option value="1hour">1 Hour</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                    </select>
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Bollinger Bands</legend>
                 <div class="form-group">
                     <label for="sbrBbLen">BB Length</label>
                     <input type="number" id="sbrBbLen" value="20" min="2" step="1">
@@ -463,6 +482,8 @@
                     <label for="sbrBbOffset">BB Offset</label>
                     <input type="number" id="sbrBbOffset" value="0" min="0" step="1">
                 </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Session</legend>
                 <div class="form-group">
                     <label for="sbrEntryStart">Entry From</label>
                     <input type="time" id="sbrEntryStart" value="09:15">
@@ -479,6 +500,7 @@
                     <label for="sbrMaxTrades">Max Trades / Day</label>
                     <input type="number" id="sbrMaxTrades" value="2" min="1" max="10" step="1">
                 </div>
+                </fieldset>
             </div>
 
             <!-- Pivot Confluence position sizing -->

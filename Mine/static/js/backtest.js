@@ -967,6 +967,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.bb_mult       = parseFloat(document.getElementById('sbrBbMult')?.value || 2);
                 payload.bb_offset     = parseInt(document.getElementById('sbrBbOffset')?.value || 0);
                 payload.direction     = document.getElementById('sbrDirection')?.value || 'both';
+                payload.htf           = document.getElementById('sbrHtf')?.value || 'off';
                 payload.lots          = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
                 payload.lot_value     = parseFloat(document.getElementById('pcLotValue')?.value || 65);
                 payload.compounding   = document.getElementById('sbrCompound')?.checked ?? false;

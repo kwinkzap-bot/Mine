@@ -134,3 +134,45 @@ def test_fixed_lots_books_rupees_with_brokerage_without_compounding():
     assert out['total_brokerage'] == 2 * brokerage_for(2)
     assert out['total_pnl_rupees'] == gross - 2 * brokerage_for(2)       # the final, net figure
     assert out['compounding'] is False and out['server_rupees'] is True
+
+
+def _daily_trend(n=60, up=True):
+    days = pd.bdate_range('2025-01-01', periods=n)
+    base = np.linspace(100, 200, n) if up else np.linspace(200, 100, n)
+    return _frame([(d.strftime('%Y-%m-%d'), [b] * 6) for d, b in zip(days, base)])
+
+
+def test_htf_direction_follows_trend_and_never_sees_its_own_period():
+    from trading_app.Backtest.st_bb_rsi_engine import htf_direction
+    up = _daily_trend(up=True).set_index('date')
+    assert htf_direction(up, 'daily', 10, 2)[-1] == 1
+    assert htf_direction(up, 'weekly', 5, 2)[-1] == 1
+    dn = _daily_trend(up=False).set_index('date')
+    assert htf_direction(dn, 'daily', 10, 2)[-1] == -1
+    # The first session has no completed higher-timeframe candle behind it.
+    assert htf_direction(up, 'daily', 10, 2)[0] == 0
+    assert htf_direction(up, 'weekly', 5, 2)[:6].tolist() == [0] * 6   # first week itself
+
+
+def test_htf_filter_blocks_the_side_against_the_higher_trend():
+    df = _daily_trend(up=False)
+    eng = StBbRsiEngine(df, direction='both', htf='daily', st_period=5)
+    sg = eng.signals()['signal']
+    assert not (sg == 1).any()                        # a CE never fires in a daily down-trend
+    off = StBbRsiEngine(df, direction='both', htf='off', st_period=5)
+    assert set(np.unique(off.signals()['signal'])) <= {-1, 0, 1}
+
+
+def test_htf_1hour_uses_last_completed_hour_only():
+    from trading_app.Backtest.st_bb_rsi_engine import htf_direction
+    days = pd.bdate_range('2025-01-01', periods=6)
+    rows = []
+    for d in days:                                   # steady rally, 5-min bars 09:15-15:25
+        for k in range(75):
+            cl = 100 + len(rows) * 0.2
+            t = d + pd.Timedelta(hours=9, minutes=15 + 5 * k)
+            rows.append({'date': t, 'open': cl, 'high': cl + 0.3, 'low': cl - 0.3, 'close': cl, 'volume': 0})
+    df = pd.DataFrame(rows).set_index('date')
+    h = htf_direction(df, '1hour', 3, 2)
+    assert h[:12].tolist() == [0] * 12               # the first hour has no completed candle behind it
+    assert h[-1] == 1

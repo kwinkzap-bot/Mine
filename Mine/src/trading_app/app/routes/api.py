@@ -5037,7 +5037,7 @@ def run_pivot_confluence_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interval):
+def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interval, warmup_days=45):
     """(minutes, bars_df, junk_dropped, bars_from_start) for the ST + BB + RSI backtest.
 
     Shared by the run and the Find Best Params sweep so both read the same candles.
@@ -5051,7 +5051,8 @@ def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interv
     # day's R1 by 30 points and dropped a valid 14:15 signal. Indicators also
     # need a run-in, as they have on a chart, so 45 days before the start are
     # read and only trades on/after the start are kept.
-    warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).strftime('%Y-%m-%d')
+    # (a weekly / monthly higher-timeframe SuperTrend needs a longer one: warmup_days)
+    warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=warmup_days)).strftime('%Y-%m-%d')
     # The store files these minutes under the provider's tag. Only the missing tail
     # (today, usually) is ever fetched, and it goes through the same chain the live
     # algos read — Zerodha, then Fyers, then ICICI — so Fyers hitting its daily request
@@ -5266,8 +5267,11 @@ def run_st_bb_rsi_backtest_api():
         from trading_app.Backtest.st_bb_rsi_engine import (
             StBbRsiEngine, attach_option_legs, summarise, apply_compounding)
 
+        htf = str(data.get('htf', 'off') or 'off').lower()
+        from trading_app.Backtest.st_bb_rsi_engine import HTF_WARMUP_DAYS
         minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
-            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval)
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
+            warmup_days=HTF_WARMUP_DAYS.get(htf, 45))
         if minutes is None:
             return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
         candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
@@ -5288,6 +5292,7 @@ def run_st_bb_rsi_backtest_api():
             max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
             require_green=bool(data.get('require_green', False)),
             direction=str(data.get('direction', 'both')),
+            htf=htf,
         )
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -5311,7 +5316,7 @@ def run_st_bb_rsi_backtest_api():
                            entry=[data.get('entry_start', '09:15'), data.get('entry_end', '15:14')],
                            exit_cutoff=data.get('exit_cutoff', '15:14'),
                            max_trades_per_day=engine.max_trades_per_day,
-                           require_green=engine.require_green, direction=engine.direction,
+                           require_green=engine.require_green, direction=engine.direction, htf=engine.htf,
                            premium=premium, price_options=price_options,
                            compounding=compounding),
             'index_signals': len(trades),

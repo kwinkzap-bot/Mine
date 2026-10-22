@@ -39350,8 +39350,26 @@
       "reason": "No candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 80.8 pts (0.353%), 09:15 candle O 23016.0 H 23063.6 L 22976.15 C 23039.2 | Trade by rule: no candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-10-22",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Wide",
+      "cpr_direction": "Dec",
+      "first_candle": "Big candle red near S3(cam)",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "09:15 candle opened at 22,688 and closed at PDL/S1 22,552-22,650 (22,610) \u2014 a 133-pt candle, too big to enter under, and 09:20 green \u2014 no sell; price never lost PDL/S1 first, so no break to retest by 14:15 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 98.0 pts (0.431%), 09:15 candle O 22687.75 H 22697.55 L 22564.9 C 22610.3 | Trade by rule: 09:15 candle opened at 22,688 and closed at PDL/S1 22,552-22,650 (22,610) \u2014 a 133-pt candle, too big to enter under, and 09:20 green \u2014 no sell; price never lost PDL/S1 first, so no break to retest by 14:15 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-21 15:30",
+  "extended_at": "2026-10-22 15:50",
   "backfilled_from": "2018-01-01"
 }
