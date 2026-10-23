@@ -35,6 +35,7 @@
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
                 <option value="st_bb_rsi" selected>🚀 ST + BB + RSI + R1</option>
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
+                <option value="ma_htf">📈 MA Cross + HTF</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
             </select>
@@ -658,6 +659,171 @@
                 <div class="form-group">
                     <label for="hmMaxTrades">Max Entries / Day</label>
                     <input type="number" id="hmMaxTrades" value="1" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- MA Cross + HTF (Pawan Sharma, Upsurge Club): SMMA 11/21 crossover taken only in the
+                 direction of a higher-timeframe MA; index signal, optionally re-priced on the CE/PE
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/ma_htf_engine.py. -->
+            <div id="maHtfParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="mhDirection">Direction</label>
+                    <select id="mhDirection">
+                        <option value="long">Long (CE)</option>
+                        <option value="short">Short (PE)</option>
+                        <option value="both" selected>Both</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mhPositional">Positional (swing)</label>
+                    <input type="checkbox" id="mhPositional" title="On: no square-off, the trade is carried across sessions (swing: 15-min chart with a 1-hour HTF). Off: intraday, squared off at the cut-off.">
+                </div>
+                <div class="form-group">
+                    <label for="mhPriceOptions">Price on options</label>
+                    <input type="checkbox" id="mhPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE (long) / PE (short) and priced in option premiums; needs an ICICI login and is slow the first time. Not available with Partial booking.">
+                </div>
+                <div class="form-group">
+                    <label for="mhPremium">Option Premium ≈</label>
+                    <select id="mhPremium">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mhRoll">Roll to (positional)</label>
+                    <select id="mhRoll">
+                        <option value="same" selected>Same strike, next expiry</option>
+                        <option value="premium">Strike nearest premium</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mhMinSessions">Min sessions to expiry</label>
+                    <input type="number" id="mhMinSessions" value="5" min="0" max="20" step="1" title="Positional + option only.">
+                </div>
+                <div class="form-group">
+                    <label for="mhCompound">Compounding</label>
+                    <input type="checkbox" id="mhCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="mhCapital">Start Capital (₹)</label>
+                    <input type="number" id="mhCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="mhPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="mhPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Lines</legend>
+                <div class="form-group">
+                    <label for="mhFast">Fast SMMA</label>
+                    <input type="number" id="mhFast" value="11" min="1" step="1" title="The green line.">
+                </div>
+                <div class="form-group">
+                    <label for="mhSlow">Slow SMMA</label>
+                    <input type="number" id="mhSlow" value="21" min="2" step="1" title="The red line.">
+                </div>
+                <div class="form-group">
+                    <label for="mhHtfMin">HTF (minutes)</label>
+                    <select id="mhHtfMin" title="The higher timeframe of the black line. Intraday: chart 3 min, HTF 15 (or 5). Swing: chart 15 min, HTF 60 (or 30).">
+                        <option value="5">5 min</option>
+                        <option value="15" selected>15 min</option>
+                        <option value="30">30 min</option>
+                        <option value="60">1 hour</option>
+                        <option value="120">2 hour</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mhHtfLen">HTF MA length</label>
+                    <input type="number" id="mhHtfLen" value="21" min="2" step="1" title="At least the chart's own length. The conservative variant uses 100-200.">
+                </div>
+                <div class="form-group">
+                    <label for="mhHtfType">HTF MA type</label>
+                    <select id="mhHtfType">
+                        <option value="sma" selected>SMA</option>
+                        <option value="ema">EMA</option>
+                        <option value="smma">SMMA</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mhHtfCalc">HTF value</label>
+                    <select id="mhHtfCalc" title="Live = the in-progress HTF candle's close counts (what the chart shows). Closed = the last completed HTF candle only. Neither looks ahead.">
+                        <option value="live" selected>Live (as charted)</option>
+                        <option value="closed">Last closed candle</option>
+                    </select>
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry / Exit</legend>
+                <div class="form-group">
+                    <label for="mhConfirm">Confirm after (candles)</label>
+                    <input type="number" id="mhConfirm" value="1" min="0" max="10" step="1" title="Candles after the crossover before entry is allowed. 1 = the 2nd candle.">
+                </div>
+                <div class="form-group">
+                    <label for="mhMaxWait">Enter within (candles)</label>
+                    <input type="number" id="mhMaxWait" value="5" min="1" max="20" step="1" title="A crossover older than this is skipped: the move has already run. 4-5 intraday, 5-7 swing.">
+                </div>
+                <div class="form-group">
+                    <label for="mhSl">Stop (points)</label>
+                    <input type="number" id="mhSl" value="35" min="0" step="1" title="Index points. About 30-35 on NIFTY after 09:30; 0 = no fixed stop (only the opposite crossover).">
+                </div>
+                <div class="form-group">
+                    <label for="mhPartialPct">Partial %</label>
+                    <input type="number" id="mhPartialPct" value="0" min="0" max="100" step="10" title="Share booked at the partial level, the rest then rides with the stop at cost. 0 = off. Index points only (not with Price on options).">
+                </div>
+                <div class="form-group">
+                    <label for="mhPartialPts">Partial at (points)</label>
+                    <input type="number" id="mhPartialPts" value="0" min="0" step="1" title="0 = the stop distance (1:1).">
+                </div>
+                <div class="form-group">
+                    <label for="mhTrail">Trailing stop (points)</label>
+                    <input type="number" id="mhTrail" value="0" min="0" step="5" title="0 = off. Once the trade is in profit by the start level, the stop follows this far behind the best price. Tested on NIFTY 3-min: it cuts the all-day winners that pay for the stop-outs, and did not help.">
+                </div>
+                <div class="form-group">
+                    <label for="mhTrailStart">Trail starts at (points)</label>
+                    <input type="number" id="mhTrailStart" value="0" min="0" step="5" title="0 = the trailing distance.">
+                </div>
+                <div class="form-group">
+                    <label for="mhExitCross">Exit on opposite cross</label>
+                    <input type="checkbox" id="mhExitCross" checked title="Off: the trade ends only on the stop or the square-off.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Trend-day filter</legend>
+                <div class="form-group">
+                    <label for="mhAdx">ADX at least</label>
+                    <input type="number" id="mhAdx" value="0" min="0" max="60" step="1" title="0 = off. Skip entries while the chart's ADX(14) is below this. 20 was the only filter that improved the profit factor in both halves of 2024-26 (about a quarter fewer trades).">
+                </div>
+                <div class="form-group">
+                    <label for="mhChopLb">Whipsaw window (candles)</label>
+                    <input type="number" id="mhChopLb" value="0" min="0" max="100" step="1" title="0 = off. Skip entries when the fast and slow lines have crossed more than the limit below within this many candles (a sideways day).">
+                </div>
+                <div class="form-group">
+                    <label for="mhChopMax">Max crossings</label>
+                    <input type="number" id="mhChopMax" value="2" min="0" max="20" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mhDayBias">Day agrees</label>
+                    <input type="checkbox" id="mhDayBias" title="Long only above the day's open, short only below it.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Session</legend>
+                <div class="form-group">
+                    <label for="mhEntryStart">Entry From</label>
+                    <input type="time" id="mhEntryStart" value="09:30" title="A crossover before this time is ignored.">
+                </div>
+                <div class="form-group">
+                    <label for="mhEntryEnd">Entry Until</label>
+                    <input type="time" id="mhEntryEnd" value="14:30">
+                </div>
+                <div class="form-group">
+                    <label for="mhExitCutoff">Square-off</label>
+                    <input type="time" id="mhExitCutoff" value="15:14" title="Intraday only; ignored when Positional is on.">
+                </div>
+                <div class="form-group">
+                    <label for="mhMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="mhMaxTrades" value="2" min="1" max="10" step="1">
                 </div>
                 </fieldset>
             </div>

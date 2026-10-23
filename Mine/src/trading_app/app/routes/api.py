@@ -5567,6 +5567,196 @@ def run_hilega_milega_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/backtest/ma-htf', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_ma_htf_backtest_api():
+    """MA Cross + HTF: SMMA 11/21 crossover taken only in the direction of a
+    higher-timeframe moving average (Pawan Sharma, Upsurge Club).
+
+    Index points by default; with `price_options` every trade is re-priced on the
+    ≈premium CE (long) / PE (short), in the background, polled on
+    /backtest/st-bb-rsi/status/<task_id> (the same task table). See
+    Backtest/ma_htf_engine.py.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json() or {}
+        symbol         = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '3minute')
+        premium        = float(data.get('premium', 250) or 250)
+        price_options  = bool(data.get('price_options', True))
+        compounding    = bool(data.get('compounding', False))
+        start_capital  = float(data.get('start_capital', 25000) or 25000)
+        per_lot        = float(data.get('per_lot') or 0)
+        max_lots       = int(data.get('max_lots', 27) or 27)
+        fixed_lots     = max(1, int(data.get('lots', 1) or 1))
+        lot_value      = float(data.get('lot_value', 0) or 0)
+        partial_pct    = min(100.0, max(0.0, float(data.get('partial_pct', 0) or 0))) / 100.0
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        if price_options and partial_pct > 0:
+            return jsonify({'success': False,
+                            'error': 'Partial booking is index-points only: turn off Price on options '
+                                     'or set Partial % to 0.'}), 400
+        from trading_app.service import cpr_option_service as _cos
+        if symbol == 'ALL STOCKS':
+            symbol = 'NIFTY'
+        is_stock = not _cos.is_index(symbol)
+        if is_stock:
+            if _cos.stock_spec(symbol) is None and price_options:
+                return jsonify({'success': False,
+                                'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                         "turn off Price on options or pick an index."}), 400
+            premium = 0.0
+            lot_value = 0.0
+
+        current_kite = get_fyers_adapter()      # Fyers history, as the ST+BB+RSI run (see there)
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+        import pandas as pd
+        from trading_app.Backtest.ma_htf_engine import MaHtfEngine
+        from trading_app.Backtest.st_bb_rsi_engine import (
+            attach_option_legs, summarise, apply_compounding)
+
+        minutes_per_bar = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 3)
+        htf_minutes = int(data.get('htf_minutes', 15) or 15)
+        positional = bool(data.get('positional', False))
+        # The HTF average needs htf_len HTF candles of run-in (150 × 1h ≈ 24 sessions).
+        need_days = int(data.get('htf_len', 21) or 21) * htf_minutes / 60.0 / 6.25 * 1.5 + 10
+        minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
+            warmup_days=int(max(30, need_days)))
+        if minutes is None:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+        candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
+
+        engine = MaHtfEngine(
+            df=candles_df,
+            fast_len=int(data.get('fast_len', 11) or 11),
+            slow_len=int(data.get('slow_len', 21) or 21),
+            htf_len=int(data.get('htf_len', 21) or 21),
+            htf_minutes=htf_minutes,
+            htf_type=str(data.get('htf_type', 'sma')),
+            htf_calc=str(data.get('htf_calc', 'live')),
+            confirm_bars=int(data.get('confirm_bars', 1) or 0),
+            max_wait=int(data.get('max_wait', 5) or 5),
+            sl_points=float(data.get('sl_points', 35) or 0),
+            partial_pct=partial_pct,
+            partial_points=float(data.get('partial_points', 0) or 0),
+            exit_on_cross=bool(data.get('exit_on_cross', True)),
+            direction=str(data.get('direction', 'both')),
+            entry_start=data.get('entry_start', '09:30'),
+            entry_end=data.get('entry_end', '14:30'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
+            bar_minutes=minutes_per_bar,
+            positional=positional,
+            trail_points=float(data.get('trail_points', 0) or 0),
+            trail_start=float(data.get('trail_start', 0) or 0),
+            adx_min=float(data.get('adx_min', 0) or 0),
+            chop_lookback=int(data.get('chop_lookback', 0) or 0),
+            chop_max=int(data.get('chop_max', 2) or 0),
+            day_bias=bool(data.get('day_bias', False)),
+        )
+        trades, _ = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
+
+        _want = min(pd.Timestamp(end_date_str).date(), datetime.now().date())
+        while _want.weekday() >= 5:
+            _want -= timedelta(days=1)
+        _have = pd.Timestamp(candles[-1]['date']).date()
+        data_warning = (f"Candles end at {_have:%d %b}; {_want:%d %b} could not be loaded (data provider "
+                        f"limit or outage), so it is not in this run.") if _have < _want else None
+        ran = {
+            'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
+            'start_date': start_date_str, 'end_date': end_date_str,
+            'bars': n_bars, 'junk_bars_dropped': n_junk, 'first_bar': str(candles[0]['date']),
+            'last_bar': str(candles[-1]['date']),
+            'params': dict(fast_len=engine.fast_len, slow_len=engine.slow_len, htf_len=engine.htf_len,
+                           htf_minutes=engine.htf_minutes, htf_type=engine.htf_type, htf_calc=engine.htf_calc,
+                           confirm_bars=engine.confirm_bars, max_wait=engine.max_wait,
+                           sl_points=engine.sl_points, partial_pct=engine.partial_pct,
+                           trail_points=engine.trail_points, adx_min=engine.adx_min,
+                           chop_lookback=engine.chop_lookback, day_bias=engine.day_bias,
+                           exit_on_cross=engine.exit_on_cross, direction=engine.direction,
+                           positional=engine.positional, roll=str(data.get('roll', 'same')),
+                           min_sessions=int(data.get('min_sessions', 5) or 0), premium=premium,
+                           price_options=price_options, compounding=compounding),
+            'index_signals': len(trades),
+            'strategy': 'ma_htf',             # backtest.js words the run banner by it
+        }
+
+        def _payload(priced_trades, option_info, warning):
+            summ = summarise(priced_trades)
+            summ['pnl_basis'] = 'option' if option_info else 'index'
+            extra = {}
+            if option_info:
+                extra = apply_compounding(
+                    priced_trades, lot_value or option_info.get('lot') or 65,
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
+            return {
+                'success': True, 'trades': priced_trades, 'option': option_info,
+                'warning': warning, 'ran': ran,
+                'summary': {**{k: summ[k] for k in (
+                    'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
+                    'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
+                    'pnl_basis': summ['pnl_basis'], **extra},
+            }
+
+        logger.info('[MAHTF BT] %s %s %s→%s  %d bars  %d signals  options=%s',
+                    symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
+        if not (price_options and trades):
+            return jsonify(_payload(trades, None, data_warning))
+
+        sessions = sorted(set(minutes.index.date))
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': len(trades)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                if engine.positional:
+                    from trading_app.Backtest.hilega_milega_engine import attach_positional_legs
+                    priced, info = attach_positional_legs(symbol, trades, premium or 250.0, _progress,
+                                                          calendar=sessions,
+                                                          roll=str(data.get('roll', 'same')),
+                                                          min_sessions=max(0, int(data.get('min_sessions', 5) or 0)))
+                else:
+                    priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
+                                                       calendar=sessions)
+                warn = None
+                if info['unpriced'] or info['truncated']:
+                    warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
+                            f"candles and {info['truncated']} older ones were not priced; "
+                            f"they are left out of the totals.")
+                task['payload'] = _payload(priced, info, ' '.join(w for w in (warn, data_warning) if w) or None)
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[MAHTF BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, None, ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.', data_warning) if w))
+            task['status'] = 'complete'
+
+        threading.Thread(target=_run, name=f'mahtf-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
+    except Exception as e:
+        logger.error(f"Error in MA+HTF backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/backtest/pivot-confluence/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth

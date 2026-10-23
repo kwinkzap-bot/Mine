@@ -448,6 +448,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (sbrParamsRow)  sbrParamsRow.style.display  = 'none';
         const hmParamsRow   = document.getElementById('hilegaMilegaParamsRow');
         if (hmParamsRow)   hmParamsRow.style.display   = 'none';
+        const mhParamsRow   = document.getElementById('maHtfParamsRow');
+        if (mhParamsRow)   mhParamsRow.style.display   = 'none';
         // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
         document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
         document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
@@ -636,6 +638,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2022-01-01';
             updatePcInvestment();
 
+        } else if (val === 'ma_htf') {
+            // Index signal; optional CE/PE leg. Lots / lot value reuse the Pivot Confluence boxes.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (mhParamsRow) mhParamsRow.style.display = 'grid';
+            if (pcLotRow)    pcLotRow.style.display    = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2024-01-01';
+            updatePcInvestment();
+
         } else if (val === 'weekly_cpr_breakout') {
             if (wcbParamsRow) wcbParamsRow.style.display = 'grid';
             // The shared Symbol box, with ALL STOCKS (every F&O future stock)
@@ -735,7 +750,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'st_bb_rsi'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -1018,6 +1033,52 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.max_trades_per_day = parseInt(document.getElementById('sbrMaxTrades')?.value || 2);
             }
 
+            // MA Cross + HTF: index signal, optionally priced on the CE/PE
+            if (strat === 'ma_htf') {
+                endpoint = '/api/backtest/ma-htf';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const mhv = (id, d) => document.getElementById(id)?.value || d;
+                const mhn = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = mhv('interval', '3minute');
+                payload.premium        = parseFloat(mhv('mhPremium', 250));
+                payload.price_options  = document.getElementById('mhPriceOptions')?.checked ?? true;
+                payload.positional     = document.getElementById('mhPositional')?.checked ?? false;
+                payload.roll           = mhv('mhRoll', 'same');
+                payload.min_sessions   = parseInt(mhv('mhMinSessions', 5));
+                payload.direction      = mhv('mhDirection', 'both');
+                payload.fast_len       = parseInt(mhv('mhFast', 11));
+                payload.slow_len       = parseInt(mhv('mhSlow', 21));
+                payload.htf_minutes    = parseInt(mhv('mhHtfMin', 15));
+                payload.htf_len        = parseInt(mhv('mhHtfLen', 21));
+                payload.htf_type       = mhv('mhHtfType', 'sma');
+                payload.htf_calc       = mhv('mhHtfCalc', 'live');
+                payload.confirm_bars   = mhn('mhConfirm', 1);
+                payload.max_wait       = mhn('mhMaxWait', 5);
+                payload.sl_points      = mhn('mhSl', 35);
+                payload.partial_pct    = mhn('mhPartialPct', 0);
+                payload.partial_points = mhn('mhPartialPts', 0);
+                payload.exit_on_cross  = document.getElementById('mhExitCross')?.checked ?? true;
+                payload.trail_points   = mhn('mhTrail', 0);
+                payload.trail_start    = mhn('mhTrailStart', 0);
+                payload.adx_min        = mhn('mhAdx', 0);
+                payload.chop_lookback  = mhn('mhChopLb', 0);
+                payload.chop_max       = mhn('mhChopMax', 2);
+                payload.day_bias       = document.getElementById('mhDayBias')?.checked ?? false;
+                payload.entry_start    = mhv('mhEntryStart', '09:30');
+                payload.entry_end      = mhv('mhEntryEnd', '14:30');
+                payload.exit_cutoff    = mhv('mhExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(mhv('mhMaxTrades', 2));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('mhCompound')?.checked ?? false;
+                payload.start_capital  = mhn('mhCapital', 25000);
+                payload.per_lot        = mhn('mhPerLot', 0);
+            }
+
             // Hilega Milega: index signal, optionally priced on the CE/PE
             if (strat === 'hilega_milega') {
                 endpoint = '/api/backtest/hilega-milega';
@@ -1125,7 +1186,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // ST + BB + RSI + R1: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'st_bb_rsi' || strat === 'hilega_milega')) {
+            if (data.success && data.task_id && (strat === 'st_bb_rsi' || strat === 'hilega_milega' || strat === 'ma_htf')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -1147,7 +1208,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.success) {
                 if (data.warning) window.showNotification(data.warning, 'warning');
-                if (data.ran && data.ran.strategy === 'hilega_milega') {
+                if (data.ran && data.ran.strategy === 'ma_htf') {
+                    const r = data.ran;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · SMMA ${r.params.fast_len}/${r.params.slow_len}, `
+                        + `HTF ${r.params.htf_type.toUpperCase()} ${r.params.htf_len} on ${r.params.htf_minutes}m, `
+                        + `stop ${r.params.sl_points}`, 'info');
+                } else if (data.ran && data.ran.strategy === 'hilega_milega') {
                     const r = data.ran;
                     window.showNotification(
                         `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
@@ -1878,7 +1946,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_bb_rsi' || strategySelect.value === 'hilega_milega');
+        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_bb_rsi' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
