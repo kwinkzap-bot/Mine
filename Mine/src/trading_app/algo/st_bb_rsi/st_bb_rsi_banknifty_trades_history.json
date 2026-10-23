@@ -72,5 +72,42 @@
     "charges": 103.0,
     "net": 4872.5,
     "unconfirmed": null
+  },
+  {
+    "date": "2026-10-23",
+    "n": 1,
+    "mode": "paper",
+    "side": "Short",
+    "signal_bar": "2026-10-23 09:51:00",
+    "signal": {
+      "rsi": 29.7,
+      "close": 54534.0,
+      "bb_band": 54555.65,
+      "supertrend": 54728.7,
+      "pivot_level": 54545.22,
+      "pivot": "S1"
+    },
+    "index_entry": 54538.75,
+    "entry_time": "09:54",
+    "index_exit": 54329.8,
+    "exit_time": "11:21",
+    "result": "SuperTrend Up",
+    "strike": 54900,
+    "option_type": "PE",
+    "legs": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": null,
+        "entry": 505.1,
+        "exit": 644.65,
+        "pnl": 4186.5,
+        "exit_reason": null
+      }
+    },
+    "pnl": 4186.5,
+    "charges": 103.0,
+    "net": 4083.5,
+    "unconfirmed": null
   }
 ]

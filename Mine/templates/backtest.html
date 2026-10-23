@@ -528,6 +528,21 @@
             <div id="hilegaMilegaParamsRow" class="form-row" style="display:none">
                 <fieldset class="ind-block"><legend>Trade</legend>
                 <div class="form-group">
+                    <label for="hmPositional">Positional</label>
+                    <input type="checkbox" id="hmPositional" checked title="On: no square-off. A trade is carried across sessions and ends only on the stop or the exit rule, as the talk describes (hourly: two-three days). The option is bought on the next expiry; when it expires with the signal still on it is sold and the next expiry bought (see Roll to). Off: intraday, squared off at the cut-off.">
+                </div>
+                <div class="form-group">
+                    <label for="hmRoll">Roll to</label>
+                    <select id="hmRoll" title="Positional only. When the contract expires with the signal still on: Same strike = carry the strike to the next expiry; Premium = re-pick the strike nearest the premium. Sold and bought at 15:15 on the expiry day.">
+                        <option value="same" selected>Same strike, next expiry</option>
+                        <option value="premium">Strike nearest premium</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hmMinSessions">Min sessions to expiry</label>
+                    <input type="number" id="hmMinSessions" value="5" min="0" max="20" step="1" title="Positional + option: buy the expiry at least this many sessions after the entry. 1 buys tomorrow's weekly, which bleeds time value fast (the index trade can win while the option loses); 5 buys next week's. Compare the two.">
+                </div>
+                <div class="form-group">
                     <label for="hmDirection">Direction</label>
                     <select id="hmDirection" title="Long: RSI above 50 with the red line under it. Short is the mirror. Both takes whichever fires first.">
                         <option value="long">Long (CE)</option>
@@ -537,7 +552,7 @@
                 </div>
                 <div class="form-group">
                     <label for="hmPriceOptions">Price on options</label>
-                    <input type="checkbox" id="hmPriceOptions" title="Off = instant run in INDEX points. On = re-price every trade on the CE (long) / PE (short); needs an ICICI login and is slow the first time.">
+                    <input type="checkbox" id="hmPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE (long) / PE (short) and entry/exit/P&L are the option premiums, as in ST + BB + RSI + R1; needs an ICICI login and is slow the first time.">
                 </div>
                 <div class="form-group">
                     <label for="hmPremium">Option Premium ≈</label>
@@ -581,6 +596,29 @@
                 </fieldset>
                 <fieldset class="ind-block"><legend>Entry / Exit</legend>
                 <div class="form-group">
+                    <label for="hmEntryMode">Entry</label>
+                    <select id="hmEntryMode" title="Breakout: first close beyond the previous candle after the zone turns on. Pullback: inside a running zone, the red line has come back near 50 and the candle resumes (the retracement the talk buys). Either: both.">
+                        <option value="breakout">Breakout</option>
+                        <option value="pullback">Pullback to 50</option>
+                        <option value="either" selected>Either</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hmPbBand">Pullback band</label>
+                    <input type="number" id="hmPbBand" value="10" min="0" step="1" title="A pullback entry needs the red line within this many points of 50.">
+                </div>
+                <div class="form-group">
+                    <label for="hmChop">Sideways filter (bars)</label>
+                    <input type="number" id="hmChop" value="12" min="0" step="1" title="0 = off. Skip entries when the RSI/red/50 lines crossed each other more than twice in this many candles (the talk's 'no trading zone'). 12 on NIFTY 1-hour: win rate about 41% to 46% in both 2022-24 and 2025-26, with about a third of the trades.">
+                </div>
+                <div class="form-group">
+                    <label for="hmHtf">Daily RSI agrees</label>
+                    <select id="hmHtf" title="Only long when the last completed day's RSI(9) is above 50, short below. Tested on NIFTY: it cut trades and did not help.">
+                        <option value="off" selected>Off</option>
+                        <option value="daily">On</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="hmArmBars">Armed Bars</label>
                     <input type="number" id="hmArmBars" value="5" min="1" max="30" step="1" title="After the zone turns on, the first candle within this many bars to close beyond the previous high/low is the signal.">
                 </div>
@@ -590,9 +628,9 @@
                 </div>
                 <div class="form-group">
                     <label for="hmExitMode">Exit Rule</label>
-                    <select id="hmExitMode">
-                        <option value="red" selected>Red leaves zone</option>
-                        <option value="green">Green touches RSI</option>
+                    <select id="hmExitMode" title="Green touches RSI: the earlier exit (RSI falls back onto its 3-EMA). On NIFTY 1-hour 2022-26 it lifted the win rate 38.8% to 41.4% at the same profit factor; Red leaves zone holds longer for more points.">
+                        <option value="red">Red leaves zone</option>
+                        <option value="green" selected>Green touches RSI</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -615,11 +653,11 @@
                 </div>
                 <div class="form-group">
                     <label for="hmExitCutoff">Square-off</label>
-                    <input type="time" id="hmExitCutoff" value="15:14">
+                    <input type="time" id="hmExitCutoff" value="15:14" title="Intraday only; ignored when Positional is on.">
                 </div>
                 <div class="form-group">
-                    <label for="hmMaxTrades">Max Trades / Day</label>
-                    <input type="number" id="hmMaxTrades" value="2" min="1" max="10" step="1">
+                    <label for="hmMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="hmMaxTrades" value="1" min="1" max="10" step="1">
                 </div>
                 </fieldset>
             </div>

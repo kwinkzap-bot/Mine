@@ -1,0 +1,76 @@
+[
+  {
+    "date": "2026-10-23",
+    "n": 1,
+    "mode": "paper",
+    "side": "Long",
+    "signal_bar": "2026-10-23 09:15:00",
+    "signal": {
+      "rsi": 75.9,
+      "close": 73734.09,
+      "bb_band": 73524.49,
+      "supertrend": 73469.54,
+      "pivot_level": 73645.11,
+      "pivot": "R1"
+    },
+    "index_entry": 73682.27,
+    "entry_time": "09:18",
+    "index_exit": 73408.67,
+    "exit_time": "09:36",
+    "result": "SuperTrend Down",
+    "strike": 73600,
+    "option_type": "CE",
+    "legs": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": null,
+        "entry": 810.0,
+        "exit": 670.5,
+        "pnl": -2790.0,
+        "exit_reason": null
+      }
+    },
+    "pnl": -2790.0,
+    "charges": 103.0,
+    "net": -2893.0,
+    "unconfirmed": null
+  },
+  {
+    "date": "2026-10-23",
+    "n": 2,
+    "mode": "paper",
+    "side": "Short",
+    "signal_bar": "2026-10-23 10:12:00",
+    "signal": {
+      "rsi": 27.7,
+      "close": 72884.61,
+      "bb_band": 72895.11,
+      "supertrend": 73098.17,
+      "pivot_level": 72929.39,
+      "pivot": "S1"
+    },
+    "index_entry": 72896.25,
+    "entry_time": "10:15",
+    "index_exit": 72858.11,
+    "exit_time": "11:21",
+    "result": "SuperTrend Up",
+    "strike": 73300,
+    "option_type": "PE",
+    "legs": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": null,
+        "entry": 780.0,
+        "exit": 811.95,
+        "pnl": 639.0,
+        "exit_reason": null
+      }
+    },
+    "pnl": 639.0,
+    "charges": 103.0,
+    "net": 536.0,
+    "unconfirmed": null
+  }
+]

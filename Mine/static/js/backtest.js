@@ -448,6 +448,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (sbrParamsRow)  sbrParamsRow.style.display  = 'none';
         const hmParamsRow   = document.getElementById('hilegaMilegaParamsRow');
         if (hmParamsRow)   hmParamsRow.style.display   = 'none';
+        // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
+        document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
+        document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
         if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
         const osParamsRow   = document.getElementById('optionSellingParamsRow');
         if (osParamsRow)   osParamsRow.style.display   = 'none';
@@ -615,7 +618,21 @@ document.addEventListener('DOMContentLoaded', function() {
             if (hmParamsRow) hmParamsRow.style.display = 'grid';
             if (pcLotRow)    pcLotRow.style.display    = 'grid';
             if (intFg) intFg.style.display = '';
-            if (intervalSelect) intervalSelect.value = '60minute';   // the talk: hourly for intraday
+            if (intervalSelect) {
+                [['60minute', '1 Hour'], ['day', '1 Day']].forEach(([v, label]) => {
+                    if (![...intervalSelect.options].some(o => o.value === v)) {
+                        const opt = new Option(label, v);
+                        opt.dataset.hm = '1';
+                        intervalSelect.add(opt);
+                    }
+                });
+                // A positional system: the talk uses the hourly chart (held two-three days) or the daily.
+                [...intervalSelect.options].forEach(o => {
+                    const ok = o.value === '60minute' || o.value === 'day';
+                    o.hidden = !ok; o.disabled = !ok;
+                });
+                intervalSelect.value = '60minute';
+            }
             if (startDateInput) startDateInput.value = '2022-01-01';
             updatePcInvestment();
 
@@ -1012,7 +1029,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const hmv = (id, d) => document.getElementById(id)?.value || d;
                 payload.interval      = hmv('interval', '60minute');
                 payload.premium       = parseFloat(hmv('hmPremium', 250));
-                payload.price_options = document.getElementById('hmPriceOptions')?.checked ?? false;
+                payload.price_options = document.getElementById('hmPriceOptions')?.checked ?? true;
                 payload.direction     = hmv('hmDirection', 'both');
                 payload.rsi_period    = parseInt(hmv('hmRsiLen', 9));
                 payload.green_len     = parseInt(hmv('hmGreenLen', 3));
@@ -1020,13 +1037,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.mid           = parseFloat(hmv('hmMid', 50));
                 payload.arm_bars      = parseInt(hmv('hmArmBars', 5));
                 payload.min_gap       = parseFloat(document.getElementById('hmMinGap')?.value || 0);
-                payload.exit_mode     = hmv('hmExitMode', 'red');
+                payload.exit_mode     = hmv('hmExitMode', 'green');
+                payload.entry_mode    = hmv('hmEntryMode', 'either');
+                payload.pb_band       = parseFloat(document.getElementById('hmPbBand')?.value || 10);
+                payload.chop_lookback = parseInt(document.getElementById('hmChop')?.value || 12);
+                payload.htf           = hmv('hmHtf', 'off');
                 payload.rr            = parseFloat(document.getElementById('hmRr')?.value || 0);
                 payload.sl_on_close   = document.getElementById('hmSlOnClose')?.checked ?? true;
                 payload.entry_start   = hmv('hmEntryStart', '10:15');
                 payload.entry_end     = hmv('hmEntryEnd', '15:14');
                 payload.exit_cutoff   = hmv('hmExitCutoff', '15:14');
-                payload.max_trades_per_day = parseInt(hmv('hmMaxTrades', 2));
+                payload.max_trades_per_day = parseInt(hmv('hmMaxTrades', 1));
+                payload.positional    = document.getElementById('hmPositional')?.checked ?? true;
+                payload.roll          = hmv('hmRoll', 'same');
+                payload.min_sessions  = parseInt(document.getElementById('hmMinSessions')?.value ?? 5);
                 payload.lots          = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
                 payload.lot_value     = parseFloat(document.getElementById('pcLotValue')?.value || 65);
                 payload.compounding   = document.getElementById('hmCompound')?.checked ?? false;
@@ -1128,7 +1152,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     window.showNotification(
                         `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
                         + `${r.index_signals} signals · RSI ${r.params.rsi_period}, green ${r.params.green_len}, red ${r.params.red_len}, `
-                        + `armed ${r.params.arm_bars}, exit: ${r.params.exit_mode}`, 'info');
+                        + `entry ${r.params.entry_mode}, armed ${r.params.arm_bars}, exit: ${r.params.exit_mode}`, 'info');
                 } else if (data.ran) {
                     const r = data.ran;
                     window.showNotification(

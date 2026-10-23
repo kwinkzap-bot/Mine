@@ -26,11 +26,21 @@ of the ST+BB+RSI engine; with it off the stop is intrabar and fills at the stop
 Exit. First of: the stop; the optional `rr` target; the red line leaving the zone
 (`exit_mode='red'`: red crosses to the wrong side of the RSI, or the RSI loses 50)
 or the RSI falling back onto the green line (`exit_mode='green'`); the intraday
-square-off (`exit_cutoff`).
+square-off (`exit_cutoff`) — unless `positional`.
+
+Positional (`positional=True`): the talk holds an hourly trade for "two-three days"
+and a daily one far longer, ending it only on the stop or the red line leaving the
+zone. So there is no square-off and no end-of-day exit: the trade is carried across
+sessions and the exit fills at the next candle's open, which may be tomorrow's gap.
+A trade still open when the data ends is closed at the last close as 'Still Open'.
+Daily candles (bar_minutes >= 1440) are always positional: the signal is read at the
+close and the order fills at the next open.
+`max_trades_per_day` then caps ENTRIES per day.
 
 Like the ST+BB+RSI engine this books INDEX points; `attach_option_legs` (shared,
-imported from there) re-prices every trade on the ≈premium CE (long) / PE (short)
-and needs an ICICI Breeze login.
+imported from there) re-prices every intraday trade on the ≈premium CE (long) / PE
+(short) and needs an ICICI Breeze login. A positional trade is re-priced by
+`attach_positional_legs` below, which holds ONE contract across the sessions.
 
 Indicator conventions are TradingView's: Wilder smoothing for the RSI, an
 SMA-seeded EMA, and ta.vwma = sma(x·volume) / sma(volume). They run continuously
@@ -38,14 +48,19 @@ across days, as on a chart.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date as _date
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from trading_app.Backtest.st_bb_rsi_engine import _parse_hhmm, _r, rsi, summarise
+from trading_app.Backtest.st_bb_rsi_engine import (
+    _WORKERS, MAX_OPTION_LEGS, _parse_hhmm, _prior_minute, _r, rsi, summarise)
 
 EXIT_MODES = ('red', 'green')
+ENTRY_MODES = ('breakout', 'pullback', 'either')
+HTF_MODES = ('off', 'daily')
 
 
 def ema(values: np.ndarray, period: int) -> np.ndarray:
@@ -81,7 +96,9 @@ class HilegaMilegaEngine:
                  mid: float = 50.0, arm_bars: int = 5, min_gap: float = 0.0,
                  exit_mode: str = 'red', rr: float = 0.0, sl_on_close: bool = True,
                  direction: str = 'both', entry_start: str = '09:15', entry_end: str = '15:14',
-                 exit_cutoff: str = '15:14', max_trades_per_day: int = 2, bar_minutes: Optional[int] = None):
+                 exit_cutoff: str = '15:14', max_trades_per_day: int = 2, bar_minutes: Optional[int] = None,
+                 positional: bool = False, entry_mode: str = 'breakout', pb_band: float = 5.0,
+                 chop_lookback: int = 0, chop_max: int = 2, htf: str = 'off'):
         self.df = df.copy()
         self.rsi_period = int(rsi_period)
         self.green_len = int(green_len)
@@ -97,6 +114,12 @@ class HilegaMilegaEngine:
         self.entry_end = _parse_hhmm(entry_end, 15 * 60 + 14)
         self.exit_cutoff = _parse_hhmm(exit_cutoff, 15 * 60 + 14)
         self.max_trades_per_day = max(1, int(max_trades_per_day))
+        self.positional = bool(positional)
+        self.entry_mode = entry_mode if entry_mode in ENTRY_MODES else 'breakout'
+        self.pb_band = max(0.0, float(pb_band))
+        self.chop_lookback = max(0, int(chop_lookback or 0))
+        self.chop_max = max(0, int(chop_max))
+        self.htf = htf if htf in HTF_MODES else 'off'
         self._prepare()
         if bar_minutes:
             self.bar_minutes = int(bar_minutes)
@@ -105,6 +128,9 @@ class HilegaMilegaEngine:
             self.bar_minutes = max(1, int(round(step.median().total_seconds() / 60)))
         else:
             self.bar_minutes = 5
+        if self.bar_minutes >= 1440:                     # a daily candle: no clock to gate on, and it is carried
+            self.entry_start, self.entry_end = 0, 24 * 60
+            self.positional = True
 
     def _prepare(self):
         if not pd.api.types.is_datetime64_any_dtype(self.df.index):
@@ -136,6 +162,26 @@ class HilegaMilegaEngine:
             out[i] = n
         return out
 
+    def _daily_bias(self, df_idx) -> Tuple[np.ndarray, np.ndarray]:
+        """(bull, bear) per candle from the DAILY RSI(9) of the last COMPLETED session:
+        above `mid` allows longs, below it shorts. The day's own candle is never used."""
+        d = self.df
+        day = pd.Series(d.index.normalize(), index=d.index)
+        daily = d.groupby(day).agg(close=('close', 'last'))
+        r = pd.Series(rsi(daily['close'].to_numpy(dtype=float), self.rsi_period), index=daily.index).shift(1)
+        mapped = day.map(r).to_numpy(dtype=float)
+        with np.errstate(invalid='ignore'):
+            return mapped > self.mid, mapped < self.mid
+
+    @staticmethod
+    def _flips(a: np.ndarray, b: np.ndarray, n: int) -> np.ndarray:
+        """Crossings of `a` over/under `b` within the last n candles (the chop count)."""
+        with np.errstate(invalid='ignore'):
+            side = np.sign(a - b)
+        side = np.where(np.isfinite(side), side, 0)
+        cross = np.concatenate(([0], (np.diff(side) != 0) & (side[1:] != 0) & (side[:-1] != 0))).astype(int)
+        return pd.Series(cross).rolling(n, min_periods=1).sum().to_numpy()
+
     def signals(self) -> Dict[str, Any]:
         ind = self.indicators()
         r, g, red = ind['rsi'], ind['green'], ind['red']
@@ -149,8 +195,25 @@ class HilegaMilegaEngine:
         prev_h = np.concatenate(([np.nan], h[:-1]))
         prev_l = np.concatenate(([np.nan], l[:-1]))
         with np.errstate(invalid='ignore'):
-            long_sig = bull & (age_bull <= self.arm_bars) & (c > prev_h)
-            short_sig = bear & (age_bear <= self.arm_bars) & (c < prev_l)
+            brk_l = bull & (age_bull <= self.arm_bars) & (c > prev_h)
+            brk_s = bear & (age_bear <= self.arm_bars) & (c < prev_l)
+            # Pullback: inside an ongoing zone the red line has come back to within pb_band of 50 (the
+            # retracement the talk buys), and the candle closes beyond the previous one — it resumes.
+            pb_l = bull & ((red - self.mid) <= self.pb_band) & (c > prev_h)
+            pb_s = bear & ((self.mid - red) <= self.pb_band) & (c < prev_l)
+        if self.entry_mode == 'breakout':
+            long_sig, short_sig = brk_l, brk_s
+        elif self.entry_mode == 'pullback':
+            long_sig, short_sig = pb_l, pb_s
+        else:
+            long_sig, short_sig = brk_l | pb_l, brk_s | pb_s
+        if self.chop_lookback:                          # the sideways "no trade zone": the lines keep crossing
+            chop = self._flips(r, red, self.chop_lookback) + self._flips(r, np.full(len(r), self.mid), self.chop_lookback)
+            quiet = chop <= self.chop_max
+            long_sig, short_sig = long_sig & quiet, short_sig & quiet
+        if self.htf == 'daily':
+            hb, hs = self._daily_bias(None)
+            long_sig, short_sig = long_sig & hb, short_sig & hs
         sig = np.where(long_sig, 1, np.where(short_sig, -1, 0))
         if self.direction == 'long':
             sig = np.where(sig == 1, 1, 0)
@@ -194,6 +257,8 @@ class HilegaMilegaEngine:
         trades: List[Dict[str, Any]] = []
         if not len(cand):
             return trades
+        if self.positional:                              # one continuous run, no day boundaries
+            return self._day(0, len(df) - 1, cand, o, h, l, c, signal, sg, tmin, ts)
         day_of = np.searchsorted(starts, cand, side='right') - 1
         for d in np.unique(day_of):
             trades.extend(self._day(int(starts[d]), int(ends[d]), cand[day_of == d],
@@ -209,9 +274,13 @@ class HilegaMilegaEngine:
     def _day(self, a, b, idxs, o, h, l, c, signal, sg, tmin, ts):
         out = []
         free_from = a                                    # a new trade cannot start before the last one ended
-        cutoff = self.exit_cutoff
+        cutoff = 10 ** 9 if self.positional else self.exit_cutoff    # positional: no clock exit
+        per_day: Dict[str, int] = {}
         for i in idxs:
-            if len(out) >= self.max_trades_per_day:
+            if self.positional:
+                if per_day.get(ts[i][:10], 0) >= self.max_trades_per_day:
+                    continue
+            elif len(out) >= self.max_trades_per_day:
                 break
             if i < free_from or i >= b:
                 continue
@@ -228,7 +297,7 @@ class HilegaMilegaEngine:
             exit_sig = sg['exit_long'] if is_long else sg['exit_short']
             sig_name = 'Red leaves zone' if self.exit_mode == 'red' else 'Green touches RSI'
 
-            exit_k, exit_px, reason, stamp = b, c[b], 'EOD Exit', None
+            exit_k, exit_px, reason, stamp = b, c[b], ('Still Open' if self.positional else 'EOD Exit'), None
             for k in range(e, b + 1):
                 if k > e and tmin[k] >= cutoff:
                     exit_k, exit_px, reason = k, o[k], 'Time Exit'
@@ -255,15 +324,18 @@ class HilegaMilegaEngine:
                     else:
                         # Known only at this close, at or after the square-off minute: the clock
                         # has already squared the trade off.
-                        exit_k, exit_px, reason = k, c[k], 'Time Exit'
+                        exit_k, exit_px, reason = k, c[k], ('Still Open' if self.positional else 'Time Exit')
                     break
             pnl = (exit_px - entry) if is_long else (entry - exit_px)
             if reason == 'Time Exit':
                 exit_time = self._clock_exit_stamp(ts[exit_k])
             else:
                 exit_time = stamp or ts[exit_k]
+            if self.positional:
+                per_day[ts[i][:10]] = per_day.get(ts[i][:10], 0) + 1
             out.append({
                 'entry_time': ts[e], 'exit_time': exit_time,
+                'days_held': (pd.Timestamp(exit_time[:10]) - pd.Timestamp(ts[e][:10])).days,
                 'type': 'Long' if is_long else 'Short',
                 'pattern': 'HM Bull' if is_long else 'HM Bear',
                 'entry_price': round(float(entry), 2), 'exit_price': round(float(exit_px), 2),
@@ -277,3 +349,133 @@ class HilegaMilegaEngine:
             })
             free_from = max(exit_k, e) + 1
         return out
+
+
+# ── Positional option legs ─────────────────────────────────────────────────────
+
+POSITIONAL_MIN_SESSIONS = 1     # buy an expiry that is at least this many sessions after the entry
+ROLL_MINUTE = '15:15'           # the expiry day's minute a contract is sold and the next one bought
+ROLL_MODES = ('same', 'premium')
+
+
+def _fill_minute(stamp: str) -> str:
+    """The minute a fill reads its premium at: the close of the minute BEFORE the stamp
+    (as `attach_option_legs`), except an order at the opening bell (a daily candle's next
+    open, 09:15) which has no minute before it and is read at 09:15 itself."""
+    hhmm = stamp[11:16]
+    return hhmm if hhmm <= '09:15' else _prior_minute(stamp)
+
+
+def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: float = 250.0,
+                           progress=None, calendar=None, min_sessions: int = POSITIONAL_MIN_SESSIONS,
+                           roll: str = 'same', roll_minute: str = ROLL_MINUTE
+                           ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Re-price each positional index trade on an option held, and rolled, across its sessions.
+
+    `attach_option_legs` prices a trade inside one session on the weekly expiry running that
+    day: the wrong contract for a trade held for days. Here the trade is bought on the nearest
+    expiry at least `min_sessions` sessions after the entry (known on the entry day, so no
+    look-ahead), the strike being the one nearest `premium` at the entry minute. When that
+    contract expires and the signal is STILL ON (the index trade has not exited), it is sold at
+    `roll_minute` on the expiry day and the NEXT expiry bought at that minute:
+      roll='same'     the same strike, carried to the next expiry (the default)
+      roll='premium'  the strike nearest `premium` again at that minute
+    and so on until the index trade's own exit, when the current contract is sold. The trade's
+    `pnl` is the sum of the legs' (exit - entry); `legs` lists them and `rolls` counts the
+    rolls. Entry/exit premium shown are the first leg's entry and the last leg's exit. A trade
+    any leg of which cannot be priced is left out and counted in info['unpriced'].
+    Returns (priced trades, info) shaped like `attach_option_legs`."""
+    from trading_app.service import cpr_option_service as cos
+
+    roll = roll if roll in ROLL_MODES else 'same'
+    info: Dict[str, Any] = {'premium': premium, 'index_trades': len(trades), 'unpriced': 0,
+                            'truncated': 0, 'lot': cos.lot_size(symbol), 'positional': True,
+                            'roll': roll, 'rolls': 0}
+    if not trades:
+        return [], info
+    work = trades[-MAX_OPTION_LEGS:]
+    info['truncated'] = len(trades) - len(work)
+    fetch = cos._option_minutes_fetcher(symbol)               # raises without a Breeze login
+    days = sorted({_date.fromisoformat(t['entry_time'][:10]) for t in work}
+                  | {_date.fromisoformat(t['exit_time'][:10]) for t in work})
+    cal = sorted(set(calendar)) if calendar else cos._trading_days(symbol, days[0], days[-1])
+    from trading_app.Backtest.st_bb_rsi_engine import _listed_expiries
+    cal = sorted(set(cal) | set(_listed_expiries(symbol, max(cal))))
+
+    def price(t: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        d_in = _date.fromisoformat(t['entry_time'][:10])
+        d_out = _date.fromisoformat(t['exit_time'][:10])
+        side = 'SELL' if t.get('type') == 'Short' else 'BUY'
+        ahead = [d for d in cal if d >= d_in]
+        anchor = ahead[min(min_sessions, len(ahead) - 1)] if ahead else d_in
+        con = cos.contract(symbol, anchor, side, t['entry_price'], cal)
+        if con is None:
+            return None
+        t_in, t_out = _fill_minute(t['entry_time']), _fill_minute(t['exit_time'])
+        con, bars, _ = cos.pick_strike(symbol, con, d_in, t_in, premium, fetch)
+        b = cos.bar_at(bars, t_in)
+        if not b:
+            return None
+        day, entry_px, legs = d_in, b['close'], []
+        while True:
+            expiry = _date.fromisoformat(con['expiry'])
+            if d_out <= expiry:                               # the index trade ends on this contract
+                bars_out = bars if day == d_out else fetch(con, d_out)
+                bo = cos.bar_at(bars_out, t_out)
+                if not bo:
+                    return None
+                legs.append({'strike': con['strike'], 'expiry': con['expiry'], 'entry': entry_px,
+                             'exit': bo['close'], 'exit_day': d_out.isoformat()})
+                break
+            # The contract expires with the signal still on: sell it, buy the next expiry.
+            bars_e = bars if day == expiry else fetch(con, expiry)
+            sold = cos.bar_at(bars_e, roll_minute)
+            later = [d for d in cal if d > expiry]
+            if not sold or not later:
+                return None
+            nxt = cos.contract(symbol, later[0], side, float(con['strike']), cal)   # level = strike: same strike
+            if nxt is None:
+                return None
+            if roll == 'premium':
+                nxt, bars, _ = cos.pick_strike(symbol, nxt, expiry, roll_minute, premium, fetch)
+            else:
+                bars = fetch(nxt, expiry)
+            bought = cos.bar_at(bars, roll_minute)
+            if not bought:
+                return None
+            legs.append({'strike': con['strike'], 'expiry': con['expiry'], 'entry': entry_px,
+                         'exit': sold['close'], 'exit_day': expiry.isoformat()})
+            con, day, entry_px = nxt, expiry, bought['close']
+        return {'legs': [dict(g, entry=round(g['entry'], 2), exit=round(g['exit'], 2)) for g in legs],
+                'option_type': con['option_type']}
+
+    done = [0]
+
+    def run(t):
+        try:
+            return price(t)
+        except cos.OptionDataUnavailable:
+            raise
+        except Exception:                                      # noqa: BLE001 — one dead leg is unpriced, not fatal
+            return None
+        finally:
+            done[0] += 1
+            if progress:
+                progress(done[0], len(work))
+
+    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+        results = list(pool.map(run, work))
+    priced = []
+    for t, res in zip(work, results):
+        if not res:
+            info['unpriced'] += 1
+            continue
+        legs = res['legs']
+        pnl = round(sum(g['exit'] - g['entry'] for g in legs), 2)
+        info['rolls'] += len(legs) - 1
+        priced.append(dict(
+            t, index_pnl=t['pnl'], entry_premium=legs[0]['entry'], exit_premium=legs[-1]['exit'], pnl=pnl,
+            result='WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
+            strike=legs[0]['strike'], option_type=res['option_type'], expiry=legs[-1]['expiry'],
+            rolls=len(legs) - 1, legs=legs))
+    return priced, info

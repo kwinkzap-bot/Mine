@@ -5078,7 +5078,8 @@ def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interv
     if n_junk:
         minutes = minutes[~junk]
     mins = {'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3, '5minute': 5,
-            '10minute': 10, '15minute': 15, '30minute': 30, '60minute': 60}.get(interval, 5)
+            '10minute': 10, '15minute': 15, '30minute': 30, '60minute': 60,
+            'day': 1440}.get(interval, 5)     # 'day' (Hilega Milega): one candle per session, stamped 09:15
     anchor = pd.Timedelta(hours=9, minutes=15)
     key = (minutes.index - anchor).floor(f'{mins}min') + anchor
     bars = minutes.groupby(key).agg(open=('open', 'first'), high=('high', 'max'),
@@ -5413,7 +5414,7 @@ def run_hilega_milega_backtest_api():
         end_date_str   = data.get('end_date')
         interval       = data.get('interval', '15minute')
         premium        = float(data.get('premium', 250) or 250)
-        price_options  = bool(data.get('price_options', False))
+        price_options  = bool(data.get('price_options', True))
         compounding    = bool(data.get('compounding', False))
         start_capital  = float(data.get('start_capital', 25000) or 25000)
         per_lot        = float(data.get('per_lot') or 0)
@@ -5446,12 +5447,14 @@ def run_hilega_milega_backtest_api():
         from trading_app.Backtest.st_bb_rsi_engine import (
             attach_option_legs, summarise, apply_compounding)
 
+        daily = interval == 'day'          # a daily run is positional by definition (the engine forces it)
         minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
-            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval)
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
+            warmup_days=150 if daily else 45)
         if minutes is None:
             return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
         candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
-        minutes_per_bar = int(''.join(ch for ch in interval if ch.isdigit()) or 15)
+        minutes_per_bar = 1440 if daily else int(''.join(ch for ch in interval if ch.isdigit()) or 15)
 
         engine = HilegaMilegaEngine(
             df=candles_df,
@@ -5461,7 +5464,12 @@ def run_hilega_milega_backtest_api():
             mid=float(data.get('mid', 50) or 50),
             arm_bars=int(data.get('arm_bars', 5) or 5),
             min_gap=float(data.get('min_gap', 0) or 0),
-            exit_mode=str(data.get('exit_mode', 'red')),
+            exit_mode=str(data.get('exit_mode', 'green')),
+            entry_mode=str(data.get('entry_mode', 'either')),
+            pb_band=float(data.get('pb_band', 10) or 10),
+            chop_lookback=int(data.get('chop_lookback', 12) or 0),
+            chop_max=int(data.get('chop_max', 2) or 2),
+            htf=str(data.get('htf', 'off')),
             rr=float(data.get('rr', 0) or 0),
             sl_on_close=bool(data.get('sl_on_close', True)),
             direction=str(data.get('direction', 'both')),
@@ -5470,6 +5478,7 @@ def run_hilega_milega_backtest_api():
             exit_cutoff=data.get('exit_cutoff', '15:14'),
             max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
             bar_minutes=minutes_per_bar,
+            positional=bool(data.get('positional', False)) or daily,
         )
         trades, _ = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -5488,7 +5497,10 @@ def run_hilega_milega_backtest_api():
             'params': dict(rsi_period=engine.rsi_period, green_len=engine.green_len, red_len=engine.red_len,
                            arm_bars=engine.arm_bars, min_gap=engine.min_gap, exit_mode=engine.exit_mode,
                            rr=engine.rr, sl_on_close=engine.sl_on_close, direction=engine.direction,
-                           premium=premium, price_options=price_options, compounding=compounding),
+                           entry_mode=engine.entry_mode, pb_band=engine.pb_band,
+                           chop_lookback=engine.chop_lookback, htf=engine.htf,
+                           positional=engine.positional, roll=str(data.get('roll', 'same')),
+                           min_sessions=int(data.get('min_sessions', 5) or 0), premium=premium, price_options=price_options, compounding=compounding),
             'index_signals': len(trades),
             'strategy': 'hilega_milega',      # backtest.js words the run banner by it
         }
@@ -5527,8 +5539,15 @@ def run_hilega_milega_backtest_api():
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
             try:
-                priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
-                                                   calendar=sessions)
+                if engine.positional:
+                    from trading_app.Backtest.hilega_milega_engine import attach_positional_legs
+                    priced, info = attach_positional_legs(symbol, trades, premium or 250.0, _progress,
+                                                          calendar=sessions,
+                                                          roll=str(data.get('roll', 'same')),
+                                                          min_sessions=max(0, int(data.get('min_sessions', 5) or 0)))
+                else:
+                    priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
+                                                       calendar=sessions)
                 warn = None
                 if info['unpriced'] or info['truncated']:
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "

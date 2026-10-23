@@ -52,7 +52,7 @@ window.MineCPR = (function () {
         box5m: false, box1m: false,
         mondayBox: true, mondayWeeksBack: 100,
         vwapCur: true, vwapPrev: true, vwapAvg3: true, vwapLabels: false,
-        supertrend: false, stPeriod: 10, stMult: 3,   // TradingView's ta.supertrend(3, 10)
+        supertrend: false, stPeriod: 10, stMult: 2,   // ta.supertrend(2, 10)
     };
 
     const LIGHT_COLORS = {
