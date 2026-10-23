@@ -5392,6 +5392,162 @@ def run_st_bb_rsi_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/backtest/hilega-milega', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_hilega_milega_backtest_api():
+    """Hilega Milega: RSI(9) + EMA(3) and volume-weighted MA(21) of the RSI.
+
+    Index points by default; with `price_options` every trade is re-priced on the
+    ≈premium CE (long) / PE (short), in the background, polled on
+    /backtest/st-bb-rsi/status/<task_id> (the same task table). See
+    Backtest/hilega_milega_engine.py.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json() or {}
+        symbol         = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '15minute')
+        premium        = float(data.get('premium', 250) or 250)
+        price_options  = bool(data.get('price_options', False))
+        compounding    = bool(data.get('compounding', False))
+        start_capital  = float(data.get('start_capital', 25000) or 25000)
+        per_lot        = float(data.get('per_lot') or 0)
+        max_lots       = int(data.get('max_lots', 27) or 27)
+        fixed_lots     = max(1, int(data.get('lots', 1) or 1))
+        lot_value      = float(data.get('lot_value', 0) or 0)
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        from trading_app.service import cpr_option_service as _cos
+        if symbol == 'ALL STOCKS':
+            symbol = 'NIFTY'
+        is_stock = not _cos.is_index(symbol)
+        if is_stock:
+            if _cos.stock_spec(symbol) is None and price_options:
+                return jsonify({'success': False,
+                                'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                         "turn off Price on options or pick an index."}), 400
+            premium = 0.0
+            lot_value = 0.0
+
+        current_kite = get_fyers_adapter()      # Fyers history, as the ST+BB+RSI run (see there)
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+        import pandas as pd
+        from trading_app.Backtest.hilega_milega_engine import HilegaMilegaEngine
+        from trading_app.Backtest.st_bb_rsi_engine import (
+            attach_option_legs, summarise, apply_compounding)
+
+        minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval)
+        if minutes is None:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+        candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
+        minutes_per_bar = int(''.join(ch for ch in interval if ch.isdigit()) or 15)
+
+        engine = HilegaMilegaEngine(
+            df=candles_df,
+            rsi_period=int(data.get('rsi_period', 9) or 9),
+            green_len=int(data.get('green_len', 3) or 3),
+            red_len=int(data.get('red_len', 21) or 21),
+            mid=float(data.get('mid', 50) or 50),
+            arm_bars=int(data.get('arm_bars', 5) or 5),
+            min_gap=float(data.get('min_gap', 0) or 0),
+            exit_mode=str(data.get('exit_mode', 'red')),
+            rr=float(data.get('rr', 0) or 0),
+            sl_on_close=bool(data.get('sl_on_close', True)),
+            direction=str(data.get('direction', 'both')),
+            entry_start=data.get('entry_start', '09:15'),
+            entry_end=data.get('entry_end', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
+            bar_minutes=minutes_per_bar,
+        )
+        trades, _ = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
+
+        _want = min(pd.Timestamp(end_date_str).date(), datetime.now().date())
+        while _want.weekday() >= 5:
+            _want -= timedelta(days=1)
+        _have = pd.Timestamp(candles[-1]['date']).date()
+        data_warning = (f"Candles end at {_have:%d %b}; {_want:%d %b} could not be loaded (data provider "
+                        f"limit or outage), so it is not in this run.") if _have < _want else None
+        ran = {
+            'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
+            'start_date': start_date_str, 'end_date': end_date_str,
+            'bars': n_bars, 'junk_bars_dropped': n_junk, 'first_bar': str(candles[0]['date']),
+            'last_bar': str(candles[-1]['date']),
+            'params': dict(rsi_period=engine.rsi_period, green_len=engine.green_len, red_len=engine.red_len,
+                           arm_bars=engine.arm_bars, min_gap=engine.min_gap, exit_mode=engine.exit_mode,
+                           rr=engine.rr, sl_on_close=engine.sl_on_close, direction=engine.direction,
+                           premium=premium, price_options=price_options, compounding=compounding),
+            'index_signals': len(trades),
+            'strategy': 'hilega_milega',      # backtest.js words the run banner by it
+        }
+
+        def _payload(priced_trades, option_info, warning):
+            summ = summarise(priced_trades)
+            summ['pnl_basis'] = 'option' if option_info else 'index'
+            extra = {}
+            if option_info:
+                extra = apply_compounding(
+                    priced_trades, lot_value or option_info.get('lot') or 65,
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
+            return {
+                'success': True, 'trades': priced_trades, 'option': option_info,
+                'warning': warning, 'ran': ran,
+                'summary': {**{k: summ[k] for k in (
+                    'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
+                    'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
+                    'pnl_basis': summ['pnl_basis'], **extra},
+            }
+
+        logger.info('[HM BT] %s %s %s→%s  %d bars  %d signals  options=%s',
+                    symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
+        if not (price_options and trades):
+            return jsonify(_payload(trades, None, data_warning))
+
+        sessions = sorted(set(minutes.index.date))
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': len(trades)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
+                                                   calendar=sessions)
+                warn = None
+                if info['unpriced'] or info['truncated']:
+                    warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
+                            f"candles and {info['truncated']} older ones were not priced; "
+                            f"they are left out of the totals.")
+                task['payload'] = _payload(priced, info, ' '.join(w for w in (warn, data_warning) if w) or None)
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[HM BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, None, ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.', data_warning) if w))
+            task['status'] = 'complete'
+
+        threading.Thread(target=_run, name=f'hm-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
+    except Exception as e:
+        logger.error(f"Error in Hilega Milega backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/backtest/pivot-confluence/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth

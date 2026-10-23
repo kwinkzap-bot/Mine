@@ -34,6 +34,7 @@
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
                 <option value="st_bb_rsi" selected>🚀 ST + BB + RSI + R1</option>
+                <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
             </select>
@@ -517,6 +518,108 @@
                 <div class="form-group">
                     <label for="sbrMaxTrades">Max Trades / Day</label>
                     <input type="number" id="sbrMaxTrades" value="2" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- Hilega Milega: RSI(9) + EMA(3) and volume-weighted MA(21) of the RSI, traded on
+                 the index, optionally re-priced on the ≈premium CE/PE (shares the Pivot Confluence
+                 Lots boxes). See src/trading_app/Backtest/hilega_milega_engine.py. -->
+            <div id="hilegaMilegaParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="hmDirection">Direction</label>
+                    <select id="hmDirection" title="Long: RSI above 50 with the red line under it. Short is the mirror. Both takes whichever fires first.">
+                        <option value="long">Long (CE)</option>
+                        <option value="short">Short (PE)</option>
+                        <option value="both" selected>Both</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hmPriceOptions">Price on options</label>
+                    <input type="checkbox" id="hmPriceOptions" title="Off = instant run in INDEX points. On = re-price every trade on the CE (long) / PE (short); needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="hmPremium">Option Premium ≈</label>
+                    <select id="hmPremium" title="The strike whose premium at the entry minute was nearest this (weekly expiry running that day).">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hmCompound">Compounding</label>
+                    <input type="checkbox" id="hmCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="hmCapital">Start Capital (₹)</label>
+                    <input type="number" id="hmCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="hmPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="hmPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Indicator</legend>
+                <div class="form-group">
+                    <label for="hmRsiLen">RSI Length</label>
+                    <input type="number" id="hmRsiLen" value="9" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="hmGreenLen">Green EMA</label>
+                    <input type="number" id="hmGreenLen" value="3" min="1" step="1" title="EMA of the RSI. The RSI falling back onto it is the early warning.">
+                </div>
+                <div class="form-group">
+                    <label for="hmRedLen">Red VWMA</label>
+                    <input type="number" id="hmRedLen" value="21" min="2" step="1" title="Volume-weighted MA of the RSI (a plain WMA where the symbol has no volume).">
+                </div>
+                <div class="form-group">
+                    <label for="hmMid">Divider</label>
+                    <input type="number" id="hmMid" value="50" min="30" max="70" step="1">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry / Exit</legend>
+                <div class="form-group">
+                    <label for="hmArmBars">Armed Bars</label>
+                    <input type="number" id="hmArmBars" value="5" min="1" max="30" step="1" title="After the zone turns on, the first candle within this many bars to close beyond the previous high/low is the signal.">
+                </div>
+                <div class="form-group">
+                    <label for="hmMinGap">Min Gap (RSI vs Red)</label>
+                    <input type="number" id="hmMinGap" value="0" min="0" step="0.5" title="Points between the RSI and the red line. Wider = more momentum.">
+                </div>
+                <div class="form-group">
+                    <label for="hmExitMode">Exit Rule</label>
+                    <select id="hmExitMode">
+                        <option value="red" selected>Red leaves zone</option>
+                        <option value="green">Green touches RSI</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hmRr">Target (R)</label>
+                    <input type="number" id="hmRr" value="0" min="0" step="0.5" title="0 = no target; the trade ends on the exit rule, the stop or the square-off.">
+                </div>
+                <div class="form-group">
+                    <label for="hmSlOnClose">Stop on close</label>
+                    <input type="checkbox" id="hmSlOnClose" checked title="On: the stop (signal candle's low/high) is hit when a candle CLOSES beyond it, exit at the next open. Off: intrabar, filled at the stop.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Session</legend>
+                <div class="form-group">
+                    <label for="hmEntryStart">Entry From</label>
+                    <input type="time" id="hmEntryStart" value="10:15">
+                </div>
+                <div class="form-group">
+                    <label for="hmEntryEnd">Entry Until</label>
+                    <input type="time" id="hmEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="hmExitCutoff">Square-off</label>
+                    <input type="time" id="hmExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="hmMaxTrades">Max Trades / Day</label>
+                    <input type="number" id="hmMaxTrades" value="2" min="1" max="10" step="1">
                 </div>
                 </fieldset>
             </div>

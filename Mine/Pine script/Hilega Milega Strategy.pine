@@ -1,0 +1,93 @@
+//@version=5
+strategy("Hilega Milega Strategy", overlay=true,
+         initial_capital         = 100000,
+         default_qty_type        = strategy.fixed,
+         default_qty_value       = 1,
+         calc_on_every_tick      = false,
+         process_orders_on_close = false)
+
+// ─── Indicator (RSI + 3 EMA on RSI + volume-weighted 21 MA on RSI) ────────────
+rsiLen   = input.int(9,  "RSI Length",             minval=2, group="Indicator")
+greenLen = input.int(3,  "Green: EMA on RSI",      minval=1, group="Indicator")
+redLen   = input.int(21, "Red: VWMA on RSI",       minval=2, group="Indicator",
+     tooltip="Volume-weighted MA of the RSI. Falls back to a plain WMA when the symbol has no volume (spot indices).")
+mid      = input.float(50, "Bull/Bear divider",    group="Indicator")
+
+rsiV   = ta.rsi(close, rsiLen)
+green  = ta.ema(rsiV, greenLen)
+redRaw = ta.vwma(rsiV, redLen)
+red    = na(redRaw) ? ta.wma(rsiV, redLen) : redRaw
+
+// ─── Entry ─────────────────────────────────────────────────────────────────────
+armBars  = input.int(5,   "Bars a fresh signal stays armed", minval=1, group="Entry",
+     tooltip="After the zone turns bullish/bearish, a price-confirmation candle must appear within this many bars.")
+minGap   = input.float(0, "Min gap RSI vs Red (points)", minval=0, step=0.5, group="Entry",
+     tooltip="The video: wider gap between the lines = more momentum. 0 = any gap.")
+allowLong  = input.bool(true, "Trade longs",  group="Entry")
+allowShort = input.bool(true, "Trade shorts", group="Entry")
+
+// ─── Exit ──────────────────────────────────────────────────────────────────────
+exitMode = input.string("Red leaves zone", "Exit rule", options=["Red leaves zone", "Green touches RSI"], group="Exit",
+     tooltip="Red leaves zone: red line crosses to the wrong side of the RSI (or RSI loses 50).\nGreen touches RSI: the earlier, tighter warning in the video.")
+rr       = input.float(0, "Optional target (R multiple, 0 = none)", minval=0, step=0.5, group="Exit",
+     tooltip="0 = trade only ends on the exit rule or the stop (the video's trailing approach).")
+
+// ─── Filters ───────────────────────────────────────────────────────────────────
+useSess = input.bool(false, "Only enter inside session (intraday)", group="Filters")
+sess    = input.session("1015-1500", "Entry session", group="Filters")
+useEod  = input.bool(false, "Square off at time (intraday)", group="Filters")
+eodHHMM = input.int(1515, "Square-off HHMM", group="Filters")
+
+// ─── States ────────────────────────────────────────────────────────────────────
+// Bull: RSI above 50, red above 50 and sitting under the RSI line.
+// Bear: mirror — RSI below 50, red below 50 and sitting over the RSI line.
+bullState = rsiV > mid and red > mid and red < rsiV and (rsiV - red) >= minGap
+bearState = rsiV < mid and red < mid and red > rsiV and (red - rsiV) >= minGap
+
+bullArmed = bullState and nz(ta.barssince(not bullState), 999) <= armBars
+bearArmed = bearState and nz(ta.barssince(not bearState), 999) <= armBars
+
+longTrig  = bullArmed and close > high[1]
+shortTrig = bearArmed and close < low[1]
+
+inSess = not useSess or not na(time(timeframe.period, sess))
+hhmm   = hour(time, syminfo.timezone) * 100 + minute(time, syminfo.timezone)
+eodNow = useEod and timeframe.isintraday and hhmm >= eodHHMM
+
+// ─── Orders ────────────────────────────────────────────────────────────────────
+var float slL = na
+var float slS = na
+
+if allowLong and longTrig and inSess and not eodNow and strategy.position_size == 0
+    slL := low                       // stop = the signal candle's low
+    strategy.entry("L", strategy.long)
+
+if allowShort and shortTrig and inSess and not eodNow and strategy.position_size == 0
+    slS := high                      // stop = the signal candle's high
+    strategy.entry("S", strategy.short)
+
+exitLongSig  = exitMode == "Red leaves zone" ? (red >= rsiV or rsiV < mid) : (rsiV <= green or rsiV < mid)
+exitShortSig = exitMode == "Red leaves zone" ? (red <= rsiV or rsiV > mid) : (rsiV >= green or rsiV > mid)
+
+if strategy.position_size > 0
+    avg = strategy.position_avg_price
+    strategy.exit("L-SL", "L", stop=slL, limit = rr > 0 ? avg + (avg - slL) * rr : na)
+    if exitLongSig or eodNow
+        strategy.close("L", comment="Exit")
+
+if strategy.position_size < 0
+    avg = strategy.position_avg_price
+    strategy.exit("S-SL", "S", stop=slS, limit = rr > 0 ? avg - (slS - avg) * rr : na)
+    if exitShortSig or eodNow
+        strategy.close("S", comment="Exit")
+
+// ─── Visuals ───────────────────────────────────────────────────────────────────
+plotshape(longTrig  and strategy.position_size == 0, "Long signal",  shape.triangleup,   location.belowbar, color.green, size=size.tiny)
+plotshape(shortTrig and strategy.position_size == 0, "Short signal", shape.triangledown, location.abovebar, color.red,   size=size.tiny)
+bgcolor(bullState ? color.new(color.green, 92) : bearState ? color.new(color.red, 92) : na)
+plot(strategy.position_size > 0 ? slL : strategy.position_size < 0 ? slS : na, "Stop", color.orange, 1, plot.style_linebr)
+
+// RSI lines for the data window / alerts (view them on the pane with the HM indicator)
+plot(rsiV,  "RSI",   display=display.data_window)
+plot(green, "Green", display=display.data_window)
+plot(red,   "Red",   display=display.data_window)
