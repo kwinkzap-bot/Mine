@@ -5235,7 +5235,7 @@ def run_st_bb_rsi_backtest_api():
         # see Backtest/st_bb_rsi_engine.apply_compounding. Needs the option legs.
         compounding    = bool(data.get('compounding', False))
         start_capital  = float(data.get('start_capital', 25000) or 25000)
-        per_lot        = float(data.get('per_lot', 25000) or 25000)
+        per_lot        = float(data.get('per_lot') or 0)       # 0 / blank = Auto (entry premium × lot)
         max_lots       = int(data.get('max_lots', 27) or 27)
         fixed_lots     = max(1, int(data.get('lots', 1) or 1))      # the Lots box, when not compounding
         lot_value      = float(data.get('lot_value', 0) or 0)       # ₹ per premium point = lot size
@@ -5298,6 +5298,10 @@ def run_st_bb_rsi_backtest_api():
             require_green=bool(data.get('require_green', False)),
             direction=str(data.get('direction', 'both')),
             htf=htf,
+            use_rsi=bool(data.get('use_rsi', True)),
+            use_bb=bool(data.get('use_bb', True)),
+            use_st=bool(data.get('use_st', True)),
+            use_pivot=bool(data.get('use_pivot', True)),
         )
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -5322,7 +5326,8 @@ def run_st_bb_rsi_backtest_api():
                            exit_cutoff=data.get('exit_cutoff', '15:14'),
                            max_trades_per_day=engine.max_trades_per_day,
                            require_green=engine.require_green, direction=engine.direction, htf=engine.htf,
-                           premium=premium, price_options=price_options,
+                           use_rsi=engine.use_rsi, use_bb=engine.use_bb, use_st=engine.use_st,
+                           use_pivot=engine.use_pivot, premium=premium, price_options=price_options,
                            compounding=compounding),
             'index_signals': len(trades),
         }

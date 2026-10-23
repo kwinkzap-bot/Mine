@@ -698,12 +698,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // "live" is every strategy that also runs as a live algo thread — the
     // Candle Breakout (paper-only since 2026-09-15, but still a running
     // thread), 30-Min Fakeout, Swing Momentum (Go Live / Live Watch) and EMA
-    // Confluence. A strategy is in exactly one bucket: when one goes live,
+    // Confluence, and ST + BB + RSI (3 index algos, paper by default). A strategy is in exactly one bucket: when one goes live,
     // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
-        live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
+        live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'st_bb_rsi'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence', 'st_bb_rsi', 'weekly_cpr_breakout', 'option_selling'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -972,8 +972,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.lot_value     = parseFloat(document.getElementById('pcLotValue')?.value || 65);
                 payload.compounding   = document.getElementById('sbrCompound')?.checked ?? false;
                 payload.start_capital = parseFloat(document.getElementById('sbrCapital')?.value || 25000);
-                payload.per_lot       = parseFloat(document.getElementById('sbrPerLot')?.value || 25000);
+                payload.per_lot       = parseFloat(document.getElementById('sbrPerLot')?.value || 0);
                 payload.require_green = document.getElementById('sbrGreen')?.checked ?? false;
+                payload.use_rsi       = document.getElementById('sbrUseRsi')?.checked ?? true;
+                payload.use_bb        = document.getElementById('sbrUseBb')?.checked ?? true;
+                payload.use_st        = document.getElementById('sbrUseSt')?.checked ?? true;
+                payload.use_pivot     = document.getElementById('sbrUsePivot')?.checked ?? true;
                 payload.rsi_level     = parseFloat(document.getElementById('sbrRsi')?.value || 70);
                 payload.rsi_lower     = parseFloat(document.getElementById('sbrRsiLower')?.value || 30);
                 payload.entry_start   = document.getElementById('sbrEntryStart')?.value || '09:15';

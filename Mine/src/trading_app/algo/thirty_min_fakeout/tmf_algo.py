@@ -141,6 +141,8 @@ if not any(isinstance(h, RotatingFileHandler) and getattr(h, '_tmf_sink', False)
 _POLL_SECS = 5           # how often the monitor loop ticks
 _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
 _RECONCILE_SECS = 30     # how often to cross-check real broker positions against state
+_SCAN_RETRY_SECS = 60    # wait before re-fetching candles for a stock whose fetch failed
+_SCAN_MAX_TRIES = 20     # after this many empty fetches it is no_setup for the day
 
 # How long an unfilled entry LIMIT order is allowed to sit at the trigger
 # price before the remainder is cancelled. The backtest assumes the entry
@@ -503,13 +505,28 @@ class TMFAlgo:
     def _fetch_today_candles(self, provider: Any, is_symbol_provider: bool, symbol: str) -> Optional[pd.DataFrame]:
         from trading_app.Backtest.minute_candle_store import get_minute_history
         today_str = date.today().isoformat()
-        spot_token = f'NSE:{symbol}-EQ' if is_symbol_provider else symbol
+        if is_symbol_provider:
+            spot_token = f'NSE:{symbol}-EQ'
+        else:
+            # Kite addresses a stock by numeric instrument token; handed the bare
+            # symbol it answers "invalid token" and every stock came back empty.
+            spot_token = self._kite_token(provider, symbol)
+            if not spot_token:
+                logger.warning(f"[TMF] {symbol}: no Kite instrument token")
+                return None
         provider_tag = _provider_tag(provider)
         try:
             return get_minute_history(provider, spot_token, symbol, today_str, today_str, provider_tag=provider_tag)
         except Exception as e:
             logger.warning(f"[TMF] {symbol}: today-candle fetch failed: {e}")
             return None
+
+    def _kite_token(self, provider: Any, symbol: str) -> Optional[Any]:
+        svc = getattr(self, '_kite_token_svc', None)
+        if svc is None or svc.kite is not provider:
+            from trading_app.service.kite_order_services import KiteService
+            svc = self._kite_token_svc = KiteService(kite_instance=provider)
+        return svc.get_instrument_token(symbol)
 
     def _kite_stream_ltps(self, provider: Any, symbols: List[str]) -> Dict[str, float]:
         """Streamed last prices for the stocks the Kite WebSocket already has.
@@ -544,7 +561,7 @@ class TMFAlgo:
             symbols = [s for s in symbols if s not in result]
             if not symbols:
                 return result
-        tokens = [f'NSE:{s}-EQ' if is_symbol_provider else s for s in symbols]
+        tokens = [f'NSE:{s}-EQ' if is_symbol_provider else f'NSE:{s}' for s in symbols]
         try:
             data = provider.ltp(tokens) or {}
         except Exception as e:
@@ -566,7 +583,16 @@ class TMFAlgo:
 
         df = self._fetch_today_candles(provider, is_symbol_provider, symbol)
         if df is None or df.empty:
-            s['phase'] = 'no_setup'
+            # A failed or empty fetch is not "no setup": marking it so was final
+            # for the day, and a dead data path silently skipped every stock
+            # (10-19 to 10-22). Stay pending_scan and retry, a minute apart.
+            tries = s.get('scan_tries', 0) + 1
+            s['scan_tries'] = tries
+            if tries >= _SCAN_MAX_TRIES:
+                logger.error(f"[TMF] {symbol}: no candles after {tries} tries — giving up for today")
+                s['phase'] = 'no_setup'
+            else:
+                s['scan_retry_at'] = time.time() + _SCAN_RETRY_SECS
             return
         prepared = _prepare_df(df.copy())
         thirty = _resample_30min(prepared)
@@ -1491,7 +1517,7 @@ class TMFAlgo:
 
         if now_mins >= third_candle_end_min:
             for symbol, s in stocks.items():
-                if s['phase'] != 'pending_scan':
+                if s['phase'] != 'pending_scan' or s.get('scan_retry_at', 0) > time.time():
                     continue
                 try:
                     self._scan_one(provider, is_symbol_provider, symbol, s, capital_per_trade, max_sl_risk)

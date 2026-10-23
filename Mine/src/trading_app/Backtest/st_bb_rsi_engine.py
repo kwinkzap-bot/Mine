@@ -48,6 +48,12 @@ _CHUNK = 4             # trades per legs_at call — small, so the calls spread 
 _WORKERS = 6
 
 
+def _r(v, nd: int = 2):
+    """Round a signal-card number; a warm-up NaN is None, not invalid JSON."""
+    v = float(v)
+    return round(v, nd) if np.isfinite(v) else None
+
+
 def _parse_hhmm(value, default_mins: int) -> int:
     if value is None:
         return default_mins
@@ -187,8 +193,14 @@ class StBbRsiEngine:
                  entry_start: str = '09:15', entry_end: str = '15:14',
                  exit_cutoff: str = '15:14', max_trades_per_day: int = 1,
                  require_green: bool = False, direction: str = 'long',
-                 rsi_lower: Optional[float] = None, htf: str = 'off'):
+                 rsi_lower: Optional[float] = None, htf: str = 'off',
+                 use_rsi: bool = True, use_bb: bool = True, use_st: bool = True,
+                 use_pivot: bool = True):
         self.df = df.copy()
+        # Each indicator can be switched out of the rule. Off, it neither gates the entry
+        # nor (SuperTrend) ends the trade: the exit is then the square-off clock only.
+        self.use_rsi, self.use_bb = bool(use_rsi), bool(use_bb)
+        self.use_st, self.use_pivot = bool(use_st), bool(use_pivot)
         # Higher-timeframe SuperTrend gate on the trade's side (same length/factor as
         # the entry SuperTrend): 'off' | 'daily' | 'weekly' | 'monthly'.
         self.htf = htf if htf in HTF_CHOICES else 'off'
@@ -274,7 +286,8 @@ class StBbRsiEngine:
                  bb_mult=self.bb_mult, bb_offset=self.bb_offset, st_period=self.st_period,
                  st_mult=self.st_mult, entry_start=self.entry_start, entry_end=self.entry_end,
                  exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
-                 require_green=self.require_green, direction=self.direction, htf=self.htf)
+                 require_green=self.require_green, direction=self.direction, htf=self.htf,
+                 use_rsi=self.use_rsi, use_bb=self.use_bb, use_st=self.use_st, use_pivot=self.use_pivot)
         P.update(over)
         if 'rsi_level' in over and 'rsi_lower' not in over:     # a swept upper line keeps the mirror
             P['rsi_lower'] = 100.0 - P['rsi_level']
@@ -292,11 +305,26 @@ class StBbRsiEngine:
         rsi_v = self._ind('rsi', P['rsi_period'])
         bb_up, bb_lo = self._ind('bb', P['bb_period'], P['bb_mult'], P['bb_offset'])
         st_line, st_dir = self._ind('st', P['st_period'], P['st_mult'])
+        n = len(c)
+        yes = np.ones(n, dtype=bool)
         with np.errstate(invalid='ignore'):
-            long_sig = ((rsi_v > P['rsi_level']) & (c > bb_up) & (st_dir == 1)
-                        & np.isfinite(st_line) & (c > b['r1']))
-            short_sig = ((rsi_v < P['rsi_lower']) & (c < bb_lo) & (st_dir == -1)
-                         & np.isfinite(st_line) & (c < b['s1']))
+            long_sig, short_sig = yes.copy(), yes.copy()
+            if P['use_rsi']:
+                long_sig &= rsi_v > P['rsi_level']
+                short_sig &= rsi_v < P['rsi_lower']
+            if P['use_bb']:
+                long_sig &= c > bb_up
+                short_sig &= c < bb_lo
+            if P['use_st']:
+                long_sig &= (st_dir == 1) & np.isfinite(st_line)
+                short_sig &= (st_dir == -1) & np.isfinite(st_line)
+            if P['use_pivot']:
+                long_sig &= c > b['r1']
+                short_sig &= c < b['s1']
+            if not (P['use_rsi'] or P['use_bb'] or P['use_st'] or P['use_pivot']
+                    or P['htf'] != 'off' or P['require_green']):
+                # Nothing left to decide a side: a signal on every bar is not a strategy.
+                long_sig, short_sig = ~yes, ~yes
         if P['htf'] != 'off':                           # trade only WITH the higher-timeframe trend
             h_dir = self._ind('htf', P['htf'], P['st_period'], P['st_mult'])
             long_sig = long_sig & (h_dir == 1)
@@ -354,7 +382,7 @@ class StBbRsiEngine:
                 if k > e and tmin[k] >= P['exit_cutoff']:
                     exit_k, exit_px, reason = k, o[k], 'Time Exit'
                     break
-                if st_dir[k] == exit_flip:               # SuperTrend broke against us on this close
+                if P['use_st'] and st_dir[k] == exit_flip:               # SuperTrend broke against us on this close
                     name = 'SuperTrend Down' if is_long else 'SuperTrend Up'
                     if k < b and tmin[k + 1] < P['exit_cutoff']:
                         exit_k, exit_px, reason = k + 1, o[k + 1], name
@@ -378,10 +406,10 @@ class StBbRsiEngine:
                 'pnl': round(float(pnl), 2),
                 'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
                 'exit_reason': reason,
-                'signal': {'rsi': round(float(rsi_v[i]), 1), 'close': round(float(c[i]), 2),
-                           'bb_band': round(float((lv['bb_up'] if is_long else lv['bb_lo'])[i]), 2),
-                           'supertrend': round(float(st_line[i]), 2),
-                           'pivot_level': round(float((lv['r1'] if is_long else lv['s1'])[i]), 2)},
+                'signal': {'rsi': _r(rsi_v[i], 1), 'close': _r(c[i]),
+                           'bb_band': _r((lv['bb_up'] if is_long else lv['bb_lo'])[i]),
+                           'supertrend': _r(st_line[i]),
+                           'pivot_level': _r((lv['r1'] if is_long else lv['s1'])[i])},
             })
             free_from = max(exit_k, e) + 1
         return out
@@ -578,12 +606,12 @@ def brokerage_for(lots: int) -> float:
 
 
 def apply_compounding(trades: List[Dict[str, Any]], lot_size: int, start_capital: float = 25000.0,
-                      per_lot: float = 25000.0, max_lots: int = 27,
+                      per_lot: float = 0.0, max_lots: int = 27,
                       fixed_lots: Optional[int] = None) -> Dict[str, Any]:
     """Size every trade from the account's running balance.
 
     The account starts at `start_capital` and carries `per_lot` of capital per lot,
-    so 25,000 buys 1 lot, and once the balance reaches 50,000 the next trade is
+    so 25,000 buys 1 lot (or, with `per_lot` 0 = Auto, the trade's own entry premium × lot size), and once the balance reaches 50,000 the next trade is
     2 lots, 75,000 → 3, and so on; a losing run steps the size back down, never
     below 1 lot. The balance moves by each trade's NET rupees (premium points ×
     lot size × lots, less brokerage), booked in order, so a trade is sized from
@@ -591,7 +619,9 @@ def apply_compounding(trades: List[Dict[str, Any]], lot_size: int, start_capital
     lots instead (no compounding) but is still booked in rupees, brokerage taken
     off, so the page's Total / Brokerage / Net all come from one place. Mutates `trades` (adds lots, gross_pnl_rupees,
     brokerage, pnl_rupees, balance_after) and returns the ₹ summary fields."""
-    per_lot = max(1.0, float(per_lot))
+    # per_lot <= 0 is Auto: the capital one lot needs is that trade's own cost, its entry
+    # premium × lot size, so the size follows what the option actually costs that day.
+    per_lot = max(0.0, float(per_lot or 0))
     balance = float(start_capital)
     peak = balance
     max_dd = 0.0
@@ -600,7 +630,8 @@ def apply_compounding(trades: List[Dict[str, Any]], lot_size: int, start_capital
     losses_rs: List[float] = []
     max_seen = 1
     for t in sorted(trades, key=lambda x: x['entry_time']):
-        lots = int(fixed_lots) if fixed_lots else int(max(1, min(max_lots, balance // per_lot)))
+        cost = per_lot or (float(t.get('entry_premium') or 0) * lot_size)
+        lots = int(fixed_lots) if fixed_lots else int(max(1, min(max_lots, balance // cost if cost > 0 else 1)))
         gross = t['pnl'] * lot_size * lots
         brok = brokerage_for(lots)
         net = gross - brok

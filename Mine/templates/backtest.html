@@ -19,9 +19,9 @@
         <div class="bt-header-controls">
             <span id="liveFlagBadge" class="bt-live-flag" style="display:none;" title="These params are currently running as a live algo"><span class="dot"></span>LIVE</span>
             <select id="strategyStatusSelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
-                <option value="live">🔴 Live</option>
+                <option value="live" selected>🔴 Live</option>
                 <option value="success">✅ Success</option>
-                <option value="testing" selected>🧪 Testing</option>
+                <option value="testing">🧪 Testing</option>
                 <option value="failure">❌ Failure</option>
             </select>
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
@@ -426,14 +426,24 @@
                 </div>
                 <div class="form-group">
                     <label for="sbrPerLot">Capital per Lot (₹)</label>
-                    <input type="number" id="sbrPerLot" value="25000" min="1000" step="1000">
+                    <input type="number" id="sbrPerLot" value="25000" placeholder="Auto" min="1000" step="1000" title="Default 25,000 per lot. Clear the box for Auto: one lot is sized by what it costs, the trade's entry premium × lot size, so lots follow the option price. Type a number to use a fixed amount per lot instead.">
                 </div>
                 <div class="form-group">
                     <label for="sbrGreen">Green candle only</label>
                     <input type="checkbox" id="sbrGreen" title="The signal candle must close above its open.">
                 </div>
                 </fieldset>
+                <fieldset class="ind-block"><legend>Pivot R1 / S1</legend>
+                <div class="form-group">
+                    <label for="sbrUsePivot">On</label>
+                    <input type="checkbox" id="sbrUsePivot" checked title="Off = the close does not need to be above R1 (long) / under S1 (short).">
+                </div>
+                </fieldset>
                 <fieldset class="ind-block"><legend>RSI</legend>
+                <div class="form-group">
+                    <label for="sbrUseRsi">On</label>
+                    <input type="checkbox" id="sbrUseRsi" checked title="Off = RSI is not part of the entry rule.">
+                </div>
                 <div class="form-group">
                     <label for="sbrRsi">RSI above</label>
                     <input type="number" id="sbrRsi" value="70" min="50" max="95" step="1">
@@ -448,6 +458,10 @@
                 </div>
                 </fieldset>
                 <fieldset class="ind-block"><legend>SuperTrend</legend>
+                <div class="form-group">
+                    <label for="sbrUseSt">On</label>
+                    <input type="checkbox" id="sbrUseSt" checked title="Off = SuperTrend neither gates the entry nor ends the trade; the exit is the square-off time.">
+                </div>
                 <div class="form-group">
                     <label for="sbrStLen">SuperTrend Length</label>
                     <input type="number" id="sbrStLen" value="10" min="1" step="1">
@@ -470,6 +484,10 @@
                 </div>
                 </fieldset>
                 <fieldset class="ind-block"><legend>Bollinger Bands</legend>
+                <div class="form-group">
+                    <label for="sbrUseBb">On</label>
+                    <input type="checkbox" id="sbrUseBb" checked title="Off = the Bollinger band is not part of the entry rule.">
+                </div>
                 <div class="form-group">
                     <label for="sbrBbLen">BB Length</label>
                     <input type="number" id="sbrBbLen" value="20" min="2" step="1">
