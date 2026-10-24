@@ -411,6 +411,28 @@ document.addEventListener('DOMContentLoaded', function() {
     // 2.5 Strategy Selection Logic
     const strategySelect = document.getElementById('strategySelect');
 
+    // Simpler Trader group — the Quantman run "BB PP ST RSI WR with SL NIFTY CE" on the ST + BB + RSI
+    // engine: 3-min candles; BB(15, 3), Williams %R(14) > -30, RSI(14) > 70, SuperTrend(10, 2),
+    // close above R1; buy the ≈250 current-week CE; exit on a close below SuperTrend; stop-loss 13 %
+    // with TSL X 15 % / Y 10 %; 09:15-15:14, one transaction a day. Re-applied each time the strategy is picked.
+    function applySimplerTraderPreset() {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        const on  = (id, v) => { const el = document.getElementById(id); if (el) el.checked = v; };
+        set('sbrDirection', 'long');
+        set('sbrHtf', 'off');
+        ['sbrUseRsi', 'sbrUseBb', 'sbrUseSt', 'sbrUsePivot', 'sbrUseWr'].forEach(id => on(id, true));
+        on('sbrGreen', false); on('sbrCompound', false);
+        set('sbrRsi', 70); set('sbrRsiLen', 14);
+        set('sbrStLen', 10); set('sbrStFactor', 2);
+        set('sbrBbLen', 15); set('sbrBbMult', 3); set('sbrBbOffset', 0);
+        set('sbrWrLen', 14); set('sbrWrLevel', -30);
+        set('sbrSlPct', 13); set('sbrTslX', 15); set('sbrTslY', 10);
+        set('sbrEntryStart', '09:15'); set('sbrEntryEnd', '15:14'); set('sbrExitCutoff', '15:14');
+        set('sbrMaxTrades', 1);
+        const prem = document.getElementById('sbrPremium');
+        if (prem && [...prem.options].some(o => o.value === '250')) prem.value = '250';
+    }
+
     function updateStrategyView() {
         if (!strategySelect) return;
 
@@ -450,10 +472,23 @@ document.addEventListener('DOMContentLoaded', function() {
         const wcbParamsRow  = document.getElementById('weeklyCprBreakoutParamsRow');
         const sbrParamsRow  = document.getElementById('stBbRsiParamsRow');
         if (sbrParamsRow)  sbrParamsRow.style.display  = 'none';
+        { const _sr = document.getElementById('simplerStatsRow'); if (_sr) _sr.style.display = 'none'; }
         const hmParamsRow   = document.getElementById('hilegaMilegaParamsRow');
         if (hmParamsRow)   hmParamsRow.style.display   = 'none';
         const mhParamsRow   = document.getElementById('maHtfParamsRow');
         if (mhParamsRow)   mhParamsRow.style.display   = 'none';
+        const secParamsRow  = document.getElementById('stEmaParamsRow');
+        if (secParamsRow)  secParamsRow.style.display  = 'none';
+        const srpParamsRow  = document.getElementById('stRppParamsRow');
+        if (srpParamsRow)  srpParamsRow.style.display  = 'none';
+        const srfParamsRow  = document.getElementById('stRpfParamsRow');
+        if (srfParamsRow)  srfParamsRow.style.display  = 'none';
+        const scwParamsRow  = document.getElementById('stRcwParamsRow');
+        if (scwParamsRow)  scwParamsRow.style.display  = 'none';
+        const scxParamsRow  = document.getElementById('stScxParamsRow');
+        if (scxParamsRow)  scxParamsRow.style.display  = 'none';
+        const swxParamsRow  = document.getElementById('stSwxParamsRow');
+        if (swxParamsRow)  swxParamsRow.style.display  = 'none';
         // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
         document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
         document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
@@ -602,7 +637,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2017-01-01';
             updatePcInvestment();
 
-        } else if (val === 'st_bb_rsi') {
+        } else if (val === 'st_bb_rsi' || val === 'simpler_trader') {
             // Index signal, ≈250 CE leg; lots/lot value reuse the Pivot Confluence boxes.
             // The Symbol box keeps whatever the last strategy left in it
             // (Weekly CPR Breakout parks ALL STOCKS there): this one trades one symbol —
@@ -624,6 +659,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 intervalSelect.value = '3minute';
             }
             if (startDateInput) startDateInput.value = '2019-04-01';
+            if (val === 'simpler_trader') applySimplerTraderPreset();
             updatePcInvestment();
 
         } else if (val === 'hilega_milega') {
@@ -651,6 +687,88 @@ document.addEventListener('DOMContentLoaded', function() {
                 intervalSelect.value = '60minute';
             }
             if (startDateInput) startDateInput.value = '2022-01-01';
+            updatePcInvestment();
+
+        } else if (val === 'st_ema_rsi_cci') {
+            // Index signal, ≈250 PE leg with a premium SL / TSL; lots / lot value reuse the Pivot Confluence boxes.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (secParamsRow) secParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2019-04-01';
+            updatePcInvestment();
+
+        } else if (val === 'st_rsi_pp_bb') {
+            // Index signal, ≈250 CE leg with a premium SL / TSL; lots / lot value reuse the Pivot Confluence boxes.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (srpParamsRow) srpParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2019-04-01';
+            updatePcInvestment();
+
+        } else if (val === 'st_rsi_pp_bb_fut') {
+            // NIFTY future signal on 5-minute candles, ≈250 CE leg with a premium SL / TSL.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (srfParamsRow) srfParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '5minute';
+            if (startDateInput) startDateInput.value = '2019-04-01';
+            updatePcInvestment();
+
+        } else if (val === 'st_rsi_cci_wr_pp_bb_fut') {
+            // NIFTY future signal on 3-minute candles, ≈250 CE leg with a premium SL / TSL.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (scwParamsRow) scwParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2019-04-01';
+            updatePcInvestment();
+
+        } else if (val === 'st_rsi_cpr_bb_sx') {
+            // SENSEX index signal on 5-minute candles, ≈500 CE leg with a premium SL / TSL.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS || symbolSearch.value.toUpperCase() !== 'SENSEX') {
+                selectedSymbol = 'SENSEX';
+                symbolSearch.value = 'SENSEX';
+            }
+            if (scxParamsRow) scxParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            const lotVal = document.getElementById('pcLotValue');     // SENSEX's lot is 20, not NIFTY's 65
+            if (lotVal) lotVal.value = 20;
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '5minute';
+            if (startDateInput) startDateInput.value = '2023-10-24';
+            updatePcInvestment();
+
+        } else if (val === 'st_rsi_cpr_bb_wr_sx') {
+            // SENSEX index signal on 5-minute candles, ≈500 CE leg (ST + RSI band + %R + narrow Traditional CPR + BB) with a premium SL / TSL.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS || symbolSearch.value.toUpperCase() !== 'SENSEX') {
+                selectedSymbol = 'SENSEX';
+                symbolSearch.value = 'SENSEX';
+            }
+            if (swxParamsRow) swxParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            const lotVal = document.getElementById('pcLotValue');     // SENSEX's lot is 20, not NIFTY's 65
+            if (lotVal) lotVal.value = 20;
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '5minute';
+            if (startDateInput) startDateInput.value = '2023-10-24';
             updatePcInvestment();
 
         } else if (val === 'ma_htf') {
@@ -783,6 +901,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Confluence, and ST + BB + RSI (3 index algos, paper by default). A strategy is in exactly one bucket: when one goes live,
     // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
+        simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'st_bb_rsi'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
@@ -909,6 +1028,53 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Entry', 'At the NEXT candle\'s open. Index points, optionally re-priced on the ≈250 premium option.'],
             ['Exit', 'There is no stop or target. Exit when a candle closes back through SuperTrend, or at the 15:15 square-off.'],
             ['Limit', 'Limited number of trades per day, one open at a time.']] },
+        simpler_trader: { sub: 'Quantman "BB PP ST RSI WR with SL" — long NIFTY CE, 3-minute candles', steps: [
+            ['Entry rule', 'On a closed 3-min candle ALL must hold: close above SuperTrend(10, 2), RSI(14) above 70, close above R1 of the traditional day pivots, close above the upper Bollinger Band (15 candles, multiplier 3), and Williams %R(14) above -30.'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '13% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
+            ['Limit', 'Trade window 09:15-15:14, one transaction per day.']] },
+        st_rsi_pp_bb: { sub: 'Quantman "ST RSI PP BB with SL" — long NIFTY CE, 3-minute candles on the index', steps: [
+            ['Entry rule', 'On a closed 3-min candle of the NIFTY index ALL must hold: close above SuperTrend(10, 2.3), RSI(14) above 70, close above R1 of the traditional day pivots, and close above the upper Bollinger Band (15 candles, multiplier 3).'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '15% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
+            ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
+            ['Limit', 'Trade window 09:31-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_rsi_pp_bb_fut: { sub: 'Quantman "ST RSI PP BB with SL NIFTY Fut CE" — long NIFTY CE, 5-minute candles on the future', steps: [
+            ['Entry rule', 'On a closed 5-min candle of the NIFTY future ALL must hold: close above SuperTrend(10, 1.8), RSI(20) above 68, close above R1 of the traditional day pivots, close above the upper Bollinger Band (20 candles, multiplier 3.3), and close above the candle\'s own open.'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '13% under the entry premium; trailing: for every 13% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
+            ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
+            ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_rsi_cpr_bb_sx: { sub: 'Quantman "ST RSI CPR BB with SL Sensex CE" — long SENSEX CE, 5-minute candles on the index', steps: [
+            ['Entry rule', 'On a closed 5-min candle of the SENSEX index ALL must hold: close above SuperTrend(10, 1.5), RSI(14) above 70, close above R1 of today\'s Demark CPR, that CPR not wide (width under 0.35 %), and close above the upper Bollinger Band (20 candles, multiplier 2.5).'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week SENSEX CE whose premium is nearest 500.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '17% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
+            ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
+            ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_rsi_cpr_bb_wr_sx: { sub: 'Quantman "ST RSI CPR BB WR with SL SX2 CE" — long SENSEX CE, 5-minute candles on the index', steps: [
+            ['Entry rule', 'On a closed 5-min candle of the SENSEX index ALL must hold: close above SuperTrend(10, 1.5), RSI(14) above 68 and below 80, Williams %R(14) above -10, close above R1 of today\'s Traditional CPR, that CPR narrow (width under 0.2 %), and close above the upper Bollinger Band (20 candles, multiplier 2.5).'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week SENSEX CE whose premium is nearest 500.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '15% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
+            ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
+            ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_rsi_cci_wr_pp_bb_fut: { sub: 'Quantman "ST RSI CCI WR PP BB With SL NIFTY Fut CE" — long NIFTY CE, 3-minute candles on the future', steps: [
+            ['Entry rule', 'On a closed 3-min candle of the NIFTY future ALL must hold: close above SuperTrend(10, 2), RSI(14) above 78, CCI(20) above 280, Williams %R(14) above -15, close above R1 of the traditional day pivots, and close above the upper Bollinger Band (20 candles, multiplier 3).'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '15% under the entry premium; no trailing stop on this run.'],
+            ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
+            ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_ema_rsi_cci: { sub: 'Quantman "ST EMA RSI CCI WR CPR BB with SL" — short NIFTY PE, 3-minute candles', steps: [
+            ['Entry rule', 'On a closed 3-min candle ALL must hold: close below SuperTrend(10, 2) and EMA(200), RSI(20) below 30, CCI(20) below -200, Williams %R(14) below -85, close below the lower Bollinger Band(20, 2), close below S1 of today\'s CPR, and that CPR is narrow (width under 0.2 %).'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week PE whose premium is nearest 250.'],
+            ['Exit', 'A candle closes with RSI(20) above 45, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
+            ['Stop-loss', '15 % under the entry premium; trailing: for every 5 % (X) the premium rises, the stop moves up 5 % (Y) of the entry premium.'],
+            ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
         hilega_milega: { sub: 'RSI(9) with a green EMA(3) and red volume-weighted MA(21) on the RSI', steps: [
             ['Bull zone', 'RSI above 50, the red line above 50 and under the RSI. (Bear zone is the mirror.)'],
             ['Signal', 'Once the zone turns on, the first candle that closes beyond the previous candle\'s High (long) / Low (short) within the window.'],
@@ -1158,7 +1324,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // SuperTrend + BB + RSI + R1, bought as the ≈250 CE; exit on SuperTrend break
-            if (strat === 'st_bb_rsi') {
+            if (strat === 'st_bb_rsi' || strat === 'simpler_trader') {
                 endpoint = '/api/backtest/st-bb-rsi';
                 // An index buys its ≈premium weekly option; an F&O stock buys the ATM monthly one
                 // (the server prices it and ignores the premium box). ALL STOCKS is not one symbol.
@@ -1200,6 +1366,224 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.entry_end     = document.getElementById('sbrEntryEnd')?.value || '15:14';
                 payload.exit_cutoff   = document.getElementById('sbrExitCutoff')?.value || '15:14';
                 payload.max_trades_per_day = parseInt(document.getElementById('sbrMaxTrades')?.value || 2);
+            }
+
+            // ST + EMA + RSI + CCI + WR + CPR + BB: short index signal, bought as the ≈250 PE with a premium SL / TSL
+            if (strat === 'st_ema_rsi_cci') {
+                endpoint = '/api/backtest/st-ema-rsi-cci';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '3minute');
+                payload.premium        = parseFloat(sev('secPremium', 250));
+                payload.price_options  = document.getElementById('secPriceOptions')?.checked ?? true;
+                payload.direction      = sev('secDirection', 'short');
+                payload.st_period      = sen('secStLen', 10);
+                payload.st_mult        = sen('secStFactor', 2);
+                payload.ema_period     = sen('secEmaLen', 200);
+                payload.rsi_period     = sen('secRsiLen', 20);
+                payload.rsi_entry      = sen('secRsiEntry', 30);
+                payload.rsi_exit       = sen('secRsiExit', 45);
+                payload.cci_period     = sen('secCciLen', 20);
+                payload.cci_level      = sen('secCciLevel', -200);
+                payload.wr_period      = sen('secWrLen', 14);
+                payload.wr_level       = sen('secWrLevel', -85);
+                payload.bb_period      = sen('secBbLen', 20);
+                payload.bb_mult        = sen('secBbMult', 2);
+                payload.cpr_narrow     = sen('secCprNarrow', 0.2);
+                payload.use_cpr_narrow = document.getElementById('secUseCprNarrow')?.checked ?? true;
+                payload.sl_pct         = sen('secSlPct', 0);
+                payload.tsl_x          = sen('secTslX', 0);
+                payload.tsl_y          = sen('secTslY', 0);
+                payload.entry_start    = sev('secEntryStart', '09:15');
+                payload.entry_end      = sev('secEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('secExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('secMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('secCompound')?.checked ?? false;
+                payload.start_capital  = sen('secCapital', 25000);
+                payload.per_lot        = sen('secPerLot', 0);
+            }
+
+            // ST + RSI + PP + BB: long index signal, bought as the ≈250 CE with a premium SL / TSL
+            if (strat === 'st_rsi_pp_bb') {
+                endpoint = '/api/backtest/st-rsi-pp-bb';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '3minute');
+                payload.premium        = parseFloat(sev('srpPremium', 250));
+                payload.price_options  = document.getElementById('srpPriceOptions')?.checked ?? true;
+                payload.direction      = 'long';
+                payload.st_period      = sen('srpStLen', 10);
+                payload.st_mult        = sen('srpStFactor', 2.3);
+                payload.rsi_period     = sen('srpRsiLen', 14);
+                payload.rsi_level      = sen('srpRsiLevel', 70);
+                payload.bb_period      = sen('srpBbLen', 15);
+                payload.bb_mult        = sen('srpBbMult', 3);
+                payload.sl_pct         = sen('srpSlPct', 0);
+                payload.tsl_x          = sen('srpTslX', 0);
+                payload.tsl_y          = sen('srpTslY', 0);
+                payload.entry_start    = sev('srpEntryStart', '09:31');
+                payload.entry_end      = sev('srpEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('srpExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('srpMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('srpCompound')?.checked ?? false;
+                payload.start_capital  = sen('srpCapital', 25000);
+                payload.per_lot        = sen('srpPerLot', 0);
+            }
+
+            // ST + RSI + PP + BB + green candle: long NIFTY-future signal, bought as the ≈250 CE with a premium SL / TSL
+            if (strat === 'st_rsi_pp_bb_fut') {
+                endpoint = '/api/backtest/st-rsi-pp-bb-fut';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '5minute');
+                payload.premium        = parseFloat(sev('srfPremium', 250));
+                payload.price_options  = document.getElementById('srfPriceOptions')?.checked ?? true;
+                payload.direction      = 'long';
+                payload.require_green  = document.getElementById('srfGreen')?.checked ?? true;
+                payload.st_period      = sen('srfStLen', 10);
+                payload.st_mult        = sen('srfStFactor', 1.8);
+                payload.rsi_period     = sen('srfRsiLen', 20);
+                payload.rsi_level      = sen('srfRsiLevel', 68);
+                payload.bb_period      = sen('srfBbLen', 20);
+                payload.bb_mult        = sen('srfBbMult', 3.3);
+                payload.sl_pct         = sen('srfSlPct', 0);
+                payload.tsl_x          = sen('srfTslX', 0);
+                payload.tsl_y          = sen('srfTslY', 0);
+                payload.entry_start    = sev('srfEntryStart', '09:15');
+                payload.entry_end      = sev('srfEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('srfExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('srfMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('srfCompound')?.checked ?? false;
+                payload.start_capital  = sen('srfCapital', 25000);
+                payload.per_lot        = sen('srfPerLot', 0);
+            }
+
+            // ST + RSI + CPR (Demark) + BB: long SENSEX-index signal, bought as the ≈500 CE with a premium SL / TSL
+            if (strat === 'st_rsi_cpr_bb_sx') {
+                endpoint = '/api/backtest/st-rsi-cpr-bb-sx';
+                payload.symbol = 'SENSEX';
+                selectedSymbol = 'SENSEX';
+                symbolSearch.value = 'SENSEX';
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '5minute');
+                payload.premium        = parseFloat(sev('scxPremium', 500));
+                payload.price_options  = document.getElementById('scxPriceOptions')?.checked ?? true;
+                payload.direction      = 'long';
+                payload.st_period      = sen('scxStLen', 10);
+                payload.st_mult        = sen('scxStFactor', 1.5);
+                payload.rsi_period     = sen('scxRsiLen', 14);
+                payload.rsi_level      = sen('scxRsiLevel', 70);
+                payload.bb_period      = sen('scxBbLen', 20);
+                payload.bb_mult        = sen('scxBbMult', 2.5);
+                payload.cpr_wide       = sen('scxCprWide', 0.35);
+                payload.sl_pct         = sen('scxSlPct', 0);
+                payload.tsl_x          = sen('scxTslX', 0);
+                payload.tsl_y          = sen('scxTslY', 0);
+                payload.entry_start    = sev('scxEntryStart', '09:15');
+                payload.entry_end      = sev('scxEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('scxExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('scxMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 20);
+                payload.compounding    = document.getElementById('scxCompound')?.checked ?? false;
+                payload.start_capital  = sen('scxCapital', 25000);
+                payload.per_lot        = sen('scxPerLot', 0);
+            }
+
+            // ST + RSI + WR + CPR (Traditional, narrow) + BB (SX2): long SENSEX-index signal, bought as the ≈500 CE with a premium SL / TSL
+            if (strat === 'st_rsi_cpr_bb_wr_sx') {
+                endpoint = '/api/backtest/st-rsi-cpr-bb-wr-sx';
+                payload.symbol = 'SENSEX';
+                selectedSymbol = 'SENSEX';
+                symbolSearch.value = 'SENSEX';
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '5minute');
+                payload.premium        = parseFloat(sev('swxPremium', 500));
+                payload.price_options  = document.getElementById('swxPriceOptions')?.checked ?? true;
+                payload.direction      = 'long';
+                payload.st_period      = sen('swxStLen', 10);
+                payload.st_mult        = sen('swxStFactor', 1.5);
+                payload.rsi_period     = sen('swxRsiLen', 14);
+                payload.rsi_level      = sen('swxRsiLevel', 68);
+                payload.rsi_cap        = sen('swxRsiCap', 80);
+                payload.wr_period      = sen('swxWrLen', 14);
+                payload.wr_level       = sen('swxWrLevel', -10);
+                payload.bb_period      = sen('swxBbLen', 20);
+                payload.bb_mult        = sen('swxBbMult', 2.5);
+                payload.cpr_narrow     = sen('swxCprNarrow', 0.2);
+                payload.sl_pct         = sen('swxSlPct', 0);
+                payload.tsl_x          = sen('swxTslX', 0);
+                payload.tsl_y          = sen('swxTslY', 0);
+                payload.entry_start    = sev('swxEntryStart', '09:15');
+                payload.entry_end      = sev('swxEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('swxExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('swxMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 20);
+                payload.compounding    = document.getElementById('swxCompound')?.checked ?? false;
+                payload.start_capital  = sen('swxCapital', 25000);
+                payload.per_lot        = sen('swxPerLot', 0);
+            }
+
+            // ST + RSI + CCI + WR + PP + BB: long NIFTY-future signal, bought as the ≈250 CE with a premium SL / TSL
+            if (strat === 'st_rsi_cci_wr_pp_bb_fut') {
+                endpoint = '/api/backtest/st-rsi-cci-wr-pp-bb-fut';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '3minute');
+                payload.premium        = parseFloat(sev('scwPremium', 250));
+                payload.price_options  = document.getElementById('scwPriceOptions')?.checked ?? true;
+                payload.direction      = 'long';
+                payload.st_period      = sen('scwStLen', 10);
+                payload.st_mult        = sen('scwStFactor', 2);
+                payload.rsi_period     = sen('scwRsiLen', 14);
+                payload.rsi_level      = sen('scwRsiLevel', 78);
+                payload.cci_period     = sen('scwCciLen', 20);
+                payload.cci_level      = sen('scwCciLevel', 280);
+                payload.wr_period      = sen('scwWrLen', 14);
+                payload.wr_level       = sen('scwWrLevel', -15);
+                payload.bb_period      = sen('scwBbLen', 20);
+                payload.bb_mult        = sen('scwBbMult', 3);
+                payload.sl_pct         = sen('scwSlPct', 0);
+                payload.tsl_x          = sen('scwTslX', 0);
+                payload.tsl_y          = sen('scwTslY', 0);
+                payload.entry_start    = sev('scwEntryStart', '09:15');
+                payload.entry_end      = sev('scwEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('scwExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('scwMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('scwCompound')?.checked ?? false;
+                payload.start_capital  = sen('scwCapital', 25000);
+                payload.per_lot        = sen('scwPerLot', 0);
             }
 
             // MA Cross + HTF: index signal, optionally priced on the CE/PE
@@ -1355,7 +1739,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // ST + BB + RSI + R1: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'st_bb_rsi' || strat === 'hilega_milega' || strat === 'ma_htf')) {
+            if (data.success && data.task_id && (strat === 'st_bb_rsi' || strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -1377,7 +1761,38 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.success) {
                 if (data.warning) window.showNotification(data.warning, 'warning');
-                if (data.ran && data.ran.strategy === 'ma_htf') {
+                if (data.ran && data.ran.strategy === 'st_rsi_cpr_bb_wr_sx') {
+                    const r = data.ran, p = r.params;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, RSI ${p.rsi[0]}-${p.rsi[2]}, %R ${p.wr[0]} >${p.wr[1]}, BB ${p.bb.join('/')}, `
+                        + `CPR ${p.cpr_narrow ? 'narrow <' + p.cpr_narrow + '%' : 'any'}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`, 'info');
+                } else if (data.ran && data.ran.strategy === 'st_rsi_cpr_bb_sx') {
+                    const r = data.ran, p = r.params;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, RSI ${p.rsi[0]} >${p.rsi[1]}, BB ${p.bb.join('/')}, `
+                        + `CPR ${p.cpr_wide ? '<' + p.cpr_wide + '%' : 'any'}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`, 'info');
+                } else if (data.ran && (data.ran.strategy === 'st_rsi_pp_bb' || data.ran.strategy === 'st_rsi_pp_bb_fut')) {
+                    const r = data.ran, p = r.params;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, RSI ${p.rsi[0]} >${p.rsi[1]}, BB ${p.bb.join('/')}, `
+                        + `SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`, 'info');
+                } else if (data.ran && data.ran.strategy === 'st_rsi_cci_wr_pp_bb_fut') {
+                    const r = data.ran, p = r.params;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, RSI ${p.rsi[0]} >${p.rsi[1]}, CCI ${p.cci[0]} >${p.cci[1]}, `
+                        + `%R ${p.wr[0]} >${p.wr[1]}, BB ${p.bb.join('/')}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`, 'info');
+                } else if (data.ran && data.ran.strategy === 'st_ema_rsi_cci') {
+                    const r = data.ran, p = r.params;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, EMA ${p.ema}, RSI ${p.rsi[0]} <${p.rsi[1]} exit >${p.rsi[2]}, `
+                        + `CCI ${p.cci[0]} <${p.cci[1]}, %R ${p.wr[0]} <${p.wr[1]}, BB ${p.bb.join('/')}, `
+                        + `CPR ${p.use_cpr_narrow ? '<' + p.cpr_narrow + '%' : 'any'}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`, 'info');
+                } else if (data.ran && data.ran.strategy === 'ma_htf') {
                     const r = data.ran;
                     window.showNotification(
                         `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
@@ -2150,6 +2565,88 @@ document.addEventListener('DOMContentLoaded', function() {
     let lastData = null;
 
     function displayResults(data) {
+        _displayResultsCore(data);
+        applySimplerTraderStats(data);
+    }
+
+    // Simpler Trader's extra cards, in the Quantman run's own terms: ₹ = premium points × lots × lot
+    // size (gross, before brokerage), a streak is unbroken wins/losses (a flat trade breaks both),
+    // and Drawdown Days counts the trading days from the equity peak to the trough of the deepest drawdown.
+    function applySimplerTraderStats(data) {
+        const row  = document.getElementById('simplerStatsRow');
+        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx');
+        const setSub = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+        if (row) row.style.display = 'none';
+        // Simpler Trader's first row: Wins + Losses merge into one card and Net Outcome goes.
+        const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+        show('statWinsCard', !isSt); show('statLossesCard', !isSt); show('statOutcomeCard', !isSt);
+        show('statWinLossCard', isSt);
+        const r1 = document.getElementById('resultsRow1');
+        if (r1) r1.style.gridTemplateColumns = '';
+        // Simpler Trader is two rows of six: Profit Factor and Net P&L move up beside Total P&L, and the
+        // streak and max cards slot in before CAGR. Any other strategy puts every card back where it was.
+        const card = id => document.getElementById(id)?.closest('.stat-card');
+        const rtp = document.getElementById('rtpStatsRow');
+        const pf = card('statProfitFactor'), net = card('statNetRs'), cagr = card('statCagr');
+        const streak = card('statWinStreak'), maxpl = card('statMaxProfit');
+        if (r1 && rtp && row && pf && net && cagr && streak && maxpl) {
+            if (isSt) {
+                r1.appendChild(pf); r1.appendChild(net);
+                rtp.insertBefore(streak, cagr); rtp.insertBefore(maxpl, cagr);
+            } else {
+                rtp.insertBefore(pf, rtp.firstChild);
+                rtp.insertBefore(net, cagr);
+                row.appendChild(streak); row.appendChild(maxpl);
+            }
+        }
+        if (isSt) {
+            const t = id => document.getElementById(id)?.textContent || '0';
+            const wEl = document.getElementById('statWinLossW'), lEl = document.getElementById('statWinLossL');
+            if (wEl) wEl.textContent = t('statWins');
+            if (lEl) lEl.textContent = t('statLosses');
+        }
+        if (!isSt) { setSub('statAvgWinSub', 'pts per win'); setSub('statAvgLossSub', 'pts per loss'); return; }
+        const trades = ((data && data.trades) || []).filter(t => t.pnl != null)
+            .slice().sort((a, b) => String(a.entry_time).localeCompare(String(b.entry_time)));
+        if (!trades.length || !row) return;
+        const lotVal = Math.max(1, parseFloat(document.getElementById('pcLotValue')?.value || 65));
+        const rs = t => t.gross_pnl_rupees != null ? Number(t.gross_pnl_rupees) : Number(t.pnl) * lotVal * (t.lots || 1);
+        const inr = v => (v < 0 ? '-' : '') + '₹' + Math.round(Math.abs(v)).toLocaleString('en-IN');
+        const vals = trades.map(rs);
+        const wins = vals.filter(v => v > 0), losses = vals.filter(v => v < 0);
+
+        const avgW = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : null;
+        const avgL = losses.length ? losses.reduce((a, b) => a + b, 0) / losses.length : null;
+        const awEl = document.getElementById('statAvgWin'), alEl = document.getElementById('statAvgLoss');
+        if (awEl) awEl.textContent = avgW != null ? '+' + inr(avgW) : '—';
+        if (alEl) alEl.textContent = avgL != null ? inr(avgL) : '—';
+        setSub('statAvgWinSub', 'points × lots × lot size');
+        setSub('statAvgLossSub', 'points × lots × lot size');
+
+        let w = 0, l = 0, maxW = 0, maxL = 0, cum = 0, peak = 0, peakIdx = -1, ddMax = 0, ddDays = 0;
+        vals.forEach((v, i) => {
+            if (v > 0) { w++; l = 0; } else if (v < 0) { l++; w = 0; } else { w = l = 0; }
+            maxW = Math.max(maxW, w); maxL = Math.max(maxL, l);
+            cum += v;
+            if (cum > peak) { peak = cum; peakIdx = i; }
+            if (peak - cum > ddMax) {
+                ddMax = peak - cum;
+                ddDays = new Set(trades.slice(peakIdx + 1, i + 1).map(t => String(t.entry_time).slice(0, 10))).size;
+            }
+        });
+        const best = Math.max(...vals), worst = Math.min(...vals);
+        const bestT = trades[vals.indexOf(best)], worstT = trades[vals.indexOf(worst)];
+        const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+        set('statMaxDDDates', ddDays + ' drawdown day' + (ddDays === 1 ? '' : 's') + ' (peak to trough)');
+        set('statWinStreak', String(maxW));
+        set('statLossStreak', String(maxL));
+        set('statMaxProfit', '+' + inr(best));
+        set('statMaxLoss', inr(worst));
+        set('statMaxProfitSub', String(bestT.entry_time).slice(0, 10));
+        set('statMaxLossSub', String(worstT.entry_time).slice(0, 10));
+    }
+
+    function _displayResultsCore(data) {
         lastData = data;
         const { summary } = data;
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
@@ -2177,7 +2674,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_bb_rsi' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
+        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_bb_rsi' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.

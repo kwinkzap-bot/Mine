@@ -153,7 +153,18 @@ class ZerodhaFirstHistory:
                 logger.warning(f'Zerodha history unavailable for {symbol} {interval} '
                                f"({'no BROKER_1 session' if kite is None else 'history probe refused'}) - using Fyers")
                 return None
-            rows = kite.historical_data(token, f'{from_date} 00:00:00', f'{to_date} 23:59:59', interval)
+            # Kite refuses a minute request spanning more than ~60 days, so a deep
+            # backfill (the backtest's head gap) is read a window at a time.
+            rows = []
+            if interval == 'minute':
+                lo, hi = date.fromisoformat(str(from_date)[:10]), date.fromisoformat(str(to_date)[:10])
+                while lo <= hi:
+                    end = min(lo + timedelta(days=55), hi)
+                    rows += kite.historical_data(token, f'{lo:%Y-%m-%d} 00:00:00',
+                                                 f'{end:%Y-%m-%d} 23:59:59', interval) or []
+                    lo = end + timedelta(days=1)
+            else:
+                rows = kite.historical_data(token, f'{from_date} 00:00:00', f'{to_date} 23:59:59', interval)
             out = []
             for r in rows or []:
                 d = r.get('date')

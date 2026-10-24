@@ -585,7 +585,7 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
     reqs = []
     for n, t in enumerate(work):
         reqs.append({'key': n, 'date': t['entry_time'][:10], 'side': 'BUY' if t.get('type') != 'Short' else 'SELL',
-                     'level': t['entry_price'], 'entry_time': _prior_minute(t['entry_time']),
+                     'level': t.get('level', t['entry_price']), 'entry_time': _prior_minute(t['entry_time']),
                      'exit_time': exit_minute(t), 'exit_price': t['exit_price']})
     # Breeze meters requests app-wide, so threads cannot beat that pace on a cold
     # run — but each strike probe also spends most of its time waiting on the

@@ -37,6 +37,7 @@ sessions are disk-cached there, so the first read of a long sheet is the
 slow one (one Breeze request per trade at 1.5/s).
 """
 
+import math
 import json
 import os
 import threading
@@ -255,6 +256,10 @@ def pick_strike(symbol: str, con: Dict[str, Any], day: date, entry_time: str, pr
     step = strike_step(symbol)
     itm = -1 if con['option_type'] == 'CE' else 1          # deeper ITM is a lower CALL strike, a higher PUT strike
     seen: Dict[int, tuple] = {}
+    # SENSEX's ladder is 100 apart on an index ~3x NIFTY's, so a given premium sits
+    # about twice as many strikes from the ATM: on 2024-06-03 (a gap day) the ≈500 CE
+    # was 12 strikes out and a 10-strike walk settled on a 1,274 premium.
+    max_strikes = PICK_MAX_STRIKES * (2 if (symbol or '').upper() == 'SENSEX' else 1)
 
     def price(strike: int) -> Optional[float]:
         if strike not in seen:
@@ -275,17 +280,27 @@ def pick_strike(symbol: str, con: Dict[str, Any], day: date, entry_time: str, pr
     cur = atm
     if p0 != premium:
         jump = int(round((premium - p0) / (PICK_DELTA_GUESS * step)))
-        cur = atm + (itm if jump > 0 else -itm) * max(1, min(abs(jump), PICK_MAX_STRIKES - 2)) * step
+        way = itm if jump > 0 else -itm
+        cur = atm + way * max(1, min(abs(jump), max_strikes - 2)) * step
+        while cur != atm and price(cur) is None and len(seen) < max_strikes // 2 + 2:
+            cur -= way * step                  # the jump landed on a strike with no print: come back towards the ATM
         if price(cur) is None:
             cur = atm
     # One strike at a time towards the target until it sits between two neighbours.
-    while len(seen) < PICK_MAX_STRIKES:
+    while len(seen) < max_strikes:
         pc = price(cur)
         if pc is None:
             break
         towards = itm if premium > pc else -itm
         nxt = cur + towards * step
         pn = price(nxt)
+        # An illiquid strike has no print at the entry minute (3 Jun 2024: 77200-77700 had
+        # none, 78000 did, at 680): look past up to 10 such gaps for the next one that does.
+        for _ in range(10):
+            if pn is not None or len(seen) >= max_strikes:
+                break
+            nxt += towards * step
+            pn = price(nxt)
         if pn is None:
             break
         if (premium - pc) * (premium - pn) <= 0:     # bracketed (or exact)
@@ -800,7 +815,10 @@ def _plus_minutes(hhmm: str, mins: int) -> str:
 def _premium_stop(bars: List[Dict[str, Any]], entry: float, t_in: str, t_out: str,
                   sl_pct: float, tsl_x: float, tsl_y: float) -> Optional[Dict[str, Any]]:
     """First bar after `t_in` and up to `t_out` whose low reaches the stop — see legs_at."""
-    base = entry * (1.0 - sl_pct / 100.0)
+    def tick_up(v: float) -> float:        # Quantman's stop prices sit on the 0.05 tick, rounded UP
+        return math.ceil(round(v / 0.05, 6)) * 0.05
+
+    base = tick_up(entry * (1.0 - sl_pct / 100.0))
     stop = base
     for b in bars:
         if b['time'] <= t_in:
@@ -813,7 +831,7 @@ def _premium_stop(bars: List[Dict[str, Any]], entry: float, t_in: str, t_out: st
         if tsl_x > 0 and tsl_y > 0:
             steps = int(((b['high'] / entry - 1.0) * 100.0) // tsl_x)
             if steps > 0:
-                stop = max(stop, base + steps * tsl_y / 100.0 * entry)
+                stop = max(stop, tick_up(base + steps * tsl_y / 100.0 * entry))
     return None
 
 

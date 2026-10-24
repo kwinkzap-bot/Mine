@@ -19,7 +19,8 @@
         <div class="bt-header-controls">
             <span id="liveFlagBadge" class="bt-live-flag" style="display:none;" title="These params are currently running as a live algo"><span class="dot"></span>LIVE</span>
             <select id="strategyStatusSelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
-                <option value="live" selected>🔴 Live</option>
+                <option value="live">🔴 Live</option>
+                <option value="simpler" selected>🎓 Simpler Trader</option>
                 <option value="success">✅ Success</option>
                 <option value="testing">🧪 Testing</option>
                 <option value="failure">❌ Failure</option>
@@ -33,12 +34,19 @@
                 <option value="ema_pullback">📉 EMA Confluence Breakout</option>
                 <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
                 <option value="pivot_confluence">🎯 Pivot Confluence</option>
-                <option value="st_bb_rsi" selected>🚀 ST + BB + RSI + R1</option>
+                <option value="st_bb_rsi">🚀 ST + BB + RSI + R1</option>
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="ma_htf">📈 MA Cross + HTF</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="ha_supertrend">🕯️ Heikin-Ashi + SuperTrend</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
+                <option value="simpler_trader" selected>🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
+                <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
+                <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
+                <option value="st_rsi_pp_bb_fut">🎓 4. ST RSI PP BB + SL NIFTY Fut (Quantman CE)</option>
+                <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
+                <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
+                <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -858,6 +866,620 @@
                 </fieldset>
             </div>
 
+            <!-- ST + EMA + RSI + CCI + WR + CPR + BB (Quantman "ST EMA RSI CCI WR CPR BB with SL NIFTY PE"):
+                 short signal on the index, bought as the ≈250 PE with a premium SL / TSL
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_ema_rsi_cci_engine.py. -->
+            <div id="stEmaParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="secDirection">Direction</label>
+                    <select id="secDirection">
+                        <option value="short" selected>Short (PE)</option>
+                        <option value="long">Long (CE, mirror)</option>
+                        <option value="both">Both</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="secPriceOptions">Price on options</label>
+                    <input type="checkbox" id="secPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the PE (short) / CE (long) and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="secPremium">Option Premium ≈</label>
+                    <select id="secPremium">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="secSlPct">Stop-loss %</label>
+                    <input type="number" id="secSlPct" value="15" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="secTslX">TSL X %</label>
+                    <input type="number" id="secTslX" value="5" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="secTslY">TSL Y %</label>
+                    <input type="number" id="secTslY" value="5" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="secCompound">Compounding</label>
+                    <input type="checkbox" id="secCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="secCapital">Start Capital (₹)</label>
+                    <input type="number" id="secCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="secPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="secPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="secStLen">SuperTrend length</label>
+                    <input type="number" id="secStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="secStFactor">SuperTrend factor</label>
+                    <input type="number" id="secStFactor" value="2" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="secEmaLen">EMA length</label>
+                    <input type="number" id="secEmaLen" value="200" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="secRsiLen">RSI length</label>
+                    <input type="number" id="secRsiLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="secRsiEntry">RSI below</label>
+                    <input type="number" id="secRsiEntry" value="30" min="1" max="99" step="1" title="Short entry. A long entry uses the mirror, 100 minus this.">
+                </div>
+                <div class="form-group">
+                    <label for="secCciLen">CCI length</label>
+                    <input type="number" id="secCciLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="secCciLevel">CCI below</label>
+                    <input type="number" id="secCciLevel" value="-200" step="10" title="Short entry. A long entry uses the mirror, the negative of this.">
+                </div>
+                <div class="form-group">
+                    <label for="secWrLen">Williams %R length</label>
+                    <input type="number" id="secWrLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="secWrLevel">Williams %R below</label>
+                    <input type="number" id="secWrLevel" value="-85" min="-100" max="0" step="1" title="Short entry. A long entry uses the mirror, -100 minus this.">
+                </div>
+                <div class="form-group">
+                    <label for="secBbLen">BB length</label>
+                    <input type="number" id="secBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="secBbMult">BB multiplier</label>
+                    <input type="number" id="secBbMult" value="2" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="secCprNarrow">CPR narrow under %</label>
+                    <input type="number" id="secCprNarrow" value="0.2" min="0" step="0.05" title="Today's CPR width, |TC-BC| as a % of the pivot, must be under this.">
+                </div>
+                <div class="form-group">
+                    <label for="secUseCprNarrow">Require narrow CPR</label>
+                    <input type="checkbox" id="secUseCprNarrow" checked>
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Exit &amp; window</legend>
+                <div class="form-group">
+                    <label for="secRsiExit">Exit when RSI above</label>
+                    <input type="number" id="secRsiExit" value="45" min="1" max="99" step="1" title="Short exit. A long exit uses the mirror, 100 minus this.">
+                </div>
+                <div class="form-group">
+                    <label for="secEntryStart">Entry From</label>
+                    <input type="time" id="secEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="secEntryEnd">Entry Until</label>
+                    <input type="time" id="secEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="secExitCutoff">Square-off</label>
+                    <input type="time" id="secExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="secMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="secMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ST + RSI + Pivot Points + BB (Quantman "ST RSI PP BB with SL NIFTY CE"): long signal on the
+                 NIFTY index, bought as the ≈250 CE with a premium SL / TSL and same-day re-entry
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_rsi_pp_bb_engine.py. -->
+            <div id="stRppParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="srpPriceOptions">Price on options</label>
+                    <input type="checkbox" id="srpPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="srpPremium">Option Premium ≈</label>
+                    <select id="srpPremium">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="srpSlPct">Stop-loss %</label>
+                    <input type="number" id="srpSlPct" value="15" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="srpTslX">TSL X %</label>
+                    <input type="number" id="srpTslX" value="15" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="srpTslY">TSL Y %</label>
+                    <input type="number" id="srpTslY" value="10" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="srpCompound">Compounding</label>
+                    <input type="checkbox" id="srpCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="srpCapital">Start Capital (₹)</label>
+                    <input type="number" id="srpCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="srpPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="srpPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="srpStLen">SuperTrend length</label>
+                    <input type="number" id="srpStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srpStFactor">SuperTrend factor</label>
+                    <input type="number" id="srpStFactor" value="2.3" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="srpRsiLen">RSI length</label>
+                    <input type="number" id="srpRsiLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srpRsiLevel">RSI above</label>
+                    <input type="number" id="srpRsiLevel" value="70" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srpBbLen">BB length</label>
+                    <input type="number" id="srpBbLen" value="15" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srpBbMult">BB multiplier</label>
+                    <input type="number" id="srpBbMult" value="3" min="0.5" step="0.1">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="srpEntryStart">Entry From</label>
+                    <input type="time" id="srpEntryStart" value="09:31">
+                </div>
+                <div class="form-group">
+                    <label for="srpEntryEnd">Entry Until</label>
+                    <input type="time" id="srpEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="srpExitCutoff">Square-off</label>
+                    <input type="time" id="srpExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="srpMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="srpMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ST + RSI + Pivot Points + BB (Quantman "ST RSI PP BB with SL NIFTY Fut CE"): long signal on the
+                 NIFTY FUTURE's 5-minute candles, bought as the ≈250 CE with a premium SL / TSL and same-day re-entry
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_rsi_pp_bb_fut_engine.py. -->
+            <div id="stRpfParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="srfPriceOptions">Price on options</label>
+                    <input type="checkbox" id="srfPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="srfPremium">Option Premium ≈</label>
+                    <select id="srfPremium">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="srfSlPct">Stop-loss %</label>
+                    <input type="number" id="srfSlPct" value="13" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="srfTslX">TSL X %</label>
+                    <input type="number" id="srfTslX" value="13" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="srfTslY">TSL Y %</label>
+                    <input type="number" id="srfTslY" value="10" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="srfCompound">Compounding</label>
+                    <input type="checkbox" id="srfCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="srfCapital">Start Capital (₹)</label>
+                    <input type="number" id="srfCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="srfPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="srfPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="srfStLen">SuperTrend length</label>
+                    <input type="number" id="srfStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srfStFactor">SuperTrend factor</label>
+                    <input type="number" id="srfStFactor" value="1.8" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="srfRsiLen">RSI length</label>
+                    <input type="number" id="srfRsiLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srfRsiLevel">RSI above</label>
+                    <input type="number" id="srfRsiLevel" value="68" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srfBbLen">BB length</label>
+                    <input type="number" id="srfBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="srfBbMult">BB multiplier</label>
+                    <input type="number" id="srfBbMult" value="3.3" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="srfGreen">Green candle</label>
+                    <input type="checkbox" id="srfGreen" checked title="Close must be above the same candle's open.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="srfEntryStart">Entry From</label>
+                    <input type="time" id="srfEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="srfEntryEnd">Entry Until</label>
+                    <input type="time" id="srfEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="srfExitCutoff">Square-off</label>
+                    <input type="time" id="srfExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="srfMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="srfMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ST + RSI + CCI + Williams %R + Pivot Points + BB (Quantman "ST RSI CCI WR PP BB With SL NIFTY Fut CE"): long
+                 signal on the NIFTY FUTURE's 3-minute candles, bought as the ≈250 CE with a premium SL / TSL and same-day re-entry
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_rsi_cci_wr_pp_bb_fut_engine.py. -->
+            <div id="stRcwParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="scwPriceOptions">Price on options</label>
+                    <input type="checkbox" id="scwPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="scwPremium">Option Premium ≈</label>
+                    <select id="scwPremium">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="scwSlPct">Stop-loss %</label>
+                    <input type="number" id="scwSlPct" value="15" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="scwTslX">TSL X %</label>
+                    <input type="number" id="scwTslX" value="0" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="scwTslY">TSL Y %</label>
+                    <input type="number" id="scwTslY" value="0" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="scwCompound">Compounding</label>
+                    <input type="checkbox" id="scwCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="scwCapital">Start Capital (₹)</label>
+                    <input type="number" id="scwCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="scwPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="scwPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="scwStLen">SuperTrend length</label>
+                    <input type="number" id="scwStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwStFactor">SuperTrend factor</label>
+                    <input type="number" id="scwStFactor" value="2" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="scwRsiLen">RSI length</label>
+                    <input type="number" id="scwRsiLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwRsiLevel">RSI above</label>
+                    <input type="number" id="scwRsiLevel" value="78" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwCciLen">CCI length</label>
+                    <input type="number" id="scwCciLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwCciLevel">CCI above</label>
+                    <input type="number" id="scwCciLevel" value="280" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="scwWrLen">Williams %R length</label>
+                    <input type="number" id="scwWrLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwWrLevel">Williams %R above</label>
+                    <input type="number" id="scwWrLevel" value="-15" min="-100" max="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwBbLen">BB length</label>
+                    <input type="number" id="scwBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scwBbMult">BB multiplier</label>
+                    <input type="number" id="scwBbMult" value="3" min="0.5" step="0.1">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="scwEntryStart">Entry From</label>
+                    <input type="time" id="scwEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="scwEntryEnd">Entry Until</label>
+                    <input type="time" id="scwEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="scwExitCutoff">Square-off</label>
+                    <input type="time" id="scwExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="scwMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="scwMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ST + RSI + CPR (Demark) + BB (Quantman "ST RSI CPR BB with SL Sensex CE"): long
+                 signal on the SENSEX index's 5-minute candles, bought as the ≈500 CE with a premium SL / TSL and same-day re-entry
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_rsi_cpr_bb_sx_engine.py. -->
+            <div id="stScxParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="scxPriceOptions">Price on options</label>
+                    <input type="checkbox" id="scxPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="scxPremium">Option Premium ≈</label>
+                    <select id="scxPremium">
+                        <option value="250">250</option>
+                        <option value="500" selected>500</option>
+                        <option value="750">750</option>
+                        <option value="1000">1000</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="scxSlPct">Stop-loss %</label>
+                    <input type="number" id="scxSlPct" value="17" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="scxTslX">TSL X %</label>
+                    <input type="number" id="scxTslX" value="15" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="scxTslY">TSL Y %</label>
+                    <input type="number" id="scxTslY" value="10" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="scxCompound">Compounding</label>
+                    <input type="checkbox" id="scxCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="scxCapital">Start Capital (₹)</label>
+                    <input type="number" id="scxCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="scxPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="scxPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="scxStLen">SuperTrend length</label>
+                    <input type="number" id="scxStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scxStFactor">SuperTrend factor</label>
+                    <input type="number" id="scxStFactor" value="1.5" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="scxRsiLen">RSI length</label>
+                    <input type="number" id="scxRsiLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scxRsiLevel">RSI above</label>
+                    <input type="number" id="scxRsiLevel" value="70" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scxBbLen">BB length</label>
+                    <input type="number" id="scxBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scxBbMult">BB multiplier</label>
+                    <input type="number" id="scxBbMult" value="2.5" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="scxCprWide">CPR wide at %</label>
+                    <input type="number" id="scxCprWide" value="0.35" min="0.05" step="0.05" title="Demark CPR width (|TC-BC| / pivot, in %) at or above this is a WIDE CPR; the entry wants it not wide. 0 = ignore.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="scxEntryStart">Entry From</label>
+                    <input type="time" id="scxEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="scxEntryEnd">Entry Until</label>
+                    <input type="time" id="scxEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="scxExitCutoff">Square-off</label>
+                    <input type="time" id="scxExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="scxMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="scxMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ST + RSI + WR + CPR (Traditional, narrow) + BB (Quantman "ST RSI CPR BB WR with SL SX2 CE"): long
+                 signal on the SENSEX index's 5-minute candles, bought as the ≈500 CE with a premium SL / TSL and same-day re-entry
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_rsi_cpr_bb_wr_sx_engine.py. -->
+            <div id="stSwxParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="swxPriceOptions">Price on options</label>
+                    <input type="checkbox" id="swxPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="swxPremium">Option Premium ≈</label>
+                    <select id="swxPremium">
+                        <option value="250">250</option>
+                        <option value="500" selected>500</option>
+                        <option value="750">750</option>
+                        <option value="1000">1000</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="swxSlPct">Stop-loss %</label>
+                    <input type="number" id="swxSlPct" value="15" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="swxTslX">TSL X %</label>
+                    <input type="number" id="swxTslX" value="15" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="swxTslY">TSL Y %</label>
+                    <input type="number" id="swxTslY" value="10" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="swxCompound">Compounding</label>
+                    <input type="checkbox" id="swxCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="swxCapital">Start Capital (₹)</label>
+                    <input type="number" id="swxCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="swxPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="swxPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="swxStLen">SuperTrend length</label>
+                    <input type="number" id="swxStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="swxStFactor">SuperTrend factor</label>
+                    <input type="number" id="swxStFactor" value="1.5" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="swxRsiLen">RSI length</label>
+                    <input type="number" id="swxRsiLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="swxRsiLevel">RSI above</label>
+                    <input type="number" id="swxRsiLevel" value="68" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="swxBbLen">BB length</label>
+                    <input type="number" id="swxBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="swxBbMult">BB multiplier</label>
+                    <input type="number" id="swxBbMult" value="2.5" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="swxRsiCap">RSI below</label>
+                    <input type="number" id="swxRsiCap" value="80" min="1" max="100" step="1" title="The entry also wants RSI under this line. 100 = no cap.">
+                </div>
+                <div class="form-group">
+                    <label for="swxWrLen">Williams %R length</label>
+                    <input type="number" id="swxWrLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="swxWrLevel">%R above</label>
+                    <input type="number" id="swxWrLevel" value="-10" min="-99" max="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="swxCprNarrow">CPR narrow under %</label>
+                    <input type="number" id="swxCprNarrow" value="0.2" min="0" step="0.05" title="Traditional CPR width (|TC-BC| / pivot, in %) under this is a NARROW CPR; the entry wants it narrow, and close above its R1. 0 = ignore the width.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="swxEntryStart">Entry From</label>
+                    <input type="time" id="swxEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="swxEntryEnd">Entry Until</label>
+                    <input type="time" id="swxEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="swxExitCutoff">Square-off</label>
+                    <input type="time" id="swxExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="swxMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="swxMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
             <!-- Pivot Confluence position sizing -->
             <div id="pivotConfluenceLotRow" class="form-row" style="display:none">
                 <div class="form-group">
@@ -1589,16 +2211,20 @@
                 <div class="results-section">
 
                     <!-- Row 1 — always visible -->
-                    <div class="results-row results-row-6">
+                    <div class="results-row results-row-6" id="resultsRow1">
                         <div class="stat-card ac-blue">
                             <span class="stat-card__lbl">Total Trades</span>
                             <span class="stat-card__val" id="statTotalTrades">0</span>
                         </div>
-                        <div class="stat-card ac-green">
+                        <div class="stat-card ac-blue" id="statWinLossCard" style="display:none;">
+                            <span class="stat-card__lbl">Win / Loss</span>
+                            <span class="stat-card__val"><span class="stat-val-green" id="statWinLossW">0</span> / <span class="stat-val-red" id="statWinLossL">0</span></span>
+                        </div>
+                        <div class="stat-card ac-green" id="statWinsCard">
                             <span class="stat-card__lbl">Wins</span>
                             <span class="stat-card__val stat-val-green" id="statWins">0</span>
                         </div>
-                        <div class="stat-card ac-red">
+                        <div class="stat-card ac-red" id="statLossesCard">
                             <span class="stat-card__lbl">Losses</span>
                             <span class="stat-card__val stat-val-red" id="statLosses">0</span>
                         </div>
@@ -1611,7 +2237,7 @@
                             <span class="stat-card__val" id="statTotalPnl">0</span>
                             <span class="stat-card__sub" id="statTotalPnlUnit">points</span>
                         </div>
-                        <div class="stat-card ac-green">
+                        <div class="stat-card ac-green" id="statOutcomeCard">
                             <span class="stat-card__lbl">Net Outcome</span>
                             <span class="stat-card__val" id="statOutcome">—</span>
                         </div>
@@ -1626,12 +2252,12 @@
                         <div class="stat-card ac-green">
                             <span class="stat-card__lbl">Avg Win</span>
                             <span class="stat-card__val stat-val-green" id="statAvgWin">—</span>
-                            <span class="stat-card__sub">pts per win</span>
+                            <span class="stat-card__sub" id="statAvgWinSub">pts per win</span>
                         </div>
                         <div class="stat-card ac-red">
                             <span class="stat-card__lbl">Avg Loss</span>
                             <span class="stat-card__val stat-val-red" id="statAvgLoss">—</span>
-                            <span class="stat-card__sub">pts per loss</span>
+                            <span class="stat-card__sub" id="statAvgLossSub">pts per loss</span>
                         </div>
                         <div class="stat-card ac-red">
                             <span class="stat-card__lbl">Max Drawdown (<span id="statMaxDDPts">—</span>)</span>
@@ -1647,6 +2273,20 @@
                             <span class="stat-card__lbl">CAGR</span>
                             <span class="stat-card__val" id="statCagr">—</span>
                             <span class="stat-card__sub" id="statCagrSub"></span>
+                        </div>
+                    </div>
+
+                    <!-- Row 2b — Simpler Trader only: streaks and extremes, in ₹ (points × lots × lot size) -->
+                    <div id="simplerStatsRow" class="results-row results-row-5" style="display:none;">
+                        <div class="stat-card ac-blue">
+                            <span class="stat-card__lbl">Win / Loss Streak</span>
+                            <span class="stat-card__val"><span class="stat-val-green" id="statWinStreak">—</span> / <span class="stat-val-red" id="statLossStreak">—</span></span>
+                            <span class="stat-card__sub">trades in a row</span>
+                        </div>
+                        <div class="stat-card ac-blue">
+                            <span class="stat-card__lbl">Max Profit / Loss</span>
+                            <span class="stat-card__val"><span class="stat-val-green" id="statMaxProfit">—</span> / <span class="stat-val-red" id="statMaxLoss">—</span></span>
+                            <span class="stat-card__sub"><span id="statMaxProfitSub">best</span> · <span id="statMaxLossSub">worst</span></span>
                         </div>
                     </div>
 

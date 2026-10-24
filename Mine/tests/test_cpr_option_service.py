@@ -300,3 +300,16 @@ def test_a_derived_expiry_past_the_last_session_is_replaced_by_the_exchanges_lis
     assert svc.contract('NIFTY', date(2026, 10, 14), 'SELL', 22700.0, days)['expiry'] == '2026-10-20'
     settled = svc.contract('NIFTY', date(2026, 10, 12), 'SELL', 22700.0, days)   # before the last session: never asked
     assert settled['expiry'] == '2026-10-13'
+
+
+def test_premium_stop_sits_on_the_005_tick_rounded_up():
+    """Quantman's export: a 13 % stop on 244.85 fills at 213.05 (213.0195 up to the tick),
+    251.95 at 219.2, and a trail step lands on the tick too (237.5 -> 0.97 x = 230.4)."""
+    from trading_app.service.cpr_option_service import _premium_stop
+    bar = lambda lo: [{'time': '09:19', 'open': 250.0, 'high': 250.0, 'low': lo, 'close': lo}]
+    assert _premium_stop(bar(200), 244.85, '09:18', '15:14', 13, 15, 10)['price'] == 213.05
+    assert _premium_stop(bar(200), 251.95, '09:18', '15:14', 13, 15, 10)['price'] == 219.2
+    rise = [{'time': '09:19', 'open': 237.5, 'high': 275.0, 'low': 237.0, 'close': 270.0},
+            {'time': '09:20', 'open': 250.0, 'high': 250.0, 'low': 200.0, 'close': 205.0}]
+    hit = _premium_stop(rise, 237.5, '09:18', '15:14', 13, 15, 10)
+    assert hit['price'] == 230.4 and hit['kind'] == 'Trailing SL'

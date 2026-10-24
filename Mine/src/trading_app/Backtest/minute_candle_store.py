@@ -170,8 +170,8 @@ def get_minute_history(provider, token, symbol: str, start_date: str, end_date: 
                 fetched = _fetch(provider, token, start_date, gap_end.strftime('%Y-%m-%d'))
                 if fetched is not None:
                     entry["df"] = _merge(entry["df"], fetched)
-                entry["earliest"] = start
-                changed = True
+                    entry["earliest"] = start      # a failed fetch must not mark the gap as filled
+                    changed = True
 
             # Tail gap: newer days requested than stored. Closed days are
             # fetched once and kept forever; only re-request from the last
