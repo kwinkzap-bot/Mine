@@ -195,8 +195,12 @@ class StBbRsiEngine:
                  require_green: bool = False, direction: str = 'long',
                  rsi_lower: Optional[float] = None, htf: str = 'off',
                  use_rsi: bool = True, use_bb: bool = True, use_st: bool = True,
-                 use_pivot: bool = True):
+                 use_pivot: bool = True, positional: bool = False):
         self.df = df.copy()
+        # Positional: no square-off and no end-of-day exit; a trade is carried across
+        # sessions until SuperTrend turns against it (the 1-hour timeframe), and
+        # `max_trades_per_day` then caps ENTRIES per day.
+        self.positional = bool(positional)
         # Each indicator can be switched out of the rule. Off, it neither gates the entry
         # nor (SuperTrend) ends the trade: the exit is then the square-off clock only.
         self.use_rsi, self.use_bb = bool(use_rsi), bool(use_bb)
@@ -287,7 +291,8 @@ class StBbRsiEngine:
                  st_mult=self.st_mult, entry_start=self.entry_start, entry_end=self.entry_end,
                  exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
                  require_green=self.require_green, direction=self.direction, htf=self.htf,
-                 use_rsi=self.use_rsi, use_bb=self.use_bb, use_st=self.use_st, use_pivot=self.use_pivot)
+                 use_rsi=self.use_rsi, use_bb=self.use_bb, use_st=self.use_st, use_pivot=self.use_pivot,
+                 positional=self.positional)
         P.update(over)
         if 'rsi_level' in over and 'rsi_lower' not in over:     # a swept upper line keeps the mirror
             P['rsi_lower'] = 100.0 - P['rsi_level']
@@ -355,6 +360,9 @@ class StBbRsiEngine:
         if not len(cand):
             return trades
         starts, ends = b['starts'], b['ends']
+        if P['positional']:                             # one continuous run, no day boundaries
+            return self._day(0, len(c) - 1, cand, o, c, signal, st_dir, st_line, rsi_v, lv,
+                             tmin, b['ts'], P)
         day_of = np.searchsorted(starts, cand, side='right') - 1
         for d in np.unique(day_of):
             a_, b_ = int(starts[d]), int(ends[d])
@@ -366,39 +374,48 @@ class StBbRsiEngine:
     def _day(self, a, b, idxs, o, c, signal, st_dir, st_line, rsi_v, lv, tmin, ts, P):
         out = []
         free_from = a                                   # a new trade cannot start before the last one ended
+        pos = P['positional']
+        cutoff = 10 ** 9 if pos else P['exit_cutoff']   # positional: no clock exit
+        per_day: Dict[str, int] = {}
         for i in idxs:
-            if len(out) >= P['max_trades_per_day']:
+            if pos:
+                if per_day.get(ts[i][:10], 0) >= P['max_trades_per_day']:
+                    continue
+            elif len(out) >= P['max_trades_per_day']:
                 break
             if i < free_from or i >= b:
                 continue
             e = i + 1                                   # filled at the next open
-            if tmin[e] >= P['exit_cutoff']:
+            if tmin[e] >= cutoff:
                 break
             is_long = signal[i] == 1
             exit_flip = -1 if is_long else 1             # SuperTrend turning against the trade
             entry = o[e]
-            exit_k, exit_px, reason = b, c[b], 'EOD Exit'
+            exit_k, exit_px, reason = b, c[b], ('Still Open' if pos else 'EOD Exit')
             for k in range(e, b + 1):
-                if k > e and tmin[k] >= P['exit_cutoff']:
+                if k > e and tmin[k] >= cutoff:
                     exit_k, exit_px, reason = k, o[k], 'Time Exit'
                     break
                 if P['use_st'] and st_dir[k] == exit_flip:               # SuperTrend broke against us on this close
                     name = 'SuperTrend Down' if is_long else 'SuperTrend Up'
-                    if k < b and tmin[k + 1] < P['exit_cutoff']:
+                    if k < b and tmin[k + 1] < cutoff:
                         exit_k, exit_px, reason = k + 1, o[k + 1], name
                     else:
                         # The flip is only known when this candle closes, which is at or
                         # after the square-off minute: by then the clock has already
                         # squared the trade off (the live algo does exactly that).
-                        exit_k, exit_px, reason = k, c[k], 'Time Exit'
+                        exit_k, exit_px, reason = k, c[k], ('Still Open' if pos else 'Time Exit')
                     break
             pnl = (exit_px - entry) if is_long else (entry - exit_px)
+            if pos:
+                per_day[ts[i][:10]] = per_day.get(ts[i][:10], 0) + 1
             out.append({
                 'entry_time': ts[e],
                 # A square-off is a clock event, not a candle one: Quantman sells at
                 # 15:14 itself, not at the open of the next 3-minute bar (15:15).
                 'exit_time': (ts[exit_k][:11] + f"{P['exit_cutoff'] // 60:02d}:{P['exit_cutoff'] % 60:02d}:00"
                               if reason == 'Time Exit' else ts[exit_k]),
+                'days_held': (pd.Timestamp(ts[exit_k][:10]) - pd.Timestamp(ts[e][:10])).days,
                 'type': 'Long' if is_long else 'Short',
                 'pattern': 'ST+BB+RSI+R1' if is_long else 'ST+BB+RSI+S1',
                 'entry_price': round(float(entry), 2), 'exit_price': round(float(exit_px), 2),

@@ -5303,6 +5303,7 @@ def run_st_bb_rsi_backtest_api():
             use_bb=bool(data.get('use_bb', True)),
             use_st=bool(data.get('use_st', True)),
             use_pivot=bool(data.get('use_pivot', True)),
+            positional=(interval == '60minute'),     # 1 Hour is a carried trade, not an intraday one
         )
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -5329,7 +5330,7 @@ def run_st_bb_rsi_backtest_api():
                            require_green=engine.require_green, direction=engine.direction, htf=engine.htf,
                            use_rsi=engine.use_rsi, use_bb=engine.use_bb, use_st=engine.use_st,
                            use_pivot=engine.use_pivot, premium=premium, price_options=price_options,
-                           compounding=compounding),
+                           compounding=compounding, positional=engine.positional),
             'index_signals': len(trades),
         }
 
@@ -5371,8 +5372,15 @@ def run_st_bb_rsi_backtest_api():
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
             try:
-                priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
-                                                   calendar=sessions)
+                if engine.positional:
+                    from trading_app.Backtest.hilega_milega_engine import attach_positional_legs
+                    priced, info = attach_positional_legs(symbol, trades, premium or 250.0, _progress,
+                                                          calendar=sessions,
+                                                          roll=str(data.get('roll', 'same')),
+                                                          min_sessions=max(0, int(data.get('min_sessions', 5) or 0)))
+                else:
+                    priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
+                                                       calendar=sessions)
                 warn = None
                 if info['unpriced'] or info['truncated']:
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "

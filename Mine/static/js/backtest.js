@@ -607,7 +607,15 @@ document.addEventListener('DOMContentLoaded', function() {
             if (sbrParamsRow) sbrParamsRow.style.display = 'grid';
             if (pcLotRow)     pcLotRow.style.display     = 'grid';
             if (intFg) intFg.style.display = '';
-            if (intervalSelect) intervalSelect.value = '3minute';
+            if (intervalSelect) {
+                // 1 Hour: _sbr_load_bars resamples the stored minutes to any width, anchored on 09:15.
+                if (![...intervalSelect.options].some(o => o.value === '60minute')) {
+                    const opt = new Option('1 Hour', '60minute');
+                    opt.dataset.hm = '1';       // removed again on the next strategy switch
+                    intervalSelect.add(opt);
+                }
+                intervalSelect.value = '3minute';
+            }
             if (startDateInput) startDateInput.value = '2019-04-01';
             updatePcInvestment();
 

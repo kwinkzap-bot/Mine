@@ -39368,8 +39368,26 @@
       "reason": "09:15 candle opened at 22,688 and closed at PDL/S1 22,601-22,650 (22,610), but a 133-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle closed under PDL/S1 (22,620-22,558) -> SELL under it; SL over its high; target 1:2",
       "setup_time": "09:20",
       "note": "Analysis added from the chart (Fyers 5-min): CPR 49.4 pts (0.216%), 09:15 candle O 22687.75 H 22697.55 L 22564.9 C 22610.3 | Trade by rule: 09:15 candle opened at 22,688 and closed at PDL/S1 22,601-22,650 (22,610), but a 133-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle closed under PDL/S1 (22,620-22,558) -> SELL under it; SL over its high; target 1:2; chart replay SL 09:35 -> 09:35"
+    },
+    {
+      "date": "2026-10-23",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Dec",
+      "first_candle": "In decision candle(doji) near R3(cam)",
+      "boxes": "Small",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Narrow CPR (12 pts) with the boxes 103 pts away on both sides \u2014 too thin to trade against, entries only on a break of a box or a rejection from one \u2014 none by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 11.8 pts (0.052%), 09:15 candle O 22742.2 H 22787.25 L 22718.15 C 22726.25 | Trade by rule: narrow CPR (12 pts) with the boxes 103 pts away on both sides \u2014 too thin to trade against, entries only on a break of a box or a rejection from one \u2014 none by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-22 15:50",
+  "extended_at": "2026-10-23 17:23",
   "backfilled_from": "2018-01-01"
 }
