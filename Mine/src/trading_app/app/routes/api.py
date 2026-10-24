@@ -7666,6 +7666,202 @@ def weekly_cpr_breakout_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+# ── Heikin-Ashi + SuperTrend swing backtest ──────────────────────────────────
+# A daily trend-following rule (Backtest/ha_supertrend_engine.py) run on every F&O
+# future stock, or one stock. Fyers daily bars through the shared per-stock disk
+# store under the Fyers-only key, as the Weekly CPR Breakout run above. Equity
+# (cash/delivery) P&L: each trade is `capital_per_trade` ₹ at the entry, less
+# `cost_pct` for the round trip. A background task the page polls.
+_hast_tasks: dict = {}
+_hast_tasks_lock = threading.Lock()
+
+
+@api_bp.route('/backtest/ha-supertrend', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_ha_supertrend_backtest_api():
+    """Start a Heikin-Ashi + SuperTrend backtest; returns {'task_id'} to poll at
+    /backtest/ha-supertrend/status/<task_id>.
+
+    Body: start_date, end_date; symbol ('' = every F&O future stock); direction
+    'both' | 'long' | 'short'; st_period (10), st_mult (3), st_source 'ha' | 'raw',
+    swing_len (8), fresh_bars (2), rr (2), partial (0.5 = share sold at the target),
+    opp_candles (2), max_risk_pct (25), be_after_t1 (false), stop_on_close (true: stop on a
+    daily close, exit next open - no same-day exit); capital_per_trade (25000),
+    cost_pct (0.2, round trip)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    data = request.get_json(silent=True) or {}
+    start_date_str = str(data.get('start_date') or '')
+    end_date_str = str(data.get('end_date') or '')
+    try:
+        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+
+    def _num(key, default, lo=None, hi=None):
+        try:
+            v = float(data.get(key, default))
+        except (TypeError, ValueError):
+            v = float(default)
+        if lo is not None:
+            v = max(lo, v)
+        return min(hi, v) if hi is not None else v
+
+    params = dict(
+        st_period=int(_num('st_period', 10, 1, 100)), st_mult=_num('st_mult', 3.0, 0.5, 20),
+        st_source='raw' if str(data.get('st_source', 'ha')).lower() == 'raw' else 'ha',
+        swing_len=int(_num('swing_len', 8, 1, 60)), fresh_bars=int(_num('fresh_bars', 2, 1, 10)),
+        rr=_num('rr', 2.0, 0.5, 10), partial=_num('partial', 0.5, 0, 1),
+        opp_candles=int(_num('opp_candles', 2, 1, 5)), max_risk_pct=_num('max_risk_pct', 25.0, 0, 90),
+        be_after_t1=bool(data.get('be_after_t1', False)),
+        stop_on_close=bool(data.get('stop_on_close', True)),
+        direction=str(data.get('direction', 'both')).lower(),
+    )
+    # Daily and positional by rule (the talk: "day candle" for swing trades): any other
+    # timeframe is refused rather than silently run on daily bars.
+    interval = str(data.get('interval', 'day') or 'day').lower()
+    if interval not in ('day', '1day', 'd', '1d'):
+        return jsonify({'success': False,
+                        'error': 'Heikin-Ashi + SuperTrend runs on the DAILY timeframe only (positional).'}), 400
+    capital = _num('capital_per_trade', 25000.0, 1000)
+    cost_pct = _num('cost_pct', 0.2, 0, 5)
+    single = str(data.get('symbol', '') or '').strip().upper()
+
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    try:
+        lot_sizes = _fno_lot_sizes()
+    except FileNotFoundError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
+    universe, err = _wcb_universe(single, lot_sizes)
+    if err or universe is None:
+        return jsonify({'success': False, 'error': err}), 400
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': len(universe)}}
+    with _hast_tasks_lock:
+        _hast_tasks[task_id] = task
+
+    def _run():
+        import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from trading_app.Backtest.ha_supertrend_engine import HaSupertrendEngine, summarise_r
+        from trading_app.filters.candle_store import get_daily_history
+
+        daily_days = (end_dt - start_dt).days + 200        # run-in for the ATR and the first swing
+
+        def _one(symbol):
+            daily = get_daily_history(fyers, _wcb_token(symbol), f'fyers__{symbol}', daily_days,
+                                      end_date=end_dt)
+            if daily is None or daily.empty:
+                return None
+            daily = pd.DataFrame(daily[['open', 'high', 'low', 'close']].astype(float))
+            daily.index = pd.DatetimeIndex(pd.to_datetime(daily.index)).normalize()  # pyright: ignore[reportAttributeAccessIssue]
+            daily = daily[daily.index <= pd.Timestamp(end_dt)]
+            trades, _ = HaSupertrendEngine(daily, **params).run()
+            return [t for t in trades if t['signal_time'] >= start_date_str]
+
+        all_trades, failed, no_data, done = [], 0, 0, 0
+        try:
+            with ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {pool.submit(_one, s): s for s in universe}
+                for fut in as_completed(futures):
+                    sym = futures[fut]
+                    done += 1
+                    task['progress'] = {'done': done, 'total': len(universe)}
+                    try:
+                        trades = fut.result()
+                    except Exception as e:
+                        failed += 1
+                        logger.error(f"[HaSupertrend] {sym} failed: {e}")
+                        continue
+                    if trades is None:
+                        no_data += 1
+                        continue
+                    for t in trades:
+                        gross = t['pnl_pct']
+                        net = round(gross - cost_pct, 2)
+                        t.update({
+                            'symbol': sym, 'gross_pnl_pct': gross, 'pnl_pct': net,
+                            'r_multiple': round(net / t['risk_pct'], 2) if t['risk_pct'] else 0.0,
+                            'result': 'WIN' if net > 0 else ('LOSS' if net < 0 else 'SCRATCH'),
+                            'capital': round(capital, 2), 'lot_size': 1,
+                            'qty': int(capital // t['entry_price']) if t['entry_price'] else 0,
+                            'gross_pnl_rupees': round(capital * gross / 100.0, 2),
+                            'brokerage': round(capital * cost_pct / 100.0, 2),
+                            'pnl_rupees': round(capital * net / 100.0, 2),
+                            'sl_risk_rupees': round(capital * t['risk_pct'] / 100.0, 2),
+                        })
+                        all_trades.append(t)
+            all_trades.sort(key=lambda t: t['entry_time'])
+            summary = summarise_r(all_trades)
+            running = peak = dd = 0.0
+            for t in all_trades:
+                running += t['pnl_rupees']
+                peak = max(peak, running)
+                dd = max(dd, peak - running)
+            summary.update({
+                'total_pnl_rupees': round(sum(t['pnl_rupees'] for t in all_trades), 2),
+                'total_gross_pnl_rupees': round(sum(t['gross_pnl_rupees'] for t in all_trades), 2),
+                'total_brokerage': round(sum(t['brokerage'] for t in all_trades), 2),
+                'max_drawdown_rupees': round(dd, 2), 'capital_per_trade': capital, 'cost_pct': cost_pct,
+                'partial_hits': sum(1 for t in all_trades if t['partial_price'] is not None),
+                'stops': sum(1 for t in all_trades if 'Stop' in t['exit_reason']),
+                'trend_exits': sum(1 for t in all_trades if t['exit_reason'] in (
+                    'SuperTrend flip', f"{params['opp_candles']} opposite HA candles")),
+                'still_open': sum(1 for t in all_trades if t['exit_reason'] == 'Still Open'),
+                'symbols_scanned': len(universe),
+                'symbols_with_trades': len({t['symbol'] for t in all_trades}),
+                'symbols_no_data': no_data, 'symbols_failed': failed, 'multi_symbol': True,
+                'pnl_basis': 'equity', 'params': params,
+                'timeframe': '1 Day', 'holding': 'positional',
+                'avg_days_held': round(sum((datetime.strptime(t['exit_time'], '%Y-%m-%d') - datetime.strptime(t['entry_time'], '%Y-%m-%d')).days for t in all_trades) / len(all_trades), 1) if all_trades else 0.0,
+            })
+            cap = float(capital)
+            end_value = cap + summary['total_pnl_rupees']
+            span = (end_dt - start_dt).days
+            summary['cagr_pct'] = (round(((end_value / cap) ** (365.0 / span) - 1) * 100, 2)
+                                   if span > 0 and end_value > 0 else 0.0)
+            logger.info('[HaSupertrend] %s..%s: %d stocks (%d no data, %d failed) -> %d trades',
+                        start_date_str, end_date_str, len(universe), no_data, failed, len(all_trades))
+            task['payload'] = {'trades': all_trades, 'summary': summary}
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[HaSupertrend] run failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'hast-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+@api_bp.route('/backtest/ha-supertrend/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def ha_supertrend_status(task_id):
+    """Poll a Heikin-Ashi + SuperTrend backtest started by the POST above."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _hast_tasks_lock:
+        task = _hast_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task['progress'], 'elapsed': elapsed})
+    with _hast_tasks_lock:
+        _hast_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 # ── NIFTY option selling (short strangle) backtest ───────────────────────────
 # Sell the OTM CE + PE of the current weekly at 09:30, buy back at 10:30, each
 # leg stopped on its own at +sl% with one re-entry at cost. The rule and its

@@ -273,6 +273,10 @@ document.addEventListener('DOMContentLoaded', function() {
     function isWcbStrategy() {
         return (document.getElementById('strategySelect')?.value || '') === 'weekly_cpr_breakout';
     }
+    // Heikin-Ashi + SuperTrend runs over the same F&O stock universe.
+    function isHastStrategy() {
+        return (document.getElementById('strategySelect')?.value || '') === 'ha_supertrend';
+    }
 
     // Kicked off only after ALL_STOCKS above exists — its completion callback
     // runs applyLotValueForSymbol(), which reads it.
@@ -284,7 +288,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show every matching symbol (not just the first 15) — the list
         // itself scrolls (#symbolList has max-height + overflow-y in CSS),
         // same as the Open Interest page's symbol dropdown.
-        const pool = (isEmaStrategy() || isWcbStrategy()) ? [ALL_STOCKS, ...allSymbols] : allSymbols;
+        const pool = (isEmaStrategy() || isWcbStrategy() || isHastStrategy()) ? [ALL_STOCKS, ...allSymbols] : allSymbols;
         const matches = pool.filter(s => {
             if (!filter) return true;
             return s.includes(filter);
@@ -453,7 +457,10 @@ document.addEventListener('DOMContentLoaded', function() {
         // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
         document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
         document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
+        { const _iv = document.getElementById('interval'); if (_iv) _iv.disabled = false; }   // HA + SuperTrend locks it
         if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
+        const hastParamsRow = document.getElementById('haSupertrendParamsRow');
+        if (hastParamsRow) hastParamsRow.style.display = 'none';
         const osParamsRow   = document.getElementById('optionSellingParamsRow');
         if (osParamsRow)   osParamsRow.style.display   = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
@@ -672,6 +679,26 @@ document.addEventListener('DOMContentLoaded', function() {
             const wcbEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2017-01-01';
             if (wcbEnd) wcbEnd.value = localToday();
+        } else if (val === 'ha_supertrend') {
+            if (hastParamsRow) hastParamsRow.style.display = 'grid';
+            // Daily candles, positional by rule: the Timeframe shows 1 Day and is locked.
+            // ALL STOCKS = every F&O future stock.
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) {
+                if (![...intervalSelect.options].some(o => o.value === 'day')) {
+                    const opt = new Option('1 Day (positional)', 'day');
+                    opt.dataset.hm = '1';
+                    intervalSelect.add(opt);
+                }
+                [...intervalSelect.options].forEach(o => { const ok = o.value === 'day'; o.hidden = !ok; o.disabled = !ok; });
+                intervalSelect.value = 'day';
+                intervalSelect.disabled = true;
+            }
+            selectedSymbol = ALL_STOCKS;
+            symbolSearch.value = ALL_STOCKS;
+            const hastEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = '2019-01-01';
+            if (hastEnd) hastEnd.value = localToday();
         } else if (val === 'option_selling') {
             if (osParamsRow) osParamsRow.style.display = 'grid';
             // NIFTY only, on a fixed 1-minute basis: no Symbol / Timeframe.
@@ -689,7 +716,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // "All Stocks" only exists for EMA Confluence Breakout — every other
         // strategy backtests one symbol, so switching away falls back to the
         // default rather than posting a symbol the backend can't resolve.
-        if (val !== 'ema_pullback' && val !== 'weekly_cpr_breakout' && selectedSymbol === ALL_STOCKS) {
+        if (val !== 'ema_pullback' && val !== 'weekly_cpr_breakout' && val !== 'ha_supertrend' && selectedSymbol === ALL_STOCKS) {
             selectedSymbol = 'NIFTY';
             symbolSearch.value = selectedSymbol;
             applyLotValueForSymbol(selectedSymbol);
@@ -758,7 +785,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'st_bb_rsi'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -820,6 +847,130 @@ document.addEventListener('DOMContentLoaded', function() {
         strategySelect.addEventListener('change', updateStrategyView);
         // Set initial state
         updateStrategyView();
+    }
+
+
+    // ── Backtest logic popup (💡 Logic button, explains the selected strategy) ──
+    const BT_LOGIC = {
+        second_candle: { sub: 'Index breakout of the 2nd 30-second candle', steps: [
+            ['Range', 'Take the 2nd 30-second candle of the day (09:15:30–09:16:00). Its High and Low are the range.'],
+            ['Entry', 'Price goes above the High → BUY. Price goes below the Low → SELL. Only the first breakout of the day is taken.'],
+            ['Stop', 'The opposite end of that candle (Low for a BUY, High for a SELL).'],
+            ['Target', 'Entry plus the chosen ratio × risk (default 1 : 3).'],
+            ['Exit', 'Stop, target, or the cut-off time (default 15:25) — whichever comes first. One trade per day.']],
+            note: 'Signals are always on the index. With the option P&L switch, profit is shown on a modelled CE/PE premium instead of index points.' },
+        option_breakout: { sub: 'Same idea, but on the option\'s own candles', steps: [
+            ['Strike', 'At the open, pick the strike nearest to NIFTY\'s open. Watch both its CE and its PE.'],
+            ['Range', 'Each option\'s own 2nd 30-second candle gives its High and Low.'],
+            ['Entry', 'When that option\'s premium breaks above its candle High, BUY it at the High. CE and PE are independent — both can trade on one day.'],
+            ['Stop / Target', 'Stop = candle Low minus a small buffer (₹1). Target = entry + ratio × risk.'],
+            ['Exit', 'Stop, target, cut-off time or end of day. Each option trades at most once a day.']],
+            note: 'All prices and P&L are real option premiums (needs a Breeze login for old dates).' },
+        expiry_breakout: { sub: 'Monthly expiry-day High/Low breakout on 1-hour candles', steps: [
+            ['Levels', 'Take the High and Low of each monthly expiry day.'],
+            ['Signal (BUY)', 'A 1-hour candle touches the expiry High and CLOSES above it, touches at least one of the 20/50/100/200 EMAs, and closes above all four.'],
+            ['Signal (SELL)', 'The exact mirror: closes below the expiry Low and below all four EMAs.'],
+            ['Entry', 'At the open of the next 1-hour candle.'],
+            ['Stop / Target', 'Stop is the expiry Low (BUY) or High (SELL). Target uses your chosen ratio.'],
+            ['Repeat', 'After an exit, scanning starts again — a cycle can have several trades.']] },
+        thirty_min_fakeout: { sub: 'Opening 30-minute fake breakout that reverses', steps: [
+            ['Setup (SELL)', 'Candle 1 green; candle 2 green and closes above candle 1\'s High. Candle 3 pokes above candle 2\'s High but closes back below it (a fakeout), without closing too deep and with a dominant upper wick.'],
+            ['Entry', 'After 10:45, SELL when price breaks below candle 3\'s Low (minus a 0.05 % buffer).'],
+            ['Stop', 'Candle 3\'s High.'],
+            ['Target', 'The day\'s low (backtest-only; known in hindsight).'],
+            ['BUY side', 'Exact mirror image: red, red, then a fake break below that closes back above.'],
+            ['Exit', 'Stop, target, or cut-off (default 15:18).']] },
+        swing_momentum: { sub: 'Monthly momentum stock portfolio', steps: [
+            ['Rank', 'Rank every stock in the chosen index by average momentum over 3, 6 and 9 months.'],
+            ['Buy', 'Hold the Top N stocks, equal weight.'],
+            ['Rebalance', 'On each weekly/monthly/quarterly date, sell stocks that fell below the exit rank and buy the new leaders.'],
+            ['Result', 'Portfolio value, CAGR and max drawdown over time. Optional monthly top-up money.']] },
+        ema_pullback: { sub: 'Daily candle that touches all four EMAs', steps: [
+            ['Signal', 'A daily candle whose range touches EMA 20, 50, 100 and 200 at once. Green = BUY setup, red = SELL setup.'],
+            ['Entry', 'Break of that candle\'s High (BUY) or Low (SELL) on a later day. A newer signal replaces an unfilled older one.'],
+            ['Stop', 'The signal candle\'s opposite end.'],
+            ['Target', 'A % of the entry price (default 5 %).'],
+            ['Filter', 'Optionally skip trades where the target pays less than the stop risks.']] },
+        scalp_pullback: { sub: '2-minute trend pullback with candle patterns', steps: [
+            ['Bias', 'EMA10 above EMA20 with price above both → longs only. The reverse → shorts only.'],
+            ['Trend', 'The trend must have been running for a while and made a decent move first.'],
+            ['Pullback', 'Price comes back to touch the EMA, usually after sweeping a recent swing low/high (stop hunt).'],
+            ['Trigger', 'A Morning Star / Bullish Engulfing (long) or Evening Star / Bearish Engulfing (short). Dojis and huge candles are skipped.'],
+            ['Entry / Stop', 'Stop-entry beyond the pattern\'s extreme; stop at its opposite end; too-wide stops are skipped.']] },
+        pivot_confluence: { sub: '"Yesterday decides today" — pivots + VWAP + EMA', steps: [
+            ['Direction', 'Compute pivots from yesterday\'s H/L/C. Above the pivot → calls only; below → puts only.'],
+            ['Day bias', 'A full candle body beyond yesterday\'s High (up) or Low (down).'],
+            ['Confluence', '20 EMA and VWAP agree with the direction, price on the right side of the 20 EMA.'],
+            ['Timing', 'Enter after 09:30, plus an optional second window in the afternoon; max 2 trades a day.'],
+            ['Target', 'The next pivot level (R1/R2… or S1/S2…). Entries already parked at R2/S2 are refused.']] },
+        st_bb_rsi: { sub: '4 indicators agree on a 3-minute candle', steps: [
+            ['Long signal', 'On a closed 3-min candle: RSI(14) > 70, close above the upper Bollinger Band, close above SuperTrend, and close above yesterday\'s R1 pivot.'],
+            ['Short signal', 'The mirror image (when Sell is enabled).'],
+            ['Entry', 'At the NEXT candle\'s open. Index points, optionally re-priced on the ≈250 premium option.'],
+            ['Exit', 'There is no stop or target. Exit when a candle closes back through SuperTrend, or at the 15:15 square-off.'],
+            ['Limit', 'Limited number of trades per day, one open at a time.']] },
+        hilega_milega: { sub: 'RSI(9) with a green EMA(3) and red volume-weighted MA(21) on the RSI', steps: [
+            ['Bull zone', 'RSI above 50, the red line above 50 and under the RSI. (Bear zone is the mirror.)'],
+            ['Signal', 'Once the zone turns on, the first candle that closes beyond the previous candle\'s High (long) / Low (short) within the window.'],
+            ['Entry', 'Next candle\'s open.'],
+            ['Stop', 'The signal candle\'s Low (long) / High (short), usually on a candle CLOSE.'],
+            ['Exit', 'Stop, optional target, red line leaving the zone (or RSI dropping to green line), or the square-off unless positional.']] },
+        ma_htf: { sub: '11/21 moving-average cross, only with the higher-timeframe trend', steps: [
+            ['Cross', 'Fast SMMA(11) crosses slow SMMA(21).'],
+            ['Filter', 'Only take it if price is on the same side of the higher-timeframe MA(21).'],
+            ['Confirm', 'Within a few candles, a candle closes beyond all three lines with the cross still intact. Otherwise the move is skipped as already run.'],
+            ['Entry', 'Next candle\'s open (not before 09:30).'],
+            ['Exit', 'Fixed stop in points, opposite cross, or square-off. Optional trailing stop and partial booking.']] },
+        weekly_cpr_breakout: { sub: 'Stock opens inside weekly CPR, then breaks the first-hour candle', steps: [
+            ['Setup', 'The day opens inside the weekly CPR; the CPR is narrow; the first hour is a decent-sized candle that is not already at weekly R3/S3.'],
+            ['Direction', 'Red first-hour candle → SELL, green → BUY.'],
+            ['Entry', 'After 10:15, when price breaks the first-hour candle\'s High (BUY) or Low (SELL).'],
+            ['Stop / Target', 'Stop = candle\'s other end. Target = ratio × the candle\'s range.'],
+            ['Exit', 'Stop (wins if both touched in one bar), target, or 15:20. One trade per stock per day.']] },
+        ha_supertrend: { sub: 'Daily Heikin-Ashi + SuperTrend swing', steps: [
+            ['Signal', 'SuperTrend (10,3) on Heikin-Ashi candles has just flipped to your side, and the HA candle is your colour.'],
+            ['Entry', 'Next day\'s open.'],
+            ['Stop', 'Recent swing low (long) / high (short). Too-wide stops are skipped.'],
+            ['Target', 'Ratio × risk — a part of the position is sold there.'],
+            ['Trail', 'The rest is held until SuperTrend flips back, two opposite HA candles appear, or the stop is hit.']] },
+        option_selling: { sub: 'NIFTY weekly short strangle', steps: [
+            ['Days', 'Monday, Tuesday and Friday (configurable).'],
+            ['Entry', 'At 09:30, SELL one OTM CE and one OTM PE of the current weekly expiry.'],
+            ['Stop', 'Each leg has its own stop, a % above its entry premium (e.g. 60 %).'],
+            ['Re-entry', 'If a leg stops out, sell it again once when its premium returns to the original entry.'],
+            ['Exit', 'No target. Anything still open is bought back at 10:30.']] },
+    };
+    const btLogicBtn   = document.getElementById('btLogicBtn');
+    const btLogicModal = document.getElementById('btLogicModal');
+    if (btLogicBtn && btLogicModal && strategySelect) {
+        document.body.appendChild(btLogicModal);
+        const esc = (t) => String(t).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+        let prevOverflow = '';
+        const closeLogic = () => {
+            btLogicModal.style.display = 'none';
+            document.body.style.overflow = prevOverflow;
+        };
+        btLogicBtn.addEventListener('click', () => {
+            const key  = strategySelect.value;
+            const info = BT_LOGIC[key];
+            const name = strategySelect.options[strategySelect.selectedIndex]?.textContent || key;
+            document.getElementById('btLogicTitle').textContent = name + ' — Logic';
+            document.getElementById('btLogicSub').textContent = info ? info.sub : '';
+            document.getElementById('btLogicBody').innerHTML = info
+                ? '<ol style="margin:0;padding-left:20px;line-height:1.6;font-size:14px;">'
+                    + info.steps.map(s => `<li style="margin-bottom:8px;"><b>${esc(s[0])}:</b> ${esc(s[1])}</li>`).join('')
+                    + '</ol>'
+                    + (info.note ? `<div style="margin-top:10px;font-size:12.5px;opacity:.8;">ℹ️ ${esc(info.note)}</div>` : '')
+                : '<p>No explanation written for this strategy yet.</p>';
+            btLogicModal.style.display = 'flex';
+            prevOverflow = document.body.style.overflow;
+            document.body.style.overflow = 'hidden';
+        });
+        document.getElementById('btLogicClose').addEventListener('click', closeLogic);
+        btLogicModal.addEventListener('click', (e) => { if (e.target === btLogicModal) closeLogic(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && btLogicModal.style.display !== 'none') closeLogic();
+        });
     }
 
     // ── 30-Min Opening Fakeout: Rule popup ─────────────────────────────
@@ -900,6 +1051,10 @@ document.addEventListener('DOMContentLoaded', function() {
         // Also backgrounded: every F&O stock, minutes on a cold cache.
         if (_strat === 'weekly_cpr_breakout') {
             await runWeeklyCprBreakout();
+            return;
+        }
+        if (_strat === 'ha_supertrend') {
+            await runHaSupertrend();
             return;
         }
         const symbol = symbolSearch.value.toUpperCase();
@@ -1466,6 +1621,66 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // ── Heikin-Ashi + SuperTrend — start + poll ─────────────────────────
+    // Daily bars for every F&O stock, mostly off the per-stock disk store.
+    let _hastRun = 0;
+    async function runHaSupertrend() {
+        const v = (id, d) => document.getElementById(id)?.value ?? d;
+        const payload = {
+            symbol:     selectedSymbol === ALL_STOCKS ? '' : (selectedSymbol || '').toUpperCase(),
+            start_date: v('startDate'), end_date: v('endDate'),
+            interval:   'day',
+            direction:  v('hastDirection', 'both'),
+            st_period:  parseInt(v('hastPeriod', 10)), st_mult: parseFloat(v('hastMult', 3)),
+            st_source:  v('hastSource', 'ha'),
+            swing_len:  parseInt(v('hastSwing', 8)), fresh_bars: parseInt(v('hastFresh', 2)),
+            rr:         parseFloat(v('hastRr', 2)), partial: parseFloat(v('hastPartial', 50)) / 100,
+            opp_candles: parseInt(v('hastOpp', 2)), max_risk_pct: parseFloat(v('hastMaxRisk', 25)),
+            be_after_t1: v('hastBe', 'no') === 'yes',
+            stop_on_close: v('hastStopClose', 'yes') === 'yes',
+            capital_per_trade: parseFloat(v('hastCapital', 25000)), cost_pct: parseFloat(v('hastCost', 0.2)),
+        };
+        const myRun = ++_hastRun;
+        resultsArea.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader('Running Heikin-Ashi + SuperTrend', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/ha-supertrend', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _hastRun) return;            // superseded
+                data = await (await fetch(`/api/backtest/ha-supertrend/status/${taskId}`)).json();
+                if (myRun !== _hastRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Running Heikin-Ashi + SuperTrend',
+                    `${p.done || 0} / ${p.total || 0} stocks · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            const s = data.summary || {};
+            if (s.symbols_no_data) window.showNotification(
+                `${s.symbols_no_data} stock${s.symbols_no_data === 1 ? '' : 's'} had no Fyers data for this range`, 'info');
+            displayResults(data);
+        } catch (err) {
+            if (myRun !== _hastRun) return;
+            _hideOptLoader();
+            console.error('HA + SuperTrend error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
     // ── 30-Sec Option Breakout — start + poll ───────────────────────────
     // The server fetches one contract's premiums per Breeze request at 1.5
     // req/s, so a run is minutes, not seconds. It answers with a task id and
@@ -1948,7 +2163,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const isEmaAll = !!(isEma && summary && summary.multi_symbol);
         // Weekly CPR Breakout runs every F&O future stock, each trade sized
         // server-side (lots × that stock's lot size) — the same ₹ cards.
-        const isWcb  = strategySelect && strategySelect.value === 'weekly_cpr_breakout';
+        const isHast = strategySelect && strategySelect.value === 'ha_supertrend';
+        // HA + SuperTrend is a many-stock ₹ run shaped like Weekly CPR Breakout's.
+        const isWcb  = strategySelect && (strategySelect.value === 'weekly_cpr_breakout' || isHast);
         const isMultiSymbol = isTmf || isEmaAll || isWcb;
         // Scalp Pullback is single-symbol and points-based like the 2nd-candle
         // breakout, so it takes the same ₹ cards off its own lot inputs.
@@ -2161,7 +2378,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 // The EMA scan's per-entry figure is an average across very
                 // differently priced stocks, so say how many actually traded.
                 if (isEmaAll || isWcb) sub += ` · ${summary.symbols_with_trades || 0}/${summary.symbols_scanned || 0} stocks`;
-                if (isWcb) sub += ` · ${summary.targets || 0} target / ${summary.stops || 0} SL / ${summary.time_exits || 0} time`;
+                if (isWcb && !isHast) sub += ` · ${summary.targets || 0} target / ${summary.stops || 0} SL / ${summary.time_exits || 0} time`;
+                if (isHast) sub += ` · ${summary.partial_hits || 0} 1:R hit / ${summary.stops || 0} SL / ${summary.trend_exits || 0} trend exit · ${summary.expectancy_r}R expectancy`;
                 if (isWcb && summary.pnl_basis === 'stock_option') sub += ' · ATM option P&L';
                 netSubEl.textContent = sub;
             }

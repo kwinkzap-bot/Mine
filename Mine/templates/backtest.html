@@ -37,8 +37,10 @@
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="ma_htf">📈 MA Cross + HTF</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
+                <option value="ha_supertrend">🕯️ Heikin-Ashi + SuperTrend</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
             </select>
+            <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
             <button id="smGoLiveBtn" class="btn-sm-golive-main" style="display:none;">🚀 Go Live</button>
@@ -1267,6 +1269,78 @@
                 </div>
             </div>
 
+            <!-- Heikin-Ashi + SuperTrend — a daily trend-following swing rule over every F&O future
+                 stock. See Backtest/ha_supertrend_engine.py. Backtest only. -->
+            <div id="haSupertrendParamsRow" class="form-row" style="display:none">
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Rule</label>
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        <b>Daily timeframe, positional</b> — trades are carried overnight for days or weeks, with no intraday square-off. Daily Heikin-Ashi candles + SuperTrend. <b>Entry</b>: SuperTrend flips to your side
+                        within the last <i>Fresh</i> candles and the HA candle is your colour; the order fills
+                        the NEXT open. <b>Stop</b>: swing low (long) / high (short) of the last <i>Swing</i>
+                        candles. <b>Target</b>: 1:<i>R</i> sells the <i>Partial</i> share; the rest trails until
+                        SuperTrend flips back or <i>N</i> opposite HA candles print (exit next open), or the stop.
+                        Equity P&amp;L: each trade is the Capital per trade, less the round-trip cost.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label for="hastDirection">Direction</label>
+                    <select id="hastDirection"><option value="both" selected>Both</option><option value="long">Long only</option><option value="short">Short only</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="hastPeriod">ST Period</label>
+                    <input type="number" id="hastPeriod" value="10" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="hastMult">ST Factor</label>
+                    <input type="number" id="hastMult" value="3" min="0.5" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="hastSource" title="SuperTrend computed on the HA candles (as a chart set to HA draws it) or on the raw candles.">ST on</label>
+                    <select id="hastSource"><option value="ha" selected>Heikin-Ashi candles</option><option value="raw">Raw candles</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="hastSwing" title="Stop = lowest low / highest high of this many candles up to the signal candle.">Swing (candles)</label>
+                    <input type="number" id="hastSwing" value="8" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="hastFresh" title="Only a flip within this many candles is a new trend worth entering; older is skipped.">Fresh (candles)</label>
+                    <input type="number" id="hastFresh" value="2" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="hastRr">Target (1:R)</label>
+                    <input type="number" id="hastRr" value="2" min="0.5" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="hastPartial" title="Share of the position sold at the target; the rest trails.">Partial at target %</label>
+                    <input type="number" id="hastPartial" value="50" min="0" step="10">
+                </div>
+                <div class="form-group">
+                    <label for="hastOpp" title="Exit (next open) after this many consecutive opposite-colour HA candles.">Opposite HA candles</label>
+                    <input type="number" id="hastOpp" value="2" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="hastMaxRisk" title="Skip a trade whose stop is wider than this % of the entry. 0 = off.">Max stop %</label>
+                    <input type="number" id="hastMaxRisk" value="25" min="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="hastStopClose" title="Yes: the stop triggers only when a daily candle CLOSES beyond it and exits at the next open, so a trade is never squared off the day it is taken. No: intrabar stop, filled at the stop (or the open on a gap).">Stop on daily close</label>
+                    <select id="hastStopClose"><option value="yes" selected>Yes (positional)</option><option value="no">No (intrabar)</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="hastBe">Stop to entry after T1</label>
+                    <select id="hastBe"><option value="no" selected>No</option><option value="yes">Yes</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="hastCapital">Capital / trade (₹)</label>
+                    <input type="number" id="hastCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="hastCost" title="Brokerage + STT + charges, taken off every trade.">Cost % (round trip)</label>
+                    <input type="number" id="hastCost" value="0.2" min="0" step="0.05">
+                </div>
+            </div>
+
             <div id="swingMomentumParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label>Index</label>
@@ -1647,6 +1721,19 @@
     </div><!-- /bt-layout -->
 
 </div><!-- /backtest-container -->
+
+<div class="bt-modal-overlay" id="btLogicModal" style="display:none">
+    <div class="bt-modal-box">
+        <div class="bt-modal-hdr">
+            <div class="bt-modal-hdr-text">
+                <div class="bt-modal-title" id="btLogicTitle">Backtest logic</div>
+                <div class="bt-modal-subtitle" id="btLogicSub"></div>
+            </div>
+            <button class="bt-modal-close" id="btLogicClose" type="button">✕</button>
+        </div>
+        <div class="bt-modal-body" id="btLogicBody"></div>
+    </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/backtest.js') }}?v={{ sv('js/backtest.js') }}"></script>
