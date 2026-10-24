@@ -5303,8 +5303,14 @@ def run_st_bb_rsi_backtest_api():
             use_bb=bool(data.get('use_bb', True)),
             use_st=bool(data.get('use_st', True)),
             use_pivot=bool(data.get('use_pivot', True)),
+            use_wr=bool(data.get('use_wr', False)),
+            wr_period=int(data.get('wr_period', 14) or 14),
+            wr_level=float(data.get('wr_level', -30) if data.get('wr_level') not in (None, '') else -30),
             positional=(interval == '60minute'),     # 1 Hour is a carried trade, not an intraday one
         )
+        sl_pct = max(0.0, float(data.get('sl_pct') or 0))      # premium stop-loss / trailing SL, 0 = none
+        tsl_x  = max(0.0, float(data.get('tsl_x') or 0))
+        tsl_y  = max(0.0, float(data.get('tsl_y') or 0))
         trades, summary = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
         summary = summarise(trades)
@@ -5329,7 +5335,8 @@ def run_st_bb_rsi_backtest_api():
                            max_trades_per_day=engine.max_trades_per_day,
                            require_green=engine.require_green, direction=engine.direction, htf=engine.htf,
                            use_rsi=engine.use_rsi, use_bb=engine.use_bb, use_st=engine.use_st,
-                           use_pivot=engine.use_pivot, premium=premium, price_options=price_options,
+                           use_pivot=engine.use_pivot, use_wr=engine.use_wr, wr=[engine.wr_period, engine.wr_level],
+                           sl_pct=sl_pct, tsl=[tsl_x, tsl_y], premium=premium, price_options=price_options,
                            compounding=compounding, positional=engine.positional),
             'index_signals': len(trades),
         }
@@ -5380,7 +5387,7 @@ def run_st_bb_rsi_backtest_api():
                                                           min_sessions=max(0, int(data.get('min_sessions', 5) or 0)))
                 else:
                     priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
-                                                       calendar=sessions)
+                                                       calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y)
                 warn = None
                 if info['unpriced'] or info['truncated']:
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "

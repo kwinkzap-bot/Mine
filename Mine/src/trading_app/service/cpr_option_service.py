@@ -797,10 +797,37 @@ def _plus_minutes(hhmm: str, mins: int) -> str:
     return t.strftime('%H:%M')
 
 
+def _premium_stop(bars: List[Dict[str, Any]], entry: float, t_in: str, t_out: str,
+                  sl_pct: float, tsl_x: float, tsl_y: float) -> Optional[Dict[str, Any]]:
+    """First bar after `t_in` and up to `t_out` whose low reaches the stop — see legs_at."""
+    base = entry * (1.0 - sl_pct / 100.0)
+    stop = base
+    for b in bars:
+        if b['time'] <= t_in:
+            continue
+        if b['time'] > t_out:
+            break
+        if b['low'] <= stop:
+            return {'price': round(min(b['open'], stop), 2), 'time': b['time'],
+                    'kind': 'Trailing SL' if stop > base else 'Stop Loss'}
+        if tsl_x > 0 and tsl_y > 0:
+            steps = int(((b['high'] / entry - 1.0) * 100.0) // tsl_x)
+            if steps > 0:
+                stop = max(stop, base + steps * tsl_y / 100.0 * entry)
+    return None
+
+
 def legs_at(symbol: str, trades: List[Dict[str, Any]],
             premium: Optional[float] = None, span_min: int = 1,
-            source: str = 'spot', trading_days: Optional[List[date]] = None) -> Dict[str, Any]:
+            source: str = 'spot', trading_days: Optional[List[date]] = None,
+            sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0) -> Dict[str, Any]:
     """Price one option leg per trade in `trades`.
+
+    `sl_pct` / `tsl_x` / `tsl_y` put a stop on the PREMIUM (Quantman's leg stop-loss and
+    trailing SL): the stop rests `sl_pct` % under the entry premium and, for every
+    `tsl_x` % the premium has risen from entry, moves up `tsl_y` % of entry. A bar's low
+    through the stop sells at the stop (at the open if it gapped past) and the leg is
+    marked `stop`; the stop is tested before the bar's high can lift it. 0 = no stop.
 
     Each trade: {'date': 'YYYY-MM-DD', 'side': 'BUY'|'SELL', 'level': float,
                  'entry_time': 'HH:MM', 'exit_time': 'HH:MM' | None,
@@ -877,6 +904,10 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
                 leg['entry'] = round(b_in['close'], 2)
             if b_out:
                 leg['exit'] = round(b_out['close'], 2)
+            if sl_pct > 0 and leg['entry'] is not None and t_out:
+                hit = _premium_stop(bars, leg['entry'], t_in, t_out, sl_pct, tsl_x, tsl_y)
+                if hit:
+                    leg.update(exit=hit['price'], exit_time=hit['time'], stop=hit['kind'])
             if leg['entry'] is not None and leg['exit'] is not None:
                 # Long premium on both sides: a CALL for a BUY, a PUT for a
                 # SELL. Exit minus entry is the move either way.

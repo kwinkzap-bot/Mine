@@ -1188,6 +1188,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.use_bb        = document.getElementById('sbrUseBb')?.checked ?? true;
                 payload.use_st        = document.getElementById('sbrUseSt')?.checked ?? true;
                 payload.use_pivot     = document.getElementById('sbrUsePivot')?.checked ?? true;
+                payload.use_wr        = document.getElementById('sbrUseWr')?.checked ?? false;
+                payload.wr_period     = parseInt(document.getElementById('sbrWrLen')?.value || 14);
+                payload.wr_level      = parseFloat(document.getElementById('sbrWrLevel')?.value ?? -30);
+                payload.sl_pct        = parseFloat(document.getElementById('sbrSlPct')?.value || 0);
+                payload.tsl_x         = parseFloat(document.getElementById('sbrTslX')?.value || 0);
+                payload.tsl_y         = parseFloat(document.getElementById('sbrTslY')?.value || 0);
                 payload.rsi_level     = parseFloat(document.getElementById('sbrRsi')?.value || 70);
                 payload.rsi_lower     = parseFloat(document.getElementById('sbrRsiLower')?.value || 30);
                 payload.entry_start   = document.getElementById('sbrEntryStart')?.value || '09:15';

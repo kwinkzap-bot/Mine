@@ -176,3 +176,32 @@ def test_htf_1hour_uses_last_completed_hour_only():
     h = htf_direction(df, '1hour', 3, 2)
     assert h[:12].tolist() == [0] * 12               # the first hour has no completed candle behind it
     assert h[-1] == 1
+
+
+# ── Quantman parity: Williams %R gate and the premium stop / trail ──────────
+
+def test_williams_r_range_and_extremes():
+    from trading_app.Backtest.st_bb_rsi_engine import williams_r
+    h = np.array([10, 11, 12, 13, 14.0]); l = h - 2; c = h.copy()
+    out = williams_r(h, l, c, 3)
+    assert np.isnan(out[:2]).all()
+    assert out[-1] == 0.0                      # close at the highest high
+    c2 = l.copy(); c2[-1] = 10.0
+    assert williams_r(h, l, c2, 3)[-1] == -100.0
+
+
+def test_premium_stop_and_trail():
+    from trading_app.service.cpr_option_service import _premium_stop
+    mk = lambda t, o, h, l, c: {'time': t, 'open': o, 'high': h, 'low': l, 'close': c}
+    # plain 13% stop on entry 100 -> 87
+    bars = [mk('09:30', 100, 100, 100, 100), mk('09:31', 99, 100, 85, 90)]
+    assert _premium_stop(bars, 100, '09:30', '09:40', 13, 0, 0) == {'price': 87.0, 'time': '09:31', 'kind': 'Stop Loss'}
+    # gap below the stop sells at the open
+    bars = [mk('09:30', 100, 100, 100, 100), mk('09:31', 80, 82, 78, 80)]
+    assert _premium_stop(bars, 100, '09:30', '09:40', 13, 0, 0)['price'] == 80
+    # +31% high lifts the stop two steps of 10% -> 87 + 20 = 107; next low 105 trails out
+    bars = [mk('09:30', 100, 100, 100, 100), mk('09:31', 100, 131, 100, 130), mk('09:32', 130, 130, 105, 110)]
+    hit = _premium_stop(bars, 100, '09:30', '09:40', 13, 15, 10)
+    assert hit == {'price': 107.0, 'time': '09:32', 'kind': 'Trailing SL'}
+    # never hit, and bars after the exit minute are ignored
+    assert _premium_stop(bars, 100, '09:30', '09:31', 13, 15, 10) is None

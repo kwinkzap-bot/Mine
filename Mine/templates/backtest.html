@@ -475,6 +475,34 @@
                     <input type="number" id="sbrStFactor" value="2" min="0.1" step="0.1">
                 </div>
                 </fieldset>
+                <fieldset class="ind-block"><legend>Williams %R</legend>
+                <div class="form-group">
+                    <label for="sbrUseWr">On</label>
+                    <input type="checkbox" id="sbrUseWr" checked title="Long needs %R above the level; short is the mirror (below -100 - level). Quantman: Williams R(14) above -30.">
+                </div>
+                <div class="form-group">
+                    <label for="sbrWrLen">Length</label>
+                    <input type="number" id="sbrWrLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="sbrWrLevel">Above</label>
+                    <input type="number" id="sbrWrLevel" value="-30" min="-99" max="0" step="1">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Option SL / Trail</legend>
+                <div class="form-group">
+                    <label for="sbrSlPct">Stop-loss %</label>
+                    <input type="number" id="sbrSlPct" value="13" min="0" step="1" title="Stop on the option premium, this % under the entry. 0 = none (exit on SuperTrend only). Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="sbrTslX">Trail X %</label>
+                    <input type="number" id="sbrTslX" value="15" min="0" step="1" title="For every X% the premium rises from entry...">
+                </div>
+                <div class="form-group">
+                    <label for="sbrTslY">Trail Y %</label>
+                    <input type="number" id="sbrTslY" value="10" min="0" step="1" title="...the stop moves up Y% of the entry premium. Needs a stop-loss %.">
+                </div>
+                </fieldset>
                 <fieldset class="ind-block"><legend>Higher-TF SuperTrend</legend>
                 <div class="form-group">
                     <label for="sbrHtf">Timeframe</label>
@@ -494,11 +522,11 @@
                 </div>
                 <div class="form-group">
                     <label for="sbrBbLen">BB Length</label>
-                    <input type="number" id="sbrBbLen" value="20" min="2" step="1">
+                    <input type="number" id="sbrBbLen" value="15" min="2" step="1">
                 </div>
                 <div class="form-group">
                     <label for="sbrBbMult">BB Mult</label>
-                    <input type="number" id="sbrBbMult" value="2" min="0.1" step="0.1">
+                    <input type="number" id="sbrBbMult" value="3" min="0.1" step="0.1">
                 </div>
                 <div class="form-group">
                     <label for="sbrBbOffset">BB Offset</label>

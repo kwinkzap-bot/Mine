@@ -101,6 +101,14 @@ def rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     return out
 
 
+def williams_r(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Williams %R: -100 * (highest high - close) / (highest high - lowest low) over `period`."""
+    hh = pd.Series(high).rolling(period).max().to_numpy()
+    ll = pd.Series(low).rolling(period).min().to_numpy()
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return -100.0 * (hh - close) / (hh - ll)
+
+
 def bollinger(close: np.ndarray, period: int = 20, mult: float = 2.0, offset: int = 0
               ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     s = pd.Series(close)
@@ -195,7 +203,8 @@ class StBbRsiEngine:
                  require_green: bool = False, direction: str = 'long',
                  rsi_lower: Optional[float] = None, htf: str = 'off',
                  use_rsi: bool = True, use_bb: bool = True, use_st: bool = True,
-                 use_pivot: bool = True, positional: bool = False):
+                 use_pivot: bool = True, positional: bool = False,
+                 use_wr: bool = False, wr_period: int = 14, wr_level: float = -30.0):
         self.df = df.copy()
         # Positional: no square-off and no end-of-day exit; a trade is carried across
         # sessions until SuperTrend turns against it (the 1-hour timeframe), and
@@ -205,6 +214,10 @@ class StBbRsiEngine:
         # nor (SuperTrend) ends the trade: the exit is then the square-off clock only.
         self.use_rsi, self.use_bb = bool(use_rsi), bool(use_bb)
         self.use_st, self.use_pivot = bool(use_st), bool(use_pivot)
+        # Williams %R gate (Quantman's "Williams R is above -30"): long needs %R above
+        # `wr_level`, the short mirror needs it below -100 - wr_level. Off by default so
+        # the live algos, which share signals(), are unchanged.
+        self.use_wr, self.wr_period, self.wr_level = bool(use_wr), max(2, int(wr_period)), float(wr_level)
         # Higher-timeframe SuperTrend gate on the trade's side (same length/factor as
         # the entry SuperTrend): 'off' | 'daily' | 'weekly' | 'monthly'.
         self.htf = htf if htf in HTF_CHOICES else 'off'
@@ -271,6 +284,8 @@ class StBbRsiEngine:
             elif kind == 'bb':
                 up, _, lo = bollinger(b['c'], key[0], key[1], key[2])
                 self._ind_cache[k] = (up, lo)
+            elif kind == 'wr':
+                self._ind_cache[k] = williams_r(b['h'], b['l'], b['c'], key[0])
             elif kind == 'htf':
                 self._ind_cache[k] = htf_direction(self.df, key[0], key[1], key[2])
             else:
@@ -292,7 +307,8 @@ class StBbRsiEngine:
                  exit_cutoff=self.exit_cutoff, max_trades_per_day=self.max_trades_per_day,
                  require_green=self.require_green, direction=self.direction, htf=self.htf,
                  use_rsi=self.use_rsi, use_bb=self.use_bb, use_st=self.use_st, use_pivot=self.use_pivot,
-                 positional=self.positional)
+                 positional=self.positional, use_wr=self.use_wr, wr_period=self.wr_period,
+                 wr_level=self.wr_level)
         P.update(over)
         if 'rsi_level' in over and 'rsi_lower' not in over:     # a swept upper line keeps the mirror
             P['rsi_lower'] = 100.0 - P['rsi_level']
@@ -326,7 +342,11 @@ class StBbRsiEngine:
             if P['use_pivot']:
                 long_sig &= c > b['r1']
                 short_sig &= c < b['s1']
-            if not (P['use_rsi'] or P['use_bb'] or P['use_st'] or P['use_pivot']
+            if P['use_wr']:
+                wr_v = self._ind('wr', P['wr_period'])
+                long_sig &= wr_v > P['wr_level']
+                short_sig &= wr_v < -100.0 - P['wr_level']
+            if not (P['use_rsi'] or P['use_bb'] or P['use_st'] or P['use_pivot'] or P['use_wr']
                     or P['htf'] != 'off' or P['require_green']):
                 # Nothing left to decide a side: a signal on every bar is not a strategy.
                 long_sig, short_sig = ~yes, ~yes
@@ -543,7 +563,8 @@ def _prior_minute(stamp: str) -> str:
 
 
 def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float = 250.0,
-                       bar_minutes: int = 5, progress=None, calendar=None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                       bar_minutes: int = 5, progress=None, calendar=None,
+                       sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Re-price each index trade on the ≈`premium` CE. Returns (priced trades,
     info). A priced trade keeps its index move in `index_*` and carries the
     premium points in `pnl`; a trade whose leg could not be priced is dropped
@@ -583,7 +604,7 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
     results = []
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
         futures = [pool.submit(cos.legs_at, symbol, ch, premium=premium, span_min=1,
-                               trading_days=calendar)
+                               trading_days=calendar, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y)
                    for ch in chunks]
         for n, fut in enumerate(futures, 1):
             results.append(fut.result())
@@ -603,8 +624,11 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
         # entry_price / exit_price stay the INDEX's — they are what the chart
         # shows and what the signal and the SuperTrend exit were decided on.
         # Only the order is the option: its premiums and P&L ride beside them.
+        stopped = {}
+        if leg.get('stop'):         # the premium's own stop (or its trail) ended the trade first
+            stopped = dict(exit_reason=leg['stop'], exit_time=f"{t['entry_time'][:10]} {leg['exit_time']}:00")
         priced.append(dict(
-            t,
+            t, **stopped,
             index_pnl=t['pnl'],
             entry_premium=leg['entry'], exit_premium=leg['exit'], pnl=pnl,
             result='WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
