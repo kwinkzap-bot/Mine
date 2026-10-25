@@ -279,7 +279,7 @@ def test_each_algo_has_its_own_flags_files_and_dispatch_route(monkeypatch):
     assert pr[6].symbol == 'SENSEX' and pr[6].instrument == 'BFO' and pr[4].instrument == 'NFO'
     for n in range(1, 8):
         assert api._STBB_FLAGS[f'st{n}'] == f'ST{n}'
-    assert api._STBB_FLAGS['stbb'] == 'STBB'              # the ST + BB + RSI tabs are untouched
+    assert 'stbb' not in api._STBB_FLAGS                  # the ST + BB + RSI tabs are gone
 
 
 def test_settings_default_to_the_backtest_form_and_env_overrides(monkeypatch):

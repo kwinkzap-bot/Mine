@@ -11488,9 +11488,8 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     return {**result, 'strategy': strategy}
 
 
-# strategy key -> env prefix of the ST + BB + RSI algos (NIFTY, BANKNIFTY, SENSEX).
-_STBB_FLAGS = {'stbb': 'STBB', 'stbb_bn': 'STBB_BN', 'stbb_sx': 'STBB_SX',
-               **{f'st{n}': f'ST{n}' for n in range(1, 8)}}      # Simple Trader 1-7
+# strategy key -> env prefix of the Simple Trader algos (1-7).
+_STBB_FLAGS = {f'st{n}': f'ST{n}' for n in range(1, 8)}
 
 
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
@@ -11542,10 +11541,8 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     # backstop SL-M it places itself — an extra flat stop here would be a
     # second order on the sell side.
     _auto_sl = strategy not in ('intrinsic', 'oix', 'op', 'cpr')
-    # 'stbb' is the ST + BB + RSI algo, which exits on the SuperTrend itself — a flat
+    # The Simple Trader algos exit on their own rule and place their own stop — a flat
     # stop here would be a second order on the sell side.
-    _auto_sl = _auto_sl and strategy != 'stbb'
-    # The BANKNIFTY / SENSEX copies of that algo, each under its own flag prefix.
     _auto_sl = _auto_sl and strategy not in _STBB_FLAGS
 
     # A manual SELL closes the position — kill any running auto-exit monitors for this
@@ -12743,8 +12740,7 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
         if simple:          # Simple Trader <n>: same handlers over its own module and profile
             from trading_app.algo.simple_trader import simple_trader_algo as sb
             return sb, sb.PROFILES[simple]
-        from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as sb
-        return sb, sb.PROFILES[symbol]
+        raise KeyError(path)
 
     def _user():
         return session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
@@ -12887,9 +12883,6 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
         api_bp.route(f'/algo/{path}/{suffix}', methods=[method], endpoint=endpoint)(view)
 
 
-_register_stbb_routes('st-bb-rsi', 'NIFTY', 'stbb')
-_register_stbb_routes('st-bb-rsi-banknifty', 'BANKNIFTY', 'stbb_bn')
-_register_stbb_routes('st-bb-rsi-sensex', 'SENSEX', 'stbb_sx')
 for _n in range(1, 8):      # Simple Trader 1-7: /algo/simple-trader-<n>/{status,settings,history,start,stop}
     _register_stbb_routes(f'simple-trader-{_n}', 'NIFTY', f'st{_n}', simple=_n)
 

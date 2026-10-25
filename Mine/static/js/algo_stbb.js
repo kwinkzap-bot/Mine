@@ -1,14 +1,10 @@
-/* algo_stbb.js — Algo page: the three ST + BB + RSI tabs (NIFTY, BANKNIFTY, SENSEX) and the seven
+/* algo_stbb.js — Algo page: the seven
    Simple Trader tabs ('simple-1'..'simple-7'): the Backtest page's strategies run live on index
    options. One set of functions; every function takes the tab key. */
 'use strict';
 
 // key → DOM id prefix (p), API base, index and env-flag prefix. The state is per tab.
-const _STBB = {
-    'stbb':    { p: 'stbb',   api: '/api/algo/st-bb-rsi',            sym: 'NIFTY',     pfx: 'STBB' },
-    'stbb-bn': { p: 'stbbbn', api: '/api/algo/st-bb-rsi-banknifty', sym: 'BANKNIFTY', pfx: 'STBB_BN' },
-    'stbb-sx': { p: 'stbbsx', api: '/api/algo/st-bb-rsi-sensex',    sym: 'SENSEX',    pfx: 'STBB_SX' },
-};
+const _STBB = {};
 for (let n = 1; n <= 7; n++) {
     _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true };
 }

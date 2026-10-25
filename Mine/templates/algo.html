@@ -24,7 +24,6 @@
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle (Paper)</button>
         <button class="ag-tab"        id="algo-tab-tmf"             onclick="algoSwitch('tmf')">30-Min Fakeout</button>
         <button class="ag-tab"        id="algo-tab-cpr"             onclick="algoSwitch('cpr')">CPR Logic</button>
-        <button class="ag-tab"        id="algo-tab-stbb"            onclick="algoSwitch('stbb')">ST + BB + RSI</button>
         <button class="ag-tab"        id="algo-tab-simple"          onclick="algoSwitch('simple-1')">Simple Trader</button>
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
@@ -223,9 +222,6 @@
     {% include 'algo_tmf.html' %}
 
     {% include 'algo_cpr.html' %}
-    {% with key='stbb', p='stbb', symbol='NIFTY', pfx='STBB' %}{% include 'algo_stbb.html' %}{% endwith %}
-    {% with key='stbb-bn', p='stbbbn', symbol='BANKNIFTY', pfx='STBB_BN' %}{% include 'algo_stbb.html' %}{% endwith %}
-    {% with key='stbb-sx', p='stbbsx', symbol='SENSEX', pfx='STBB_SX' %}{% include 'algo_stbb.html' %}{% endwith %}
     {% with key='simple-1', p='sim1', n=1, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST1' %}{% include 'algo_simple.html' %}{% endwith %}
     {% with key='simple-2', p='sim2', n=2, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST2' %}{% include 'algo_simple.html' %}{% endwith %}
     {% with key='simple-3', p='sim3', n=3, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST3' %}{% include 'algo_simple.html' %}{% endwith %}

@@ -190,27 +190,6 @@ def test_live_mode_is_never_chosen_without_the_toggle(paper):
     assert algo.mode('u') == 'paper'
 
 
-def test_stbb_orders_route_on_their_own_flag_and_carry_no_automatic_stop(monkeypatch):
-    import inspect
-    from trading_app.app.routes import api
-    src = inspect.getsource(api._dispatch_order_to_brokers)
-    assert "_auto_sl = _auto_sl and strategy != 'stbb'" in src
-    env = {'BROKER_1_TYPE': 'zerodha', 'BROKER_1_ACTIVE': 'true', 'BROKER_1_STBB_ACTIVE': 'true',
-           'BROKER_2_TYPE': 'zerodha', 'BROKER_2_ACTIVE': 'true', 'BROKER_2_CPR_ACTIVE': 'true',
-           'BROKER_3_TYPE': 'zerodha', 'BROKER_3_ACTIVE': 'true', 'BROKER_3_OP_ACTIVE': 'true'}
-    monkeypatch.setattr('trading_app.app.utils.user_env.UserEnvManager.get_user_var',
-                        staticmethod(lambda u, k, d='': env.get(k, d)))
-    tried = []
-    monkeypatch.setattr(api, 'get_kite', lambda instance=None, **k: tried.append(instance))
-    res = api._dispatch_order_to_brokers(symbol='NIFTY', strike=24850, option_type='CE', action='BUY',
-                                         strategy='stbb', username='u', session_data={},
-                                         lots_for=lambda i: 1)
-    assert res['brokers_targeted'] == 1 and tried == [1]            # only the STBB-flagged account
-    unsized = api._dispatch_order_to_brokers(symbol='NIFTY', strike=24850, option_type='CE', action='BUY',
-                                             strategy='stbb', username='u', session_data={})
-    assert 'sized by the caller' in unsized['summary'][0]['result']['error']
-
-
 def test_there_is_no_compounding_or_lot_setting_left():
     assert not hasattr(algo, 'lot_mode') and not hasattr(algo, 'booked_pnl') and not hasattr(algo, 'lots_for_trade')
     assert not hasattr(live, 'compound_lots')
@@ -230,56 +209,3 @@ def test_a_live_entry_is_the_accounts_own_lots_flag(paper, monkeypatch):
     import inspect
     src = inspect.getsource(algo.StBbRsiAlgo._enter_live)
     assert "lots = a['lots']" in src and 'compound' not in src
-
-
-# ── three algos: NIFTY, BANKNIFTY, SENSEX ─────────────────────────────────────
-
-def test_each_index_has_its_own_flags_premium_and_files(monkeypatch):
-    env = {'STBB_BN_MODE': 'live', 'STBB_SX_PREMIUM': '900', 'STBB_MODE': 'paper'}
-    monkeypatch.setattr(algo, '_uvar', lambda u, name, default='': env.get(name, default))
-    nf, bn, sx = algo.NIFTY, algo.BANKNIFTY, algo.SENSEX
-    assert [algo.settings('u', p)['premium'] for p in (nf, bn)] == [250, 500]
-    assert algo.settings('u', sx)['premium'] == 900            # its own variable, its own default (800)
-    monkeypatch.delitem(env, 'STBB_SX_PREMIUM')
-    assert algo.settings('u', sx)['premium'] == 800
-    # one flag per algo: BANKNIFTY live does not make NIFTY or SENSEX live
-    assert (algo.mode('u', nf), algo.mode('u', bn), algo.mode('u', sx)) == ('paper', 'live', 'paper')
-    assert len({algo.PROFILES[s].state_file() for s in algo.PROFILES}) == 3
-    assert len({algo.PROFILES[s].history_file() for s in algo.PROFILES}) == 3
-    assert algo.SENSEX.instrument == 'BFO' and algo.BANKNIFTY.instrument == 'NFO'
-
-
-def test_accounts_read_the_algos_own_broker_flags(monkeypatch):
-    env = {'BROKER_1_TYPE': 'zerodha', 'BROKER_1_STBB_BN_ACTIVE': 'true', 'BROKER_1_STBB_BN_LOTS': '2',
-           'BROKER_2_TYPE': 'fyers', 'BROKER_2_STBB_ACTIVE': 'true', 'BROKER_2_STBB_LOTS': '1'}
-    monkeypatch.setattr(algo, '_uvar', lambda u, name, default='': env.get(name, default))
-    monkeypatch.setattr('trading_app.app.routes.api.is_broker_active', lambda u, i: True)
-    assert [a['instance'] for a in algo.accounts('u', algo.BANKNIFTY)] == [1]
-    assert [a['instance'] for a in algo.accounts('u')] == [2]
-    assert algo.accounts('u', algo.SENSEX) == []
-
-
-def test_each_algos_orders_route_on_their_own_flag(monkeypatch):
-    from trading_app.app.routes import api
-    env = {'BROKER_1_TYPE': 'zerodha', 'BROKER_1_ACTIVE': 'true', 'BROKER_1_STBB_ACTIVE': 'true',
-           'BROKER_2_TYPE': 'zerodha', 'BROKER_2_ACTIVE': 'true', 'BROKER_2_STBB_BN_ACTIVE': 'true',
-           'BROKER_3_TYPE': 'zerodha', 'BROKER_3_ACTIVE': 'true', 'BROKER_3_STBB_SX_ACTIVE': 'true'}
-    monkeypatch.setattr('trading_app.app.utils.user_env.UserEnvManager.get_user_var',
-                        staticmethod(lambda u, k, d='': env.get(k, d)))
-    for strategy, want in (('stbb', 1), ('stbb_bn', 2), ('stbb_sx', 3)):
-        tried = []
-        monkeypatch.setattr(api, 'get_kite', lambda instance=None, _t=tried, **k: _t.append(instance))
-        res = api._dispatch_order_to_brokers(symbol='BANKNIFTY', strike=52000, option_type='CE', action='BUY',
-                                             strategy=strategy, username='u', session_data={},
-                                             lots_for=lambda i: 1)
-        assert res['brokers_targeted'] == 1 and tried == [want], strategy
-
-
-def test_a_banknifty_algo_keeps_its_own_state_and_history(tmp_path, monkeypatch):
-    monkeypatch.setattr(algo, '_DIR', str(tmp_path))
-    bn = algo.BANKNIFTY
-    algo._append_history({'n': 1, 'net': 5}, bn)
-    assert algo.load_history(bn) == [{'n': 1, 'net': 5}]
-    assert algo.load_history(algo.SENSEX) == []
-    a = algo.StBbRsiAlgo('u', bn)
-    assert a.p is bn and a._signal_id.__func__ is not None

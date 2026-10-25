@@ -1,11 +1,8 @@
-"""ST + BB + RSI + R1/S1 — the Backtest page's strategy as a live index-options algo,
-one instance per index (NIFTY, BANKNIFTY, SENSEX — see ``PROFILES``).
+"""ST + BB + RSI + R1/S1 — the base thread of the live index-options algos.
 
-Each index is its OWN algo: its own tab, thread, state and history files, mode toggle
-and flags (``STBB_*`` for NIFTY, ``STBB_BN_*`` BANKNIFTY, ``STBB_SX_*`` SENSEX, and
-``BROKER_N_<prefix>_ACTIVE`` / ``_LOTS`` per account). They differ only in the symbol and
-the premium bought (≈250 / 500 / 800, the Backtest page's choice per symbol). Below,
-"STBB_*" is the NIFTY spelling of every setting.
+The ST + BB + RSI tabs (NIFTY, BANKNIFTY, SENSEX) were removed on 2026-10-25; what is left
+is the machinery ``algo/simple_trader`` subclasses. ``NIFTY`` is only the default Profile
+of these helpers — nothing starts it, routes to it or schedules it.
 
 The rule is ``Backtest/st_bb_rsi_engine.py`` (its ``signals`` is called as-is),
 decided one closed 3-minute candle at a time by ``service/st_bb_rsi_live_engine.py``.
@@ -81,9 +78,6 @@ class Profile:
 
 
 NIFTY = Profile('NIFTY', 'stbb', 'STBB', 250, 'NFO', 'STBB', 'ST+BB+RSI NIFTY')
-BANKNIFTY = Profile('BANKNIFTY', 'stbb_bn', 'STBB_BN', 500, 'NFO', 'STBB-BN', 'ST+BB+RSI BANKNIFTY')
-SENSEX = Profile('SENSEX', 'stbb_sx', 'STBB_SX', 800, 'BFO', 'STBB-SX', 'ST+BB+RSI SENSEX')
-PROFILES = {pr.symbol: pr for pr in (NIFTY, BANKNIFTY, SENSEX)}
 _POLL_SECS = 5
 _BAR_LAG = timedelta(minutes=eng.BAR_MINUTES, seconds=5)     # a candle is read 5 s after it closes
 _OPEN_MIN = 9 * 60 + 15

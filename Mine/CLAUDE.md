@@ -436,87 +436,18 @@ Two things are load-bearing:
 Order failures raise `ema_confluence_order_failed` (bell + Telegram) once per
 symbol per day. Tests: `tests/test_ema_confluence_live.py`.
 
-## ST + BB + RSI live algo
+## ST + BB + RSI live algo — removed
 
-The Backtest page's **ST + BB + RSI + R1** strategy run live on NIFTY options —
-the **ST + BB + RSI** tab on /algo (`templates/algo_stbb.html`,
-`static/js/algo_stbb.js`), the thread `algo/st_bb_rsi/st_bb_rsi_algo.py`, the
-brain `service/st_bb_rsi_live_engine.py`, routes `/api/algo/st-bb-rsi/{status,
-settings,history,start,stop}`, jobs `stbb_start` 09:05 + `stbb_watchdog` (and
-startup recovery). Added 2026-10-18, **paper by default**:
-
-```
-STBB_MODE=paper                 # live = real orders; the tab's toggle, read at each ENTRY
-STBB_ENABLED=true               # the tab's Start/Stop (scheduler honours it)
-STBB_DIRECTION=both             # long = CE on the long signal, short = PE on the mirror
-STBB_MAX_TRADES=2               # a day, one open at a time
-STBB_PREMIUM=250                # the strike nearest this premium is bought
-STBB_BACKSTOP_PCT=0             # optional broker SL-M this % below the fill; 0 = none (the default)
-BROKER_N_STBB_ACTIVE=true       # per account, with BROKER_N_ACTIVE; zerodha/fyers only
-BROKER_N_STBB_LOTS=1            # per account, THE size of a live order; an account without it is refused, never guessed
-```
-
-Load-bearing:
-
-* **One rule, two drivers.** The signals are `StBbRsiEngine.signals` — the very
-  function the backtest simulates with — and `on_bar` reads the LAST closed
-  3-minute candle of the history it is handed. Replayed candle by candle over the
-  last 25 sessions it reproduces the backtest's trades exactly (long: 10 / 10,
-  both: 21 / 21, every entry and exit). Keep it that way: change the rule in the
-  engine, never copy it.
-* **The trade is on the index; the order is an option.** A long signal buys the
-  ≈250 CE of the front weekly, a short signal the ≈250 PE, at market. **There is
-  no target and no stop** — the exit is a later candle's close putting SuperTrend
-  against the trade, or the 15:14 square-off. A live position therefore has no
-  protection if this app is down; `STBB_BACKSTOP_PCT` is the opt-in floor.
-* **A signal read late is still traded** (changed 2026-10-19): there is no target
-  or stop, so a trade whose SuperTrend is still with it is still the trade. A restart
-  catching up the morning enters at the current price (`late: true`) unless the same
-  catch-up also carries its SuperTrend exit, then it is `missed`. An entry that is
-  unpriced or refused by every broker stays `open` with `pending_entry` and is
-  retried every 10 s, 6 tries (`_ENTRY_TRIES`); never retried once any qty filled.
-* **Candles** are 1-minute Fyers bars (last 14 days, `use_cache=False`) resampled
-  to 3 minutes anchored on 09:15 with the backtest's closing-minute junk filter —
-  Fyers/Breeze have served junk bars at 15:20+ that moved a pivot and dropped a
-  signal. A candle is read 3 min 5 s after it opens.
-* **`strategy='stbb'` in `_dispatch_order_to_brokers`** routes on
-  `BROKER_N_STBB_ACTIVE` only, has no automatic `entry − 20` stop and refuses to
-  size itself, exactly as `'cpr'` (tests/test_st_bb_rsi_live.py). The `_auto_sl`
-  line for the other strategies is asserted verbatim by other tests: add to it on
-  its own line, never edit it.
-* **Priced off Kite, not `DATA_PROVIDER`** (2026-10-21). Spot, the strike ladder (one
-  `ltp` call, NFO/BFO) and every premium come from the flagged account's Kite session —
-  the broker that fills. With Fyers over its 5,000/day cap the old path served stale
-  quotes: NIFTY spot 22,971 vs ~22,750 real, a 23200 PE quoted 263 that filled at 503,
-  and SENSEX had no quote at all.
-* **Sizing is the flag, nothing computed.** A live order is `BROKER_N_STBB_LOTS` lots at
-  each account with `BROKER_N_STBB_ACTIVE=true`; a paper trade takes the first flagged
-  account's lots, or 1. Fixed/compound lot modes were removed on 2026-10-18 (the
-  *Backtest* page still has its Compounding box; that is a backtest feature only).
-* **The books are the broker's**: live legs book at the order book's real fills
-  (`leg_fills`); history rows carry gross, charges (the Backtest page's per-lot
-  brokerage table) and net.
-
-Tests: `tests/test_st_bb_rsi_live.py`, `tests/test_st_bb_rsi_engine.py`.
-
-### BANKNIFTY and SENSEX copies (2026-10-18)
-
-The same algo runs on three indices as three independent algos — own tab (`ST + BB + RSI
-NIFTY / BANKNIFTY / SENSEX`), thread, state/history files, Live/Paper toggle and flags. Only
-the symbol and the premium differ (≈250 / 500 / 800, the Backtest page's per-symbol choice).
-`algo/st_bb_rsi/st_bb_rsi_algo.py` carries a `Profile` per index; the tab is one template
-(`algo_stbb.html`) and one script (`algo_stbb.js`) keyed by tab. Paper by default:
-
-```
-STBB_BN_MODE / STBB_BN_ENABLED / STBB_BN_PREMIUM(500) / STBB_BN_DIRECTION / STBB_BN_MAX_TRADES   # BANKNIFTY
-STBB_SX_*      (SENSEX, premium 800, options on BFO)
-BROKER_N_STBB_BN_ACTIVE / BROKER_N_STBB_BN_LOTS      # per account, zerodha/fyers only — NOT the NIFTY flags
-BROKER_N_STBB_SX_ACTIVE / BROKER_N_STBB_SX_LOTS
-```
-
-Dispatcher strategies are `stbb` / `stbb_bn` / `stbb_sx` (`_STBB_FLAGS` in `api.py`), routes
-`/api/algo/st-bb-rsi-banknifty/*` and `/st-bb-rsi-sensex/*`. One `stbb_start` / `stbb_watchdog`
-job pair starts all three. The live order path of BANKNIFTY/SENSEX has never been exercised.
+The three **ST + BB + RSI** tabs (NIFTY / BANKNIFTY / SENSEX) were removed on 2026-10-25: tab
+and `algo_stbb.html`, the 15 `/api/algo/st-bb-rsi*` routes, the `stbb` / `stbb_bn` / `stbb_sx`
+dispatcher strategies and their `_auto_sl` line, and the start of their three threads. The
+**Backtest** strategy (`Backtest/st_bb_rsi_engine.py`, `/api/backtest/st-bb-rsi*`) stays.
+Deliberately still there because Simple Trader subclasses it: `algo/st_bb_rsi/st_bb_rsi_algo.py`
+(`StBbRsiAlgo`, `Profile`; `NIFTY` is only its default profile), `service/st_bb_rsi_live_engine.py`,
+`_register_stbb_routes` (Simple Trader's routes), `static/js/algo_stbb.js` and the `stbb_start` /
+`stbb_watchdog` jobs (now Simple Trader's). The `STBB_*` / `BROKER_N_STBB_*` env variables and the
+`st_bb_rsi*_state/_trades_history.json` files are dead but untouched. Tests that still cover the
+base: `tests/test_st_bb_rsi_live.py`, `tests/test_st_bb_rsi_engine.py`.
 
 ## Removed algos
 
