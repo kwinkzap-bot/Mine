@@ -74,3 +74,5 @@
 .bc-panel .bc-tbl td:first-child { min-width: 0; line-height: 1.25; }
 .bc-panel .bc-bar { height: 3px; margin: 2px 0 0 auto; }
 .bc-sortable em { margin-left: 2px; width: 6px; }
+
+.bc-warn { display: block; margin-bottom: 4px; padding: 7px 10px; border: 1px solid #f59e0b; border-radius: 6px; background: rgba(245,158,11,.1); color: var(--oip-text); font-weight: 600; }

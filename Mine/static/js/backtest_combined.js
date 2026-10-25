@@ -1,6 +1,6 @@
-/* Backtest page — "Combined" popup for the Simpler Trader group.
+/* Backtest page — "Combined" popup for the Simple Trader group.
  *
- * Runs every Simpler Trader strategy (each on its own /api/backtest/* endpoint, with the
+ * Runs every Simple Trader strategy (each on its own /api/backtest/* endpoint, with the
  * parameters on its own form — strategy 1 with its Quantman preset), then merges the trades into
  * one book: cards, equity curve, P&L breakdowns and the trade history. Ticking / unticking a
  * strategy re-aggregates at once. ₹ figures are the server's (pnl_rupees = net of brokerage,
@@ -19,7 +19,7 @@
     const chk = (id, d) => { const el = $(id); return el ? el.checked : d; };
     const lots = () => Math.max(1, parseInt(val('pcLots', 1), 10) || 1);
 
-    // Fields every Simpler Trader form shares, read off its own id prefix.
+    // Fields every Simple Trader form shares, read off its own id prefix.
     function common(p, o) {
         return {
             premium: num(p + 'Premium', o.premium),
@@ -36,7 +36,7 @@
         };
     }
 
-    // One entry per Simpler Trader strategy — keep in step with the strategy dropdown's 🎓 options.
+    // One entry per Simple Trader strategy — keep in step with the strategy dropdown's 🎓 options.
     const DEFS = [
         { id: 'simpler_trader', name: '1. BB PP ST RSI WR', ep: 'st-bb-rsi', symbol: 'NIFTY', interval: '3minute', lot: 65, side: 'CE',
           // Quantman's run, fixed here exactly as applySimplerTraderPreset() sets the form.
@@ -101,6 +101,7 @@
               cpr_narrow: num('swxCprNarrow', 0.2),
           }) },
     ];
+    const SENSEX_OPTIONS_FROM = '27 May 2024';
     const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777'];
     DEFS.forEach((d, i) => { d.color = COLORS[i]; });
 
@@ -109,6 +110,8 @@
     DEFS.forEach(d => { state[d.id] = { status: 'idle', trades: [] }; });
     const selected = new Set(DEFS.map(d => d.id));
     let running = false, cancelled = false;
+    // Quantman books gross (before brokerage), so Gross is the default for comparing with it.
+    let basis = 'gross';
     let modal = null, equityChart = null, page = 0;
     const PAGE = 25;
 
@@ -132,8 +135,12 @@
             side: t.option_type || def.side,
             strike: t.strike, entry: String(t.entry_time || ''), exit: String(t.exit_time || ''),
             ep: t.entry_premium, xp: t.exit_premium, lots: t.lots || lots(),
-            gross, brok: gross - net, net, reason: t.exit_reason || '',
+            gross, brok: gross - net, nb: net, net: basis === 'gross' ? gross : net, reason: t.exit_reason || '',
         };
+    }
+
+    function applyBasis() {
+        DEFS.forEach(d => state[d.id].trades.forEach(r => { r.net = basis === 'gross' ? r.gross : r.nb; }));
     }
 
     function book() {
@@ -225,12 +232,13 @@
           <div class="bt-modal-box bc-box">
             <div class="bt-modal-hdr">
               <div class="bt-modal-hdr-text">
-                <div class="bt-modal-title">Combined — Simpler Trader</div>
+                <div class="bt-modal-title">Combined — Simple Trader</div>
                 <div class="bt-modal-subtitle">All selected strategies merged into one book. ₹ = premium points × lots × lot size, net of brokerage.</div>
               </div>
               <div class="bc-dates">
                 <label>From <input type="date" id="bcFrom"></label>
                 <label>To <input type="date" id="bcTo"></label>
+                <label>P&amp;L <select id="bcBasis"><option value="gross">Gross</option><option value="net">Net of brokerage</option></select></label>
                 <button type="button" id="bcRun" class="bc-run">Run combined</button>
               </div>
               <button class="bt-modal-close" id="bcClose" type="button">✕</button>
@@ -245,6 +253,7 @@
         $('bcFrom').value = '2019-04-01';
         $('bcTo').value = todayIso();
         $('bcClose').addEventListener('click', close);
+        $('bcBasis').addEventListener('change', (e) => { basis = e.target.value; applyBasis(); page = 0; paintResults(); });
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display !== 'none') close(); });
         $('bcRun').addEventListener('click', () => {
@@ -306,8 +315,15 @@
             if (s.status === 'error') notes.push(`<b>${esc(d.name)}</b>: ${esc(s.msg)}`);
             else if (s.status === 'done' && s.unpriced) notes.push(`<b>${esc(d.name)}</b>: option premiums unavailable — showing index points × lot value.`);
             else if (s.status === 'done' && s.warning) notes.push(`<b>${esc(d.name)}</b>: ${esc(s.warning)}`);
-            else if (s.status === 'done' && s.from !== $('bcFrom').value && d.minStart) notes.push(`<b>${esc(d.name)}</b>: SENSEX history starts ${esc(d.minStart)}.`);
         });
+        // ICICI Breeze serves no SENSEX (BFO) option candles before this date, at any interval, so those
+        // signals cannot be priced and are left out of the totals rather than guessed.
+        const sx = DEFS.filter(d => d.symbol === 'SENSEX' && selected.has(d.id) && state[d.id].status === 'done');
+        if (sx.length) {
+            notes.unshift(`<span class="bc-warn">SENSEX trades before ${SENSEX_OPTIONS_FROM} are excluded: no option data exists for them `
+                + `(the broker feed serves SENSEX option candles only from ${SENSEX_OPTIONS_FROM}). `
+                + `${sx.length > 1 ? 'Strategies' : 'Strategy'} ${esc(sx.map(d => d.name.split('.')[0]).join(' and '))} therefore cover that date onwards only, so the combined totals are lower than a full-history run would be.</span>`);
+        }
         $('bcNote').innerHTML = notes.join('<br>');
     }
 
@@ -355,7 +371,7 @@
             { k: 'name', label: firstCol, get: e => e.plain || e.label, html: e => e.label },
             { k: 'n', label: 'Trades', right: true, get: e => e.s.n, html: e => e.s.n },
             { k: 'win', label: 'Win%', right: true, get: e => e.s.winRate, html: e => e.s.winRate.toFixed(0) + '%' },
-            { k: 'net', label: 'Net', right: true, get: e => e.s.net,
+            { k: 'net', label: basis === 'gross' ? 'Gross' : 'Net', right: true, get: e => e.s.net,
               html: e => `${inrc(e.s.net, true)}<span class="bc-bar ${e.s.net < 0 ? 'neg' : ''}" style="width:${Math.abs(e.s.net) / max * 100}%"></span>`,
               cls: e => cls(e.s.net) },
             { k: 'avg', label: 'Avg', right: true, get: e => e.s.n ? e.s.net / e.s.n : 0, html: e => inrc(e.s.n ? e.s.net / e.s.n : 0, true), cls: e => cls(e.s.net) },
@@ -376,7 +392,7 @@
         { k: 'xp', label: 'Exit ₹', right: true, get: r => Number(r.xp) || 0, html: r => r.xp != null ? Number(r.xp).toFixed(2) : '—' },
         { k: 'lots', label: 'Lots', right: true, get: r => r.lots, html: r => r.lots },
         { k: 'why', label: 'Exit reason', get: r => r.reason, html: r => esc(r.reason) },
-        { k: 'net', label: 'Net P&amp;L', right: true, get: r => r.net, html: r => inr(r.net, true), cls: r => cls(r.net) },
+        { k: 'net', label: 'P&amp;L', right: true, get: r => r.net, html: r => inr(r.net, true), cls: r => cls(r.net) },
         { k: 'cum', label: 'Cumulative', right: true, get: r => r.cum, html: r => inr(r.cum) },
     ];
     const HIST_DEFAULT = { k: 'no', dir: 'desc' };
@@ -435,8 +451,8 @@
         box.innerHTML = `
           <div class="bc-meta">${esc(first)} → ${esc(last)} · ${selected.size} of ${DEFS.length} strategies</div>
           <div class="bc-cards">
-            ${card('Net P&amp;L', inr(s.net, true), 'after brokerage', cls(s.net))}
-            ${card('Gross P&amp;L', inr(s.gross, true), 'before brokerage', cls(s.gross))}
+            ${card(basis === 'gross' ? 'Gross P&amp;L' : 'Net P&amp;L', inr(s.net, true), basis === 'gross' ? 'before brokerage (as Quantman)' : 'after brokerage', cls(s.net))}
+            ${card(basis === 'gross' ? 'Net P&amp;L' : 'Gross P&amp;L', inr(basis === 'gross' ? s.gross - s.brok : s.gross, true), basis === 'gross' ? 'after brokerage' : 'before brokerage')}
             ${card('Brokerage', inr(-s.brok), 'all trades')}
             ${card('Trades', s.n, s.wins + ' wins · ' + s.losses + ' losses')}
             ${card('Win rate', s.winRate.toFixed(2) + '%', 'win:loss ' + s.wins + ':' + s.losses)}
@@ -446,7 +462,7 @@
             ${card('Streak', s.winStreak + ' W / ' + s.lossStreak + ' L', 'unbroken, best / worst')}
             ${card('Best trade', inr(s.best.net, true), esc(s.best.entry.slice(0, 10)) + ' · ' + esc(s.best.sname), 'bc-pos')}
             ${card('Worst trade', inr(s.worst.net), esc(s.worst.entry.slice(0, 10)) + ' · ' + esc(s.worst.sname), 'bc-neg')}
-            ${card('Return / drawdown', s.dd > 0 ? (s.net / s.dd).toFixed(2) : '—', 'net ÷ max drawdown')}
+            ${card('Return / drawdown', s.dd > 0 ? (s.net / s.dd).toFixed(2) : '—', 'P&amp;L ÷ max drawdown')}
           </div>
 
           <div class="bc-sec">Equity curve <small>combined net ₹ by trade date; thin lines are each strategy alone</small></div>
@@ -529,7 +545,7 @@
         const head = ['Strategy', 'Instrument', 'Type', 'Strike', 'Entry', 'Exit', 'Entry premium', 'Exit premium', 'Lots', 'Exit reason', 'Gross', 'Brokerage', 'Net'];
         const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
         const csv = [head.map(q).join(',')].concat(rows.map(r => [r.sname, r.symbol, r.side, r.strike, r.entry, r.exit, r.ep, r.xp, r.lots,
-            r.reason, r.gross.toFixed(2), r.brok.toFixed(2), r.net.toFixed(2)].map(q).join(','))).join('\n');
+            r.reason, r.gross.toFixed(2), r.brok.toFixed(2), r.nb.toFixed(2)].map(q).join(','))).join('\n');
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
         a.download = 'combined_simpler_trader.csv';
@@ -537,7 +553,7 @@
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
-    // ── Header button: only for the Simpler Trader group ───────────────────────────────────
+    // ── Header button: only for the Simple Trader group ───────────────────────────────────
     const group = $('strategyStatusSelect');
     function syncVisibility() { btn.style.display = !group || group.value === 'simpler' ? '' : 'none'; }
     if (group) group.addEventListener('change', syncVisibility);

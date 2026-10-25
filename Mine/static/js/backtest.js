@@ -411,7 +411,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 2.5 Strategy Selection Logic
     const strategySelect = document.getElementById('strategySelect');
 
-    // Simpler Trader group — the Quantman run "BB PP ST RSI WR with SL NIFTY CE" on the ST + BB + RSI
+    // Simple Trader group — the Quantman run "BB PP ST RSI WR with SL NIFTY CE" on the ST + BB + RSI
     // engine: 3-min candles; BB(15, 3), Williams %R(14) > -30, RSI(14) > 70, SuperTrend(10, 2),
     // close above R1; buy the ≈250 current-week CE; exit on a close below SuperTrend; stop-loss 13 %
     // with TSL X 15 % / Y 10 %; 09:15-15:14, one transaction a day. Re-applied each time the strategy is picked.
@@ -2569,7 +2569,7 @@ document.addEventListener('DOMContentLoaded', function() {
         applySimplerTraderStats(data);
     }
 
-    // Simpler Trader's extra cards, in the Quantman run's own terms: ₹ = premium points × lots × lot
+    // Simple Trader's extra cards, in the Quantman run's own terms: ₹ = premium points × lots × lot
     // size (gross, before brokerage), a streak is unbroken wins/losses (a flat trade breaks both),
     // and Drawdown Days counts the trading days from the equity peak to the trough of the deepest drawdown.
     function applySimplerTraderStats(data) {
@@ -2577,13 +2577,13 @@ document.addEventListener('DOMContentLoaded', function() {
         const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx');
         const setSub = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
         if (row) row.style.display = 'none';
-        // Simpler Trader's first row: Wins + Losses merge into one card and Net Outcome goes.
+        // Simple Trader's first row: Wins + Losses merge into one card and Net Outcome goes.
         const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
         show('statWinsCard', !isSt); show('statLossesCard', !isSt); show('statOutcomeCard', !isSt);
         show('statWinLossCard', isSt);
         const r1 = document.getElementById('resultsRow1');
         if (r1) r1.style.gridTemplateColumns = '';
-        // Simpler Trader is two rows of six: Profit Factor and Net P&L move up beside Total P&L, and the
+        // Simple Trader is two rows of six: Profit Factor and Net P&L move up beside Total P&L, and the
         // streak and max cards slot in before CAGR. Any other strategy puts every card back where it was.
         const card = id => document.getElementById(id)?.closest('.stat-card');
         const rtp = document.getElementById('rtpStatsRow');
