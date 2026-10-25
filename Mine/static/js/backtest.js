@@ -419,7 +419,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const SIMPLE_STRATS = ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut',
                            'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'];
 
+    // BANKNIFTY runs different numbers. Swept offline on 2019-04 → 2026-10 candles, priced on the 500 option
+    // from the cached Breeze minutes (the page's own pricing): max drawdown ₹8.8k at 1 lot (65/pt) against
+    // ₹20.4k for the previous BANKNIFTY row and ₹34.4k for the NIFTY numbers, net ₹2.87L, PF 5.6, 109 trades.
+    // The 8 % stop does the most (6-13 % all sit under ₹11k here); 2024 was flat, so treat it as capital protection.
+    const SIMPLER_BN = { rsi: 65, stLen: 14, stFactor: 1.5, bbLen: 20, bbMult: 3, wrLevel: -10, start: '10:30',
+                         slPct: 8, tslX: 0, tslY: 0, premium: '500' };
+
     function applySimplerTraderPreset() {
+        const isBn = ((symbolSearch && symbolSearch.value) || '').toUpperCase().includes('BANKNIFTY');
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         const on  = (id, v) => { const el = document.getElementById(id); if (el) el.checked = v; };
         set('sbrDirection', 'long');
@@ -435,6 +443,14 @@ document.addEventListener('DOMContentLoaded', function() {
         set('sbrMaxTrades', 1);
         const prem = document.getElementById('sbrPremium');
         if (prem && [...prem.options].some(o => o.value === '250')) prem.value = '250';
+        if (isBn) {
+            set('sbrRsi', SIMPLER_BN.rsi);
+            set('sbrStLen', SIMPLER_BN.stLen); set('sbrStFactor', SIMPLER_BN.stFactor);
+            set('sbrBbLen', SIMPLER_BN.bbLen); set('sbrBbMult', SIMPLER_BN.bbMult);
+            set('sbrWrLevel', SIMPLER_BN.wrLevel); set('sbrEntryStart', SIMPLER_BN.start);
+            set('sbrSlPct', SIMPLER_BN.slPct); set('sbrTslX', SIMPLER_BN.tslX); set('sbrTslY', SIMPLER_BN.tslY);
+            if (prem && [...prem.options].some(o => o.value === SIMPLER_BN.premium)) prem.value = SIMPLER_BN.premium;
+        }
     }
 
     function updateStrategyView() {
@@ -962,6 +978,7 @@ document.addEventListener('DOMContentLoaded', function() {
         _sbrPremiumKey = key;
         const cfg = SBR_PREMIUMS[key];
         sel.innerHTML = cfg.list.map(v => `<option value="${v}"${v === cfg.def ? ' selected' : ''}>${v}</option>`).join('');
+        if (strategySelect && strategySelect.value === 'simpler_trader') applySimplerTraderPreset();
     }
     syncSbrPremium();
     setInterval(syncSbrPremium, 400);
