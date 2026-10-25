@@ -555,7 +555,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || val === 'st_bb_rsi' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -657,7 +657,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2017-01-01';
             updatePcInvestment();
 
-        } else if (val === 'st_bb_rsi' || val === 'simpler_trader') {
+        } else if (val === 'simpler_trader') {
             // Index signal, ≈250 CE leg; lots/lot value reuse the Pivot Confluence boxes.
             // The Symbol box keeps whatever the last strategy left in it
             // (Weekly CPR Breakout parks ALL STOCKS there): this one trades one symbol —
@@ -922,7 +922,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'st_bb_rsi'],
+        live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
         failure: [],
@@ -1043,12 +1043,6 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Confluence', '20 EMA and VWAP agree with the direction, price on the right side of the 20 EMA.'],
             ['Timing', 'Enter after 09:30, plus an optional second window in the afternoon; max 2 trades a day.'],
             ['Target', 'The next pivot level (R1/R2… or S1/S2…). Entries already parked at R2/S2 are refused.']] },
-        st_bb_rsi: { sub: '4 indicators agree on a 3-minute candle', steps: [
-            ['Long signal', 'On a closed 3-min candle: RSI(14) > 70, close above the upper Bollinger Band, close above SuperTrend, and close above yesterday\'s R1 pivot.'],
-            ['Short signal', 'The mirror image (when Sell is enabled).'],
-            ['Entry', 'At the NEXT candle\'s open. Index points, optionally re-priced on the ≈250 premium option.'],
-            ['Exit', 'There is no stop or target. Exit when a candle closes back through SuperTrend, or at the 15:15 square-off.'],
-            ['Limit', 'Limited number of trades per day, one open at a time.']] },
         simpler_trader: { sub: 'Quantman "BB PP ST RSI WR with SL" — long NIFTY CE, 3-minute candles', steps: [
             ['Entry rule', 'On a closed 3-min candle ALL must hold: close above SuperTrend(10, 2), RSI(14) above 70, close above R1 of the traditional day pivots, close above the upper Bollinger Band (15 candles, multiplier 3), and Williams %R(14) above -30.'],
             ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
@@ -1345,7 +1339,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // SuperTrend + BB + RSI + R1, bought as the ≈250 CE; exit on SuperTrend break
-            if (strat === 'st_bb_rsi' || strat === 'simpler_trader') {
+            if (strat === 'simpler_trader') {
                 endpoint = '/api/backtest/st-bb-rsi';
                 // An index buys its ≈premium weekly option; an F&O stock buys the ATM monthly one
                 // (the server prices it and ignores the premium box). ALL STOCKS is not one symbol.
@@ -1767,9 +1761,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             let data = await response.json();
 
-            // ST + BB + RSI + R1: signals come back at once, the option legs are
+            // Simple Trader / Hilega / MA: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'st_bb_rsi' || strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx')) {
+            if (data.success && data.task_id && (strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -2704,7 +2698,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_bb_rsi' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
+        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
@@ -4780,34 +4774,12 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'pivot_confluence') runPcOptimise(false);
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
         else if (strat === 'option_selling') runOsOptimise(false);
-        else if (strat === 'st_bb_rsi') runSbrOptimise();
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
     });
 
-    // ── ST + BB + RSI + R1/S1 — Find Best Params ────────────────────────
-    // 2,160 combinations (direction × RSI level × SuperTrend length/factor × BB
-    // multiplier × green-candle × entry start) scored on INDEX points in about a
-    // minute — the option leg is not priced per combination (a Breeze read per
-    // trade is far too dear for a sweep), so the board is a shortlist: pick a row
-    // and run the normal backtest to see it on the option.
+    // ── Simple Trader — Find Best Params ────────────────────────────────
     let _sbrOptRun = 0;
-    const SBR_OPT_COLS = [
-        { label: '#',          key: null,            fmt: (r, i) => i + 1 },
-        { label: 'Side',       key: 'direction',     fmt: r => ({ long: 'Long (CE)', short: 'Short (PE)', both: 'Both' })[r.direction] || r.direction },
-        { label: 'RSI',        key: 'rsi_level',     fmt: r => r.direction === 'long' ? `> ${r.rsi_level}` : (r.direction === 'short' ? `< ${100 - r.rsi_level}` : `> ${r.rsi_level} / < ${100 - r.rsi_level}`) },
-        { label: 'SuperTrend', key: 'st_mult',       fmt: r => `${r.st_period} / ${r.st_mult}` },
-        { label: 'BB Mult',    key: 'bb_mult',       fmt: r => r.bb_mult },
-        { label: 'Green',      key: 'require_green', fmt: r => r.require_green ? 'Yes' : 'No' },
-        { label: 'From',       key: 'entry_start',   fmt: r => r.entry_start },
-        { label: 'Trades',     key: 'total_trades',  fmt: r => r.total_trades },
-        { label: 'Win%',       key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
-        { label: 'Total (index pts)', key: 'total_pnl', fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.total_pnl >= 0 ? '+' : ''}${(r.total_pnl ?? 0).toFixed(0)}</span>` },
-        { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => `<span class="${r.recent_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.recent_pnl >= 0 ? '+' : ''}${(r.recent_pnl ?? 0).toFixed(0)}</span>` },
-        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
-        { label: '',           key: null,            fmt: () => '' },   // Use button
-    ];
 
     // Simple Trader board: the page's own filters stay as set; the numbers Quantman's
     // run picked by eye (RSI line, SuperTrend, BB, %R level, entry start) are swept.
@@ -4885,21 +4857,6 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
 
-    function applySbrOptResult(r) {
-        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-        set('sbrDirection', r.direction);
-        set('sbrRsi', r.rsi_level);
-        set('sbrRsiLower', 100 - r.rsi_level);     // the optimiser sweeps the mirror
-        set('sbrStLen', r.st_period);
-        set('sbrStFactor', r.st_mult);
-        set('sbrBbMult', r.bb_mult);
-        set('sbrEntryStart', r.entry_start);
-        const g = document.getElementById('sbrGreen'); if (g) g.checked = !!r.require_green;
-        if (window.showNotification) window.showNotification(
-            `Applied: ${r.direction} · RSI ${r.rsi_level} · ST ${r.st_period}/${r.st_mult} · BB ×${r.bb_mult}`
-            + `${r.require_green ? ' · green only' : ''} · from ${r.entry_start} — press BACKTEST to see it on the option`, 'success');
-    }
-
     function renderSbrOptResults(data) {
         const panel  = document.getElementById('stBbRsiOptimisePanel');
         const metaEl = document.getElementById('sbrOptMeta');
@@ -4948,10 +4905,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         : '— outside the quality filter (win < 50%, under 150 trades or no recent profit)')
             + (data.option_error ? `. Option pricing unavailable (${data.option_error}); showing index points.` : '');
         _mountSingleOptGrid('sbrOptGrid', rows,
-                            withRs(strat ? sbrStrategyCols(data.swept || []) : (simple ? SBR_SIMPLE_COLS : SBR_OPT_COLS)),
+                            withRs(strat ? sbrStrategyCols(data.swept || []) : SBR_SIMPLE_COLS),
                             (simple || strat) ? 'profit_factor' : 'total_pnl',
                             strat ? applySbrStrategyResult(data.strategy, data.swept || [])
-                                  : (simple ? applySbrSimpleResult : applySbrOptResult));
+                                  : applySbrSimpleResult);
         if (panel) panel.style.display = '';
     }
 

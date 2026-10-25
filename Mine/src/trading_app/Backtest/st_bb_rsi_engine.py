@@ -454,72 +454,7 @@ class StBbRsiEngine:
 
 # ── Find best params ───────────────────────────────────────────────────────────
 
-# Swept knobs. RSI period, BB period/offset, the session window's end, square-off
-# and trades per day are the page's own values and are not varied.
-_GRID_DIRECTION = ('long', 'short', 'both')
-_GRID_RSI = (60, 65, 70, 75, 80)
-_GRID_ST_MULT = (1.5, 2.0, 2.5, 3.0)
-_GRID_ST_PERIOD = (7, 10, 14)
-_GRID_BB_MULT = (1.5, 2.0, 2.5)
-_GRID_GREEN = (False, True)
-_GRID_START = ('09:15', '09:30')
 MIN_TRADES = 30          # a handful of lucky trades is not a result
-
-
-def grid_size() -> int:
-    return (len(_GRID_DIRECTION) * len(_GRID_RSI) * len(_GRID_ST_MULT) * len(_GRID_ST_PERIOD)
-            * len(_GRID_BB_MULT) * len(_GRID_GREEN) * len(_GRID_START))
-
-
-def optimise_st_bb_rsi(df: pd.DataFrame, rsi_period: int = 14, bb_period: int = 20, bb_offset: int = 0,
-                       entry_end: str = '15:14', exit_cutoff: str = '15:14', max_trades_per_day: int = 1,
-                       top: int = 25, progress=None, from_date: str = '') -> Dict[str, Any]:
-    """Sweep the grid above on INDEX points and return the best combinations.
-
-    Ranked on total index points among combinations with at least MIN_TRADES
-    trades. Index points, not option premiums: pricing a combination on the
-    option means a Breeze read per trade, which a 2,000-combination sweep cannot
-    afford, so treat the board as a shortlist and confirm a pick with a normal run
-    on the option. Every row also carries its points over the most recent 30 % of
-    the sessions (`recent_pnl`) — a combination that only ever worked early on
-    shows up there."""
-    eng = StBbRsiEngine(df, rsi_period=rsi_period, bb_period=bb_period, bb_offset=bb_offset,
-                        entry_end=entry_end, exit_cutoff=exit_cutoff,
-                        max_trades_per_day=max_trades_per_day)
-    days = sorted({str(t)[:10] for t in eng._base()['ts'] if str(t)[:10] >= from_date})
-    cut = days[int(len(days) * 0.7)] if days else ''
-    total = grid_size()
-    rows: List[Dict[str, Any]] = []
-    done = 0
-    for st_period in _GRID_ST_PERIOD:
-        for st_mult in _GRID_ST_MULT:
-            eng._ind('st', st_period, st_mult)                 # paid once for every combination below
-            for bb_mult in _GRID_BB_MULT:
-                for rsi_level in _GRID_RSI:
-                    for direction in _GRID_DIRECTION:
-                        for green in _GRID_GREEN:
-                            for start in _GRID_START:
-                                trades = eng.simulate(
-                                    st_period=st_period, st_mult=st_mult, bb_mult=bb_mult,
-                                    rsi_level=rsi_level, direction=direction, require_green=green,
-                                    entry_start=_parse_hhmm(start, 9 * 60 + 15))
-                                if from_date:          # the run-in before the start only warms indicators
-                                    trades = [t for t in trades if t['entry_time'][:10] >= from_date]
-                                done += 1
-                                if len(trades) < MIN_TRADES:
-                                    continue
-                                sm = summarise(trades)
-                                sm.update(direction=direction, rsi_level=rsi_level, st_mult=st_mult,
-                                          st_period=st_period, bb_mult=bb_mult, require_green=green,
-                                          entry_start=start,
-                                          recent_pnl=round(sum(t['pnl'] for t in trades
-                                                               if t['entry_time'][:10] >= cut), 2))
-                                rows.append(sm)
-            if progress:
-                progress(done, total)
-    rows.sort(key=lambda r: r['total_pnl'], reverse=True)
-    return {'total_combos_tested': total, 'qualified': len(rows), 'results': rows[:top],
-            'best': rows[0] if rows else None, 'recent_from': cut, 'min_trades': MIN_TRADES}
 
 
 # Simple Trader (Quantman "BB PP ST RSI WR") sweep. The page's own filters — which

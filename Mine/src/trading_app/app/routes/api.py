@@ -5271,10 +5271,9 @@ def _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval, d
 @csrf.exempt
 @require_user_auth
 def run_st_bb_rsi_optimise():
-    """Find Best Params for ST + BB + RSI + R1/S1: sweep direction, RSI level,
-    SuperTrend length/factor, BB multiplier, green-candle filter and entry start
-    on INDEX points (Backtest/st_bb_rsi_engine.optimise_st_bb_rsi). Backgrounded;
-    poll /backtest/st-bb-rsi/optimise/status/<task_id>."""
+    """Find Best Params for Simple Trader strategy 1 (Backtest/st_bb_rsi_engine.
+    optimise_simple_trader); strategies 2-7 go to `_run_simple_trader_optimise`.
+    Backgrounded; poll /backtest/st-bb-rsi/optimise/status/<task_id>."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -5309,6 +5308,8 @@ def run_st_bb_rsi_optimise():
             max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
         )
         simple = str(data.get('mode', '')) == 'simple'     # Simple Trader: keep the page's filters
+        if not simple:
+            return jsonify({'success': False, 'error': 'Unsupported optimise request'}), 400
         if simple:
             wr_lvl = data.get('wr_level')
             knobs.update(
@@ -5332,7 +5333,6 @@ def run_st_bb_rsi_optimise():
 
         def _run():
             try:
-                from trading_app.Backtest.st_bb_rsi_engine import optimise_st_bb_rsi
                 minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
                                                           end_date_str, interval)
                 if bars is None:
@@ -5358,8 +5358,6 @@ def run_st_bb_rsi_optimise():
                             logger.warning('[ST-BB-RSI OPT] option verification failed: %s', e)
                             res['option_error'] = str(e)
                             res['results'] = res['results'][:25]
-                else:
-                    res = optimise_st_bb_rsi(bars, progress=_progress, from_date=start_date_str, **knobs)
                 task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
                                    'start_date': start_date_str, 'end_date': end_date_str,
                                    'bars': n_bars, **res}
