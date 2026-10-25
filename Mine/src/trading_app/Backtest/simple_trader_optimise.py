@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import pandas as pd
 
-from trading_app.Backtest.st_bb_rsi_engine import MIN_TRADES, _parse_hhmm, summarise
+from trading_app.Backtest.st_bb_rsi_engine import MIN_TRADES, MIN_WIN_RATE, _parse_hhmm, attach_option_legs, rank_quality, rupee_card, summarise
 
 _ST_PERIOD = (7, 10, 14)
 _ST_MULT = (1.5, 2.0, 2.5, 3.0)
@@ -152,6 +152,16 @@ def optimise(strategy: str, df: pd.DataFrame, data: Dict[str, Any], from_date: s
     days = sorted({str(t)[:10] for t in (base['ts'] if base else eng._context()['ts'])
                    if str(t)[:10] >= from_date})
     cut = days[int(len(days) * 0.7)] if days else ''
+    # The page's own settings first (the sweep below overwrites the engine's attributes):
+    # scored the same way, so the board can say where the current run sits on it.
+    if not is_sweep_engine:
+        eng._ctx = None
+    cur_trades = eng.simulate()
+    if from_date:
+        cur_trades = [t for t in cur_trades if t['entry_time'][:10] >= from_date]
+    current = summarise(cur_trades)
+    current.update({n: getattr(eng, n) for n in names})
+    current['recent_pnl'] = round(sum(t['pnl'] for t in cur_trades if t['entry_time'][:10] >= cut), 2)
     rows: List[Dict[str, Any]] = []
     done = 0
     for combo in itertools.product(*[v for _, v in grid]):
@@ -181,7 +191,85 @@ def optimise(strategy: str, df: pd.DataFrame, data: Dict[str, Any], from_date: s
         rows.append(sm)
     if progress:
         progress(total, total)
-    rows.sort(key=lambda r: r['total_pnl'], reverse=True)
-    return {'total_combos_tested': total, 'qualified': len(rows), 'results': rows[:top],
-            'best': rows[0] if rows else None, 'recent_from': cut, 'min_trades': MIN_TRADES,
-            'mode': 'strategy', 'strategy': strategy, 'swept': names}
+    ordered, passed = rank_quality(rows, current)
+    return {'total_combos_tested': total, 'qualified': len(rows), 'passed': passed,
+            'min_win': MIN_WIN_RATE, 'results': ordered[:top],
+            'best': ordered[0] if ordered else None, 'recent_from': cut, 'min_trades': MIN_TRADES,
+            'mode': 'strategy', 'strategy': strategy, 'swept': names, 'current': current}
+
+
+def _num(name: str, v):
+    return int(v) if name.endswith('_period') else float(v)
+
+
+SHORTLIST = 6        # index rows re-priced on the option, beside the current settings
+
+
+def verify_on_option(strategy: str, res: Dict[str, Any], df: pd.DataFrame, data: Dict[str, Any],
+                     symbol: str, interval: str, calendar, on_future: bool, start_date: str,
+                     progress=None) -> None:
+    """Re-price the current settings and the best index rows on the option, exactly as the
+    strategy's own run does (`price_with_reentries` around `attach_option_legs`, the page's
+    premium and SL / TSL, spot-level strikes on the future), and replace res['results'] /
+    res['current'] with those figures, ranked by `rank_quality`. Each row keeps its index
+    figures as index_pnl / index_pf. A priced row is what BACKTEST shows for the same values."""
+    from trading_app.Backtest.st_ema_rsi_cci_engine import price_with_reentries, with_spot_level
+    build, _, _ = SPECS[strategy]
+    eng = build(df, data)
+    names = res['swept']
+    premium = float(data.get('premium') or 250) or None
+    sl_pct = max(0.0, float(data.get('sl_pct') or 0))
+    tsl_x = max(0.0, float(data.get('tsl_x') or 0))
+    tsl_y = max(0.0, float(data.get('tsl_y') or 0))
+    mpb = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 3)
+    cut = res.get('recent_from') or ''
+    sweep_engine = hasattr(eng, '_base')
+
+    def trades_for(row):
+        for k in names:                             # the row's numbers, as the run would have built it
+            setattr(eng, k, _num(k, row[k]))
+        if not sweep_engine:
+            eng._ctx = None
+        return [t for t in eng.simulate() if t['entry_time'][:10] >= start_date]
+
+    cur = res['current']
+    todo = [(cur, trades_for(cur))]
+    seen = {tuple(t['entry_time'] for t in todo[0][1])}
+    for row in res['results']:
+        if len(todo) > SHORTLIST:
+            break
+        trades = trades_for(row)
+        sig = tuple(t['entry_time'] for t in trades)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        todo.append((row, trades))
+
+    rows, current = [], None
+    for n, (row, trades) in enumerate(todo, 1):
+        if progress:
+            progress(n - 1, len(todo))
+        for k in names:                             # trade_after() re-reads the engine's numbers
+            setattr(eng, k, _num(k, row[k]))
+        if not sweep_engine:
+            eng._ctx = None
+        priced, info = price_with_reentries(
+            eng, trades,
+            lambda batch, prog: attach_option_legs(
+                symbol, with_spot_level(batch, symbol) if on_future else batch,
+                premium, mpb, prog, calendar=calendar, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y))
+        out = {k: row[k] for k in names}
+        out.update(summarise(priced))
+        out.update(rupee_card(priced, data, info.get('lot')))
+        out.update(index_pnl=row['total_pnl'], index_pf=row['profit_factor'],
+                   unpriced=info.get('unpriced', 0), reentries=info.get('reentries', 0),
+                   recent_pnl=round(sum(t['pnl'] for t in priced if t['entry_time'][:10] >= cut), 2))
+        if row is cur:
+            current = out
+        else:
+            rows.append(out)
+    if progress:
+        progress(len(todo), len(todo))
+    ordered, passed = rank_quality(rows, current)
+    res.update(results=ordered, best=ordered[0] if ordered else None, current=current,
+               passed=passed, basis='option', verified=len(todo))

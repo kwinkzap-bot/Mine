@@ -539,6 +539,35 @@ def simple_grid_size() -> int:
             * len(_SIMPLE_BB_MULT) * len(_SIMPLE_WR) * len(_SIMPLE_START))
 
 
+MIN_WIN_RATE = 50.0      # the Simple Trader board keeps combinations that win at least this often
+MIN_BOARD_TRADES = 150   # ...and that traded enough for a profit factor to mean something (30 trades gave PF 10)
+
+
+def rank_quality(rows: List[Dict[str, Any]], current: Optional[Dict[str, Any]] = None,
+                 min_win: float = MIN_WIN_RATE) -> Tuple[List[Dict[str, Any]], int]:
+    """Order a sweep the way a trader reads it, not by raw points (raw points reward
+    loose, high-trade settings that a premium stop then cuts down): keep win rate
+    >= `min_win`, at least MIN_BOARD_TRADES trades and a profit over the most recent 30 % of the sessions, then rank on
+    profit factor, lowest max drawdown breaking ties. Falls back to every row when too few
+    pass, so the board is never empty. Stamps `current['rank']` (None when the current
+    settings do not pass the filter). Returns (ordered rows, how many passed)."""
+    def key(r):
+        return (-r['profit_factor'], r['max_drawdown'], -r['total_pnl'])
+
+    def passes(r):
+        return (r['win_rate'] >= min_win and r.get('recent_pnl', 0) > 0
+                and r['total_trades'] >= MIN_BOARD_TRADES)
+
+    kept = [r for r in rows if passes(r)]
+    passed = len(kept)
+    pool = kept if passed >= 5 else rows
+    pool = sorted(pool, key=key)
+    if current is not None:
+        current['rank'] = (1 + sum(1 for r in pool if key(r) < key(current))) if (
+            passes(current) or pool is rows) else None
+    return pool, passed
+
+
 def optimise_simple_trader(df: pd.DataFrame, top: int = 25, progress=None, from_date: str = '',
                            **fixed) -> Dict[str, Any]:
     """Find Best Params for the Simple Trader strategies: the same sweep idea as
@@ -551,6 +580,14 @@ def optimise_simple_trader(df: pd.DataFrame, top: int = 25, progress=None, from_
     days = sorted({str(t)[:10] for t in eng._base()['ts'] if str(t)[:10] >= from_date})
     cut = days[int(len(days) * 0.7)] if days else ''
     total = simple_grid_size()
+    cur_trades = eng.simulate()                         # the page's own settings, as they stand
+    if from_date:
+        cur_trades = [t for t in cur_trades if t['entry_time'][:10] >= from_date]
+    current = summarise(cur_trades)
+    current.update(rsi_level=eng.rsi_level, st_period=eng.st_period, st_mult=eng.st_mult,
+                   bb_period=eng.bb_period, bb_mult=eng.bb_mult, wr_level=eng.wr_level,
+                   entry_start=f"{eng.entry_start // 60:02d}:{eng.entry_start % 60:02d}",
+                   recent_pnl=round(sum(t['pnl'] for t in cur_trades if t['entry_time'][:10] >= cut), 2))
     rows: List[Dict[str, Any]] = []
     done = 0
     for st_period in _SIMPLE_ST_PERIOD:
@@ -579,10 +616,11 @@ def optimise_simple_trader(df: pd.DataFrame, top: int = 25, progress=None, from_
                                 rows.append(sm)
             if progress:
                 progress(done, total)
-    rows.sort(key=lambda r: r['total_pnl'], reverse=True)
-    return {'total_combos_tested': total, 'qualified': len(rows), 'results': rows[:top],
-            'best': rows[0] if rows else None, 'recent_from': cut, 'min_trades': MIN_TRADES,
-            'mode': 'simple'}
+    ordered, passed = rank_quality(rows, current)
+    return {'total_combos_tested': total, 'qualified': len(rows), 'passed': passed,
+            'min_win': MIN_WIN_RATE, 'results': ordered[:top],
+            'best': ordered[0] if ordered else None, 'recent_from': cut, 'min_trades': MIN_TRADES,
+            'mode': 'simple', 'current': current, '_current_trades': cur_trades}
 
 
 # ── Option leg ─────────────────────────────────────────────────────────────────
@@ -760,6 +798,22 @@ def apply_compounding(trades: List[Dict[str, Any]], lot_size: int, start_capital
         'avg_loss_rupees': round(-gl / len(losses_rs), 2) if losses_rs else 0.0,
         'profit_factor_rupees': round(gp / gl, 2) if gl > 0 else (999.0 if gp > 0 else 0.0),
     }
+
+
+def rupee_card(priced: List[Dict[str, Any]], data: Dict[str, Any], lot: Optional[int] = None) -> Dict[str, Any]:
+    """The ₹ figures of the results cards for these priced trades, booked exactly as the run
+    books them (`apply_compounding` with the page's Lots / Lot value / Compounding / Capital):
+    gross, brokerage, net, average win / loss and max drawdown in rupees. Mutates `priced`."""
+    lots = max(1, int(data.get('lots', 1) or 1))
+    compounding = bool(data.get('compounding', False))
+    ex = apply_compounding(
+        priced, float(data.get('lot_value') or 0) or lot or 65,
+        float(data.get('start_capital', 25000) or 25000) if compounding else lots * 50000.0,
+        float(data.get('per_lot') or 0), int(data.get('max_lots', 27) or 27),
+        fixed_lots=None if compounding else lots)
+    return {'gross_rs': ex['total_gross_pnl_rupees'], 'brokerage_rs': ex['total_brokerage'],
+            'net_rs': ex['total_pnl_rupees'], 'avg_win_rs': ex['avg_win_rupees'],
+            'avg_loss_rs': ex['avg_loss_rupees'], 'max_dd_rs': ex['max_drawdown_rupees']}
 
 
 # ── Summary ────────────────────────────────────────────────────────────────────

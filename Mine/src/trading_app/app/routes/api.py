@@ -5167,8 +5167,8 @@ def _run_simple_trader_optimise(strategy, data):
                 bars = grouped.reset_index()
                 n_bars = int((grouped.index >= pd.Timestamp(start_date_str)).sum())
             else:
-                _, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
-                                                    end_date_str, interval, warmup_days=45)
+                minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
+                                                          end_date_str, interval, warmup_days=45)
                 if bars is None:
                     task.update(status='error', error='No historical data found for the given range')
                     return
@@ -5176,7 +5176,22 @@ def _run_simple_trader_optimise(strategy, data):
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
 
-            res = sto.optimise(strategy, bars, data, from_date=start_date_str, progress=_progress)
+            res = sto.optimise(strategy, bars, data, from_date=start_date_str, progress=_progress, top=80)
+            # As the run does: the best index rows (and the current settings) are priced on the
+            # option with the page's SL / TSL and re-ranked on those numbers.
+            if bool(data.get('price_options', True)):
+                try:
+                    def _pricing(done, total):
+                        task['progress'] = {'done': done, 'total': total, 'stage': 'pricing'}
+                    sto.verify_on_option(strategy, res, bars, data, symbol, interval,
+                                         sorted(set(minutes.index.date)), on_future, start_date_str,
+                                         progress=_pricing)
+                except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
+                    logger.warning('[SIMPLE-TRADER OPT] %s option verification failed: %s', strategy, e)
+                    res['option_error'] = str(e)
+                    res['results'] = res['results'][:25]
+            else:
+                res['results'] = res['results'][:25]
             task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
                                'start_date': start_date_str, 'end_date': end_date_str,
                                'bars': n_bars, 'on_future': on_future, **res}
@@ -5187,6 +5202,69 @@ def _run_simple_trader_optimise(strategy, data):
 
     threading.Thread(target=_run, name=f'stopt-{task_id[:6]}', daemon=True).start()
     return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
+_OPT_SHORTLIST = 10        # index rows re-priced on the option (plus the current settings)
+
+
+def _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval, data, start_date, task):
+    """Re-price the current settings and the best index rows on the option, as the run does
+    (attach_option_legs with the page's premium and SL / TSL), and replace res['results'] and
+    res['current'] with those figures, ranked by rank_quality. The index figures stay on each
+    row as index_pnl / index_pf."""
+    from trading_app.Backtest.st_bb_rsi_engine import (
+        StBbRsiEngine, attach_option_legs, summarise, rank_quality, rupee_card, _parse_hhmm)
+    premium = float(data.get('premium') or 250) or None
+    sl_pct = max(0.0, float(data.get('sl_pct') or 0))
+    tsl_x = max(0.0, float(data.get('tsl_x') or 0))
+    tsl_y = max(0.0, float(data.get('tsl_y') or 0))
+    mpb = int(''.join(ch for ch in interval if ch.isdigit()) or 3)
+    calendar = sorted(set(minutes.index.date))
+    cut = res.get('recent_from') or ''
+    eng = StBbRsiEngine(bars, **knobs)
+    cur = res['current']
+    param_keys = ('rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level', 'entry_start')
+    todo = [(cur, cur_trades)]
+    seen = {tuple(t['entry_time'] for t in cur_trades)}
+    for row in res['results']:
+        if len(todo) > _OPT_SHORTLIST:
+            break
+        trades = eng.simulate(
+            st_period=int(row['st_period']), st_mult=float(row['st_mult']),
+            bb_period=int(row['bb_period']), bb_mult=float(row['bb_mult']),
+            rsi_level=float(row['rsi_level']), wr_level=float(row['wr_level']),
+            entry_start=_parse_hhmm(row['entry_start'], 9 * 60 + 15))
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date]
+        sig = tuple(t['entry_time'] for t in trades)
+        if sig in seen:             # same trades as a row already queued (e.g. only %R differs)
+            continue
+        seen.add(sig)
+        todo.append((row, trades))
+
+    def _priced(row, trades):
+        priced, info = attach_option_legs(symbol, trades, premium, mpb, None, calendar=calendar,
+                                          sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y)
+        sm = summarise(priced)
+        out = {k: row[k] for k in param_keys}
+        out.update(sm)
+        out.update(rupee_card(priced, data, info.get('lot')))
+        out.update(index_pnl=row['total_pnl'], index_pf=row['profit_factor'],
+                   unpriced=info.get('unpriced', 0),
+                   recent_pnl=round(sum(t['pnl'] for t in priced if t['entry_time'][:10] >= cut), 2))
+        return out
+
+    rows, current = [], None
+    for n, (row, trades) in enumerate(todo, 1):
+        task['progress'] = {'done': n - 1, 'total': len(todo), 'stage': 'pricing'}
+        out = _priced(row, trades)
+        if row is cur:
+            current = out
+        else:
+            rows.append(out)
+    task['progress'] = {'done': len(todo), 'total': len(todo), 'stage': 'pricing'}
+    ordered, passed = rank_quality(rows, current)
+    res.update(results=ordered, best=ordered[0] if ordered else None, current=current,
+               passed=passed, basis='option', verified=len(todo), min_trades=res.get('min_trades'))
 
 
 @api_bp.route('/backtest/st-bb-rsi/optimise', methods=['POST'], strict_slashes=False)
@@ -5242,6 +5320,10 @@ def run_st_bb_rsi_optimise():
                 use_wr=bool(data.get('use_wr', False)),
                 wr_period=int(data.get('wr_period', 14) or 14),
                 wr_level=float(wr_lvl) if wr_lvl not in (None, '') else -30.0,
+                # the page's own numbers: scored as the "current" row beside the sweep
+                rsi_level=float(data.get('rsi_level') or 70), st_period=int(data.get('st_period') or 10),
+                st_mult=float(data.get('st_mult') or 2), bb_mult=float(data.get('bb_mult') or 2),
+                entry_start=data.get('entry_start') or '09:15',
             )
         task_id = uuid.uuid4().hex
         task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
@@ -5251,8 +5333,8 @@ def run_st_bb_rsi_optimise():
         def _run():
             try:
                 from trading_app.Backtest.st_bb_rsi_engine import optimise_st_bb_rsi
-                _, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
-                                                    end_date_str, interval)
+                minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
+                                                          end_date_str, interval)
                 if bars is None:
                     task.update(status='error', error='No historical data found for the given range')
                     return
@@ -5262,7 +5344,20 @@ def run_st_bb_rsi_optimise():
 
                 if simple:
                     from trading_app.Backtest.st_bb_rsi_engine import optimise_simple_trader
-                    res = optimise_simple_trader(bars, progress=_progress, from_date=start_date_str, **knobs)
+                    res = optimise_simple_trader(bars, progress=_progress, from_date=start_date_str, top=80, **knobs)
+                    cur_trades = res.pop('_current_trades', [])
+                    # The sweep is on index points; the BACKTEST the user trusts is on the option
+                    # with a premium SL / TSL. So the shortlist (the current settings + the best
+                    # index rows) is re-priced exactly as the run prices it and re-ranked on those
+                    # numbers — the board then shows what BACKTEST will show for the same row.
+                    if bool(data.get('price_options', True)):
+                        try:
+                            _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval,
+                                              data, start_date_str, task)
+                        except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
+                            logger.warning('[ST-BB-RSI OPT] option verification failed: %s', e)
+                            res['option_error'] = str(e)
+                            res['results'] = res['results'][:25]
                 else:
                     res = optimise_st_bb_rsi(bars, progress=_progress, from_date=start_date_str, **knobs)
                 task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,

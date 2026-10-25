@@ -3829,13 +3829,14 @@ document.addEventListener('DOMContentLoaded', function() {
         // "Find Best Params"), so it must always read whatever the CURRENT
         // render's rows are rather than closing over the first render's array.
         grid._displayed = rows.slice();
+        grid._applyFn = applyFn;            // read by the once-wired click listener below, so a later board (another strategy) applies with ITS function
         let sortState = null;
         DataGrid.mountSortable(grid, {
             rows, columns, empty: 'No combos passed the filter.',
             defaultSort: { key: defaultSortKey, dir: 'desc' },
             rowClass: (row, i) => {
                 const isLeader = sortState && sortState.key === defaultSortKey && sortState.dir === 'desc';
-                return (i === 0 && isLeader) ? 'opt-best' : '';
+                return [(i === 0 && isLeader) ? 'opt-best' : '', row && row._current ? 'opt-default' : ''].join(' ').trim();
             },
             onSorted: (r, st) => { grid._displayed = r; sortState = st; },
         });
@@ -3845,7 +3846,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const btn = e.target.closest('.btn-opt-use');
                 if (!btn) return;
                 const row = grid._displayed[parseInt(btn.dataset.idx, 10)];
-                if (row) applyFn(row);
+                if (row && grid._applyFn) grid._applyFn(row);
             });
         }
     }
@@ -4794,17 +4795,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // Simple Trader board: the page's own filters stay as set; the numbers Quantman's
     // run picked by eye (RSI line, SuperTrend, BB, %R level, entry start) are swept.
     const SBR_SIMPLE_COLS = [
-        { label: '#',          key: null,            fmt: (r, i) => i + 1 },
+        { label: '#',          key: null,            fmt: (r, i) => r._current ? '★ Default' : i + 1 },
         { label: 'RSI >',      key: 'rsi_level',     fmt: r => r.rsi_level },
         { label: 'SuperTrend', key: 'st_mult',       fmt: r => `${r.st_period} / ${r.st_mult}` },
         { label: 'BB',         key: 'bb_mult',       fmt: r => `${r.bb_period} / ${r.bb_mult}` },
         { label: '%R >',       key: 'wr_level',      fmt: r => r.wr_level },
         { label: 'From',       key: 'entry_start',   fmt: r => r.entry_start },
-        { label: 'Trades',     key: 'total_trades',  fmt: r => r.total_trades },
-        { label: 'Win%',       key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
-        { label: 'Total (index pts)', key: 'total_pnl', fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.total_pnl >= 0 ? '+' : ''}${(r.total_pnl ?? 0).toFixed(0)}</span>` },
+        { label: 'Trades',     key: 'total_trades',  fmt: r => r.total_trades + (r.option ? ` <small>(option ${r.option.total_trades})</small>` : '') },
+        { label: 'Win%',       key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` + (r.option ? ` <small>(option ${r.option.win_rate.toFixed(0)}%)</small>` : '') },
+        { label: 'Total (pts)', key: 'total_pnl', fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.total_pnl >= 0 ? '+' : ''}${(r.total_pnl ?? 0).toFixed(0)}</span>` },
         { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => `<span class="${r.recent_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.recent_pnl >= 0 ? '+' : ''}${(r.recent_pnl ?? 0).toFixed(0)}</span>` },
-        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) + (r.option ? ` <b title="On the option with your SL / TSL — the figure the BACKTEST shows">(option ${r.option.profit_factor.toFixed(2)})</b>` : '') },
+        { label: 'Index PF', key: 'index_pf', fmt: r => r.index_pf != null ? r.index_pf.toFixed(2) : '' },
         { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
         { label: '',           key: null,            fmt: () => '' },   // Use button
     ];
@@ -4839,13 +4841,14 @@ document.addEventListener('DOMContentLoaded', function() {
     function sbrStrategyCols(swept) {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
         return [
-            { label: '#', key: null, fmt: (r, i) => i + 1 },
+            { label: '#', key: null, fmt: (r, i) => r._current ? '★ Default' : i + 1 },
             ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k, fmt: r => r[k] })),
             { label: 'Trades', key: 'total_trades', fmt: r => r.total_trades },
             { label: 'Win%', key: 'win_rate', fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
-            { label: 'Total (index pts)', key: 'total_pnl', fmt: r => pnl(r.total_pnl) },
+            { label: 'Total (pts)', key: 'total_pnl', fmt: r => pnl(r.total_pnl) },
             { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => pnl(r.recent_pnl) },
             { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+            { label: 'Index PF', key: 'index_pf', fmt: r => r.index_pf != null ? r.index_pf.toFixed(2) : '' },
             { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
             { label: '', key: null, fmt: () => '' },   // Use button
         ];
@@ -4884,14 +4887,52 @@ document.addEventListener('DOMContentLoaded', function() {
         const panel  = document.getElementById('stBbRsiOptimisePanel');
         const metaEl = document.getElementById('sbrOptMeta');
         if (metaEl) metaEl.textContent =
-            `${data.total_combos_tested} combos · ${data.qualified} with ≥ ${data.min_trades} trades · `
-            + `${data.symbol} ${data.interval} · ${data.start_date} → ${data.end_date} · ranked on index points, `
+            `${data.total_combos_tested} combos · ${data.qualified} with ≥ ${data.min_trades} trades`
+            + (data.passed != null ? ` · ${data.passed} also win ≥ ${data.min_win}% on ≥ 150 trades with a recent profit` : '') + ` · `
+            + `${data.symbol} ${data.interval} · ${data.start_date} → ${data.end_date} · `
+            + (data.basis === 'option'
+                ? `the best index rows were re-priced on the option with your SL / TSL (${data.verified} checked) — these are the numbers BACKTEST shows; ranked on profit factor, then lowest drawdown, `
+                : (data.mode === 'simple' || data.mode === 'strategy'
+                    ? 'ranked on profit factor, then lowest drawdown, on index points, ' : 'ranked on index points, '))
             + `"recent" = since ${data.recent_from}`;
         const simple = data.mode === 'simple';
         const strat  = data.mode === 'strategy';
-        _mountSingleOptGrid('sbrOptGrid', data.results || [],
-                            strat ? sbrStrategyCols(data.swept || []) : (simple ? SBR_SIMPLE_COLS : SBR_OPT_COLS),
-                            'total_pnl',
+        // Option-priced boards carry the results cards' own figures (same books as the run).
+        const rsCols = data.basis !== 'option' ? [] : [
+            { label: 'Win / Loss', key: 'wins', fmt: r => `${r.wins} / ${r.losses}` },
+            { label: 'Total P&L (₹)', key: 'gross_rs', fmt: r => _rs(r.gross_rs || 0) },
+            { label: 'Net P&L (₹)', key: 'net_rs', fmt: r => _rs(r.net_rs || 0) },
+            { label: 'Avg Win (₹)', key: 'avg_win_rs', fmt: r => _rs(r.avg_win_rs || 0) },
+            { label: 'Avg Loss (₹)', key: 'avg_loss_rs', fmt: r => _rs(r.avg_loss_rs || 0) },
+            // As the card reads: rupees first, the same drawdown in premium points beside it.
+            { label: 'Max DD', key: 'max_dd_rs', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_dd_rs || 0)).toLocaleString('en-IN')}</span> <small>(${Math.abs(r.max_drawdown || 0).toFixed(1)} pts)</small>` },
+        ];
+        const withRs = (cols) => cols.length && rsCols.length
+            ? [...cols.filter(c => c.label !== 'Max DD (pts)').slice(0, -1), ...rsCols, cols[cols.length - 1]] : cols;
+        // The page's own settings, scored the same way, pinned as row ★ so the board can be
+        // read against the run the user already trusts (the sweep has no SL/TSL, see note).
+        const cur = data.current;
+        let rows = data.results || [];
+        if (cur) {
+            // The default (current page settings) is one row on the board: if the sweep already
+            // holds that exact combination, flag it; otherwise add it, scored the same way.
+            const keys = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
+                          'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit'];
+            const same = (r) => keys.every(k => r[k] === undefined || cur[k] === undefined || String(r[k]) === String(cur[k]));
+            const hit = rows.findIndex(same);
+            if (hit >= 0) rows = rows.map((r, i) => i === hit ? { ...r, _current: true, rank: cur.rank, option: r.option } : r);
+            else rows = [{ ...cur, _current: true }, ...rows];
+        }
+        if (metaEl && cur) metaEl.textContent += ` · ★ Default (current settings): ${cur.total_trades} trades, `
+            + `${cur.win_rate.toFixed(1)}% win, PF ${(cur.profit_factor || 0).toFixed(2)}, `
+            + `${cur.total_pnl >= 0 ? '+' : ''}${(cur.total_pnl ?? 0).toFixed(0)} pts `
+            + (data.basis === 'option' ? '(on the option) ' : '(index points) ')
+            + (cur.rank ? `— #${cur.rank} of ${data.basis === 'option' ? data.verified : (data.passed ?? data.qualified)}`
+                        : '— outside the quality filter (win < 50%, under 150 trades or no recent profit)')
+            + (data.option_error ? `. Option pricing unavailable (${data.option_error}); showing index points.` : '');
+        _mountSingleOptGrid('sbrOptGrid', rows,
+                            withRs(strat ? sbrStrategyCols(data.swept || []) : (simple ? SBR_SIMPLE_COLS : SBR_OPT_COLS)),
+                            (simple || strat) ? 'profit_factor' : 'total_pnl',
                             strat ? applySbrStrategyResult(data.strategy, data.swept || [])
                                   : (simple ? applySbrSimpleResult : applySbrOptResult));
         if (panel) panel.style.display = '';
@@ -4945,6 +4986,18 @@ document.addEventListener('DOMContentLoaded', function() {
                         use_wr:    document.getElementById('sbrUseWr')?.checked ?? false,
                         wr_period: parseInt(num('sbrWrLen', 14)),
                         wr_level:  num('sbrWrLevel', -30),
+                        // the page's own numbers, scored as the ★ current row
+                        rsi_level: num('sbrRsi', 70),
+                        st_period: parseInt(num('sbrStLen', 10)),
+                        st_mult:   num('sbrStFactor', 2),
+                        bb_mult:   num('sbrBbMult', 2),
+                        entry_start: document.getElementById('sbrEntryStart')?.value || '09:15',
+                        lots: Math.max(1, parseInt(num('pcLots', 1))), lot_value: num('pcLotValue', 65),
+                        compounding: document.getElementById('sbrCompound')?.checked ?? false,
+                        start_capital: num('sbrCapital', 25000), per_lot: num('sbrPerLot', 0),
+                        premium:   num('sbrPremium', 250),
+                        price_options: document.getElementById('sbrPriceOptions')?.checked ?? true,
+                        sl_pct: num('sbrSlPct', 0), tsl_x: num('sbrTslX', 0), tsl_y: num('sbrTslY', 0),
                     } : {}),
                 }),
             });
@@ -4958,8 +5011,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (myRun !== _sbrOptRun) return;
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
-                _showOptLoader('Finding best params…', p.total
-                    ? `${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`);
+                _showOptLoader('Finding best params…', p.stage === 'pricing'
+                    ? `pricing the best on the option · ${p.done} / ${p.total} · ${data.elapsed || 0}s`
+                    : (p.total ? `${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`));
             }
             _hideOptLoader();
             done();
