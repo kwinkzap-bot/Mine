@@ -415,6 +415,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // engine: 3-min candles; BB(15, 3), Williams %R(14) > -30, RSI(14) > 70, SuperTrend(10, 2),
     // close above R1; buy the ≈250 current-week CE; exit on a close below SuperTrend; stop-loss 13 %
     // with TSL X 15 % / Y 10 %; 09:15-15:14, one transaction a day. Re-applied each time the strategy is picked.
+    // Simple Trader strategies: 'simpler_trader' is #1; the rest each have their own engine.
+    const SIMPLE_STRATS = ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut',
+                           'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'];
+
     function applySimplerTraderPreset() {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         const on  = (id, v) => { const el = document.getElementById(id); if (el) el.checked = v; };
@@ -535,7 +539,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || val === 'st_bb_rsi') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || val === 'st_bb_rsi' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -1722,6 +1726,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.top_n          = parseInt(document.getElementById('smTopN')?.value || '10');
                 payload.exit_rank      = parseInt(document.getElementById('smExitRank')?.value || '50');
                 payload.monthly_add    = parseFloat(document.getElementById('smMonthlyAdd')?.value || '0');
+            }
+
+            // Find Best Params asks for the payload this strategy's run would post, so the
+            // sweep reads exactly the filters the page has set — nothing is sent.
+            if (endpoint && window._btCapture) {
+                const cb = window._btCapture;
+                window._btCapture = null;
+                cb({ endpoint, payload });
+                return;
             }
 
             if (!endpoint) {
@@ -4750,6 +4763,8 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
         else if (strat === 'option_selling') runOsOptimise(false);
         else if (strat === 'st_bb_rsi') runSbrOptimise();
+        else if (strat === 'simpler_trader') runSbrOptimise(true);
+        else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
     });
 
     // ── ST + BB + RSI + R1/S1 — Find Best Params ────────────────────────
@@ -4776,6 +4791,80 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: '',           key: null,            fmt: () => '' },   // Use button
     ];
 
+    // Simple Trader board: the page's own filters stay as set; the numbers Quantman's
+    // run picked by eye (RSI line, SuperTrend, BB, %R level, entry start) are swept.
+    const SBR_SIMPLE_COLS = [
+        { label: '#',          key: null,            fmt: (r, i) => i + 1 },
+        { label: 'RSI >',      key: 'rsi_level',     fmt: r => r.rsi_level },
+        { label: 'SuperTrend', key: 'st_mult',       fmt: r => `${r.st_period} / ${r.st_mult}` },
+        { label: 'BB',         key: 'bb_mult',       fmt: r => `${r.bb_period} / ${r.bb_mult}` },
+        { label: '%R >',       key: 'wr_level',      fmt: r => r.wr_level },
+        { label: 'From',       key: 'entry_start',   fmt: r => r.entry_start },
+        { label: 'Trades',     key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',       key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Total (index pts)', key: 'total_pnl', fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.total_pnl >= 0 ? '+' : ''}${(r.total_pnl ?? 0).toFixed(0)}</span>` },
+        { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => `<span class="${r.recent_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.recent_pnl >= 0 ? '+' : ''}${(r.recent_pnl ?? 0).toFixed(0)}</span>` },
+        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
+        { label: '',           key: null,            fmt: () => '' },   // Use button
+    ];
+
+    function applySbrSimpleResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('sbrRsi', r.rsi_level);
+        set('sbrStLen', r.st_period);
+        set('sbrStFactor', r.st_mult);
+        set('sbrBbLen', r.bb_period);
+        set('sbrBbMult', r.bb_mult);
+        set('sbrWrLevel', r.wr_level);
+        set('sbrEntryStart', r.entry_start);
+        if (window.showNotification) window.showNotification(
+            `Applied: RSI > ${r.rsi_level} · ST ${r.st_period}/${r.st_mult} · BB ${r.bb_period}/${r.bb_mult}`
+            + ` · %R > ${r.wr_level} · from ${r.entry_start} — press BACKTEST to see it on the option`, 'success');
+    }
+
+    // Strategies 2-7: the swept names come back with the rows, so the board and the
+    // "use this row" write-back are built from them. Input ids are <prefix><suffix>.
+    const SBR_PARAM = {
+        st_period:  ['ST len',     'StLen'],     st_mult:   ['ST ×',       'StFactor'],
+        bb_period:  ['BB len',     'BbLen'],     bb_mult:   ['BB ×',       'BbMult'],
+        rsi_level:  ['RSI >',      'RsiLevel'],  rsi_entry: ['RSI entry',  'RsiEntry'],
+        rsi_exit:   ['RSI exit',   'RsiExit'],   wr_level:  ['%R',         'WrLevel'],
+        cci_level:  ['CCI',        'CciLevel'],  cpr_wide:  ['CPR wide <', 'CprWide'],
+        cpr_narrow: ['CPR narrow <', 'CprNarrow'],
+    };
+    const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
+                         st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx' };
+
+    function sbrStrategyCols(swept) {
+        const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
+        return [
+            { label: '#', key: null, fmt: (r, i) => i + 1 },
+            ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k, fmt: r => r[k] })),
+            { label: 'Trades', key: 'total_trades', fmt: r => r.total_trades },
+            { label: 'Win%', key: 'win_rate', fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+            { label: 'Total (index pts)', key: 'total_pnl', fmt: r => pnl(r.total_pnl) },
+            { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => pnl(r.recent_pnl) },
+            { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+            { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
+            { label: '', key: null, fmt: () => '' },   // Use button
+        ];
+    }
+
+    function applySbrStrategyResult(strategy, swept) {
+        return (r) => {
+            const pre = SBR_PREFIX[strategy];
+            const parts = [];
+            swept.forEach(k => {
+                const el = document.getElementById(pre + (SBR_PARAM[k] || [])[1]);
+                if (el) el.value = r[k];
+                parts.push(`${(SBR_PARAM[k] || [k])[0]} ${r[k]}`);
+            });
+            if (window.showNotification) window.showNotification(
+                `Applied: ${parts.join(' · ')} — press BACKTEST to see it on the option`, 'success');
+        };
+    }
+
     function applySbrOptResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('sbrDirection', r.direction);
@@ -4798,11 +4887,17 @@ document.addEventListener('DOMContentLoaded', function() {
             `${data.total_combos_tested} combos · ${data.qualified} with ≥ ${data.min_trades} trades · `
             + `${data.symbol} ${data.interval} · ${data.start_date} → ${data.end_date} · ranked on index points, `
             + `"recent" = since ${data.recent_from}`;
-        _mountSingleOptGrid('sbrOptGrid', data.results || [], SBR_OPT_COLS, 'total_pnl', applySbrOptResult);
+        const simple = data.mode === 'simple';
+        const strat  = data.mode === 'strategy';
+        _mountSingleOptGrid('sbrOptGrid', data.results || [],
+                            strat ? sbrStrategyCols(data.swept || []) : (simple ? SBR_SIMPLE_COLS : SBR_OPT_COLS),
+                            'total_pnl',
+                            strat ? applySbrStrategyResult(data.strategy, data.swept || [])
+                                  : (simple ? applySbrSimpleResult : applySbrOptResult));
         if (panel) panel.style.display = '';
     }
 
-    async function runSbrOptimise() {
+    async function runSbrOptimise(simple, strategy) {
         const optimBtn = document.getElementById('runOptimiseBtn');
         const origText = optimBtn ? optimBtn.textContent : '';
         const panel    = document.getElementById('stBbRsiOptimisePanel');
@@ -4813,10 +4908,21 @@ document.addEventListener('DOMContentLoaded', function() {
         _showOptLoader('Finding best params…', 'Starting…');
         const num = (id, d) => parseFloat(document.getElementById(id)?.value || d);
         try {
+            let stratBody = null;
+            if (strategy) {
+                // The strategy's own run builds its payload; take it instead of posting it.
+                let cap = null;
+                window._btCapture = (c) => { cap = c; };
+                runBtn.click();
+                window._btCapture = null;
+                if (!cap) throw new Error('Could not read this strategy\'s settings');
+                stratBody = { ...cap.payload, strategy };
+                _showOptLoader('Finding best params…', 'Starting…');   // the run's own start hid it
+            }
             const resp = await fetch('/api/backtest/st-bb-rsi/optimise', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: JSON.stringify(stratBody || {
                     symbol:     (symbolSearch.value || 'NIFTY').trim().toUpperCase(),
                     start_date: document.getElementById('startDate')?.value,
                     end_date:   document.getElementById('endDate')?.value,
@@ -4827,6 +4933,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     entry_end:  document.getElementById('sbrEntryEnd')?.value || '15:14',
                     exit_cutoff: document.getElementById('sbrExitCutoff')?.value || '15:14',
                     max_trades_per_day: parseInt(num('sbrMaxTrades', 2)),
+                    ...(simple ? {
+                        mode: 'simple',
+                        direction:     document.getElementById('sbrDirection')?.value || 'long',
+                        htf:           document.getElementById('sbrHtf')?.value || 'off',
+                        require_green: document.getElementById('sbrGreen')?.checked ?? false,
+                        use_rsi:   document.getElementById('sbrUseRsi')?.checked ?? true,
+                        use_bb:    document.getElementById('sbrUseBb')?.checked ?? true,
+                        use_st:    document.getElementById('sbrUseSt')?.checked ?? true,
+                        use_pivot: document.getElementById('sbrUsePivot')?.checked ?? true,
+                        use_wr:    document.getElementById('sbrUseWr')?.checked ?? false,
+                        wr_period: parseInt(num('sbrWrLen', 14)),
+                        wr_level:  num('sbrWrLevel', -30),
+                    } : {}),
                 }),
             });
             let data = await resp.json();

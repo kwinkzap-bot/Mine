@@ -5119,6 +5119,76 @@ _sbr_opt_tasks: dict = {}
 _sbr_opt_lock = threading.Lock()
 
 
+def _run_simple_trader_optimise(strategy, data):
+    """Find Best Params for Simple Trader strategies 2-7: the engine is rebuilt from the
+    fields the strategy's own run route takes (Backtest/simple_trader_optimise.py) and
+    swept on INDEX points. Same task table and status route as the ST + BB + RSI sweep."""
+    from trading_app.Backtest import simple_trader_optimise as sto
+    if strategy not in sto.SPECS:
+        return jsonify({'success': False, 'error': f"No Find Best Params for '{strategy}'"}), 400
+    symbol = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+    start_date_str = data.get('start_date')
+    end_date_str = data.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+    interval = data.get('interval', '3minute')
+    if not start_date_str:
+        return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+    from trading_app.service import cpr_option_service as _cos
+    if not _cos.is_index(symbol):
+        return jsonify({'success': False,
+                        'error': 'This strategy trades index options: pick NIFTY, BANKNIFTY, '
+                                 'FINNIFTY, MIDCPNIFTY or SENSEX.'}), 400
+    on_future = sto.uses_future(strategy, symbol, data)
+    provider = get_fyers_adapter()
+    if provider is None and not on_future:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    token = _sp_instrument_token(provider, symbol) if provider is not None else None
+    task_id = uuid.uuid4().hex
+    task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
+    with _sbr_opt_lock:
+        _sbr_opt_tasks[task_id] = task
+
+    def _run():
+        try:
+            import pandas as pd
+            if on_future:        # the run reads the NIFTY continuous future, not the spot
+                from trading_app.Backtest.futures_minute_store import continuous_minutes
+                warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).date()
+                minutes = continuous_minutes('NIFTY', warm_from, pd.Timestamp(end_date_str).date())
+                if minutes.empty:
+                    task.update(status='error', error='No historical data found for the given range')
+                    return
+                mins = {'1minute': 1, '3minute': 3, '5minute': 5, '15minute': 15}.get(interval, 3)
+                anchor = pd.Timedelta(hours=9, minutes=15)
+                grouped = minutes.groupby((minutes.index - anchor).floor(f'{mins}min') + anchor).agg(
+                    open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
+                    close=('close', 'last')).dropna(subset=['open', 'close'])
+                grouped.index.name = 'date'
+                bars = grouped.reset_index()
+                n_bars = int((grouped.index >= pd.Timestamp(start_date_str)).sum())
+            else:
+                _, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
+                                                    end_date_str, interval, warmup_days=45)
+                if bars is None:
+                    task.update(status='error', error='No historical data found for the given range')
+                    return
+
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+
+            res = sto.optimise(strategy, bars, data, from_date=start_date_str, progress=_progress)
+            task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
+                               'start_date': start_date_str, 'end_date': end_date_str,
+                               'bars': n_bars, 'on_future': on_future, **res}
+            task['status'] = 'complete'
+        except Exception as e:      # noqa: BLE001
+            logger.error('[SIMPLE-TRADER OPT] %s %s', strategy, e, exc_info=True)
+            task.update(status='error', error=str(e))
+
+    threading.Thread(target=_run, name=f'stopt-{task_id[:6]}', daemon=True).start()
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
 @api_bp.route('/backtest/st-bb-rsi/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -5132,6 +5202,8 @@ def run_st_bb_rsi_optimise():
         return auth_error
     try:
         data = request.get_json() or {}
+        if data.get('strategy'):            # Simple Trader strategies 2-7 have their own engines
+            return _run_simple_trader_optimise(str(data['strategy']), data)
         symbol = str(data.get('symbol', 'NIFTY')).strip().upper()
         start_date_str = data.get('start_date')
         end_date_str = data.get('end_date') or datetime.today().strftime('%Y-%m-%d')
@@ -5158,6 +5230,19 @@ def run_st_bb_rsi_optimise():
             exit_cutoff=data.get('exit_cutoff', '15:14'),
             max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
         )
+        simple = str(data.get('mode', '')) == 'simple'     # Simple Trader: keep the page's filters
+        if simple:
+            wr_lvl = data.get('wr_level')
+            knobs.update(
+                direction=str(data.get('direction', 'long')),
+                htf=str(data.get('htf', 'off') or 'off').lower(),
+                require_green=bool(data.get('require_green', False)),
+                use_rsi=bool(data.get('use_rsi', True)), use_bb=bool(data.get('use_bb', True)),
+                use_st=bool(data.get('use_st', True)), use_pivot=bool(data.get('use_pivot', True)),
+                use_wr=bool(data.get('use_wr', False)),
+                wr_period=int(data.get('wr_period', 14) or 14),
+                wr_level=float(wr_lvl) if wr_lvl not in (None, '') else -30.0,
+            )
         task_id = uuid.uuid4().hex
         task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
         with _sbr_opt_lock:
@@ -5175,7 +5260,11 @@ def run_st_bb_rsi_optimise():
                 def _progress(done, total):
                     task['progress'] = {'done': done, 'total': total}
 
-                res = optimise_st_bb_rsi(bars, progress=_progress, from_date=start_date_str, **knobs)
+                if simple:
+                    from trading_app.Backtest.st_bb_rsi_engine import optimise_simple_trader
+                    res = optimise_simple_trader(bars, progress=_progress, from_date=start_date_str, **knobs)
+                else:
+                    res = optimise_st_bb_rsi(bars, progress=_progress, from_date=start_date_str, **knobs)
                 task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
                                    'start_date': start_date_str, 'end_date': end_date_str,
                                    'bars': n_bars, **res}

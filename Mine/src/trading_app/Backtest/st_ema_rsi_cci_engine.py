@@ -120,13 +120,24 @@ class StEmaRsiCciEngine:
         series a decision needs."""
         df = self.df
         o, h, l, c = (df[k].to_numpy(dtype=float) for k in ('open', 'high', 'low', 'close'))
-        st_line, _ = supertrend(h, l, c, self.st_period, self.st_mult)
-        ema_v = ema(c, self.ema_period)
-        rsi_v = rsi(c, self.rsi_period)
-        cci_v = cci(h, l, c, self.cci_period)
-        wr_v = williams_r(h, l, c, self.wr_period)
-        bb_up, _, bb_lo = bollinger(c, self.bb_period, self.bb_mult)
-        cpr = self._cpr()
+        # Indicators are memoised on their own inputs: Find Best Params re-asks for the same
+        # few series thousands of times and only the thresholds change between combinations.
+        memo = self.__dict__.setdefault('_memo', {})
+
+        def ind(key, fn):
+            if key not in memo:
+                memo[key] = fn()
+            return memo[key]
+
+        st_line, _ = ind(('st', self.st_period, self.st_mult),
+                         lambda: supertrend(h, l, c, self.st_period, self.st_mult))
+        ema_v = ind(('ema', self.ema_period), lambda: ema(c, self.ema_period))
+        rsi_v = ind(('rsi', self.rsi_period), lambda: rsi(c, self.rsi_period))
+        cci_v = ind(('cci', self.cci_period), lambda: cci(h, l, c, self.cci_period))
+        wr_v = ind(('wr', self.wr_period), lambda: williams_r(h, l, c, self.wr_period))
+        bb_up, _, bb_lo = ind(('bb', self.bb_period, self.bb_mult),
+                              lambda: bollinger(c, self.bb_period, self.bb_mult))
+        cpr = ind(('cpr',), self._cpr)
         narrow = (cpr['width'] < self.cpr_narrow) if self.use_cpr_narrow else np.ones(len(c), dtype=bool)
         with np.errstate(invalid='ignore'):
             short = ((c < st_line) & (c < ema_v) & (rsi_v < self.rsi_entry)

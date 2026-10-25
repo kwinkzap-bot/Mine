@@ -522,6 +522,69 @@ def optimise_st_bb_rsi(df: pd.DataFrame, rsi_period: int = 14, bb_period: int = 
             'best': rows[0] if rows else None, 'recent_from': cut, 'min_trades': MIN_TRADES}
 
 
+# Simple Trader (Quantman "BB PP ST RSI WR") sweep. The page's own filters — which
+# indicators are on, direction, %R length, entry end, square-off, trades a day — are
+# held as set; only the numbers Quantman's run picked by eye are varied.
+_SIMPLE_RSI = (65, 70, 75, 80)
+_SIMPLE_ST_PERIOD = (7, 10, 14)
+_SIMPLE_ST_MULT = (1.5, 2.0, 2.5, 3.0)
+_SIMPLE_BB_PERIOD = (15, 20)
+_SIMPLE_BB_MULT = (2.0, 2.5, 3.0)
+_SIMPLE_WR = (-20, -30, -40)
+_SIMPLE_START = ('09:15', '09:30')
+
+
+def simple_grid_size() -> int:
+    return (len(_SIMPLE_RSI) * len(_SIMPLE_ST_PERIOD) * len(_SIMPLE_ST_MULT) * len(_SIMPLE_BB_PERIOD)
+            * len(_SIMPLE_BB_MULT) * len(_SIMPLE_WR) * len(_SIMPLE_START))
+
+
+def optimise_simple_trader(df: pd.DataFrame, top: int = 25, progress=None, from_date: str = '',
+                           **fixed) -> Dict[str, Any]:
+    """Find Best Params for the Simple Trader strategies: the same sweep idea as
+    `optimise_st_bb_rsi`, but the engine is built with the page's filters (`fixed` is
+    the constructor's own keywords: direction, use_*, wr_period, htf, ...) so the
+    Williams %R gate and the rest of the rule are in every combination. Scored on INDEX
+    points — the premium stop / trailing stop needs option candles, a Breeze read per
+    trade — so the board is a shortlist to confirm with a normal run."""
+    eng = StBbRsiEngine(df, **fixed)
+    days = sorted({str(t)[:10] for t in eng._base()['ts'] if str(t)[:10] >= from_date})
+    cut = days[int(len(days) * 0.7)] if days else ''
+    total = simple_grid_size()
+    rows: List[Dict[str, Any]] = []
+    done = 0
+    for st_period in _SIMPLE_ST_PERIOD:
+        for st_mult in _SIMPLE_ST_MULT:
+            eng._ind('st', st_period, st_mult)
+            for bb_period in _SIMPLE_BB_PERIOD:
+                for bb_mult in _SIMPLE_BB_MULT:
+                    for rsi_level in _SIMPLE_RSI:
+                        for wr_level in _SIMPLE_WR:
+                            for start in _SIMPLE_START:
+                                trades = eng.simulate(
+                                    st_period=st_period, st_mult=st_mult, bb_period=bb_period,
+                                    bb_mult=bb_mult, rsi_level=rsi_level, wr_level=float(wr_level),
+                                    entry_start=_parse_hhmm(start, 9 * 60 + 15))
+                                if from_date:
+                                    trades = [t for t in trades if t['entry_time'][:10] >= from_date]
+                                done += 1
+                                if len(trades) < MIN_TRADES:
+                                    continue
+                                sm = summarise(trades)
+                                sm.update(rsi_level=rsi_level, st_period=st_period, st_mult=st_mult,
+                                          bb_period=bb_period, bb_mult=bb_mult, wr_level=wr_level,
+                                          entry_start=start,
+                                          recent_pnl=round(sum(t['pnl'] for t in trades
+                                                               if t['entry_time'][:10] >= cut), 2))
+                                rows.append(sm)
+            if progress:
+                progress(done, total)
+    rows.sort(key=lambda r: r['total_pnl'], reverse=True)
+    return {'total_combos_tested': total, 'qualified': len(rows), 'results': rows[:top],
+            'best': rows[0] if rows else None, 'recent_from': cut, 'min_trades': MIN_TRADES,
+            'mode': 'simple'}
+
+
 # ── Option leg ─────────────────────────────────────────────────────────────────
 
 def _listed_expiries(symbol: str, after) -> List[Any]:
