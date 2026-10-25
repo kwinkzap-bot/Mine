@@ -11489,7 +11489,8 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
 
 
 # strategy key -> env prefix of the ST + BB + RSI algos (NIFTY, BANKNIFTY, SENSEX).
-_STBB_FLAGS = {'stbb': 'STBB', 'stbb_bn': 'STBB_BN', 'stbb_sx': 'STBB_SX'}
+_STBB_FLAGS = {'stbb': 'STBB', 'stbb_bn': 'STBB_BN', 'stbb_sx': 'STBB_SX',
+               **{f'st{n}': f'ST{n}' for n in range(1, 8)}}      # Simple Trader 1-7
 
 
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
@@ -12733,12 +12734,15 @@ def algo_cpr_stop() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str) -> None:
+def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: int = 0) -> None:
     """The five /algo/<path>/* routes of one ST + BB + RSI algo. NIFTY keeps its
     original paths and endpoint names; BANKNIFTY and SENSEX are the same handlers over
     their own profile (own thread, files, STBB_BN_* / STBB_SX_* settings)."""
 
     def _prof():
+        if simple:          # Simple Trader <n>: same handlers over its own module and profile
+            from trading_app.algo.simple_trader import simple_trader_algo as sb
+            return sb, sb.PROFILES[simple]
         from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as sb
         return sb, sb.PROFILES[symbol]
 
@@ -12762,8 +12766,10 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str) -> None:
             accts = sb.accounts(username, pr)
             return jsonify({
                 'success': True,
-                'symbol': symbol,
+                'symbol': pr.symbol,
                 'flag_prefix': pr.pfx,
+                'rule': getattr(pr, 'rule', None),
+                'strategy': getattr(getattr(pr, 'spec', None), 'name', None),
                 'running': bool(inst and inst.is_running()),
                 'settings': st,
                 'accounts': accts,
@@ -12805,6 +12811,17 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str) -> None:
                     if not lo <= n <= hi:
                         return jsonify({'success': False, 'error': f'{key} must be {lo}-{hi}'}), 400
                     saves[var] = str(n)
+            if simple:      # the premium stop-loss and its trail (percent of the entry premium)
+                for key, var in (('sl_pct', f'{pr.pfx}_SL_PCT'), ('tsl_x', f'{pr.pfx}_TSL_X'),
+                                 ('tsl_y', f'{pr.pfx}_TSL_Y')):
+                    if key in data:
+                        try:
+                            n = float(data[key])
+                        except (TypeError, ValueError):
+                            return jsonify({'success': False, 'error': f'{key} must be a number'}), 400
+                        if not 0 <= n <= 100:
+                            return jsonify({'success': False, 'error': f'{key} must be 0-100'}), 400
+                        saves[var] = f'{n:g}'
             for var, val in saves.items():
                 if not UserEnvManager.save_user_var(username, var, val):
                     return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500
@@ -12873,6 +12890,8 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str) -> None:
 _register_stbb_routes('st-bb-rsi', 'NIFTY', 'stbb')
 _register_stbb_routes('st-bb-rsi-banknifty', 'BANKNIFTY', 'stbb_bn')
 _register_stbb_routes('st-bb-rsi-sensex', 'SENSEX', 'stbb_sx')
+for _n in range(1, 8):      # Simple Trader 1-7: /algo/simple-trader-<n>/{status,settings,history,start,stop}
+    _register_stbb_routes(f'simple-trader-{_n}', 'NIFTY', f'st{_n}', simple=_n)
 
 
 @api_bp.route('/algo/ema-confluence/status', methods=['GET'])

@@ -1,6 +1,6 @@
-/* algo_stbb.js — Algo page: the three ST + BB + RSI tabs (NIFTY, BANKNIFTY, SENSEX): the Backtest
-   page's strategy run live on index options. One template, one set of functions; every function
-   takes the tab key. */
+/* algo_stbb.js — Algo page: the three ST + BB + RSI tabs (NIFTY, BANKNIFTY, SENSEX) and the seven
+   Simple Trader tabs ('simple-1'..'simple-7'): the Backtest page's strategies run live on index
+   options. One set of functions; every function takes the tab key. */
 'use strict';
 
 // key → DOM id prefix (p), API base, index and env-flag prefix. The state is per tab.
@@ -9,6 +9,9 @@ const _STBB = {
     'stbb-bn': { p: 'stbbbn', api: '/api/algo/st-bb-rsi-banknifty', sym: 'BANKNIFTY', pfx: 'STBB_BN' },
     'stbb-sx': { p: 'stbbsx', api: '/api/algo/st-bb-rsi-sensex',    sym: 'SENSEX',    pfx: 'STBB_SX' },
 };
+for (let n = 1; n <= 7; n++) {
+    _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true };
+}
 Object.values(_STBB).forEach(c => Object.assign(c, { timer: null, mode: null, book: 'all', history: [] }));
 
 const _stbbEl = (c, id) => document.getElementById(c.p + id);
@@ -20,7 +23,9 @@ function _stbbClearTimers() { Object.values(_STBB).forEach(c => { clearTimeout(c
 // of waiting on a fresh fetch. `key` is only the one the user is looking at.
 const _stbbGroupOpen = () => Object.keys(_STBB).some(k => document.getElementById('algo-' + k + '-panel')?.classList.contains('active'));
 function _stbbActivate(key) {
-    Object.keys(_STBB).forEach(k => { _stbbFetchStatus(k); _stbbFetchHistory(k); });
+    // the sub-tabs of one top tab load together; the other group's are not fetched
+    Object.keys(_STBB).filter(k => !!_STBB[k].simple === !!_STBB[key].simple)
+        .forEach(k => { _stbbFetchStatus(k); _stbbFetchHistory(k); });
 }
 
 function _stbbEsc(s) {
@@ -58,10 +63,17 @@ function _stbbRender(c, key, d) {
     _stbbEl(c, 'RunBadgeText').textContent = d.running ? 'Running' : (s.enabled ? 'Idle (runs 09:00–15:30)' : 'Stopped');
 
     const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; };
+    if (d.symbol) c.sym = d.symbol;
     set(c.p + 'Direction', s.direction); set(c.p + 'MaxTrades', s.max_trades); set(c.p + 'Premium', Math.round(s.premium));
+    set(c.p + 'SlPct', s.sl_pct); set(c.p + 'TslX', s.tsl_x); set(c.p + 'TslY', s.tsl_y);
     _stbbEl(c, 'Sizing').textContent =
         `Size is the flags: a live order is each account's BROKER_N_${c.pfx}_LOTS lots (at accounts with BROKER_N_${c.pfx}_ACTIVE=true); a paper trade takes ${d.paper_lots} lot(s).`;
-    _stbbEl(c, 'Rule').textContent =
+    if (c.simple) {
+        _stbbEl(c, 'Rule').textContent = `${d.rule || ''} · stop-loss ${s.sl_pct}% under the fill`
+            + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : ', no trail')
+            + ` · up to ${s.max_trades} trade(s) a day, re-entering on the next signal after a stop · square-off 15:14`
+            + (d.live_armed && s.backstop_pct ? ` · broker SL-M rests at the initial stop` : '');
+    } else _stbbEl(c, 'Rule').textContent =
         `3-minute candles · RSI(${s.rsi_len}) ${s.rsi_level}/${100 - s.rsi_level} · SuperTrend(${s.st_len}, ${s.st_mult}) · BB(${s.bb_len}, ${s.bb_mult}) · R1/S1 of yesterday · `
         + `no target, no stop — exits when SuperTrend turns against the trade, square-off 15:14`
         + (s.backstop_pct ? ` · broker backstop SL-M ${s.backstop_pct}% below the fill` : '');
@@ -73,7 +85,7 @@ function _stbbRender(c, key, d) {
         : `<div class="ag-empty">No account has BROKER_N_${c.pfx}_ACTIVE=true — paper only. Live needs one (zerodha / fyers) with BROKER_N_${c.pfx}_LOTS.</div>`;
 
     const st = d.state || {};
-    _stbbEl(c, 'Spot').textContent = st.spot ? `${c.sym} ${_stbbNum(st.spot)}` : (st.day ? 'Waiting for the first 3-minute candle (09:18)' : '');
+    _stbbEl(c, 'Spot').textContent = st.spot ? `${c.sym} ${_stbbNum(st.spot)}` : (st.day ? (c.simple ? 'Waiting for the first closed candle' : 'Waiting for the first 3-minute candle (09:18)') : '');
     _stbbEl(c, 'LastUpd').textContent = st.updated ? 'updated ' + st.updated : '';
     _stbbRenderTrades(c, (st.day && st.day.trades) || []);
     const log = (st.log || []).slice(-30).reverse();
@@ -101,11 +113,12 @@ function _stbbRenderTrades(c, trades) {
             { key: 'mode', label: 'Book', format: v => v ? v.toUpperCase() : '—', badge: v => v === 'live' ? 'neg' : 'info' },
             { key: 'type', label: 'Side', tone: v => v === 'Short' ? 'neg' : 'pos', strong: true },
             { key: 'signal_bar', label: 'Signal candle', format: v => (v || '').slice(11, 16) },
-            { key: 'signal', label: 'RSI · close', format: v => v ? `${v.rsi} · ${_stbbNum(v.close)} (${v.pivot} ${_stbbNum(v.pivot_level)})` : '—' },
+            { key: 'signal', label: 'RSI · close', format: v => v ? `${v.rsi ?? '—'} · ${_stbbNum(v.close)}` + (v.pivot ? ` (${v.pivot} ${_stbbNum(v.pivot_level)})` : '') : '—' },
             { key: 'index_entry', label: 'Index in', format: (v, t) => v == null ? '—' : `${_stbbNum(v)} @ ${t.entry_time || ''}` },
             { key: 'leg', label: 'Option' },
             { key: 'lots', label: 'Lots' },
             { key: 'prem', label: 'Premium' },
+            ...(c.simple ? [{ key: 'stop', label: 'Stop', format: (v, t) => v == null ? '—' : _stbbNum(v) }] : []),
             { key: 'result', label: 'Exit', format: (v, t) => v ? `${v} @ ${t.exit_time || ''} (index ${_stbbNum(t.index_exit)})` : (t.error || '—') },
             { key: 'pnl_inr', label: 'P&L', strong: true, format: v => v == null ? '—' : DataGrid.inr(v), tone: DataGrid.sign },
         ],
@@ -171,8 +184,9 @@ function _stbbSave(key, body) {
 function _stbbSetMode(key, mode) {
     const c = _STBB[key];
     if (mode === c.mode) return;
-    if (mode === 'live' && !confirm(`Switch ST + BB + RSI ${c.sym} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true. There is no stop-loss: the trade ends only when the SuperTrend turns or at 15:14.`)) return;
-    if (mode === 'paper' && !confirm(`Switch ST + BB + RSI ${c.sym} to PAPER? New entries are only recorded. A live position already open keeps being managed until it is flat.`)) return;
+    if (mode === 'live' && c.simple && !confirm(`Switch Simple Trader ${key.split('-')[1]} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true (size: BROKER_N_${c.pfx}_LOTS). A stop-loss SL-M rests at the broker; the trail and the strategy's exit are managed by this app.`)) return;
+    if (mode === 'live' && !c.simple && !confirm(`Switch ST + BB + RSI ${c.sym} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true. There is no stop-loss: the trade ends only when the SuperTrend turns or at 15:14.`)) return;
+    if (mode === 'paper' && !confirm(`Switch ${c.simple ? 'Simple Trader ' + key.split('-')[1] : 'ST + BB + RSI ' + c.sym} to PAPER? New entries are only recorded. A live position already open keeps being managed until it is flat.`)) return;
     _stbbSave(key, { mode });
 }
 
@@ -182,7 +196,17 @@ function _stbbStart(key) {
 }
 
 function _stbbStop(key) {
-    if (!confirm(`Stop ST + BB + RSI ${_STBB[key].sym}? It stays stopped (also after a restart) until Start. A live position is NOT squared off — close it from the Order Placement strip.`)) return;
+    if (!confirm(`Stop ${_STBB[key].simple ? 'Simple Trader ' + key.split('-')[1] : 'ST + BB + RSI ' + _STBB[key].sym}? It stays stopped (also after a restart) until Start. A live position is NOT squared off — close it from the Order Placement strip.`)) return;
     fetch(_STBB[key].api + '/stop', { method: 'POST' }).then(r => r.json())
         .then(d => { if (!d.success) alert('Stop failed: ' + (d.error || '')); _stbbFetchStatus(key); });
+}
+
+// Rule & Accounts fields start locked; the button unlocks them (Simple Trader tabs).
+function _stbbToggleEdit(key) {
+    const c = _STBB[key];
+    const btn = _stbbEl(c, 'EditBtn');
+    const lock = btn.dataset.open === '1';
+    ['MaxTrades', 'Premium', 'SlPct', 'TslX', 'TslY'].forEach(f => { const el = _stbbEl(c, f); if (el) el.disabled = lock; });
+    btn.dataset.open = lock ? '0' : '1';
+    btn.textContent = lock ? '🔒 Locked — Edit' : '🔓 Editing — Lock';
 }

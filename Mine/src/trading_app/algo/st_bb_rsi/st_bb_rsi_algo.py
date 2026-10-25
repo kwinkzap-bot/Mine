@@ -277,9 +277,7 @@ class StBbRsiAlgo:
         the junk-filtered and 09:15-anchored resample the backtest uses, with the
         candle still forming dropped."""
         from trading_app.service import multichart_service as mc
-        adapter, fy = mc.algo_provider(), mc.resolve_symbol(self.p.symbol)
-        raw = adapter.historical_data(fy, (today - timedelta(days=_PRIOR_DAYS)).isoformat(),
-                                      today.isoformat(), 'minute', use_cache=False) or []
+        raw = self._history_rows(mc.algo_provider(), today)
         if not raw:
             return pd.DataFrame()
         m = pd.DataFrame(raw)
@@ -293,13 +291,33 @@ class StBbRsiAlgo:
         late = (m.index.hour * 60 + m.index.minute) >= 15 * 60 + 15
         m = m[~(late & ((m['high'] - m['low']) > 0.003 * m['close']))]
         anchor = pd.Timedelta(hours=9, minutes=15)
-        key = (m.index - anchor).floor(f'{eng.BAR_MINUTES}min') + anchor
+        key = (m.index - anchor).floor(f'{self._bar_minutes()}min') + anchor
         bars = m.groupby(key).agg(open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
                                   close=('close', 'last'), volume=('volume', 'sum')).dropna(subset=['open', 'close'])
         bars.index.name = 'date'
         # A candle stamped s closes at s + 3 min; _BAR_LAG is that plus 5 s for the feed to have it.
-        cutoff = pd.Timestamp(now.replace(tzinfo=None) - _BAR_LAG)
+        cutoff = pd.Timestamp(now.replace(tzinfo=None) - timedelta(minutes=self._bar_minutes(), seconds=5))
         return bars[bars.index <= cutoff]
+
+    # ── hooks the Simple Trader algos override (defaults: this algo's own) ──
+
+    def _history_rows(self, adapter, today: date) -> List[Dict[str, Any]]:
+        from trading_app.service import multichart_service as mc
+        return adapter.historical_data(mc.resolve_symbol(self.p.symbol),
+                                       (today - timedelta(days=_PRIOR_DAYS)).isoformat(),
+                                       today.isoformat(), 'minute', use_cache=False) or []
+
+    def _bar_minutes(self) -> int:
+        return eng.BAR_MINUTES
+
+    def _settings(self) -> Dict[str, Any]:
+        return settings(self.username, self.p)
+
+    def _decide(self, day, bars, s) -> List[Dict[str, Any]]:
+        return eng.on_bar(day, bars, s)
+
+    def _clock_exits(self, day, hhmm: str, cutoff: str) -> List[Dict[str, Any]]:
+        return eng.time_exits(day, hhmm, cutoff)
 
     def _kite(self):
         """The Kite session the orders go through — the first flagged account's, else
@@ -393,7 +411,7 @@ class StBbRsiAlgo:
                         self._note('session over — thread exits')
                         self._save_state()
                     break
-                if mins < _OPEN_MIN + eng.BAR_MINUTES:      # the 09:15 candle closes at 09:18
+                if mins < _OPEN_MIN + self._bar_minutes():      # the 09:15 candle closes at 09:18
                     self._stop_event.wait(10)
                     continue
                 try:
@@ -409,7 +427,7 @@ class StBbRsiAlgo:
         if not self.state or self.state['day']['date'] != today.isoformat():
             self.state = self._load_state(today.isoformat())
         day = self.state['day']
-        s = settings(self.username, self.p)
+        s = self._settings()
         events: List[Dict[str, Any]] = []
 
         # Closed candles: any that closed since the last look, oldest first, so a
@@ -428,13 +446,13 @@ class StBbRsiAlgo:
                         continue
                     # Tradeable only if this is the candle that JUST closed: an older one,
                     # or a feed that is minutes late, would buy the move late.
-                    age = (now.replace(tzinfo=None) - (bars.index[k] + pd.Timedelta(minutes=eng.BAR_MINUTES))).total_seconds()
+                    age = (now.replace(tzinfo=None) - (bars.index[k] + pd.Timedelta(minutes=self._bar_minutes()))).total_seconds()
                     stale = k < newest or age > _STALE_SECS
-                    for ev in eng.on_bar(day, bars.iloc[:k + 1], dict(s, **self._window())):
+                    for ev in self._decide(day, bars.iloc[:k + 1], dict(s, **self._window())):
                         ev['stale'] = stale
                         events.append(ev)
         events = self._drop_round_trips(events)
-        events += eng.time_exits(day, _hhmm(now), self._window()['exit_cutoff'])
+        events += self._clock_exits(day, _hhmm(now), self._window()['exit_cutoff'])
 
         for ev in events:
             self._act(ev, now, s)
@@ -469,7 +487,14 @@ class StBbRsiAlgo:
                     if leg.get('ltp') != px or leg.get('mtm') != mtm:
                         leg.update(ltp=px, mtm=mtm)
                         changed = True
+            if self._after_mark(t, px):
+                changed = True
         return changed
+
+    def _after_mark(self, t: Dict[str, Any], px: float) -> bool:
+        """Called with each open trade's fresh premium; the Simple Trader algos manage the
+        option's own stop-loss here. True when it changed the trade."""
+        return False
 
     @staticmethod
     def _drop_round_trips(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -501,14 +526,12 @@ class StBbRsiAlgo:
             did = True
         return did
 
-    @staticmethod
-    def _window() -> Dict[str, str]:
+    def _window(self) -> Dict[str, str]:
         return {'entry_start': '09:15', 'entry_end': '15:14', 'exit_cutoff': '15:14'}
 
-    @staticmethod
-    def _next_bar_ready(last_ts: str) -> str:
+    def _next_bar_ready(self, last_ts: str) -> str:
         """Wall-clock time at which the candle after `last_ts` has closed and the feed has it."""
-        t = datetime.strptime(last_ts[:19], '%Y-%m-%d %H:%M:%S') + timedelta(minutes=2 * eng.BAR_MINUTES, seconds=5)
+        t = datetime.strptime(last_ts[:19], '%Y-%m-%d %H:%M:%S') + timedelta(minutes=2 * self._bar_minutes(), seconds=5)
         return t.strftime('%Y-%m-%d %H:%M:%S')
 
     # ── the broker's side of a live leg ─────────────────────────────────
@@ -671,7 +694,7 @@ class StBbRsiAlgo:
         else:
             t['pending_entry'] = False
             t.pop('error', None)
-        self._note(f"#{t['n']} {t['type']}: RSI {t['signal']['rsi']} → BUY {self.p.symbol} {pick['strike']} {opt_type} "
+        self._note(f"#{t['n']} {t['type']}: RSI {t['signal'].get('rsi')} → BUY {self.p.symbol} {pick['strike']} {opt_type} "
                    f"≈{pick['premium']} — "
                    + (', '.join(f"{l['name']} {l['lots']} lot(s) @ {l.get('entry')}" for l in filled)
                       or 'NOTHING FILLED'))
@@ -780,7 +803,7 @@ class StBbRsiAlgo:
         self._note(f"#{t['n']} {t['type']}: {ev['reason']} at {t['exit_time']} — index "
                    f"{t.get('index_exit') or 0:,.0f}" + (f", premium {exit_px}" if exit_px else ''))
         if legs:
-            self._alert('stbb_exit', f"ST+BB+RSI exit — {ev['reason']}",
+            self._alert('stbb_exit', f"{self.p.label} exit — {ev['reason']}",
                         f"{t['type']} · {self.p.symbol} {opt['strike'] if opt else '—'} {opt['type'] if opt else ''} · "
                         f"₹{pnl:,.0f}", t)
         t['pending_entry'] = False

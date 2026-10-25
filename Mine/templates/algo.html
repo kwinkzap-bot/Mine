@@ -11,6 +11,7 @@
      for the EMA Confluence Live Algo tab (algo_ema_confluence.html). -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}?v={{ sv('css/oi_profile.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backtest_combined.css') }}?v={{ sv('css/backtest_combined.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -24,6 +25,7 @@
         <button class="ag-tab"        id="algo-tab-tmf"             onclick="algoSwitch('tmf')">30-Min Fakeout</button>
         <button class="ag-tab"        id="algo-tab-cpr"             onclick="algoSwitch('cpr')">CPR Logic</button>
         <button class="ag-tab"        id="algo-tab-stbb"            onclick="algoSwitch('stbb')">ST + BB + RSI</button>
+        <button class="ag-tab"        id="algo-tab-simple"          onclick="algoSwitch('simple-1')">Simple Trader</button>
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
@@ -224,6 +226,13 @@
     {% with key='stbb', p='stbb', symbol='NIFTY', pfx='STBB' %}{% include 'algo_stbb.html' %}{% endwith %}
     {% with key='stbb-bn', p='stbbbn', symbol='BANKNIFTY', pfx='STBB_BN' %}{% include 'algo_stbb.html' %}{% endwith %}
     {% with key='stbb-sx', p='stbbsx', symbol='SENSEX', pfx='STBB_SX' %}{% include 'algo_stbb.html' %}{% endwith %}
+    {% with key='simple-1', p='sim1', n=1, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST1' %}{% include 'algo_simple.html' %}{% endwith %}
+    {% with key='simple-2', p='sim2', n=2, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST2' %}{% include 'algo_simple.html' %}{% endwith %}
+    {% with key='simple-3', p='sim3', n=3, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST3' %}{% include 'algo_simple.html' %}{% endwith %}
+    {% with key='simple-4', p='sim4', n=4, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST4' %}{% include 'algo_simple.html' %}{% endwith %}
+    {% with key='simple-5', p='sim5', n=5, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST5' %}{% include 'algo_simple.html' %}{% endwith %}
+    {% with key='simple-6', p='sim6', n=6, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='SENSEX', pfx='ST6' %}{% include 'algo_simple.html' %}{% endwith %}
+    {% with key='simple-7', p='sim7', n=7, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='SENSEX', pfx='ST7' %}{% include 'algo_simple.html' %}{% endwith %}
 
     {% include 'algo_ema_confluence.html' %}
 
@@ -268,6 +277,7 @@
 <script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_cpr.js') }}?v={{ sv('js/algo_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_stbb.js') }}?v={{ sv('js/algo_stbb.js') }}"></script>
+<script src="{{ url_for('static', filename='js/algo_simple_combined.js') }}?v={{ sv('js/algo_simple_combined.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_ema_confluence.js') }}?v={{ sv('js/algo_ema_confluence.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo.js') }}?v={{ sv('js/algo.js') }}"></script>
 <script>algoLoad();</script>

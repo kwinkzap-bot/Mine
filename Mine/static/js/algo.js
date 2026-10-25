@@ -6,7 +6,8 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade changes
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'stbb', 'stbb-bn', 'stbb-sx', 'ema-confluence', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'stbb', 'stbb-bn', 'stbb-sx',
+    'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7', 'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -433,9 +434,12 @@ function _algoSetStrikeMode(algo, sel) {
 function algoSwitch(tab) {
     _ALGO_TABS.forEach(t => {
         document.getElementById('algo-' + t + '-panel').classList.toggle('active', t === tab);
-        // the three ST + BB + RSI indices share one top tab ('stbb'), with sub-tabs inside
-        const btn = document.getElementById('algo-tab-' + (t.startsWith('stbb') ? 'stbb' : t));
-        const on = t.startsWith('stbb') ? tab.startsWith('stbb') : t === tab;
+        // the three ST + BB + RSI indices share one top tab ('stbb') and the seven Simple Trader
+        // strategies another ('simple'), each with sub-tabs inside
+        const top = t.startsWith('stbb') ? 'stbb' : (t.startsWith('simple-') ? 'simple' : t);
+        const btn = document.getElementById('algo-tab-' + top);
+        const on = t.startsWith('stbb') ? tab.startsWith('stbb')
+                 : t.startsWith('simple-') ? tab.startsWith('simple-') : t === tab;
         if (btn) btn.classList.toggle('active', on);
     });
     history.replaceState(null, '', '#' + tab);
@@ -458,7 +462,7 @@ function algoSwitch(tab) {
     } else if (tab === 'cpr') {
         _cprFetchStatus();
         _cprFetchHistory();
-    } else if (tab === 'stbb' || tab === 'stbb-bn' || tab === 'stbb-sx') {
+    } else if (tab === 'stbb' || tab === 'stbb-bn' || tab === 'stbb-sx' || tab.startsWith('simple-')) {
         _stbbActivate(tab);
     } else if (tab === 'ema-confluence') {
         _emacFetchStatus();

@@ -858,6 +858,16 @@ class MarketScheduler:
                     logger.error(f"[{prof.tag} {source}] ensure_running failed: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"[STBB {source}] _ensure_stbb_running failed: {e}", exc_info=True)
+        # Simple Trader 1-7 ride the same two jobs, each under its own ST<n>_ENABLED.
+        try:
+            from trading_app.algo.simple_trader import simple_trader_algo
+            for prof in simple_trader_algo.PROFILES.values():
+                try:
+                    simple_trader_algo.ensure_running(self._algo_username(), source=source, p=prof)
+                except Exception as e:
+                    logger.error(f"[{prof.tag} {source}] ensure_running failed: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"[SimpleTrader {source}] ensure running failed: {e}", exc_info=True)
 
     def _start_stbb(self) -> None:
         self._ensure_stbb_running(source='Scheduler')

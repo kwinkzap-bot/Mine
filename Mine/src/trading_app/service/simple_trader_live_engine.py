@@ -1,0 +1,249 @@
+"""Simple Trader 1-7 — the decisions of the live algos, with no I/O.
+
+Each Simple Trader strategy is a Backtest-page engine (the Quantman runs: ``StBbRsiEngine``,
+``StEmaRsiCciEngine`` and the ``StRsiPpBb*`` family). The live algo calls the engine's own
+``signals()`` on the closed candles so far — never a copy of the rule — and reads the LAST
+candle, exactly as ``st_bb_rsi_live_engine`` does for ST + BB + RSI:
+
+* a signal on the candle that JUST closed enters now (the backtest's "next bar's open");
+* an open trade ends when a later candle's close ends it — SuperTrend against the trade
+  (1, 3-7) or RSI back across its exit line (2) — or at the square-off minute;
+* the OPTION's own stop-loss / trailing stop ends it between candles (``stop_level``, the
+  backtest's ``_premium_stop`` driven by the live premium), after which the next candle
+  that still signals re-enters ("Re-entry: Next Minute"), up to ``max_trades`` a day.
+
+Everything takes plain dicts and a DataFrame of CLOSED candles, so it is tested without a broker.
+"""
+from __future__ import annotations
+
+import math
+from typing import Any, Callable, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+
+from trading_app.Backtest.st_bb_rsi_engine import StBbRsiEngine, brokerage_for
+from trading_app.Backtest.st_ema_rsi_cci_engine import StEmaRsiCciEngine
+from trading_app.Backtest.st_rsi_cci_wr_pp_bb_fut_engine import StRsiCciWrPpBbFutEngine
+from trading_app.Backtest.st_rsi_cpr_bb_sx_engine import StRsiCprBbSxEngine
+from trading_app.Backtest.st_rsi_cpr_bb_wr_sx_engine import StRsiCprBbWrSxEngine
+from trading_app.Backtest.st_rsi_pp_bb_engine import StRsiPpBbEngine
+from trading_app.Backtest.st_rsi_pp_bb_fut_engine import StRsiPpBbFutEngine
+
+
+class Spec:
+    """One Simple Trader strategy: the engine, the candles it reads, the option it buys and
+    the numbers the matching Backtest form ships with (``params`` are engine arguments, each
+    overridable by ``ST<n>_<NAME>`` in the env file)."""
+
+    def __init__(self, n, name, cls, kind, symbol, data, bar, side, premium, entry_start,
+                 sl_pct, tsl_x, tsl_y, max_trades, params, fixed=None, rule=''):
+        self.n, self.name, self.cls, self.kind = n, name, cls, kind
+        self.symbol, self.data, self.bar, self.side = symbol, data, bar, side
+        self.premium, self.entry_start = premium, entry_start
+        self.sl_pct, self.tsl_x, self.tsl_y, self.max_trades = sl_pct, tsl_x, tsl_y, max_trades
+        self.params, self.fixed, self.rule = params, fixed or {}, rule
+
+    @property
+    def option_type(self) -> str:
+        return 'CE' if self.side == 'long' else 'PE'
+
+
+# 'st' = StBbRsiEngine family (exit: SuperTrend turns against the trade); 'ema' = StEmaRsiCciEngine
+# (exit: RSI back across its exit line). 'data' is 'spot' (the index) or 'fut' (the NIFTY future).
+SPECS: Dict[int, Spec] = {s.n: s for s in (
+    Spec(1, 'BB PP ST RSI WR', StBbRsiEngine, 'st', 'NIFTY', 'spot', 3, 'long', 250, '09:15',
+         13, 15, 10, 1,
+         dict(rsi_period=14, rsi_level=70, st_period=10, st_mult=2, bb_period=15, bb_mult=3,
+              wr_period=14, wr_level=-30),
+         fixed=dict(use_rsi=True, use_bb=True, use_st=True, use_pivot=True, use_wr=True,
+                    bb_offset=0, htf='off', require_green=False),
+         rule='NIFTY 3-min: close above BB(15,3) upper and R1, RSI(14) > 70, %R(14) > -30, above SuperTrend(10,2)'
+              ' → buy the ≈250 CE; exit on a close below SuperTrend'),
+    Spec(2, 'ST EMA RSI CCI WR CPR BB', StEmaRsiCciEngine, 'ema', 'NIFTY', 'spot', 3, 'short', 250, '09:15',
+         15, 5, 5, 5,
+         dict(st_period=10, st_mult=2, ema_period=200, rsi_period=20, rsi_entry=30, rsi_exit=45,
+              cci_period=20, cci_level=-200, wr_period=14, wr_level=-85, bb_period=20, bb_mult=2,
+              cpr_narrow=0.2),
+         fixed=dict(use_cpr_narrow=True),
+         rule='NIFTY 3-min: below SuperTrend(10,2), EMA(200), S1 and BB(20,2) lower; RSI(20) < 30, CCI(20) < -200,'
+              ' %R(14) < -85, narrow CPR → buy the ≈250 PE; exit when RSI(20) > 45'),
+    Spec(3, 'ST RSI PP BB', StRsiPpBbEngine, 'st', 'NIFTY', 'spot', 3, 'long', 250, '09:31',
+         15, 15, 10, 5,
+         dict(st_period=10, st_mult=2.3, rsi_period=14, rsi_level=70, bb_period=15, bb_mult=3),
+         rule='NIFTY 3-min from 09:31: close above SuperTrend(10,2.3), R1 and BB(15,3) upper, RSI(14) > 70'
+              ' → buy the ≈250 CE; exit on a close below SuperTrend'),
+    Spec(4, 'ST RSI PP BB Fut', StRsiPpBbFutEngine, 'st', 'NIFTY', 'fut', 5, 'long', 250, '09:15',
+         13, 13, 10, 5,
+         dict(st_period=10, st_mult=1.8, rsi_period=20, rsi_level=68, bb_period=20, bb_mult=3.3),
+         fixed=dict(require_green=True),
+         rule='NIFTY FUTURE 5-min: green candle closing above SuperTrend(10,1.8), R1 and BB(20,3.3) upper,'
+              ' RSI(20) > 68 → buy the ≈250 CE; exit on a close below SuperTrend'),
+    Spec(5, 'ST RSI CCI WR PP BB Fut', StRsiCciWrPpBbFutEngine, 'st', 'NIFTY', 'fut', 3, 'long', 250, '09:15',
+         15, 0, 0, 5,
+         dict(st_period=10, st_mult=2, rsi_period=14, rsi_level=78, cci_period=20, cci_level=280,
+              wr_period=14, wr_level=-15, bb_period=20, bb_mult=3),
+         rule='NIFTY FUTURE 3-min: close above SuperTrend(10,2), R1 and BB(20,3) upper; RSI(14) > 78,'
+              ' CCI(20) > 280, %R(14) > -15 → buy the ≈250 CE; exit on a close below SuperTrend'),
+    Spec(6, 'ST RSI CPR BB Sensex', StRsiCprBbSxEngine, 'st', 'SENSEX', 'spot', 5, 'long', 500, '09:15',
+         17, 15, 10, 5,
+         dict(st_period=10, st_mult=1.5, rsi_period=14, rsi_level=70, bb_period=20, bb_mult=2.5,
+              cpr_wide=0.35),
+         fixed=dict(use_cpr_wide=True),
+         rule='SENSEX 5-min: close above SuperTrend(10,1.5), Demark R1 and BB(20,2.5) upper, RSI(14) > 70,'
+              ' CPR not wide → buy the ≈500 CE; exit on a close below SuperTrend'),
+    Spec(7, 'ST RSI CPR BB WR SX2', StRsiCprBbWrSxEngine, 'st', 'SENSEX', 'spot', 5, 'long', 500, '09:15',
+         15, 15, 10, 5,
+         dict(st_period=10, st_mult=1.5, rsi_period=14, rsi_level=68, rsi_cap=80, bb_period=20, bb_mult=2.5,
+              wr_period=14, wr_level=-10, cpr_narrow=0.2),
+         fixed=dict(use_cpr_narrow=True),
+         rule='SENSEX 5-min: close above SuperTrend(10,1.5), traditional R1 and BB(20,2.5) upper, RSI(14) 68-80,'
+              ' %R(14) > -10, narrow CPR → buy the ≈500 CE; exit on a close below SuperTrend'),
+)}
+
+
+def new_day(date_str: str) -> Dict[str, Any]:
+    return {'date': date_str, 'trades': [], 'last_bar': None}
+
+
+def tick_up(v: float) -> float:
+    """Quantman's stop prices sit on the 0.05 tick, rounded UP (cpr_option_service._premium_stop)."""
+    return math.ceil(round(v / 0.05, 6)) * 0.05
+
+
+def stop_level(entry: float, peak: float, sl_pct: float, tsl_x: float, tsl_y: float) -> Dict[str, Any]:
+    """The premium stop for a leg bought at `entry` whose premium has peaked at `peak`:
+    `sl_pct` % under the entry and, for every `tsl_x` % the premium has risen from entry, `tsl_y`
+    % of entry higher — the backtest's rule (``cpr_option_service._premium_stop``)."""
+    base = tick_up(entry * (1.0 - sl_pct / 100.0))
+    stop = base
+    if tsl_x > 0 and tsl_y > 0 and entry > 0:
+        steps = int(((peak / entry - 1.0) * 100.0) // tsl_x)
+        if steps > 0:
+            stop = max(stop, tick_up(base + steps * tsl_y / 100.0 * entry))
+    return {'stop': round(stop, 2), 'kind': 'Trailing SL' if stop > base else 'Stop Loss', 'base': round(base, 2)}
+
+
+def engine_kwargs(spec: Spec, s: Dict[str, Any]) -> Dict[str, Any]:
+    kw = {k: s.get(k, v) for k, v in spec.params.items()}
+    kw.update(spec.fixed)
+    kw.update(entry_start=s.get('entry_start', spec.entry_start), entry_end=s.get('entry_end', '15:14'),
+              exit_cutoff=s.get('exit_cutoff', '15:14'), max_trades_per_day=int(s.get('max_trades', spec.max_trades)),
+              direction=spec.side)
+    return kw
+
+
+def _r(v, nd=2):
+    try:
+        v = float(v)
+        return round(v, nd) if np.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
+class _Read:
+    """What the last closed candle says, whichever engine family produced it."""
+
+    def __init__(self, spec: Spec, bars: pd.DataFrame, s: Dict[str, Any]):
+        eng = spec.cls(bars, **engine_kwargs(spec, s))
+        sg = eng.signals()
+        self.engine, self.sg, self.spec = eng, sg, spec
+        i = len(eng.df) - 1
+        self.i = i
+        if spec.kind == 'ema':
+            idx = eng.df.index
+            self.ts = idx[i].strftime('%Y-%m-%d %H:%M:%S')
+            self.tmin = int(idx[i].hour * 60 + idx[i].minute)
+            self.close = float(sg['c'][i])
+            self.rsi = float(sg['rsi'][i])
+            self.side = int(sg['signal'][i])
+            self.entry_start, self.entry_end = eng.entry_start, eng.entry_end
+            self.exit_cutoff, self.max_trades = eng.exit_cutoff, eng.max_trades_per_day
+        else:
+            b = eng._base()
+            self.ts = str(b['ts'][i])
+            self.tmin = int(b['tmin'][i])
+            self.close = float(b['c'][i])
+            self.rsi = float(sg['rsi'][i])
+            self.side = int(sg['signal'][i])
+            self.entry_start, self.entry_end = eng.entry_start, eng.entry_end
+            self.exit_cutoff, self.max_trades = eng.exit_cutoff, eng.max_trades_per_day
+
+    def exit_reason(self, long: bool) -> Optional[str]:
+        """The reason this candle's close ends an open trade of that side, else None."""
+        if self.spec.kind == 'ema':
+            e = self.engine
+            if (self.rsi < 100.0 - e.rsi_exit) if long else (self.rsi > e.rsi_exit):
+                return 'RSI Exit'
+            return None
+        if int(self.sg['st_dir'][self.i]) == (-1 if long else 1):
+            return 'SuperTrend Down' if long else 'SuperTrend Up'
+        return None
+
+    def signal_info(self, long: bool) -> Dict[str, Any]:
+        i, sg = self.i, self.sg
+        if self.spec.kind == 'ema':
+            return {'rsi': _r(self.rsi, 1), 'close': _r(self.close), 'supertrend': _r(sg['st_line'][i]),
+                    'bb_band': _r((sg['bb_up'] if long else sg['bb_lo'])[i]),
+                    'pivot': 'R1' if long else 'S1', 'pivot_level': _r(sg['cpr']['r1' if long else 's1'][i]),
+                    'cci': _r(sg['cci'][i], 1), 'wr': _r(sg['wr'][i], 1), 'ema': _r(sg['ema'][i])}
+        lv = sg['lv']
+        out = {'rsi': _r(self.rsi, 1), 'close': _r(self.close), 'supertrend': _r(sg['st_line'][i]),
+               'bb_band': _r((lv['bb_up'] if long else lv['bb_lo'])[i]),
+               'pivot': 'R1' if long else 'S1', 'pivot_level': _r((lv['r1'] if long else lv['s1'])[i])}
+        if 'cci' in sg:
+            out['cci'] = _r(sg['cci'][i], 1)
+        if 'cpr_width' in sg:
+            out['cpr_width'] = _r(sg['cpr_width'][i], 3)
+        return out
+
+
+def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read the LAST candle of `bars` (every candle in it is closed). `s['spec']` is the
+    strategy number. Returns events: {'event': 'entry'|'exit', 'trade': t, ...}. Mutates `day`."""
+    if bars is None or bars.empty:
+        return []
+    spec = SPECS[int(s['spec'])]
+    rd = _Read(spec, bars, s)
+    if rd.ts[:10] != day['date'] or rd.ts == day.get('last_bar'):
+        return []
+    day['last_bar'] = rd.ts
+    bar_end = rd.tmin + spec.bar
+    events: List[Dict[str, Any]] = []
+
+    open_t = next((t for t in day['trades'] if t['status'] == 'open'), None)
+    if open_t is not None:
+        # Only candles from the entry candle on can end the trade, as the backtest only looks from
+        # the bar it filled on.
+        if rd.tmin >= open_t['entry_bar_start']:
+            reason = rd.exit_reason(open_t['type'] == 'Long')
+            if reason:
+                events.append({'event': 'exit', 'trade': open_t, 'reason': reason,
+                               'bar': rd.ts, 'index_close': rd.close})
+        return events
+
+    entered = len(day['trades'])
+    if (rd.side and entered < rd.max_trades
+            and rd.entry_start <= rd.tmin < rd.entry_end and bar_end < rd.exit_cutoff):
+        long = rd.side == 1
+        t = {'n': entered + 1, 'type': 'Long' if long else 'Short', 'status': 'open',
+             'signal_bar': rd.ts, 'entry_bar_start': bar_end, 'signal': rd.signal_info(long)}
+        day['trades'].append(t)
+        events.append({'event': 'entry', 'trade': t, 'bar': rd.ts})
+    return events
+
+
+def time_exits(day: Dict[str, Any], hhmm: str, cutoff: str) -> List[Dict[str, Any]]:
+    """Square off whatever is open once the clock reaches the cutoff minute."""
+    if hhmm < cutoff:
+        return []
+    return [{'event': 'exit', 'trade': t, 'reason': 'Time Exit', 'bar': None, 'index_close': None}
+            for t in day['trades'] if t['status'] == 'open']
+
+
+def option_type(t: Dict[str, Any]) -> str:
+    return 'CE' if t['type'] == 'Long' else 'PE'
+
+
+__all__ = ['SPECS', 'Spec', 'new_day', 'on_bar', 'time_exits', 'option_type', 'stop_level', 'tick_up',
+           'engine_kwargs', 'brokerage_for']
