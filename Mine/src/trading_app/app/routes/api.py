@@ -5133,7 +5133,13 @@ def _run_simple_trader_optimise(strategy, data):
     if not start_date_str:
         return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
     from trading_app.service import cpr_option_service as _cos
-    if not _cos.is_index(symbol):
+    # ALL Indicators also runs on F&O stocks (ATM option), exactly as its run route allows.
+    if strategy == 'st_all_indicators':
+        if not _cos.is_index(symbol) and not _cos.stock_spec(symbol):
+            return jsonify({'success': False,
+                            'error': f'{symbol} has no listed options: pick an index (NIFTY, BANKNIFTY, '
+                                     f'FINNIFTY, MIDCPNIFTY, SENSEX) or an F&O stock.'}), 400
+    elif not _cos.is_index(symbol):
         return jsonify({'success': False,
                         'error': 'This strategy trades index options: pick NIFTY, BANKNIFTY, '
                                  'FINNIFTY, MIDCPNIFTY or SENSEX.'}), 400
@@ -6629,6 +6635,181 @@ def run_st_rsi_cpr_bb_wr_sx_backtest_api():
         return jsonify({'success': True, 'task_id': task_id})
     except Exception as e:
         logger.error(f"Error in ST-RSI-CPR-BB-WR-SX backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/st-all-indicators', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_st_all_indicators_backtest_api():
+    """Every Simple Trader indicator in one rule, long on the ≈250 CE.
+
+    SuperTrend + RSI band + Williams %R + CCI + EMA + Traditional R1 + narrow CPR + BB must
+    all agree on one closed index candle; each has a switch. Re-priced on the option with a
+    premium stop-loss / trailing stop and same-day re-entry, in the background and polled on
+    /backtest/st-bb-rsi/status/<task_id> (the same task table). See
+    Backtest/st_all_indicators_engine.py.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json() or {}
+        symbol         = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '3minute')
+        _p = data.get('premium', 250)
+        premium        = float(250 if _p in (None, '') else _p)    # 0 = ATM (stocks), never the 250 default
+        price_options  = bool(data.get('price_options', True))
+        compounding    = bool(data.get('compounding', False))
+        start_capital  = float(data.get('start_capital', 25000) or 25000)
+        per_lot        = float(data.get('per_lot') or 0)
+        max_lots       = int(data.get('max_lots', 27) or 27)
+        fixed_lots     = max(1, int(data.get('lots', 1) or 1))
+        lot_value      = float(data.get('lot_value', 0) or 0)
+        sl_pct = max(0.0, float(data.get('sl_pct') or 0))      # premium stop-loss / trailing SL, 0 = none
+        tsl_x  = max(0.0, float(data.get('tsl_x') or 0))
+        tsl_y  = max(0.0, float(data.get('tsl_y') or 0))
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        from trading_app.service import cpr_option_service as _cos
+        if not _cos.is_index(symbol) and not _cos.stock_spec(symbol):
+            return jsonify({'success': False,
+                            'error': f'{symbol} has no listed options: pick an index (NIFTY, BANKNIFTY, '
+                                     f'FINNIFTY, MIDCPNIFTY, SENSEX) or an F&O stock.'}), 400
+
+        current_kite = get_fyers_adapter()      # Fyers index history, as the ST+BB+RSI run (see there)
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+        import pandas as pd
+        from trading_app.Backtest.st_all_indicators_engine import StAllIndicatorsEngine
+        from trading_app.Backtest.st_ema_rsi_cci_engine import price_with_reentries
+        from trading_app.Backtest.st_bb_rsi_engine import (
+            attach_option_legs, summarise, apply_compounding)
+
+        # Every indicator is read off the symbol's own candles (index or stock); the option is bought ATM for a stock.
+        minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
+            warmup_days=45)
+        if minutes is None:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+        candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
+
+        def _f(key, default):
+            v = data.get(key)
+            return float(v) if v not in (None, '') else default
+
+        def _on(key):
+            return bool(data.get(key, True))
+
+        engine = StAllIndicatorsEngine(
+            df=candles_df,
+            st_period=int(_f('st_period', 10)), st_mult=_f('st_mult', 2.0),
+            rsi_period=int(_f('rsi_period', 14)), rsi_level=_f('rsi_level', 60), rsi_cap=_f('rsi_cap', 85),
+            bb_period=int(_f('bb_period', 20)), bb_mult=_f('bb_mult', 2.0),
+            wr_period=int(_f('wr_period', 14)), wr_level=_f('wr_level', -30),
+            cci_period=int(_f('cci_period', 20)), cci_level=_f('cci_level', 100),
+            ema_period=int(_f('ema_period', 200)),
+            cpr_narrow=_f('cpr_narrow', 0.2), use_cpr_narrow=_f('cpr_narrow', 0.2) > 0,
+            use_st=_on('use_st'), use_rsi=_on('use_rsi'), use_bb=_on('use_bb'), use_wr=_on('use_wr'),
+            use_cci=_on('use_cci'), use_ema=_on('use_ema'), use_pivot=_on('use_pivot'),
+            entry_start=data.get('entry_start', '09:15'),
+            entry_end=data.get('entry_end', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(_f('max_trades_per_day', 5)),
+            direction='long',
+        )
+        trades, _ = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
+
+        _want = min(pd.Timestamp(end_date_str).date(), datetime.now().date())
+        while _want.weekday() >= 5:
+            _want -= timedelta(days=1)
+        _have = pd.Timestamp(candles[-1]['date']).date()
+        data_warning = (f"Candles end at {_have:%d %b}; {_want:%d %b} could not be loaded (data provider "
+                        f"limit or outage), so it is not in this run.") if _have < _want else None
+        ran = {
+            'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
+            'start_date': start_date_str, 'end_date': end_date_str,
+            'bars': n_bars, 'junk_bars_dropped': n_junk, 'first_bar': str(candles[0]['date']),
+            'last_bar': str(candles[-1]['date']),
+            'params': dict(st=[engine.st_period, engine.st_mult],
+                           rsi=[engine.rsi_period, engine.rsi_level, engine.rsi_cap],
+                           wr=[engine.wr_period, engine.wr_level],
+                           cci=[engine.cci_period, engine.cci_level], ema=engine.ema_period,
+                           on={k: bool(getattr(engine, 'use_' + k)) for k in
+                               ('st', 'rsi', 'bb', 'wr', 'cci', 'ema', 'pivot')},
+                           bb=[engine.bb_period, engine.bb_mult], cpr_narrow=engine.cpr_narrow if engine.use_cpr_narrow else 0,
+                           direction=engine.direction,
+                           max_trades_per_day=engine.max_trades_per_day,
+                           sl_pct=sl_pct, tsl=[tsl_x, tsl_y], premium=premium,
+                           price_options=price_options, compounding=compounding),
+            'index_signals': len(trades),
+            'strategy': 'st_all_indicators',       # backtest.js words the run banner by it
+        }
+
+        def _payload(priced_trades, option_info, warning):
+            summ = summarise(priced_trades)
+            summ['pnl_basis'] = 'option' if option_info else 'index'
+            extra = {}
+            if option_info:
+                extra = apply_compounding(
+                    priced_trades, option_info.get('lot') or 65,
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
+            return {
+                'success': True, 'trades': priced_trades, 'option': option_info,
+                'warning': warning, 'ran': ran,
+                'summary': {**{k: summ[k] for k in (
+                    'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
+                    'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
+                    'pnl_basis': summ['pnl_basis'], **extra},
+            }
+
+        logger.info('[ST-ALL BT] %s %s %s→%s  %d bars  %d signals  options=%s',
+                    symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
+        if not (price_options and trades):
+            return jsonify(_payload(trades, None, data_warning))
+
+        minutes_per_bar = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 3)
+        sessions = sorted(set(minutes.index.date))
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': len(trades)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                priced, info = price_with_reentries(
+                    engine, trades,
+                    lambda batch, prog: attach_option_legs(
+                        symbol, batch, premium or None, minutes_per_bar, prog or _progress,
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                    _progress)
+                warn = None
+                if info['unpriced'] or info['truncated']:
+                    warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
+                            f"candles and {info['truncated']} older ones were not priced; "
+                            f"they are left out of the totals.")
+                task['payload'] = _payload(priced, info, ' '.join(w for w in (warn, data_warning) if w) or None)
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[ST-ALL BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, None, ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.', data_warning) if w))
+            task['status'] = 'complete'
+
+        threading.Thread(target=_run, name=f'sai-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
+    except Exception as e:
+        logger.error(f"Error in ST-ALL backtest API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

@@ -91,6 +91,21 @@ def _cpr_wr_sx(df, d):
         use_cpr_narrow=_f(d, 'cpr_narrow', 0.2) > 0, **_common(d))
 
 
+def _all_ind(df, d):
+    from trading_app.Backtest.st_all_indicators_engine import StAllIndicatorsEngine
+    on = lambda k: bool(d.get(k, True))
+    return StAllIndicatorsEngine(
+        df, st_period=int(_f(d, 'st_period', 10)), st_mult=_f(d, 'st_mult', 2),
+        rsi_period=int(_f(d, 'rsi_period', 14)), rsi_level=_f(d, 'rsi_level', 60),
+        rsi_cap=_f(d, 'rsi_cap', 85), bb_period=int(_f(d, 'bb_period', 20)),
+        bb_mult=_f(d, 'bb_mult', 2), wr_period=int(_f(d, 'wr_period', 14)),
+        wr_level=_f(d, 'wr_level', -30), cci_period=int(_f(d, 'cci_period', 20)),
+        cci_level=_f(d, 'cci_level', 100), ema_period=int(_f(d, 'ema_period', 200)),
+        cpr_narrow=_f(d, 'cpr_narrow', 0.2), use_cpr_narrow=_f(d, 'cpr_narrow', 0.2) > 0,
+        use_st=on('use_st'), use_rsi=on('use_rsi'), use_bb=on('use_bb'), use_wr=on('use_wr'),
+        use_cci=on('use_cci'), use_ema=on('use_ema'), use_pivot=on('use_pivot'), **_common(d))
+
+
 def _ema_cci(df, d):
     from trading_app.Backtest.st_ema_rsi_cci_engine import StEmaRsiCciEngine
     return StEmaRsiCciEngine(
@@ -126,6 +141,8 @@ SPECS: Dict[str, Tuple[Callable, Callable[[Dict[str, Any]], List[Tuple[str, tupl
     'st_rsi_cpr_bb_wr_sx': (_cpr_wr_sx, lambda d: _base_grid((64, 68, 72, 76)) + [
         ('wr_level', (-5, -10, -20))] + (
         [('cpr_narrow', (0.15, 0.2, 0.3))] if _f(d, 'cpr_narrow', 0.2) > 0 else []), False),
+    'st_all_indicators': (_all_ind, lambda d: _base_grid((55, 60, 65, 70)) + [
+        ('wr_level', (-20, -30, -40)), ('cci_level', (0, 100, 150))], False),
 }
 
 
@@ -217,7 +234,8 @@ def verify_on_option(strategy: str, res: Dict[str, Any], df: pd.DataFrame, data:
     build, _, _ = SPECS[strategy]
     eng = build(df, data)
     names = res['swept']
-    premium = float(data.get('premium') or 250) or None
+    _p = data.get('premium')
+    premium = float(250 if _p in (None, '') else _p) or None      # 0 = ATM (a stock), never the 250 default
     sl_pct = max(0.0, float(data.get('sl_pct') or 0))
     tsl_x = max(0.0, float(data.get('tsl_x') or 0))
     tsl_y = max(0.0, float(data.get('tsl_y') or 0))

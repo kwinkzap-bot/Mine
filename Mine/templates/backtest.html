@@ -21,7 +21,8 @@
             <span id="liveFlagBadge" class="bt-live-flag" style="display:none;" title="These params are currently running as a live algo"><span class="dot"></span>LIVE</span>
             <select id="strategyStatusSelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="live">🔴 Live</option>
-                <option value="simpler" selected>🎓 Simple Trader</option>
+                <option value="simpler">🎓 Simple Trader</option>
+                <option value="mine" selected>⛏️ Mine</option>
                 <option value="success">✅ Success</option>
                 <option value="testing">🧪 Testing</option>
                 <option value="failure">❌ Failure</option>
@@ -40,13 +41,14 @@
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="ha_supertrend">🕯️ Heikin-Ashi + SuperTrend</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
-                <option value="simpler_trader" selected>🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
+                <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
                 <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
                 <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
                 <option value="st_rsi_pp_bb_fut">🎓 4. ST RSI PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
+                <option value="st_all_indicators" selected>🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
             <button id="btCombinedBtn" type="button" title="Run every Simple Trader strategy and see them merged into one book" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🧩 Combined</button>
@@ -1477,6 +1479,154 @@
                 <div class="form-group">
                     <label for="swxMaxTrades">Max Entries / Day</label>
                     <input type="number" id="swxMaxTrades" value="5" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ALL Simple Trader indicators in one rule: ST + EMA + RSI + CCI + %R + Pivot R1 + narrow CPR + BB on the NIFTY index's
+                 3-minute candles, bought as the ≈250 CE with a premium SL / TSL and same-day re-entry. Every gate has a switch.
+                 (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_all_indicators_engine.py. -->
+            <div id="stSaiParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="saiPriceOptions">Price on options</label>
+                    <input type="checkbox" id="saiPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="saiPremium">Option Premium ≈</label>
+                    <select id="saiPremium" title="NIFTY 250, BANKNIFTY / SENSEX 500, a stock ATM — set from the symbol, change it if you like.">
+                        <option value="0">ATM</option>
+                        <option value="250" selected>250</option>
+                        <option value="500">500</option>
+                        <option value="750">750</option>
+                        <option value="1000">1000</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="saiSlPct">Stop-loss %</label>
+                    <input type="number" id="saiSlPct" value="15" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none.">
+                </div>
+                <div class="form-group">
+                    <label for="saiTslX">TSL X %</label>
+                    <input type="number" id="saiTslX" value="15" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="saiTslY">TSL Y %</label>
+                    <input type="number" id="saiTslY" value="10" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="saiCompound">Compounding</label>
+                    <input type="checkbox" id="saiCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="saiCapital">Start Capital (₹)</label>
+                    <input type="number" id="saiCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="saiPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="saiPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry (all must hold on the closed candle)</legend>
+                <div class="form-group">
+                    <label for="saiStLen">SuperTrend length</label>
+                    <input type="number" id="saiStLen" value="10" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiStFactor">SuperTrend factor</label>
+                    <input type="number" id="saiStFactor" value="2" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="saiRsiLen">RSI length</label>
+                    <input type="number" id="saiRsiLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiRsiLevel">RSI above</label>
+                    <input type="number" id="saiRsiLevel" value="60" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiBbLen">BB length</label>
+                    <input type="number" id="saiBbLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiBbMult">BB multiplier</label>
+                    <input type="number" id="saiBbMult" value="2" min="0.5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="saiRsiCap">RSI below</label>
+                    <input type="number" id="saiRsiCap" value="85" min="1" max="100" step="1" title="The entry also wants RSI under this line. 100 = no cap.">
+                </div>
+                <div class="form-group">
+                    <label for="saiWrLen">Williams %R length</label>
+                    <input type="number" id="saiWrLen" value="14" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiWrLevel">%R above</label>
+                    <input type="number" id="saiWrLevel" value="-30" min="-99" max="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiCciLen">CCI length</label>
+                    <input type="number" id="saiCciLen" value="20" min="2" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="saiCciLevel">CCI above</label>
+                    <input type="number" id="saiCciLevel" value="100" step="10">
+                </div>
+                <div class="form-group">
+                    <label for="saiEmaLen">EMA length</label>
+                    <input type="number" id="saiEmaLen" value="200" min="2" step="1" title="Close must be above this EMA.">
+                </div>
+                <div class="form-group">
+                    <label for="saiCprNarrow">CPR narrow under %</label>
+                    <input type="number" id="saiCprNarrow" value="0.2" min="0" step="0.05" title="Traditional CPR width (|TC-BC| / pivot, in %) under this is a NARROW CPR; the entry wants it narrow, and close above its R1. 0 = ignore the width.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Indicators in the rule (untick to drop one)</legend>
+                <div class="form-group">
+                    <label for="saiUseSt">SuperTrend (also the exit)</label>
+                    <input type="checkbox" id="saiUseSt" checked>
+                </div>
+                <div class="form-group">
+                    <label for="saiUseRsi">RSI</label>
+                    <input type="checkbox" id="saiUseRsi" checked>
+                </div>
+                <div class="form-group">
+                    <label for="saiUseBb">Bollinger</label>
+                    <input type="checkbox" id="saiUseBb" checked>
+                </div>
+                <div class="form-group">
+                    <label for="saiUseWr">Williams %R</label>
+                    <input type="checkbox" id="saiUseWr" checked>
+                </div>
+                <div class="form-group">
+                    <label for="saiUseCci">CCI</label>
+                    <input type="checkbox" id="saiUseCci" checked>
+                </div>
+                <div class="form-group">
+                    <label for="saiUseEma">EMA</label>
+                    <input type="checkbox" id="saiUseEma" checked>
+                </div>
+                <div class="form-group">
+                    <label for="saiUsePivot">Pivot R1 + narrow CPR</label>
+                    <input type="checkbox" id="saiUsePivot" checked>
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="saiEntryStart">Entry From</label>
+                    <input type="time" id="saiEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="saiEntryEnd">Entry Until</label>
+                    <input type="time" id="saiEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="saiExitCutoff">Square-off</label>
+                    <input type="time" id="saiExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="saiMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="saiMaxTrades" value="5" min="1" max="10" step="1">
                 </div>
                 </fieldset>
             </div>

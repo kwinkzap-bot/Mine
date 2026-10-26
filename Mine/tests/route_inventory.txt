@@ -112,6 +112,7 @@
 /api/backtest/second-candle	api.run_second_candle_backtest_api	OPTIONS,POST	False
 /api/backtest/second-candle/optimise	api.run_second_candle_optimise	OPTIONS,POST	False
 /api/backtest/second-candle/optimise/status/<task_id>	api.run_second_candle_optimise_status	GET,HEAD,OPTIONS	True
+/api/backtest/st-all-indicators	api.run_st_all_indicators_backtest_api	OPTIONS,POST	False
 /api/backtest/st-bb-rsi	api.run_st_bb_rsi_backtest_api	OPTIONS,POST	False
 /api/backtest/st-bb-rsi/optimise	api.run_st_bb_rsi_optimise	OPTIONS,POST	False
 /api/backtest/st-bb-rsi/optimise/status/<task_id>	api.run_st_bb_rsi_optimise_status	GET,HEAD,OPTIONS	True

@@ -417,7 +417,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // with TSL X 15 % / Y 10 %; 09:15-15:14, one transaction a day. Re-applied each time the strategy is picked.
     // Simple Trader strategies: 'simpler_trader' is #1; the rest each have their own engine.
     const SIMPLE_STRATS = ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut',
-                           'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'];
+                           'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx', 'st_all_indicators'];
 
     // BANKNIFTY runs different numbers. Swept offline on 2019-04 → 2026-10 candles, priced on the 500 option
     // from the cached Breeze minutes (the page's own pricing): max drawdown ₹8.8k at 1 lot (65/pt) against
@@ -509,6 +509,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (scxParamsRow)  scxParamsRow.style.display  = 'none';
         const swxParamsRow  = document.getElementById('stSwxParamsRow');
         if (swxParamsRow)  swxParamsRow.style.display  = 'none';
+        const saiParamsRow  = document.getElementById('stSaiParamsRow');
+        if (saiParamsRow)  saiParamsRow.style.display  = 'none';
         // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
         document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
         document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
@@ -791,6 +793,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2023-10-24';
             updatePcInvestment();
 
+        } else if (val === 'st_all_indicators') {
+            // NIFTY index signal on 3-minute candles, ≈250 CE leg; every Simple Trader indicator in one rule.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (saiParamsRow) saiParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2019-04-01';
+            updatePcInvestment();
+
         } else if (val === 'ma_htf') {
             // Index signal; optional CE/PE leg. Lots / lot value reuse the Pivot Confluence boxes.
             if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
@@ -922,6 +937,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
+        mine:    ['st_all_indicators'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
@@ -982,6 +998,23 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     syncSbrPremium();
     setInterval(syncSbrPremium, 400);
+
+    // ALL Indicators: the symbol sets the lot size and the option's premium — NIFTY 250,
+    // BANKNIFTY / SENSEX 500 (FINNIFTY / MIDCPNIFTY follow NIFTY), any stock ATM. Runs when
+    // the symbol (or the strategy) changes, so a hand-edited Lot Value or premium sticks.
+    const SAI_PREMIUM = { NIFTY: '250', FINNIFTY: '250', MIDCPNIFTY: '250', BANKNIFTY: '500', SENSEX: '500' };
+    let _saiKey = null;
+    function syncSaiSymbol() {
+        if (!strategySelect || strategySelect.value !== 'st_all_indicators' || !symbolSearch) { _saiKey = null; return; }
+        const sym = (symbolSearch.value || '').trim().toUpperCase();
+        if (!sym || sym === ALL_STOCKS || sym === _saiKey) return;
+        _saiKey = sym;
+        const lot = document.getElementById('pcLotValue');
+        if (lot) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
+        const prem = document.getElementById('saiPremium');
+        if (prem) prem.value = SAI_PREMIUM[sym] || '0';
+    }
+    setInterval(syncSaiSymbol, 400);
 
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
@@ -1068,6 +1101,13 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week SENSEX CE whose premium is nearest 500.'],
             ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off.'],
             ['Stop-loss', '17% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
+            ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
+            ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_all_indicators: { sub: 'ALL Simple Trader indicators in one rule — long NIFTY CE, 3-minute candles on the index', steps: [
+            ['Entry rule', 'On a closed 3-min candle of the NIFTY index ALL the ticked indicators must agree: close above SuperTrend(10, 2) and EMA(200), RSI(14) between 60 and 85, CCI(20) above 100, Williams %R(14) above -30, close above the upper Bollinger Band(20, 2), close above R1 of today\'s Traditional pivots, and that CPR narrow (width under 0.2 %). Untick an indicator to drop it from the rule.'],
+            ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
+            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off. With SuperTrend unticked only the stops and the square-off end a trade.'],
+            ['Stop-loss', '15% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
             ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
             ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
         st_rsi_cpr_bb_wr_sx: { sub: 'Quantman "ST RSI CPR BB WR with SL SX2 CE" — long SENSEX CE, 5-minute candles on the index', steps: [
@@ -1563,6 +1603,50 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.per_lot        = sen('swxPerLot', 0);
             }
 
+            // ALL Simple Trader indicators: long NIFTY-index signal, bought as the ≈250 CE with a premium SL / TSL
+            if (strat === 'st_all_indicators') {
+                endpoint = '/api/backtest/st-all-indicators';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const sev = (id, d) => document.getElementById(id)?.value || d;
+                const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = sev('interval', '3minute');
+                payload.premium        = parseFloat(sev('saiPremium', 250));
+                payload.price_options  = document.getElementById('saiPriceOptions')?.checked ?? true;
+                payload.direction      = 'long';
+                payload.st_period      = sen('saiStLen', 10);
+                payload.st_mult        = sen('saiStFactor', 2);
+                payload.rsi_period     = sen('saiRsiLen', 14);
+                payload.rsi_level      = sen('saiRsiLevel', 60);
+                payload.rsi_cap        = sen('saiRsiCap', 85);
+                payload.wr_period      = sen('saiWrLen', 14);
+                payload.wr_level       = sen('saiWrLevel', -30);
+                payload.bb_period      = sen('saiBbLen', 20);
+                payload.bb_mult        = sen('saiBbMult', 2);
+                payload.cci_period     = sen('saiCciLen', 20);
+                payload.cci_level      = sen('saiCciLevel', 100);
+                payload.ema_period     = sen('saiEmaLen', 200);
+                ['St', 'Rsi', 'Bb', 'Wr', 'Cci', 'Ema', 'Pivot'].forEach(k => {
+                    payload['use_' + k.toLowerCase()] = document.getElementById('saiUse' + k)?.checked ?? true;
+                });
+                payload.cpr_narrow     = sen('saiCprNarrow', 0.2);
+                payload.sl_pct         = sen('saiSlPct', 0);
+                payload.tsl_x          = sen('saiTslX', 0);
+                payload.tsl_y          = sen('saiTslY', 0);
+                payload.entry_start    = sev('saiEntryStart', '09:15');
+                payload.entry_end      = sev('saiEntryEnd', '15:14');
+                payload.exit_cutoff    = sev('saiExitCutoff', '15:14');
+                payload.max_trades_per_day = parseInt(sev('saiMaxTrades', 5));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('saiCompound')?.checked ?? false;
+                payload.start_capital  = sen('saiCapital', 25000);
+                payload.per_lot        = sen('saiPerLot', 0);
+            }
+
             // ST + RSI + CCI + WR + PP + BB: long NIFTY-future signal, bought as the ≈250 CE with a premium SL / TSL
             if (strat === 'st_rsi_cci_wr_pp_bb_fut') {
                 endpoint = '/api/backtest/st-rsi-cci-wr-pp-bb-fut';
@@ -1763,7 +1847,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Simple Trader / Hilega / MA: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx')) {
+            if (data.success && data.task_id && (strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -1785,7 +1869,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.success) {
                 if (data.warning) window.showNotification(data.warning, 'warning');
-                if (data.ran && data.ran.strategy === 'st_rsi_cpr_bb_wr_sx') {
+                if (data.ran && data.ran.strategy === 'st_all_indicators') {
+                    const r = data.ran, p = r.params;
+                    const off = Object.keys(p.on).filter(k => !p.on[k]);
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, RSI ${p.rsi[0]}-${p.rsi[2]}, CCI >${p.cci[1]}, EMA ${p.ema}, %R >${p.wr[1]}, BB ${p.bb.join('/')}, `
+                        + `CPR ${p.cpr_narrow ? 'narrow <' + p.cpr_narrow + '%' : 'any'}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`
+                        + (off.length ? ` · OFF: ${off.join(', ')}` : ''), 'info');
+                } else if (data.ran && data.ran.strategy === 'st_rsi_cpr_bb_wr_sx') {
                     const r = data.ran, p = r.params;
                     window.showNotification(
                         `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
@@ -2598,7 +2690,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // and Drawdown Days counts the trading days from the equity peak to the trough of the deepest drawdown.
     function applySimplerTraderStats(data) {
         const row  = document.getElementById('simplerStatsRow');
-        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx');
+        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators');
         const setSub = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
         if (row) row.style.display = 'none';
         // Simple Trader's first row: Wins + Losses merge into one card and Net Outcome goes.
@@ -2698,7 +2790,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
+        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
@@ -4825,7 +4917,7 @@ document.addEventListener('DOMContentLoaded', function() {
         cpr_narrow: ['CPR narrow <', 'CprNarrow'],
     };
     const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
-                         st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx' };
+                         st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai' };
 
     function sbrStrategyCols(swept) {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
