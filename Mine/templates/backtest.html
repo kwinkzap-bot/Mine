@@ -1492,6 +1492,17 @@
                     <label for="saiPriceOptions">Price on options</label>
                     <input type="checkbox" id="saiPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE and priced in option premiums; needs an ICICI login and is slow the first time.">
                 </div>
+                <div class="form-group sai-pos">
+                    <label for="saiRoll">Roll to</label>
+                    <select id="saiRoll" title="1 Hour / 1 Day only. When the contract expires with the signal still on: Same strike = carry the strike to the next expiry; Premium = re-pick the strike nearest the premium. Sold and bought at 15:15 on the expiry day.">
+                        <option value="same" selected>Same strike, next expiry</option>
+                        <option value="premium">Strike nearest premium</option>
+                    </select>
+                </div>
+                <div class="form-group sai-pos">
+                    <label for="saiMinSessions">Min sessions to expiry</label>
+                    <input type="number" id="saiMinSessions" value="5" min="0" max="20" step="1" title="1 Hour / 1 Day + option: buy the expiry at least this many sessions after the entry (1 buys tomorrow's weekly, which bleeds time value fast; 5 buys next week's).">
+                </div>
                 <div class="form-group">
                     <label for="saiPremium">Option Premium ≈</label>
                     <select id="saiPremium" title="NIFTY 250, BANKNIFTY / SENSEX 500, a stock ATM — set from the symbol, change it if you like.">
@@ -1611,7 +1622,7 @@
                     <input type="checkbox" id="saiUsePivot" checked>
                 </div>
                 </fieldset>
-                <fieldset class="ind-block"><legend>Window</legend>
+                <fieldset class="ind-block sai-intraday"><legend>Window</legend>
                 <div class="form-group">
                     <label for="saiEntryStart">Entry From</label>
                     <input type="time" id="saiEntryStart" value="09:15">
@@ -2313,12 +2324,24 @@
             <div id="stBbRsiOptimisePanel" style="display:none;">
                 <div class="opt-header">
                     <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 style="margin:0;">🚀 ST + BB + RSI Best Params</h4>
+                        <h4 id="sbrOptTitle" style="margin:0;">🚀 ST + BB + RSI Best Params</h4>
                     </div>
                     <small id="sbrOptMeta"></small>
                 </div>
                 <div class="opt-table-wrap">
                     <div id="sbrOptGrid"></div>
+                </div>
+                <!-- ALL Indicators: the positional board (1 Hour / 1 Day) under the intraday one -->
+                <div id="sbrOptPosBoard" style="display:none;margin-top:16px;">
+                    <div class="opt-header">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <h4 style="margin:0;">📅 Positional Best Params<br><small>1 Hour · 1 Day</small></h4>
+                        </div>
+                        <small id="sbrOptPosMeta"></small>
+                    </div>
+                    <div class="opt-table-wrap">
+                        <div id="sbrOptPosGrid"></div>
+                    </div>
                 </div>
             </div>
 

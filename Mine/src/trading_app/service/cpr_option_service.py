@@ -813,26 +813,33 @@ def _plus_minutes(hhmm: str, mins: int) -> str:
 
 
 def _premium_stop(bars: List[Dict[str, Any]], entry: float, t_in: str, t_out: str,
-                  sl_pct: float, tsl_x: float, tsl_y: float) -> Optional[Dict[str, Any]]:
-    """First bar after `t_in` and up to `t_out` whose low reaches the stop — see legs_at."""
+                  sl_pct: float, tsl_x: float, tsl_y: float,
+                  carry: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
+    """First bar after `t_in` and up to `t_out` whose low reaches the stop — see legs_at.
+    `carry` lets a position held over several sessions keep its (trailed) stop from one
+    session's call to the next: it is read at the start and written back at the end."""
     def tick_up(v: float) -> float:        # Quantman's stop prices sit on the 0.05 tick, rounded UP
         return math.ceil(round(v / 0.05, 6)) * 0.05
 
     base = tick_up(entry * (1.0 - sl_pct / 100.0))
-    stop = base
-    for b in bars:
-        if b['time'] <= t_in:
-            continue
-        if b['time'] > t_out:
-            break
-        if b['low'] <= stop:
-            return {'price': round(min(b['open'], stop), 2), 'time': b['time'],
-                    'kind': 'Trailing SL' if stop > base else 'Stop Loss'}
-        if tsl_x > 0 and tsl_y > 0:
-            steps = int(((b['high'] / entry - 1.0) * 100.0) // tsl_x)
-            if steps > 0:
-                stop = max(stop, tick_up(base + steps * tsl_y / 100.0 * entry))
-    return None
+    stop = max(base, carry['stop']) if carry and 'stop' in carry else base
+    try:
+        for b in bars:
+            if b['time'] <= t_in:
+                continue
+            if b['time'] > t_out:
+                break
+            if b['low'] <= stop:
+                return {'price': round(min(b['open'], stop), 2), 'time': b['time'],
+                        'kind': 'Trailing SL' if stop > base else 'Stop Loss'}
+            if tsl_x > 0 and tsl_y > 0:
+                steps = int(((b['high'] / entry - 1.0) * 100.0) // tsl_x)
+                if steps > 0:
+                    stop = max(stop, tick_up(base + steps * tsl_y / 100.0 * entry))
+        return None
+    finally:
+        if carry is not None:
+            carry['stop'] = stop
 
 
 def legs_at(symbol: str, trades: List[Dict[str, Any]],

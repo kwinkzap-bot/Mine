@@ -804,6 +804,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intFg) intFg.style.display = '';
             if (intervalSelect) intervalSelect.value = '3minute';
             if (startDateInput) startDateInput.value = '2019-04-01';
+            applySaiPositional();
             updatePcInvestment();
 
         } else if (val === 'ma_htf') {
@@ -1614,6 +1615,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 const sev = (id, d) => document.getElementById(id)?.value || d;
                 const sen = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
                 payload.interval       = sev('interval', '3minute');
+                payload.positional     = payload.interval === '60minute' || payload.interval === 'day';   // 1 Hour / 1 Day = carried trade
+                payload.roll           = sev('saiRoll', 'same');
+                payload.min_sessions   = sen('saiMinSessions', 5);
                 payload.premium        = parseFloat(sev('saiPremium', 250));
                 payload.price_options  = document.getElementById('saiPriceOptions')?.checked ?? true;
                 payload.direction      = 'long';
@@ -1876,7 +1880,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
                         + `${r.index_signals} signals · ST ${p.st.join('/')}, RSI ${p.rsi[0]}-${p.rsi[2]}, CCI >${p.cci[1]}, EMA ${p.ema}, %R >${p.wr[1]}, BB ${p.bb.join('/')}, `
                         + `CPR ${p.cpr_narrow ? 'narrow <' + p.cpr_narrow + '%' : 'any'}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`
-                        + (off.length ? ` · OFF: ${off.join(', ')}` : ''), 'info');
+                        + (off.length ? ` · OFF: ${off.join(', ')}` : '')
+                        + (p.positional ? ' · POSITIONAL (carried across sessions until the SuperTrend turns or the premium SL / TSL is hit)' : ''), 'info');
                 } else if (data.ran && data.ran.strategy === 'st_rsi_cpr_bb_wr_sx') {
                     const r = data.ran, p = r.params;
                     window.showNotification(
@@ -4870,6 +4875,30 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
     });
 
+    // ALL Indicators: the Timeframe offers 1 Hour and 1 Day beside the intraday ones. Either of those is a
+    // positional run — no entry window, no square-off, one entry per signal, held across sessions until SuperTrend
+    // turns or the premium SL is hit — so the intraday Window boxes give way to the expiry-roll ones.
+    function syncSaiPositionalUi() {
+        const sel = document.getElementById('interval');
+        const on = !!sel && (sel.value === '60minute' || sel.value === 'day') && strategySelect?.value === 'st_all_indicators';
+        document.querySelectorAll('#stSaiParamsRow .sai-pos').forEach(el => { el.style.display = on ? '' : 'none'; });
+        document.querySelectorAll('#stSaiParamsRow .sai-intraday').forEach(el => { el.style.display = on ? 'none' : ''; });
+    }
+    function applySaiPositional() {
+        const sel = document.getElementById('interval');
+        if (sel) {
+            [['60minute', '1 Hour (positional)'], ['day', '1 Day (positional)']].forEach(([v, label]) => {
+                if (![...sel.options].some(o => o.value === v)) {
+                    const opt = new Option(label, v);
+                    opt.dataset.hm = '1';           // removed again on the next strategy switch
+                    sel.add(opt);
+                }
+            });
+        }
+        syncSaiPositionalUi();
+    }
+    document.getElementById('interval')?.addEventListener('change', syncSaiPositionalUi);
+
     // ── Simple Trader — Find Best Params ────────────────────────────────
     let _sbrOptRun = 0;
 
@@ -4915,7 +4944,13 @@ document.addEventListener('DOMContentLoaded', function() {
         rsi_exit:   ['RSI exit',   'RsiExit'],   wr_level:  ['%R',         'WrLevel'],
         cci_level:  ['CCI',        'CciLevel'],  cpr_wide:  ['CPR wide <', 'CprWide'],
         cpr_narrow: ['CPR narrow <', 'CprNarrow'],
+        gates:      ['Indicators', ''],      timeframe: ['Timeframe', ''],
     };
+    // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
+    const SBR_TF_LABEL = { minute: '1m', '2minute': '2m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
+                           '60minute': '1h', day: '1d' };
+    const SBR_TF_MIN = { minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '60minute': 60, day: 375 };
+    const SBR_GATE_BOX = { st: 'St', rsi: 'Rsi', bb: 'Bb', wr: 'Wr', cci: 'Cci', ema: 'Ema', pivot: 'Pivot' };
     const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
                          st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai' };
 
@@ -4923,7 +4958,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
         return [
             { label: '#', key: null, fmt: (r, i) => r._current ? '★ Default' : i + 1 },
-            ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k, fmt: r => r[k] })),
+            ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k,
+                                 fmt: k === 'timeframe' ? r => SBR_TF_LABEL[r[k]] || r[k] || '–' : r => r[k] ?? '–' })),
             { label: 'Trades', key: 'total_trades', fmt: r => r.total_trades },
             { label: 'Win%', key: 'win_rate', fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
             { label: 'Total (pts)', key: 'total_pnl', fmt: r => pnl(r.total_pnl) },
@@ -4940,21 +4976,58 @@ document.addEventListener('DOMContentLoaded', function() {
             const pre = SBR_PREFIX[strategy];
             const parts = [];
             swept.forEach(k => {
+                if (k === 'timeframe' && r[k]) {                     // 1 Hour / 1 Day make the run positional
+                    const sel = document.getElementById('interval');
+                    if (sel && [...sel.options].some(o => o.value === r[k])) { sel.value = r[k]; syncSaiPositionalUi(); }
+                    parts.push(`Timeframe ${SBR_TF_LABEL[r[k]] || r[k]}`);
+                    return;
+                }
+                if (r[k] === undefined || k === 'gates') return;     // a gate that is off has no number
                 const el = document.getElementById(pre + (SBR_PARAM[k] || [])[1]);
                 if (el) el.value = r[k];
-                parts.push(`${(SBR_PARAM[k] || [k])[0]} ${r[k]}`);
+                if (r[k] !== 0 || k !== 'cpr_narrow') parts.push(`${(SBR_PARAM[k] || [k])[0]} ${r[k]}`);
             });
+            if (r.gates) {                                          // which indicators stay switched on
+                Object.entries(SBR_GATE_BOX).forEach(([g, box]) => {
+                    const el = document.getElementById(pre + 'Use' + box);
+                    if (el) el.checked = !!r['use_' + g];
+                });
+                parts.unshift(`Indicators ${r.gates}`);
+            }
             if (window.showNotification) window.showNotification(
                 `Applied: ${parts.join(' · ')} — press BACKTEST to see it on the option`, 'success');
         };
     }
 
     function renderSbrOptResults(data) {
-        const panel  = document.getElementById('stBbRsiOptimisePanel');
-        const metaEl = document.getElementById('sbrOptMeta');
+        const panel   = document.getElementById('stBbRsiOptimisePanel');
+        const title   = document.getElementById('sbrOptTitle');
+        const posWrap = document.getElementById('sbrOptPosBoard');
+        if (data.boards) {
+            // ALL Indicators: one board per mode, every timeframe of it searched and ranked together.
+            const board = (b) => ({ ...b, symbol: data.symbol, start_date: data.start_date, end_date: data.end_date,
+                                    interval: (b.timeframes || []).map(tf => SBR_TF_LABEL[tf] || tf).join(' · ') });
+            if (title) title.innerHTML = '⚡ Intraday Best Params<br><small>1m · 2m · 3m · 5m · 15m</small>';
+            renderSbrBoard(board(data.boards.intraday), 'sbrOptGrid', document.getElementById('sbrOptMeta'));
+            renderSbrBoard(board(data.boards.positional), 'sbrOptPosGrid', document.getElementById('sbrOptPosMeta'));
+            if (posWrap) posWrap.style.display = '';
+        } else {
+            if (title) title.textContent = '🚀 ST + BB + RSI Best Params';
+            if (posWrap) posWrap.style.display = 'none';
+            renderSbrBoard(data, 'sbrOptGrid', document.getElementById('sbrOptMeta'));
+        }
+        if (panel) panel.style.display = '';
+    }
+
+    function renderSbrBoard(data, gridId, metaEl) {
+        if (data.timeframes && !data.timeframes.length) {
+            if (metaEl) metaEl.textContent = 'No candles for these timeframes in the range.';
+            _mountSingleOptGrid(gridId, [], sbrStrategyCols([]), 'profit_factor', () => {});
+            return;
+        }
         if (metaEl) metaEl.textContent =
             `${data.total_combos_tested} combos · ${data.qualified} with ≥ ${data.min_trades} trades`
-            + (data.passed != null ? ` · ${data.passed} also win ≥ ${data.min_win}% on ≥ 150 trades with a recent profit` : '') + ` · `
+            + (data.passed != null ? ` · ${data.passed} also win ≥ ${data.min_win}% on ≥ ${data.min_board_trades ?? 150} trades with a recent profit` : '') + ` · `
             + `${data.symbol} ${data.interval} · ${data.start_date} → ${data.end_date} · `
             + (data.basis === 'option'
                 ? `the best index rows were re-priced on the option with your SL / TSL (${data.verified} checked) — these are the numbers BACKTEST shows; ranked on profit factor, then lowest drawdown, `
@@ -4983,7 +5056,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // The default (current page settings) is one row on the board: if the sweep already
             // holds that exact combination, flag it; otherwise add it, scored the same way.
             const keys = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
-                          'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit'];
+                          'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit', 'gates', 'timeframe'];
             const same = (r) => keys.every(k => r[k] === undefined || cur[k] === undefined || String(r[k]) === String(cur[k]));
             const hit = rows.findIndex(same);
             if (hit >= 0) rows = rows.map((r, i) => i === hit ? { ...r, _current: true, rank: cur.rank, option: r.option } : r);
@@ -4994,14 +5067,14 @@ document.addEventListener('DOMContentLoaded', function() {
             + `${cur.total_pnl >= 0 ? '+' : ''}${(cur.total_pnl ?? 0).toFixed(0)} pts `
             + (data.basis === 'option' ? '(on the option) ' : '(index points) ')
             + (cur.rank ? `— #${cur.rank} of ${data.basis === 'option' ? data.verified : (data.passed ?? data.qualified)}`
-                        : '— outside the quality filter (win < 50%, under 150 trades or no recent profit)')
-            + (data.option_error ? `. Option pricing unavailable (${data.option_error}); showing index points.` : '');
-        _mountSingleOptGrid('sbrOptGrid', rows,
+                        : `— outside the quality filter (win < 50%, under ${data.min_board_trades ?? 150} trades, no recent profit or a net loss)`);
+        if (metaEl && data.option_error) metaEl.textContent += `. Option pricing unavailable (${data.option_error}); showing index points.`;
+        _mountSingleOptGrid(gridId, rows,
                             withRs(strat ? sbrStrategyCols(data.swept || []) : SBR_SIMPLE_COLS),
                             (simple || strat) ? 'profit_factor' : 'total_pnl',
                             strat ? applySbrStrategyResult(data.strategy, data.swept || [])
-                                  : applySbrSimpleResult);
-        if (panel) panel.style.display = '';
+                                  : applySbrSimpleResult,
+                            { timeframe: r => SBR_TF_MIN[r.timeframe] ?? 0 });
     }
 
     async function runSbrOptimise(simple, strategy) {
@@ -5077,9 +5150,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (myRun !== _sbrOptRun) return;
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
+                const where = p.board ? `${p.board === 'positional' ? 'Positional' : 'Intraday'}`
+                    + (p.timeframe ? ` ${SBR_TF_LABEL[p.timeframe] || p.timeframe}` : '') + ' · ' : '';
                 _showOptLoader('Finding best params…', p.stage === 'pricing'
-                    ? `pricing the best on the option · ${p.done} / ${p.total} · ${data.elapsed || 0}s`
-                    : (p.total ? `${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`));
+                    ? `${where}pricing the best on the option · ${p.done} / ${p.total} · ${data.elapsed || 0}s`
+                    : (p.total ? `${where}${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`));
             }
             _hideOptLoader();
             done();

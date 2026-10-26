@@ -368,7 +368,8 @@ def _fill_minute(stamp: str) -> str:
 
 def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: float = 250.0,
                            progress=None, calendar=None, min_sessions: int = POSITIONAL_MIN_SESSIONS,
-                           roll: str = 'same', roll_minute: str = ROLL_MINUTE
+                           roll: str = 'same', roll_minute: str = ROLL_MINUTE,
+                           sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0
                            ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Re-price each positional index trade on an option held, and rolled, across its sessions.
 
@@ -384,6 +385,11 @@ def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: f
     `pnl` is the sum of the legs' (exit - entry); `legs` lists them and `rolls` counts the
     rolls. Entry/exit premium shown are the first leg's entry and the last leg's exit. A trade
     any leg of which cannot be priced is left out and counted in info['unpriced'].
+    `sl_pct` / `tsl_x` / `tsl_y` put the premium stop-loss / trailing SL on the held contract
+    (as `attach_option_legs` does inside one session): every session of the hold is scanned,
+    the trailed stop carries from one session to the next, and a stop ends the whole trade at
+    its price (`exit_reason` 'Stop Loss' / 'Trailing SL'). There is no re-entry: one entry per
+    signal. A roll re-bases the stop on the new contract's entry premium. 0 = no stop.
     Returns (priced trades, info) shaped like `attach_option_legs`."""
     from trading_app.service import cpr_option_service as cos
 
@@ -412,13 +418,45 @@ def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: f
         if con is None:
             return None
         t_in, t_out = _fill_minute(t['entry_time']), _fill_minute(t['exit_time'])
-        con, bars, _ = cos.pick_strike(symbol, con, d_in, t_in, premium, fetch)
+        if premium:
+            con, bars, _ = cos.pick_strike(symbol, con, d_in, t_in, premium, fetch)
+        else:                                                 # 0 = the ATM strike (a stock)
+            bars = fetch(con, d_in)
         b = cos.bar_at(bars, t_in)
         if not b:
             return None
-        day, entry_px, legs = d_in, b['close'], []
+        day, entry_px, legs, stopped, t_from = d_in, b['close'], [], None, t_in
+
+        def stop_scan(con_, bars_, day0, t_start, day_end, t_end, entry_):
+            """The premium stop over every session of this contract's hold, or None."""
+            carry: Dict[str, float] = {}
+            for d in (x for x in cal if day0 <= x <= day_end):
+                if d == day0:
+                    bs = bars_
+                else:
+                    try:
+                        bs = fetch(con_, d)
+                    except cos.OptionDataUnavailable:
+                        raise
+                    except Exception:                         # noqa: BLE001 — a dead session is skipped
+                        bs = []
+                hit = cos._premium_stop(bs or [], entry_, t_start if d == day0 else '00:00',
+                                        t_end if d == day_end else '23:59', sl_pct, tsl_x, tsl_y, carry)
+                if hit:
+                    return dict(hit, day=d)
+            return None
+
         while True:
             expiry = _date.fromisoformat(con['expiry'])
+            leg_end = min(d_out, expiry)
+            if sl_pct > 0:
+                hit = stop_scan(con, bars, day, t_from, leg_end,
+                                t_out if d_out <= expiry else roll_minute, entry_px)
+                if hit:
+                    legs.append({'strike': con['strike'], 'expiry': con['expiry'], 'entry': entry_px,
+                                 'exit': hit['price'], 'exit_day': hit['day'].isoformat(), 'stop': hit['kind']})
+                    stopped = hit
+                    break
             if d_out <= expiry:                               # the index trade ends on this contract
                 bars_out = bars if day == d_out else fetch(con, d_out)
                 bo = cos.bar_at(bars_out, t_out)
@@ -436,7 +474,7 @@ def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: f
             nxt = cos.contract(symbol, later[0], side, float(con['strike']), cal)   # level = strike: same strike
             if nxt is None:
                 return None
-            if roll == 'premium':
+            if roll == 'premium' and premium:
                 nxt, bars, _ = cos.pick_strike(symbol, nxt, expiry, roll_minute, premium, fetch)
             else:
                 bars = fetch(nxt, expiry)
@@ -445,9 +483,9 @@ def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: f
                 return None
             legs.append({'strike': con['strike'], 'expiry': con['expiry'], 'entry': entry_px,
                          'exit': sold['close'], 'exit_day': expiry.isoformat()})
-            con, day, entry_px = nxt, expiry, bought['close']
+            con, day, entry_px, t_from = nxt, expiry, bought['close'], roll_minute
         return {'legs': [dict(g, entry=round(g['entry'], 2), exit=round(g['exit'], 2)) for g in legs],
-                'option_type': con['option_type']}
+                'option_type': con['option_type'], 'stopped': stopped}
 
     done = [0]
 
@@ -473,9 +511,16 @@ def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: f
         legs = res['legs']
         pnl = round(sum(g['exit'] - g['entry'] for g in legs), 2)
         info['rolls'] += len(legs) - 1
-        priced.append(dict(
+        row = dict(
             t, index_pnl=t['pnl'], entry_premium=legs[0]['entry'], exit_premium=legs[-1]['exit'], pnl=pnl,
             result='WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
             strike=legs[0]['strike'], option_type=res['option_type'], expiry=legs[-1]['expiry'],
-            rolls=len(legs) - 1, legs=legs))
+            rolls=len(legs) - 1, legs=legs)
+        hit = res.get('stopped')
+        if hit:                       # the premium stop ended the hold before the index trade did
+            row.update(index_exit_time=t['exit_time'], exit_time=f"{hit['day'].isoformat()} {hit['time']}:00",
+                       exit_reason=hit['kind'],
+                       days_held=(hit['day'] - _date.fromisoformat(t['entry_time'][:10])).days)
+            info['stops'] = info.get('stops', 0) + 1
+        priced.append(row)
     return priced, info

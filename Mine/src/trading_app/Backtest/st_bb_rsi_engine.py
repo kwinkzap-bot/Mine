@@ -479,19 +479,21 @@ MIN_BOARD_TRADES = 150   # ...and that traded enough for a profit factor to mean
 
 
 def rank_quality(rows: List[Dict[str, Any]], current: Optional[Dict[str, Any]] = None,
-                 min_win: float = MIN_WIN_RATE) -> Tuple[List[Dict[str, Any]], int]:
+                 min_win: float = MIN_WIN_RATE, min_board: int = MIN_BOARD_TRADES) -> Tuple[List[Dict[str, Any]], int]:
     """Order a sweep the way a trader reads it, not by raw points (raw points reward
     loose, high-trade settings that a premium stop then cuts down): keep win rate
-    >= `min_win`, at least MIN_BOARD_TRADES trades and a profit over the most recent 30 % of the sessions, then rank on
-    profit factor, lowest max drawdown breaking ties. Falls back to every row when too few
+    >= `min_win`, at least `min_board` trades and a profit over the most recent 30 % of the sessions, then rank on
+    profit factor, then lowest max drawdown, then highest net P&L (rupees when priced on the option). Falls back to every row when too few
     pass, so the board is never empty. Stamps `current['rank']` (None when the current
     settings do not pass the filter). Returns (ordered rows, how many passed)."""
+    # An option-priced row carries the results cards' own rupee figures: drawdown and net P&L are
+    # read from those (the numbers BACKTEST shows); an index row falls back to its points.
     def key(r):
-        return (-r['profit_factor'], r['max_drawdown'], -r['total_pnl'])
+        return (-r['profit_factor'], r.get('max_dd_rs', r['max_drawdown']), -r.get('net_rs', r['total_pnl']))
 
     def passes(r):
-        return (r['win_rate'] >= min_win and r.get('recent_pnl', 0) > 0
-                and r['total_trades'] >= MIN_BOARD_TRADES)
+        return (r['win_rate'] >= min_win and r.get('recent_pnl', 0) > 0 and r.get('net_rs', 1) > 0
+                and r['total_trades'] >= min_board)
 
     kept = [r for r in rows if passes(r)]
     passed = len(kept)

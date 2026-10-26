@@ -5037,11 +5037,27 @@ def run_pivot_confluence_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _positional_warmup(interval) -> int:
+    """Calendar days of run-in for a carried run: EMA(200) wants 200 bars, which is a year of daily
+    candles and about two months of hourly ones (the 3-minute run-in is 45 days)."""
+    return 330 if interval == 'day' else 70
+
+
 def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interval, warmup_days=45):
     """(minutes, bars_df, junk_dropped, bars_from_start) for the ST + BB + RSI backtest.
 
     Shared by the run and the Find Best Params sweep so both read the same candles.
     Returns (None, None, 0, 0) when the store has nothing."""
+    minutes, n_junk = _sbr_load_minutes(provider, token, symbol, start_date_str, end_date_str, warmup_days)
+    if minutes is None:
+        return None, None, 0, 0
+    candles_df, n_bars = _sbr_bars(minutes, interval, start_date_str)
+    return minutes, candles_df, n_junk, n_bars
+
+
+def _sbr_load_minutes(provider, token, symbol, start_date_str, end_date_str, warmup_days=45):
+    """(minutes, junk_dropped): the stored 1-minute candles `_sbr_load_bars` resamples, from
+    `warmup_days` before the start. (None, 0) when the store has nothing."""
     import pandas as pd
     from trading_app.Backtest.minute_candle_store import get_minute_history
     # Minutes come from the local store, not a fresh provider pull. A closed
@@ -5068,7 +5084,7 @@ def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interv
     minutes = get_minute_history(_TailChain(provider), token, symbol, warm_from,
                                  end_date_str, provider_tag=_provider_tag(provider))
     if minutes is None or minutes.empty:
-        return None, None, 0, 0
+        return None, 0
     # Closing-minute junk (see above) that the store's tail refresh can still
     # pull in for the newest sessions: a bar after 15:15 spanning >0.3 % is
     # not a real 1-minute NIFTY bar.
@@ -5077,6 +5093,15 @@ def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interv
     n_junk = int(junk.sum())
     if n_junk:
         minutes = minutes[~junk]
+    return minutes, n_junk
+
+
+def _sbr_bars(minutes, interval, start_date_str, warmup_days=None):
+    """(bars_df, bars_from_start): `minutes` resampled to `interval`, anchored 09:15; with
+    `warmup_days`, only that many calendar days of run-in before the start are kept."""
+    import pandas as pd
+    if warmup_days is not None:
+        minutes = minutes[minutes.index >= pd.Timestamp(start_date_str) - pd.Timedelta(days=warmup_days)]
     mins = {'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3, '5minute': 5,
             '10minute': 10, '15minute': 15, '30minute': 30, '60minute': 60,
             'day': 1440}.get(interval, 5)     # 'day' (Hilega Milega): one candle per session, stamped 09:15
@@ -5088,7 +5113,7 @@ def _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str, interv
     bars.index.name = 'date'
     candles_df = bars.reset_index()
     n_bars = int((bars.index >= pd.Timestamp(start_date_str)).sum())
-    return minutes, candles_df, n_junk, n_bars
+    return candles_df, n_bars
 
 
 _sbr_tasks: dict = {}
@@ -5143,7 +5168,13 @@ def _run_simple_trader_optimise(strategy, data):
         return jsonify({'success': False,
                         'error': 'This strategy trades index options: pick NIFTY, BANKNIFTY, '
                                  'FINNIFTY, MIDCPNIFTY or SENSEX.'}), 400
+    # ALL Indicators' Positional option: a 1-hour / 1-day run carries the trade across sessions.
+    positional = strategy == 'st_all_indicators' and (bool(data.get('positional')) or interval in ('60minute', 'day'))
+    if positional:
+        data['positional'] = True
     on_future = sto.uses_future(strategy, symbol, data)
+    # ALL Indicators searches the timeframe as well, on two boards: intraday (1m-15m) and positional (1h, 1d).
+    by_timeframe = strategy == 'st_all_indicators' and not on_future and bool(data.get('sweep_timeframes', True))
     provider = get_fyers_adapter()
     if provider is None and not on_future:
         return jsonify({'success': False,
@@ -5154,9 +5185,41 @@ def _run_simple_trader_optimise(strategy, data):
     with _sbr_opt_lock:
         _sbr_opt_tasks[task_id] = task
 
+    def _run_timeframes():
+        # One read of the minutes, from the longest run-in (the daily EMA 200's); each timeframe is
+        # resampled from it with its own run-in, so a row reads the candles BACKTEST would.
+        minutes, _ = _sbr_load_minutes(provider, token, symbol, start_date_str, end_date_str,
+                                       warmup_days=_positional_warmup('day'))
+        if minutes is None:
+            task.update(status='error', error='No historical data found for the given range')
+            return
+
+        def bars_for(tf):
+            return _sbr_bars(minutes, tf, start_date_str,
+                             _positional_warmup(tf) if tf in ('60minute', 'day') else 45)[0]
+
+        def _progress(done, total, **kw):
+            task['progress'] = {'done': done, 'total': total, **kw}
+
+        boards = sto.optimise_timeframes(strategy, bars_for, data, from_date=start_date_str, top=80,
+                                         progress=_progress)
+        if bool(data.get('price_options', True)):
+            sto.verify_timeframes(strategy, boards, bars_for, data, symbol, sorted(set(minutes.index.date)),
+                                  start_date_str, progress=_progress)
+        else:
+            for board in boards.values():
+                board['results'] = board['results'][:25]
+        task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
+                           'start_date': start_date_str, 'end_date': end_date_str,
+                           'strategy': strategy, 'mode': 'strategy', 'boards': boards}
+        task['status'] = 'complete'
+
     def _run():
         try:
             import pandas as pd
+            if by_timeframe:
+                _run_timeframes()
+                return
             if on_future:        # the run reads the NIFTY continuous future, not the spot
                 from trading_app.Backtest.futures_minute_store import continuous_minutes
                 warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).date()
@@ -5174,7 +5237,8 @@ def _run_simple_trader_optimise(strategy, data):
                 n_bars = int((grouped.index >= pd.Timestamp(start_date_str)).sum())
             else:
                 minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
-                                                          end_date_str, interval, warmup_days=45)
+                                                          end_date_str, interval,
+                                                          warmup_days=_positional_warmup(interval) if positional else 45)
                 if bars is None:
                     task.update(status='error', error='No historical data found for the given range')
                     return
@@ -6659,6 +6723,8 @@ def run_st_all_indicators_backtest_api():
         start_date_str = data.get('start_date')
         end_date_str   = data.get('end_date')
         interval       = data.get('interval', '3minute')
+        # Positional: the trade is carried across sessions on 1-hour / 1-day candles (a daily run always is).
+        positional     = bool(data.get('positional', False)) or interval in ('60minute', 'day')
         _p = data.get('premium', 250)
         premium        = float(250 if _p in (None, '') else _p)    # 0 = ATM (stocks), never the 250 default
         price_options  = bool(data.get('price_options', True))
@@ -6695,7 +6761,7 @@ def run_st_all_indicators_backtest_api():
         # Every indicator is read off the symbol's own candles (index or stock); the option is bought ATM for a stock.
         minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
             current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
-            warmup_days=45)
+            warmup_days=_positional_warmup(interval) if positional else 45)
         if minutes is None:
             return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
         candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
@@ -6722,7 +6788,7 @@ def run_st_all_indicators_backtest_api():
             entry_end=data.get('entry_end', '15:14'),
             exit_cutoff=data.get('exit_cutoff', '15:14'),
             max_trades_per_day=int(_f('max_trades_per_day', 5)),
-            direction='long',
+            direction='long', positional=positional,
         )
         trades, _ = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -6748,6 +6814,7 @@ def run_st_all_indicators_backtest_api():
                            direction=engine.direction,
                            max_trades_per_day=engine.max_trades_per_day,
                            sl_pct=sl_pct, tsl=[tsl_x, tsl_y], premium=premium,
+                           positional=positional,
                            price_options=price_options, compounding=compounding),
             'index_signals': len(trades),
             'strategy': 'st_all_indicators',       # backtest.js words the run banner by it
@@ -6788,12 +6855,22 @@ def run_st_all_indicators_backtest_api():
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
             try:
-                priced, info = price_with_reentries(
-                    engine, trades,
-                    lambda batch, prog: attach_option_legs(
-                        symbol, batch, premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
-                    _progress)
+                if positional:
+                    # One contract held (and rolled at expiry) until SuperTrend turns or the premium
+                    # stop / trail is hit, across as many sessions as that takes; no re-entry.
+                    from trading_app.Backtest.hilega_milega_engine import attach_positional_legs
+                    priced, info = attach_positional_legs(
+                        symbol, trades, premium or 0.0, _progress, calendar=sessions,
+                        roll=str(data.get('roll', 'same')),
+                        min_sessions=max(0, int(data.get('min_sessions', 5) or 0)),
+                        sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y)
+                else:
+                    priced, info = price_with_reentries(
+                        engine, trades,
+                        lambda batch, prog: attach_option_legs(
+                            symbol, batch, premium or None, minutes_per_bar, prog or _progress,
+                            calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "

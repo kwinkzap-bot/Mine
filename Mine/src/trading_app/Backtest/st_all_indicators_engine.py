@@ -14,7 +14,11 @@ for the union — a CE is bought only when ALL of them agree on one CLOSED candl
   8. today's CPR is NARROW (width under `cpr_narrow` %)       (2, 7)
 
 Exit: a closed candle whose close is BELOW the SuperTrend line, the premium stop-loss /
-trailing stop (priced in `attach_option_legs`), or the 15:14 square-off. Same-day re-entry
+trailing stop (priced in `attach_option_legs`), or the 15:14 square-off.
+
+Positional (`positional=True`, which the 1-hour and 1-day timeframes always are): no entry
+window, no square-off and a single entry per signal — the trade is held for as many sessions as
+it takes for SuperTrend to turn or the premium stop to be hit (`attach_positional_legs`). Same-day re-entry
 after the option's own stop is `trade_after`, inherited.
 
 Each gate has its own switch (`use_*`) — off, it is simply not asked — so the strategy can be
@@ -49,6 +53,10 @@ class StAllIndicatorsEngine(StRsiCprBbWrSxEngine):
                  use_cci: bool = True, use_ema: bool = True,
                  entry_start: str = '09:15', max_trades_per_day: int = 5,
                  direction: str = 'long', **kw):
+        if kw.get('positional'):
+            # A carried trade (1-hour / 1-day candles) has no entry window, no square-off and one
+            # entry per signal: it is held until SuperTrend turns or the premium stop is hit.
+            entry_start, max_trades_per_day, kw['entry_end'] = '09:15', 1, '23:59'
         self.cci_period, self.cci_level = max(2, int(cci_period)), float(cci_level)
         self.ema_period = max(2, int(ema_period))
         self.use_cci, self.use_ema = bool(use_cci), bool(use_ema)
