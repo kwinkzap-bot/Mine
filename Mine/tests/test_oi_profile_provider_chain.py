@@ -42,3 +42,14 @@ def test_symbol_fallbacks_follow_flag_order_and_skip_kite(monkeypatch):
 
     monkeypatch.setattr(provider_logic, '_get_icici_adapter', lambda u: None)  # ICICI logged out
     assert provider_logic.get_symbol_fallbacks(fyers, user='Mine', context='oi_profile') == []
+
+
+def test_round_strike_historic_flag_puts_historic_first():
+    from trading_app.app.routes.api import _oi_profile_page_context
+    app = Flask(__name__)
+    with app.test_request_context('/api/oi-profile/round-strike',
+                                  headers={'Referer': 'http://x/oi-profile'}):
+        assert _oi_profile_page_context('round_strike', historic=True) == (
+            'oi_profile_historic', 'oi_profile_round_strike', 'oi_profile')
+        assert _oi_profile_page_context('round_strike', historic=False) == (
+            'oi_profile_round_strike', 'oi_profile')

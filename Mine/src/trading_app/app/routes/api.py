@@ -13760,7 +13760,7 @@ def _oip_format_candles(raw_data, ist_offset, requested_interval):
     return temp
 
 
-def _oi_profile_page_context(block: str = '') -> Tuple[str, ...]:
+def _oi_profile_page_context(block: str = '', historic: Optional[bool] = None) -> Tuple[str, ...]:
     """Data-provider contexts for this request, most specific first.
 
     OI-Profile and Replay share these endpoints byte-for-byte (same shared JS,
@@ -13784,9 +13784,12 @@ def _oi_profile_page_context(block: str = '') -> Tuple[str, ...]:
     # A request for a window that ended before today is historic data: it is
     # read off the OI_PROFILE_HISTORIC_DATA_PROVIDER chain (ICICI first — it is
     # the only broker that serves expired option contracts), then falls through
-    # to the page's ordinary chain.
-    end_date = (request.args.get('end_date') or '').strip()
-    if end_date and end_date < datetime.now().strftime('%Y-%m-%d'):
+    # to the page's ordinary chain. `historic` is for endpoints whose window is
+    # not an `end_date` param (Round Strike's date/expiry); None reads end_date.
+    if historic is None:
+        end_date = (request.args.get('end_date') or '').strip()
+        historic = bool(end_date) and end_date < datetime.now().strftime('%Y-%m-%d')
+    if historic:
         ctx = (f'{page}_historic',) + ctx
     return ctx
 
@@ -15753,7 +15756,9 @@ def oi_profile_round_strike() -> EndpointResponse:
         # so Replay can draw its index chart off one broker and this block off
         # another. It is in the cache key too: OI-Profile and Replay share
         # _rs_response_cache, and they no longer necessarily share a broker.
-        _rs_ctx = _oi_profile_page_context('round_strike')
+        _rs_window_end = as_of_day or expiry_day
+        _rs_ctx = _oi_profile_page_context(
+            'round_strike', historic=bool(_rs_window_end and _rs_window_end < datetime.now().date()))
         # The archive generation is in the key so a replayed window served
         # before its day was archived is rebuilt with tags once it lands,
         # instead of sitting untagged for the settled-window TTL.
@@ -15821,6 +15826,10 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         fetch_errors: list = []
         empty_reasons: Dict[str, str] = {}
+        _rs_symbol_fallbacks = []
+        if _is_symbol_provider and _data_provider:
+            from trading_app.service.provider_logic import get_symbol_fallbacks
+            _rs_symbol_fallbacks = get_symbol_fallbacks(_data_provider, context=_rs_ctx)
 
         def fetch_task(token, inter):
             try:
@@ -15839,6 +15848,21 @@ def oi_profile_round_strike() -> EndpointResponse:
                         reason = getattr(_data_provider, 'last_history_error', lambda: None)()
                         if reason:
                             empty_reasons[str(token)] = reason
+                        # Same fallback as /oi-profile/candles: the next broker
+                        # in the flag chain that reads the same symbol.
+                        for _alt in _rs_symbol_fallbacks:
+                            try:
+                                res = _alt.historical_data(
+                                    str(token), from_date.strftime('%Y-%m-%d'), to_date.strftime('%Y-%m-%d'),
+                                    inter, use_cache=True, cache_ttl=2.0)
+                            except Exception as _alt_exc:
+                                logger.warning(f'[RoundStrike] {type(_alt).__name__} fallback failed for {token}: {_alt_exc}')
+                                res = []
+                            if res:
+                                logger.info(f'[RoundStrike] {token}: {type(_data_provider).__name__} empty, '
+                                            f'served by {type(_alt).__name__}')
+                                empty_reasons.pop(str(token), None)
+                                break
                     return res
                 if kite:
                     return kite_service._historical_with_retry(
