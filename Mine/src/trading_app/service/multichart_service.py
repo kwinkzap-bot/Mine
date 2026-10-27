@@ -86,10 +86,30 @@ class BadRequest(ValueError):
 def provider() -> Any:
     """The adapter the page reads from, or raise ProviderUnavailable."""
     from trading_app.service.provider_logic import get_data_provider
-    adapter = get_data_provider(context='multichart')
+    adapter = get_data_provider(context=_contexts(), exclude=('KITE',))
     if adapter is None or not hasattr(adapter, 'historical_data') or not _speaks_symbols(adapter):
         raise ProviderUnavailable('Fyers login required — no symbol-based data provider is available.')
     return adapter
+
+
+def _contexts() -> tuple:
+    """Provider flags for this request, most specific first.
+
+    The OI Profile page's indicator popups call these same endpoints, so a
+    request from it reads OI_PROFILE_INDICATORS_DATA_PROVIDER, then the
+    page-wide OI_PROFILE_DATA_PROVIDER, before MULTICHART_DATA_PROVIDER.
+    Kite is skipped wherever it is named: these routes need a broker that
+    takes symbol strings.
+    """
+    try:
+        from flask import has_request_context, request
+        if has_request_context():
+            ref_path = (request.referrer or '').split('?', 1)[0].rstrip('/')
+            if ref_path.endswith('/oi-profile'):
+                return ('oi_profile_indicators', 'oi_profile', 'multichart')
+    except Exception:
+        pass
+    return ('multichart',)
 
 
 _KITE_INDEX_TOKENS = {
@@ -177,10 +197,88 @@ class ZerodhaFirstHistory:
             return None
 
 
-def algo_provider() -> Any:
-    """What the live CPR / ST+BB+RSI algos read candles from: Zerodha first,
-    Fyers if that fails. Falls back to the plain provider when Fyers is the
-    only thing logged in."""
+_BROKER_ALIASES = {'ICICI': 'ICICI', 'BREEZE': 'ICICI', 'ICICIDIRECT': 'ICICI',
+                   'FYERS': 'FYERS', 'KITE': 'KITE', 'ZERODHA': 'KITE'}
+_DEFAULT_ALGO_CHAIN = ('FYERS', 'KITE', 'ICICI')
+
+
+def algo_chain(user: str, context: str) -> List[str]:
+    """The brokers ``{CONTEXT}_DATA_PROVIDER`` names, in order, then DATA_PROVIDER's.
+
+    Read on every call, so a flag edit needs no restart. Fyers → Kite → ICICI
+    when neither flag names anything usable.
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    chain: List[str] = []
+    for name in (f'{context.upper()}_DATA_PROVIDER', 'DATA_PROVIDER'):
+        raw = UserEnvManager.get_user_var(user, name, '') or ''
+        for tok in raw.split('#', 1)[0].replace(',', ' ').split():
+            b = _BROKER_ALIASES.get(tok.upper())
+            if b and b not in chain:
+                chain.append(b)
+    return chain or list(_DEFAULT_ALGO_CHAIN)
+
+
+class FlagChainHistory:
+    """historical_data(fyers_symbol, ...) read broker by broker, in the algo's flag order.
+
+    The live algo's own ``ALGO_<NAME>_DATA_PROVIDER`` decides the order; a broker
+    that is not logged in, refuses, or answers empty hands the call to the next
+    one. Kite serves only the three mapped indices (it needs a token); anything
+    else falls through it. Every other attribute (future_symbol lookups and the
+    like) goes to the first symbol-speaking broker in the chain.
+    """
+
+    def __init__(self, user: str, context: str):
+        self.user, self.context = user, context
+
+    def _adapter(self, broker: str) -> Any:
+        from trading_app.service import provider_logic as pl
+        if broker == 'FYERS':
+            return pl._get_fyers_adapter(self.user)
+        if broker == 'ICICI':
+            return pl._get_icici_adapter(self.user)
+        return None
+
+    def __getattr__(self, name):
+        if name.startswith('__'):
+            raise AttributeError(name)
+        for b in algo_chain(self.user, self.context):
+            ad = self._adapter(b)
+            if ad is not None:
+                return getattr(ad, name)
+        raise ProviderUnavailable('Fyers or ICICI login required - no symbol-based data provider is available.')
+
+    def historical_data(self, symbol, from_date, to_date, interval, **kw):
+        tried = []
+        for b in algo_chain(self.user, self.context):
+            try:
+                if b == 'KITE':
+                    rows = ZerodhaFirstHistory._from_kite(symbol, from_date, to_date, interval)
+                else:
+                    ad = self._adapter(b)
+                    rows = ad.historical_data(symbol, from_date, to_date, interval, **kw) if ad else None
+            except Exception as exc:
+                logger.warning(f'[{self.context}] {b} history failed for {symbol} {interval}: {exc}')
+                rows = None
+            if rows:
+                if tried:
+                    logger.info(f'[{self.context}] {symbol} {interval} served by {b} '
+                                f'({", ".join(tried)} had nothing)')
+                return rows
+            tried.append(b)
+        return []
+
+
+def algo_provider(context: Optional[str] = None, user: Optional[str] = None) -> Any:
+    """What the live CPR / Simple Trader algos read candles from.
+
+    With a ``context`` (e.g. 'algo_cpr', 'algo_st4') the order is that algo's own
+    ``{CONTEXT}_DATA_PROVIDER`` flag — see FlagChainHistory. Without one (the
+    /cpr-logic sheet, the option pricer) it is the old fixed order: Zerodha
+    first, Fyers if that fails, then ICICI."""
+    if context:
+        return FlagChainHistory(user or 'Mine', context)
     try:
         fyers = provider()
     except ProviderUnavailable as exc:

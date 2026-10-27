@@ -271,7 +271,8 @@ class StBbRsiAlgo:
         the junk-filtered and 09:15-anchored resample the backtest uses, with the
         candle still forming dropped."""
         from trading_app.service import multichart_service as mc
-        raw = self._history_rows(mc.algo_provider(), today)
+        # Each algo's own ALGO_<KEY>_DATA_PROVIDER (ALGO_ST1 … ALGO_ST7) orders the brokers.
+        raw = self._history_rows(mc.algo_provider(f'algo_{self.p.key}', self.username), today)
         if not raw:
             return pd.DataFrame()
         m = pd.DataFrame(raw)

@@ -1131,6 +1131,13 @@ class FyersDataServiceAdapter:
 
                 if response.get('s') != 'ok':
                     api_msg = str(response.get('message') or 'unknown error')
+                    # The reason often sits in `data`, not `message`: a seconds
+                    # resolution on the Standard plan is "Invalid input" with
+                    # data={'resolution': 'seconds resolution is available only
+                    # on the Prime plan'}. Keep it, or the caller cannot tell a
+                    # plan refusal from a bad symbol.
+                    if isinstance(response.get('data'), dict) and response['data']:
+                        api_msg += ' — ' + '; '.join(f'{k}: {v}' for k, v in response['data'].items())
                     logger.error(f"[FyersAdapter] history() failed for {instrument_token} [{c_from}-{c_to}]: {api_msg}")
                     # Retries are exhausted only for the rate-limit/malformed
                     # branches above; every other code breaks out on attempt 0,

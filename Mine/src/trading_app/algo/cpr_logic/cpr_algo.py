@@ -238,7 +238,8 @@ class CPRAlgo:
 
     def _provider(self):
         from trading_app.service import multichart_service as mc
-        return mc.algo_provider(), mc.resolve_symbol(SYMBOL)
+        # ALGO_CPR_DATA_PROVIDER decides the broker order for the candles.
+        return mc.algo_provider('algo_cpr', self.username), mc.resolve_symbol(SYMBOL)
 
     def _daily_history(self, today: date) -> List[Dict[str, Any]]:
         """Every complete session since _DAILY_SINCE, in year-sized requests

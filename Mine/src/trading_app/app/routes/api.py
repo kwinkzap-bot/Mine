@@ -162,6 +162,23 @@ _pc_opt_tasks_lock = threading.Lock()
 # Rankings cache — keyed by index name, expires after 15 min
 _sm_rankings_cache: Dict[str, tuple] = {}
 _SM_RANKINGS_TTL = 900  # seconds
+# A run that lost too many symbols is not cached for the TTL, but it is not
+# retried on every call either: the next download waits this long, and the
+# last good ranking for the index is served meanwhile.
+_SM_RANKINGS_RETRY_SECS = 60
+_sm_rankings_failed_at: Dict[str, float] = {}
+_sm_rankings_index_locks: Dict[str, threading.Lock] = {}
+_sm_rankings_index_locks_guard = threading.Lock()
+
+# Daily closes shared by every index: {yf_symbol: (fetched_monotonic, Series)}.
+# NIFTY 500 contains MIDSMALLCAP 400 and SMALLCAP 250, so after one index has
+# been read the others are mostly answered from here instead of from Yahoo.
+_sm_close_cache: Dict[str, tuple] = {}
+# One Yahoo download at a time, process-wide. yfinance keeps a download's
+# results in module-level state, so two concurrent yf.download() calls trample
+# each other — that is how three /rankings requests landing together came back
+# with 200-300 of ~500 symbols empty, and each then retried in chunks.
+_sm_yf_lock = threading.Lock()
 
 
 
@@ -12520,7 +12537,7 @@ def get_open_interest() -> EndpointResponse:
         from trading_app.service.open_interest_service import OpenInterestService
         
         # Data fetch always uses Broker 1 (Zerodha Kite - data account)
-        provider = get_data_provider(context=_oi_profile_page_context(), exclude=('ICICI',))
+        provider = get_data_provider(context=_oi_profile_page_context('oi'), exclude=('ICICI',))
         if not provider:
             return jsonify({
                 'success': False,
@@ -13774,6 +13791,16 @@ def _oi_profile_page_context(block: str = '', historic: Optional[bool] = None) -
     Round Strike block reads ICICI Direct. Unset, the block flag costs nothing
     — resolution falls straight through to the page-wide flag.
 
+    The blocks, each read as {PAGE}_{BLOCK}_DATA_PROVIDER:
+      'chart'           /oi-profile/candles (index, CE/PE, fixed, future volume)
+      'round_strike'    /oi-profile/round-strike
+      'oi'              the OI chain: /open-interest, Round Strike's OI strip,
+                        /oi-profile/atm-ce-oi-strikes (never ICICI)
+      'premium_strikes' /oi-profile/premium-strikes
+      'cpr'             /oi-profile/cpr-width
+    Indicators (/api/multichart/*) resolve 'oi_profile_indicators' in
+    multichart_service.provider().
+
     The return value is hashable and goes into the response cache keys as well:
     the two pages share those caches, so without it a block fetched on one
     broker would be served back to a page sitting on the other.
@@ -13905,7 +13932,7 @@ def oi_profile_candles() -> EndpointResponse:
         # `source` likewise: spot and future are two different instruments under
         # an otherwise identical key, so leaving it out would serve one page's
         # index bars to a page that asked for the future's.
-        _page_ctx = _oi_profile_page_context()
+        _page_ctx = _oi_profile_page_context('chart')
         cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s, opt_legs, source, _page_ctx)
 
         # The OI Profile page no longer polls this endpoint — every call is now a
@@ -14801,7 +14828,7 @@ def oi_profile_cpr_width() -> EndpointResponse:
             return jsonify(cached)
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider(context=_oi_profile_page_context())
+        _data_provider = get_data_provider(context=_oi_profile_page_context('cpr'))
         effective_instance = _data_provider if _data_provider else kite
         if not effective_instance:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
@@ -14889,12 +14916,17 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         extra_leg = max(0, extra) * 50
 
         kite = get_kite(instance=1)
-        _data_provider = get_data_provider(context=_oi_profile_page_context())
+        _data_provider = get_data_provider(context=_oi_profile_page_context('premium_strikes'))
         if not kite and not _data_provider:
             return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
 
         from trading_app.service.fyers_data_service import FyersDataServiceAdapter
-        _is_fyers = isinstance(_data_provider, FyersDataServiceAdapter)
+        from trading_app.service.icici_data_service import IciciDataServiceAdapter
+        # "Speaks symbol strings", not "is Fyers": ICICI takes the same
+        # 'NSE:NIFTY…' symbols. Testing for Fyers alone sent an ICICI flag down
+        # the Kite branch — int() of a Fyers option symbol, or a Kite session
+        # it never asked for — so every premium came back empty.
+        _is_fyers = isinstance(_data_provider, (FyersDataServiceAdapter, IciciDataServiceAdapter))
         effective = _data_provider if _data_provider else kite
         kite_svc  = KiteService(kite_instance=effective) if effective else KiteService()
 
@@ -15136,7 +15168,7 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
 
         from trading_app.service.open_interest_service import OpenInterestService
         kite = get_kite(instance=1)
-        provider = get_data_provider(context=_oi_profile_page_context())
+        provider = get_data_provider(context=_oi_profile_page_context('oi'), exclude=('ICICI',))
         svc = OpenInterestService(provider if provider else kite)
         return jsonify(svc.get_atm_ce_oi_strikes(symbol, step, date_str))
 
@@ -15554,7 +15586,7 @@ def _rs_oi_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
     from trading_app.service.open_interest_service import OpenInterestService
 
     # The chain reads the page's own broker flag (OpenInterestService has no ICICI path).
-    provider = get_data_provider(context=_oi_profile_page_context(), exclude=('ICICI',))
+    provider = get_data_provider(context=_oi_profile_page_context('oi'), exclude=('ICICI',))
     if not provider:
         return None
     oi_service = OpenInterestService(provider)
@@ -17740,7 +17772,77 @@ def _sm_config_flows(config: dict, as_of, closing_value: float) -> list:
     return flows
 
 
-def _sm_compute_today_rankings(index_name: str):
+def _sm_download_closes(symbols: List[str]) -> Optional[pd.DataFrame]:
+    """Daily closes for `symbols` over the last 310 days, one column per symbol.
+
+    Callers hold _sm_yf_lock. raw['Close'] is a frame of ticker columns for one
+    symbol as much as for 500 — the old one-symbol branch renamed the MultiIndex
+    into a ('X.NS', 'X.NS') column, so every single-symbol retry read as a frame
+    and blew up with "truth value of a Series is ambiguous".
+    """
+    import yfinance as yf
+    today = datetime.today().date()
+    raw = yf.download(symbols, start=str(today - timedelta(days=310)),
+                      end=str(today + timedelta(days=1)),
+                      interval='1d', auto_adjust=True, progress=False, threads=True)
+    if raw is None or raw.empty or 'Close' not in raw:
+        return None
+    close = raw['Close']
+    if isinstance(close, pd.Series):
+        close = close.to_frame(symbols[0])
+    return close.copy()
+
+
+def _sm_closes(yf_symbols: List[str], max_age: float) -> Optional[pd.DataFrame]:
+    """Closes for `yf_symbols`, downloading only what is older than `max_age` seconds.
+
+    max_age=0 always goes to Yahoo (the order paths); the rankings view passes
+    the rankings TTL. A symbol Yahoo answers empty for is retried in chunks, up
+    to three passes, as before — a big batch can drop dozens at once.
+    """
+    with _sm_yf_lock:
+        now = _time.monotonic()
+        stale = [y for y in yf_symbols
+                 if not (y in _sm_close_cache and now - _sm_close_cache[y][0] < max_age)]
+
+        def _absorb(df):
+            got = 0
+            if df is None:
+                return got
+            for y in df.columns:
+                col = df[y]
+                if y in stale and col.notna().any():
+                    _sm_close_cache[y] = (now, col)
+                    got += 1
+            return got
+
+        if stale:
+            _absorb(_sm_download_closes(stale))
+            for _ in range(3):
+                missing = [y for y in stale
+                           if y not in _sm_close_cache or _sm_close_cache[y][0] != now]
+                if not missing:
+                    break
+                recovered = 0
+                for i in range(0, len(missing), 25):
+                    try:
+                        recovered += _absorb(_sm_download_closes(missing[i:i + 25]))
+                    except Exception as e:
+                        logger.warning('SM rankings retry chunk failed: %s', e)
+                if not recovered:
+                    break
+
+        # Fresh entries only: a symbol whose refresh failed is "no data" for this
+        # run, as it always was, rather than an older close passed off as today's.
+        cols = {y: _sm_close_cache[y][1] for y in yf_symbols
+                if y in _sm_close_cache and (_sm_close_cache[y][0] == now
+                                             or now - _sm_close_cache[y][0] < max_age)}
+    if not cols:
+        return None
+    return pd.DataFrame(cols).sort_index().dropna(how='all')
+
+
+def _sm_compute_today_rankings(index_name: str, max_age: float = 0):
     """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
 
     Returns (ranked_list, close_df, no_data).  ranked_list is sorted descending by
@@ -17750,60 +17852,15 @@ def _sm_compute_today_rankings(index_name: str):
     Returns (None, None, set()) on data failure.
     """
     import math
-    import yfinance as yf
     from trading_app.service.dynamic_constituents import DynamicConstituentsService
 
     stocks     = DynamicConstituentsService.get_constituents(index_name)
     yf_symbols = [f"{s}.NS" for s in stocks]
 
     today = datetime.today().date()
-    start = today - timedelta(days=310)
-
-    def _download(symbols):
-        raw = yf.download(symbols, start=str(start),
-                          end=str(today + timedelta(days=1)),
-                          interval='1d', auto_adjust=True, progress=False, threads=False)
-        if raw is None or raw.empty:
-            return None
-        return (raw[['Close']].copy().rename(columns={'Close': symbols[0]})  # pyright: ignore[reportCallIssue]
-                if len(symbols) == 1 else raw['Close'].copy())
-
-    close_df = _download(yf_symbols)
-    if close_df is None:
+    close_df = _sm_closes(yf_symbols, max_age)
+    if close_df is None or close_df.empty:
         return None, None, set()
-    close_df = close_df.dropna(how='all')
-    if close_df.empty:
-        return None, None, set()
-
-    # A batch download of 250–500 tickers intermittently comes back with an empty
-    # column for a handful of them. Retry just those once — otherwise a transient
-    # gap silently drops the stock from the ranking, which shifts every rank below
-    # it and makes a holding look like it lost its rank entirely.
-    # A big flaky batch can drop dozens at once (42 on 2026-10-15 08:04, which
-    # then sat in the cache as "n/a" ranks), so retry in small chunks, up to
-    # three passes, until nothing is left or a pass recovers nothing.
-    for _ in range(3):
-        missing = [y for y in yf_symbols
-                   if y not in close_df.columns or not close_df[y].notna().any()]  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
-        if not missing:
-            break
-        recovered = False
-        for i in range(0, len(missing), 25):
-            chunk = missing[i:i + 25]
-            try:
-                retry_df = _download(chunk)
-            except Exception as e:
-                logger.warning('SM rankings retry chunk failed: %s', e)
-                continue
-            if retry_df is None:
-                continue
-            for y in chunk:
-                if y in retry_df.columns and retry_df[y].notna().any():  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
-                    close_df[y] = retry_df[y]
-                    recovered = True
-        close_df = close_df.sort_index()
-        if not recovered:
-            break
 
     # Carry the last known close forward over short gaps so a symbol that has not
     # printed today's bar yet (or missed a session) still gets priced off its own
@@ -17877,16 +17934,37 @@ def _sm_rankings_cached(index_name: str, with_no_data: bool = False) -> Any:
     With with_no_data=True returns (ranked, no_data) so callers can tell a symbol
     that genuinely fell down the ranking apart from one whose data failed to load.
     """
-    now = _time.monotonic()
+    def _fresh(entry):
+        return entry and _time.monotonic() - entry[0] < _SM_RANKINGS_TTL
+
     entry = _sm_rankings_cache.get(index_name)
-    if entry and now - entry[0] < _SM_RANKINGS_TTL:
-        ranked, no_data = entry[1], entry[2]
-    else:
-        ranked, _, no_data = _sm_compute_today_rankings(index_name)
-        # A run that lost symbols to a data hiccup must not be remembered for the
-        # full TTL — the next call should try the download again.
-        if ranked and len(no_data) <= 8:
-            _sm_rankings_cache[index_name] = (now, ranked, no_data)
+    if not _fresh(entry):
+        with _sm_rankings_index_locks_guard:
+            lock = _sm_rankings_index_locks.setdefault(index_name, threading.Lock())
+        # One computation per index: the page asks for every config at once, and
+        # two configs on the same index used to download it twice, side by side.
+        with lock:
+            entry = _sm_rankings_cache.get(index_name)
+            failed = _sm_rankings_failed_at.get(index_name, 0.0)
+            backing_off = entry and _time.monotonic() - failed < _SM_RANKINGS_RETRY_SECS
+            if not _fresh(entry) and not backing_off:
+                ranked, _, no_data = _sm_compute_today_rankings(index_name, max_age=_SM_RANKINGS_TTL)
+                if ranked and len(no_data) <= 8:
+                    _sm_rankings_cache[index_name] = (_time.monotonic(), ranked, no_data,
+                                                      datetime.today().date())
+                    _sm_rankings_failed_at.pop(index_name, None)
+                    entry = _sm_rankings_cache[index_name]
+                else:
+                    # A run that lost symbols to a data hiccup is not remembered for
+                    # the TTL. The last good ranking (same day) is served until the
+                    # retry window passes; with none, this run is what there is.
+                    _sm_rankings_failed_at[index_name] = _time.monotonic()
+                    if not (entry and entry[3] == datetime.today().date()) and ranked:
+                        # Nothing better today: serve this one, never as fresh (ts 0),
+                        # so the retry window still applies to the next call.
+                        entry = (0.0, ranked, no_data, datetime.today().date())
+                        _sm_rankings_cache[index_name] = entry
+    ranked, no_data = (entry[1], entry[2]) if entry else (None, set())
     return (ranked, no_data) if with_no_data else ranked
 
 

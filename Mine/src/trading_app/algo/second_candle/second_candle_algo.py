@@ -163,6 +163,12 @@ class SecondCandleAlgo:
         # Day on which the first breakout was found already resolved (armed too
         # late to take it) — blocks chasing it for the rest of that day.
         self._stale_signal_date: Optional[str] = None
+        # Day on which the data provider refused 30-second bars outright (Fyers
+        # serves seconds resolution on the Prime plan only) — ICICI is asked
+        # directly for the rest of that day instead of burning a refused call.
+        self._30s_refused_date: Optional[str] = None
+        # Earliest moment _ensure_range may fetch again after an empty answer.
+        self._range_retry_at: float = 0.0
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -379,17 +385,49 @@ class SecondCandleAlgo:
             logger.warning(f"[SC] Spot fetch failed: {e}")
             return None
 
+    def _30s_sources(self, provider: Any) -> List[Any]:
+        """Who to ask for 30-second bars, in order: the ALGO_SC_DATA_PROVIDER
+        broker, then ICICI (Breeze builds them from 1-second bars). Kite has no
+        sub-minute candles, so it is never one of them."""
+        today = date.today().isoformat()
+        sources = [] if self._30s_refused_date == today else [provider]
+        try:
+            from trading_app.service.provider_logic import get_icici_adapter
+            icici = get_icici_adapter(self.username)
+        except Exception as e:
+            logger.debug(f"[SC] ICICI adapter unavailable: {e}")
+            icici = None
+        if icici is not None and icici is not provider:
+            sources.append(icici)
+        return sources or [provider]
+
     def _fetch_today_30s_candles(self, provider: Any) -> Optional[pd.DataFrame]:
-        """Fetch today's 30-second candles — used for both breakout entry and H/L exit checks."""
+        """Fetch today's 30-second candles — used for both breakout entry and H/L exit checks.
+
+        Fyers dropped to the Standard plan on 2026-10-21 and refuses seconds
+        resolution there; with no fallback the range candle never locked and the
+        algo sat out every day after. A source that answers empty hands over to
+        the next one, and a plan refusal stops asking that source for the day.
+        """
         try:
             today = date.today().strftime('%Y-%m-%d')
-            candles = provider.historical_data(
-                instrument_token=_NIFTY_FYERS,
-                from_date=today,
-                to_date=today,
-                interval='30second',
-                use_cache=False,
-            )
+            candles = None
+            for src in self._30s_sources(provider):
+                candles = src.historical_data(
+                    instrument_token=_NIFTY_FYERS,
+                    from_date=today,
+                    to_date=today,
+                    interval='30second',
+                    use_cache=False,
+                )
+                if candles:
+                    break
+                why = getattr(src, 'last_history_error', lambda: None)() or ''
+                if src is provider and 'prime' in why.lower():
+                    if self._30s_refused_date != today:
+                        logger.warning(f"[SC] {type(src).__name__} refuses 30-second bars "
+                                       f"({why}) — reading them from ICICI today")
+                    self._30s_refused_date = today
             if not candles:
                 return None
             df = pd.DataFrame(candles).reset_index(drop=True)
@@ -566,12 +604,18 @@ class SecondCandleAlgo:
         if now_ist < range_ready:
             return False
 
+        # The loop calls this every second until the range locks. A failed fetch
+        # waits 5 s before the next one — every one may be a Breeze request.
+        if time.monotonic() < self._range_retry_at:
+            return False
         df = self._fetch_today_30s_candles(provider)
         if df is None or df.empty:
+            self._range_retry_at = time.monotonic() + 5
             return False
 
         completed = df[df['datetime'] <= (now_ist - pd.Timedelta(seconds=30))].reset_index(drop=True)
         if len(completed) < candle_index:     # range candle not closed yet
+            self._range_retry_at = time.monotonic() + 2
             return False
 
         rc = completed.iloc[candle_index - 1]  # 1-based range candle
