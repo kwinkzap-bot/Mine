@@ -38,6 +38,13 @@ _global_nfo_cache = {
 # Get global rate limiter for historical API calls
 _rate_limiter = get_global_rate_limiter()
 
+# DB paths whose schema _init_db has already brought up to date in this process.
+# The service is built per request, and every _init_db is a run of CREATE/ALTER
+# statements — each one a write lock on the multi-GB oi_data.db that stalls the
+# readers behind it. Once per process is enough.
+_initialized_db_paths: set = set()
+_init_db_lock = threading.Lock()
+
 # The Fyers pacer is a different limiter for a different broker — named apart
 # from the Kite one above so the two are never confused at a call site. Imported
 # lazily: fyers_data_service is only reachable when Fyers is the provider, and
@@ -415,7 +422,15 @@ class OpenInterestService:
             return []
 
     def _init_db(self):
-        """Initialize the SQLite database for OI history."""
+        """Initialize the SQLite database for OI history (once per process per path)."""
+        if self.db_path in _initialized_db_paths:
+            return
+        with _init_db_lock:
+            if self.db_path in _initialized_db_paths:
+                return
+            self._init_db_schema()
+
+    def _init_db_schema(self):
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -511,6 +526,8 @@ class OpenInterestService:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_fii_sector_date ON fii_sector_limits(date, sector)')
                 conn.commit()
                 # logger.info(f"OI Database initialized at {self.db_path}")
+            # Only a clean run counts — a failed one is retried by the next service.
+            _initialized_db_paths.add(self.db_path)
         except Exception as e:
             logger.error(f"Failed to initialize OI database: {e}")
 
