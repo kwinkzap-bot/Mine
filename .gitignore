@@ -1,9 +1,9 @@
 # Environment files — NEVER track these. They hold live broker API keys,
 # secrets, access tokens and MPINs. An earlier "!Mine/env/Mine.env" negation
 # kept Mine.env tracked on a public remote; it is gone and must not come back.
-Mine/env/*.env
-Mine/env/.env
-Mine/env/sheets-key.json
+#Mine/env/*.env
+#Mine/env/.env
+#Mine/env/sheets-key.json
 
 # App user credentials (SHA-256 password hashes)
 .users.json
