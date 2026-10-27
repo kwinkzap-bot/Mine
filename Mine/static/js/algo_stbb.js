@@ -6,21 +6,25 @@
 // key → DOM id prefix (p), API base, index and env-flag prefix. The state is per tab.
 const _STBB = {};
 for (let n = 1; n <= 7; n++) {
-    _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true };
+    _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true, group: 'simple' };
 }
+// The Mine group: ST Touch Break on NIFTY (strategy 8 of the same engine; its own tab and sub-tab).
+_STBB['mine-nifty'] = { p: 'mnn', api: '/api/algo/simple-trader-8', sym: 'NIFTY', pfx: 'ST8', simple: true, group: 'mine',
+                        label: 'Mine · ST Touch Break (NIFTY)', touch: true };
 Object.values(_STBB).forEach(c => Object.assign(c, { timer: null, mode: null, book: 'all', history: [] }));
 
 const _stbbEl = (c, id) => document.getElementById(c.p + id);
+const _stbbLabel = (c, key) => c.label || (c.simple ? 'Simple Trader ' + key.split('-')[1] : 'ST + BB + RSI ' + c.sym);
 
 function _stbbClearTimers() { Object.values(_STBB).forEach(c => { clearTimeout(c.timer); c.timer = null; }); }
 
-// Called by algoSwitch for any of the three sub-tabs. All three indices load (and keep
+// Called by algoSwitch for any sub-tab of the top tab. All of that tab's sub-tabs load (and keep
 // refreshing) together, so switching between them shows data already in the DOM instead
 // of waiting on a fresh fetch. `key` is only the one the user is looking at.
 const _stbbGroupOpen = () => Object.keys(_STBB).some(k => document.getElementById('algo-' + k + '-panel')?.classList.contains('active'));
 function _stbbActivate(key) {
     // the sub-tabs of one top tab load together; the other group's are not fetched
-    Object.keys(_STBB).filter(k => !!_STBB[k].simple === !!_STBB[key].simple)
+    Object.keys(_STBB).filter(k => _STBB[k].group === _STBB[key].group)
         .forEach(k => { _stbbFetchStatus(k); _stbbFetchHistory(k); });
 }
 
@@ -62,9 +66,18 @@ function _stbbRender(c, key, d) {
     if (d.symbol) c.sym = d.symbol;
     set(c.p + 'Direction', s.direction); set(c.p + 'MaxTrades', s.max_trades); set(c.p + 'Premium', Math.round(s.premium));
     set(c.p + 'SlPct', s.sl_pct); set(c.p + 'TslX', s.tsl_x); set(c.p + 'TslY', s.tsl_y);
+    if (c.touch) { set(c.p + 'StPeriod', s.st_period); set(c.p + 'StMult', s.st_mult); set(c.p + 'MinWick', s.min_wick_pct); set(c.p + 'StopTouch', s.stop_touch ? 1 : 0); }
     _stbbEl(c, 'Sizing').textContent =
         `Size is the flags: a live order is each account's BROKER_N_${c.pfx}_LOTS lots (at accounts with BROKER_N_${c.pfx}_ACTIVE=true); a paper trade takes ${d.paper_lots} lot(s).`;
-    if (c.simple) {
+    if (c.touch) {
+        const dir = s.direction === 'both' ? 'BUY (CE) and SELL (PE)' : (s.direction === 'short' ? 'SELL (PE) only' : 'BUY (CE) only');
+        _stbbEl(c, 'Rule').textContent = `3-minute NIFTY candles · SuperTrend(${s.st_period}, ${s.st_mult}) · ${dir}, Bounce: a candle whose wick touches the line `
+            + `(wick ≥ ${s.min_wick_pct}% of its range) and closes on the trend side arms the NEXT candle; the order goes out the moment the index trades through the touch candle's `
+            + `high (low for a sell) · ≈${Math.round(s.premium)} premium · exit when a candle ${s.stop_touch ? 'trades through' : 'closes beyond'} the SuperTrend line, `
+            + `no target, square-off 15:14` + (s.sl_pct ? ` · premium stop-loss ${s.sl_pct}% under the fill` : ', no premium stop')
+            + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : '') + ` · up to ${s.max_trades} trade(s) a day`
+            + ` · the Through setup (ST flips on the break candle) is backtest-only: it is known only at that candle's close`;
+    } else if (c.simple) {
         _stbbEl(c, 'Rule').textContent = `${d.rule || ''} · stop-loss ${s.sl_pct}% under the fill`
             + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : ', no trail')
             + ` · up to ${s.max_trades} trade(s) a day, re-entering on the next signal after a stop · square-off 15:14`
@@ -88,7 +101,8 @@ function _stbbRender(c, key, d) {
     _stbbEl(c, 'Log').innerHTML = log.map(l => `<div><b>${_stbbEsc(l.t)}</b> ${_stbbEsc(l.text)}</div>`).join('');
 }
 
-const _STBB_STATUS = { open: ['In trade', 'info'], closed: ['Closed', 'neutral'], missed: ['Missed', 'neg'], failed: ['Not filled', 'neg'] };
+const _STBB_STATUS = { open: ['In trade', 'info'], closed: ['Closed', 'neutral'], missed: ['Missed', 'neg'], failed: ['Not filled', 'neg'],
+                       armed: ['Armed', 'info'], expired: ['Not triggered', 'neutral'] };
 
 function _stbbRenderTrades(c, trades) {
     const rows = trades.map(t => {
@@ -109,7 +123,8 @@ function _stbbRenderTrades(c, trades) {
             { key: 'mode', label: 'Book', format: v => v ? v.toUpperCase() : '—', badge: v => v === 'live' ? 'neg' : 'info' },
             { key: 'type', label: 'Side', tone: v => v === 'Short' ? 'neg' : 'pos', strong: true },
             { key: 'signal_bar', label: 'Signal candle', format: v => (v || '').slice(11, 16) },
-            { key: 'signal', label: 'RSI · close', format: v => v ? `${v.rsi ?? '—'} · ${_stbbNum(v.close)}` + (v.pivot ? ` (${v.pivot} ${_stbbNum(v.pivot_level)})` : '') : '—' },
+            c.touch ? { key: 'signal', label: 'Touch · level', format: v => v ? `ST ${_stbbNum(v.supertrend)} · level ${_stbbNum(v.level)}` : '—' }
+                    : { key: 'signal', label: 'RSI · close', format: v => v ? `${v.rsi ?? '—'} · ${_stbbNum(v.close)}` + (v.pivot ? ` (${v.pivot} ${_stbbNum(v.pivot_level)})` : '') : '—' },
             { key: 'index_entry', label: 'Index in', format: (v, t) => v == null ? '—' : `${_stbbNum(v)} @ ${t.entry_time || ''}` },
             { key: 'leg', label: 'Option' },
             { key: 'lots', label: 'Lots' },
@@ -180,9 +195,9 @@ function _stbbSave(key, body) {
 function _stbbSetMode(key, mode) {
     const c = _STBB[key];
     if (mode === c.mode) return;
-    if (mode === 'live' && c.simple && !confirm(`Switch Simple Trader ${key.split('-')[1]} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true (size: BROKER_N_${c.pfx}_LOTS). A stop-loss SL-M rests at the broker; the trail and the strategy's exit are managed by this app.`)) return;
+    if (mode === 'live' && c.simple && !confirm(`Switch ${_stbbLabel(c, key)} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true (size: BROKER_N_${c.pfx}_LOTS). ${c.touch ? 'The SuperTrend exit (and any premium stop-loss you set) is managed by this app; an SL-M rests at the broker only when SL % is above 0.' : 'A stop-loss SL-M rests at the broker; the trail and the strategy\'s exit are managed by this app.'}`)) return;
     if (mode === 'live' && !c.simple && !confirm(`Switch ST + BB + RSI ${c.sym} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true. There is no stop-loss: the trade ends only when the SuperTrend turns or at 15:14.`)) return;
-    if (mode === 'paper' && !confirm(`Switch ${c.simple ? 'Simple Trader ' + key.split('-')[1] : 'ST + BB + RSI ' + c.sym} to PAPER? New entries are only recorded. A live position already open keeps being managed until it is flat.`)) return;
+    if (mode === 'paper' && !confirm(`Switch ${_stbbLabel(c, key)} to PAPER? New entries are only recorded. A live position already open keeps being managed until it is flat.`)) return;
     _stbbSave(key, { mode });
 }
 
@@ -192,7 +207,7 @@ function _stbbStart(key) {
 }
 
 function _stbbStop(key) {
-    if (!confirm(`Stop ${_STBB[key].simple ? 'Simple Trader ' + key.split('-')[1] : 'ST + BB + RSI ' + _STBB[key].sym}? It stays stopped (also after a restart) until Start. A live position is NOT squared off — close it from the Order Placement strip.`)) return;
+    if (!confirm(`Stop ${_stbbLabel(_STBB[key], key)}? It stays stopped (also after a restart) until Start. A live position is NOT squared off — close it from the Order Placement strip.`)) return;
     fetch(_STBB[key].api + '/stop', { method: 'POST' }).then(r => r.json())
         .then(d => { if (!d.success) alert('Stop failed: ' + (d.error || '')); _stbbFetchStatus(key); });
 }
@@ -202,7 +217,7 @@ function _stbbToggleEdit(key) {
     const c = _STBB[key];
     const btn = _stbbEl(c, 'EditBtn');
     const lock = btn.dataset.open === '1';
-    ['MaxTrades', 'Premium', 'SlPct', 'TslX', 'TslY'].forEach(f => { const el = _stbbEl(c, f); if (el) el.disabled = lock; });
+    ['MaxTrades', 'Premium', 'SlPct', 'TslX', 'TslY', 'Direction', 'StPeriod', 'StMult', 'MinWick', 'StopTouch'].forEach(f => { const el = _stbbEl(c, f); if (el) el.disabled = lock; });
     btn.dataset.open = lock ? '0' : '1';
     btn.textContent = lock ? '🔒 Locked — Edit' : '🔓 Editing — Lock';
 }

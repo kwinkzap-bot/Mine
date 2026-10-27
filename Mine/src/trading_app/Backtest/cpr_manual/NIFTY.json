@@ -39404,8 +39404,26 @@
       "reason": "Narrow CPR (14 pts) with the boxes 194 pts away on both sides \u2014 too thin to trade against, entries only on a break of a box or a rejection from one \u2014 none by 11:00 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 13.6 pts (0.06%), 09:15 candle O 22524.4 H 22524.4 L 22435.6 C 22439.5 | Trade by rule: narrow CPR (14 pts) with the boxes 194 pts away on both sides \u2014 too thin to trade against, entries only on a break of a box or a rejection from one \u2014 none by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-10-27",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Wide",
+      "cpr_direction": "Asc",
+      "first_candle": "Strong candle red near S3(cam)",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "The CPRs and a box interlink into one zone on a Wide CPR (0.536% of price) \u2014 a break out of so wide a zone is not traded \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 121.9 pts (0.536%), 09:15 candle O 22708.8 H 22724.35 L 22653.2 C 22659.2 | Trade by rule: the CPRs and a box interlink into one zone on a Wide CPR (0.536% of price) \u2014 a break out of so wide a zone is not traded \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-26 15:31",
+  "extended_at": "2026-10-27 20:41",
   "backfilled_from": "2018-01-01"
 }

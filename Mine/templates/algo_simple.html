@@ -7,9 +7,10 @@
     <div class="ag-panel" id="algo-{{ key }}-panel">
 
     <div class="ag-subtabs">
-        {% for n in range(1, 8) %}<button class="ag-subtab{% if key == 'simple-' ~ n %} active{% endif %}" onclick="algoSwitch('simple-{{ n }}')" title="{{ names[n] }}">{{ n }}</button>
+        {% if group == 'mine' %}<button class="ag-subtab active" onclick="algoSwitch('{{ key }}')" title="{{ names[n] }} on NIFTY">NIFTY</button>
+        {% else %}{% for n in range(1, 8) %}<button class="ag-subtab{% if key == 'simple-' ~ n %} active{% endif %}" onclick="algoSwitch('simple-{{ n }}')" title="{{ names[n] }}">{{ n }}</button>
         {% endfor %}
-        <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick="simpleCombinedOpen()" title="All seven live Simple Trader algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>
+        <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick="simpleCombinedOpen()" title="All seven live Simple Trader algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>{% endif %}
     </div>
 
     <div class="ag-header">
@@ -29,7 +30,7 @@
         </span>
         <button class="ag-btn ag-btn-strikes" onclick="_stbbStart('{{ key }}')">▶ Start</button>
         <button class="ag-btn ag-btn-strikes" onclick="_stbbStop('{{ key }}')">■ Stop</button>
-        <a class="ag-btn ag-btn-strikes" href="/backtest" title="The rule's backtest: Simple Trader group, strategy {{ n }}">Backtest ↗</a>
+        <a class="ag-btn ag-btn-strikes" href="/backtest" title="{% if group == 'mine' %}The rule's backtest: the Mine group, ST Touch Break{% else %}The rule's backtest: Simple Trader group, strategy {{ n }}{% endif %}">Backtest ↗</a>
         <span class="ag-last-upd" id="{{ p }}LastUpd" style="margin-left:auto"></span>
     </div>
 
@@ -38,6 +39,20 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Rule &amp; Accounts</span>
             <button class="ag-btn ag-btn-strikes" id="{{ p }}EditBtn" onclick="_stbbToggleEdit('{{ key }}')" title="Unlock the fields to change them; lock again to prevent accidental edits">🔒 Locked — Edit</button>
+            {% if group == 'mine' %}
+            <label class="cpr-num" title="BUY only (the default: CE on an uptrend's touch), SELL only (PE on a downtrend's touch) or both. Read at each setup.">Direction
+                <select id="{{ p }}Direction" disabled onchange="_stbbSave('{{ key }}', {direction:this.value})">
+                    <option value="long">BUY only</option><option value="short">SELL only</option><option value="both">Both</option></select></label>
+            <label class="cpr-num" title="SuperTrend ATR length">ST length
+                <input type="number" id="{{ p }}StPeriod" disabled min="2" max="100" step="1" onchange="_stbbSave('{{ key }}', {st_period:+this.value})"></label>
+            <label class="cpr-num" title="SuperTrend factor">ST factor
+                <input type="number" id="{{ p }}StMult" disabled min="0.5" max="10" step="0.1" onchange="_stbbSave('{{ key }}', {st_mult:+this.value})"></label>
+            <label class="cpr-num" title="The touch candle's wick on the line's side, as a share of its range (0 = any touch)">Min wick %
+                <input type="number" id="{{ p }}MinWick" disabled min="0" max="100" step="5" onchange="_stbbSave('{{ key }}', {min_wick_pct:+this.value})"></label>
+            <label class="cpr-num" title="Close: exit when a candle CLOSES beyond the SuperTrend line (the flip). Touch: exit as soon as the index trades through the previous candle's line.">Stop
+                <select id="{{ p }}StopTouch" disabled onchange="_stbbSave('{{ key }}', {stop_touch:+this.value})">
+                    <option value="0">On close</option><option value="1">On touch</option></select></label>
+            {% endif %}
             <label class="cpr-num" title="Trades a day, one open at a time">Max trades
                 <input type="number" id="{{ p }}MaxTrades" disabled min="1" max="10" step="1" onchange="_stbbSave('{{ key }}', {max_trades:+this.value})"></label>
             <label class="cpr-num" title="The strike whose premium is nearest this is bought">Premium ≈

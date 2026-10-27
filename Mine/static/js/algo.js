@@ -7,7 +7,7 @@ let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade c
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
 const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr',
-    'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7', 'ema-confluence', 'swing-momentum'];
+    'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7', 'mine-nifty', 'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -435,9 +435,11 @@ function algoSwitch(tab) {
     _ALGO_TABS.forEach(t => {
         document.getElementById('algo-' + t + '-panel').classList.toggle('active', t === tab);
         // the seven Simple Trader strategies share one top tab ('simple'), with sub-tabs inside
-        const top = t.startsWith('simple-') ? 'simple' : t;
+        // the Mine group's algos (ST Touch Break on NIFTY) are one top tab ('mine') the same way
+        const grp = t.startsWith('simple-') ? 'simple-' : (t.startsWith('mine-') ? 'mine-' : null);
+        const top = grp ? grp.slice(0, -1) : t;
         const btn = document.getElementById('algo-tab-' + top);
-        const on = t.startsWith('simple-') ? tab.startsWith('simple-') : t === tab;
+        const on = grp ? tab.startsWith(grp) : t === tab;
         if (btn) btn.classList.toggle('active', on);
     });
     history.replaceState(null, '', '#' + tab);
@@ -460,7 +462,7 @@ function algoSwitch(tab) {
     } else if (tab === 'cpr') {
         _cprFetchStatus();
         _cprFetchHistory();
-    } else if (tab.startsWith('simple-')) {
+    } else if (tab.startsWith('simple-') || tab.startsWith('mine-')) {
         _stbbActivate(tab);
     } else if (tab === 'ema-confluence') {
         _emacFetchStatus();

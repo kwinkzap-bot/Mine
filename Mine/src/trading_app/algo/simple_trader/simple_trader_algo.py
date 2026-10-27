@@ -32,6 +32,7 @@ from trading_app.algo.st_bb_rsi.st_bb_rsi_algo import (   # noqa: F401 — the r
     StBbRsiAlgo, accounts, get_instance, load_history, mode, paper_lots, _flag, _hhmm, _now, _num, _uvar)
 from trading_app.app.utils.logger import logger
 from trading_app.service import simple_trader_live_engine as sim
+from trading_app.service import st_touch_break_live_engine as tb
 
 _DIR = os.path.dirname(__file__)
 
@@ -42,7 +43,7 @@ class SimpleProfile(base.Profile):
     def __init__(self, spec: sim.Spec):
         super().__init__(spec.symbol, f'st{spec.n}', f'ST{spec.n}', spec.premium,
                          'BFO' if spec.symbol == 'SENSEX' else 'NFO',
-                         f'ST{spec.n}', f'Simple Trader {spec.n}')
+                         f'ST{spec.n}', 'Mine · ST Touch Break' if spec.kind == 'tb' else f'Simple Trader {spec.n}')
         self.spec = spec
         self.rule = spec.rule
 
@@ -56,6 +57,15 @@ class SimpleProfile(base.Profile):
 PROFILES: Dict[int, SimpleProfile] = {n: SimpleProfile(sp) for n, sp in sim.SPECS.items()}
 
 
+def _direction(username, p: SimpleProfile) -> str:
+    """Seven strategies are one-sided by their rule. ST Touch Break (8) is the Mine group's and takes
+    the tab's choice — long (BUY, the default), short or both — read at each setup."""
+    if p.spec.kind != 'tb':
+        return p.spec.side
+    v = _uvar(username, f'{p.pfx}_DIRECTION', p.spec.side).lower()
+    return v if v in ('long', 'short', 'both') else p.spec.side
+
+
 def settings(username, p: SimpleProfile) -> Dict[str, Any]:
     """Every setting, read where used and never cached. The indicator numbers are the
     Backtest form's defaults unless ``ST<n>_<NAME>`` (e.g. ST4_RSI_LEVEL) says otherwise."""
@@ -64,7 +74,7 @@ def settings(username, p: SimpleProfile) -> Dict[str, Any]:
         'spec': sp.n,
         'mode': mode(username, p),
         'premium': _num(username, f'{p.pfx}_PREMIUM', sp.premium),
-        'direction': sp.side,
+        'direction': _direction(username, p),
         'max_trades': max(1, int(_num(username, f'{p.pfx}_MAX_TRADES', sp.max_trades))),
         'sl_pct': max(0.0, _num(username, f'{p.pfx}_SL_PCT', sp.sl_pct)),
         'tsl_x': max(0.0, _num(username, f'{p.pfx}_TSL_X', sp.tsl_x)),
@@ -113,6 +123,38 @@ class SimpleTraderAlgo(StBbRsiAlgo):
 
     def _clock_exits(self, day, hhmm: str, cutoff: str):
         return sim.time_exits(day, hhmm, cutoff)
+
+    def _price_events(self, day, now, s):
+        """ST Touch Break (8) is entered INTRABAR: the index price is read only while a setup's break
+        candle is running (or a 'touch' stop is armed), and never for the other seven strategies."""
+        if self.spec.kind != 'tb' or not tb.watching(day, _hhmm(now), s, self.spec.bar):
+            return []
+        spot = self._spot()
+        if spot is None:
+            return []
+        self.state['spot'] = spot
+        return tb.on_price(day, spot, _hhmm(now), s, self.spec.bar)
+
+    def _act(self, ev, now, s) -> None:
+        t, kind = ev['trade'], ev['event']
+        if self.spec.kind == 'tb' and kind in ('armed', 'expired', 'missed'):
+            sg = t.get('signal') or {}
+            if kind == 'armed':
+                self._note(f"#{t['n']} {t['type']}: touch candle {t['signal_bar'][11:16]} — SuperTrend {sg.get('supertrend')}, "
+                           f"waiting for the index to trade {'above' if t['type'] == 'Long' else 'below'} {t['level']:,.1f} "
+                           f"in the next candle")
+            elif kind == 'expired':
+                self._note(f"#{t['n']} {t['type']}: the {t['level']:,.1f} level was not crossed in the break candle — setup dropped")
+            else:
+                self._note(f"#{t['n']} {t['type']}: {t.get('error')}")
+            return
+        super()._act(ev, now, s)
+
+    def _signal_text(self, t) -> str:
+        if self.spec.kind != 'tb':
+            return super()._signal_text(t)
+        sg = t.get('signal') or {}
+        return f"touch {t['signal_bar'][11:16]}, level {sg.get('level')}"
 
     # ── the option's own stop ──────────────────────────────────────────
 

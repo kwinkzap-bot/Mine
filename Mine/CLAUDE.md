@@ -331,6 +331,57 @@ Load-bearing:
 
 Tests: `tests/test_cpr_live.py`.
 
+## ST Touch Break live algo (Mine → NIFTY)
+
+The Backtest page's **ST Touch Break** (Mine group) run live on NIFTY options — the **Mine** tab on
+/algo with one sub-tab, **NIFTY** (`templates/algo_simple.html` with `group='mine'`, `static/js/algo_stbb.js`
+config `'mine-nifty'`). Added 2026-10-27, **paper by default**. It is *strategy 8 of the Simple Trader
+chassis* (`algo/simple_trader/simple_trader_algo.py`, `PROFILES[8]`, flags `ST8_*`, routes
+`/api/algo/simple-trader-8/{status,settings,history,start,stop}`, state `simple_trader_8_*.json`), not a
+copy of it: thread, paper/live legs, broker fills, history and alerts are the Simple Trader ones. The
+Simple Trader tab and its Combined view are still 1-7.
+
+```
+ST8_MODE=paper              # live = real orders; the tab's toggle, read at each ENTRY
+ST8_ENABLED=true            # the tab's Start/Stop (scheduler honours it, job simple_trader_start)
+ST8_DIRECTION=long          # long (BUY, CE — the default) | short (PE) | both; the tab's Direction box
+ST8_ST_PERIOD=7  ST8_ST_MULT=1.5  ST8_STOP_TOUCH=1  ST8_MIN_WICK_PCT=25  ST8_TOUCH_TOL_PCT=0   # the Backtest form's defaults
+ST8_PREMIUM=250  ST8_MAX_TRADES=5  ST8_SL_PCT=0  ST8_TSL_X=0  ST8_TSL_Y=0     # premium stop off, as the backtest
+BROKER_N_ST8_ACTIVE=true    # per account, with BROKER_N_ACTIVE; zerodha/fyers ONLY
+BROKER_N_ST8_LOTS=1         # per account; an account without it is refused, never guessed
+```
+
+Load-bearing:
+
+* **The rule is the backtest's, and only what can be known live.** `service/st_touch_break_live_engine.py`
+  builds `StTouchBreakEngine` on the closed candles and reads its own `indicators()` / `touches()` — never a
+  copy. A touch candle that has just closed **arms** the next candle (nothing is ordered); the order goes out
+  the moment the index trades through the touch candle's high (low for a short) inside that candle; if the
+  candle closes without it the setup is `expired`. Exit is the index **trading through** the previous
+  candle's SuperTrend line (`ST8_STOP_TOUCH=1`, the default; not on the entry candle) or, with
+  `ST8_STOP_TOUCH=0`, a candle **closing** past it — or 15:14.
+  **Bounce only**: a *Through* setup is known only at the break candle's close (it is the one the SuperTrend
+  flips on) and the body filter reads that close too, so neither has a live twin. An outside bar takes
+  whichever side the index crosses first (the backtest's `outside_bar='first'`).
+* **Price is read only while something waits on it** — an armed setup's break candle, or an open trade
+  under a `touch` stop (`_price_events`, polled at the chassis's 5 s). The chassis gained two hooks for
+  this, `_price_events` and `_signal_text`, both no-ops for the other seven.
+* **A level the index has already run past is not chased.** If the first read is more than
+  `MAX_CHASE_RISK_FRAC` (0.5) × the setup's risk (level to the SuperTrend line) beyond the level, the
+  setup is `missed` and nothing is sent. A restart catching up the morning arms old candles whose break
+  windows are long gone: they can never fill (`on_price` keys on the clock) and expire on the next candle.
+* **Order path = Simple Trader's `_enter_live`** (`strategy='st8'` in `_dispatch_order_to_brokers`, which
+  routes on `BROKER_N_ST8_ACTIVE`, takes no automatic `entry − 20` stop and refuses to size itself —
+  `_STBB_FLAGS` was widened to 1-8). With `ST8_SL_PCT` above 0 an SL-M rests at the broker at the initial
+  stop; the trail and the SuperTrend exit are managed here, so with SL 0 the **only** protection if this
+  app is down is the Order Placement strip. **The live order path has never been exercised**: run paper for
+  a day first and read the log lines (`touch candle … waiting for the index to trade above …`).
+* The sweep behind the Backtest page's Find Best Params does not reach here: the tab's boxes are the
+  five numbers it searches (SuperTrend length/factor, direction, stop, min wick), set by hand.
+
+Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, and that every candle the
+backtest trades is armed live).
+
 ## The env file is read by threads and rewritten whole
 
 `env/<user>.env` holds the broker credentials and every per-account flag.

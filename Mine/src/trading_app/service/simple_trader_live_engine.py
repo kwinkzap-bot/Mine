@@ -29,6 +29,8 @@ from trading_app.Backtest.st_rsi_cpr_bb_sx_engine import StRsiCprBbSxEngine
 from trading_app.Backtest.st_rsi_cpr_bb_wr_sx_engine import StRsiCprBbWrSxEngine
 from trading_app.Backtest.st_rsi_pp_bb_engine import StRsiPpBbEngine
 from trading_app.Backtest.st_rsi_pp_bb_fut_engine import StRsiPpBbFutEngine
+from trading_app.Backtest.st_touch_break_engine import StTouchBreakEngine
+from trading_app.service import st_touch_break_live_engine as tb
 
 
 class Spec:
@@ -50,7 +52,9 @@ class Spec:
 
 
 # 'st' = StBbRsiEngine family (exit: SuperTrend turns against the trade); 'ema' = StEmaRsiCciEngine
-# (exit: RSI back across its exit line). 'data' is 'spot' (the index) or 'fut' (the NIFTY future).
+# (exit: RSI back across its exit line); 'tb' = StTouchBreakEngine (ST Touch Break, the Mine group:
+# a setup is ARMED on a touch candle and entered intrabar — st_touch_break_live_engine). 'data' is
+# 'spot' (the index) or 'fut' (the NIFTY future).
 SPECS: Dict[int, Spec] = {s.n: s for s in (
     Spec(1, 'BB PP ST RSI WR', StBbRsiEngine, 'st', 'NIFTY', 'spot', 3, 'long', 250, '09:15',
          13, 15, 10, 1,
@@ -99,6 +103,14 @@ SPECS: Dict[int, Spec] = {s.n: s for s in (
          fixed=dict(use_cpr_narrow=True),
          rule='SENSEX 5-min: close above SuperTrend(10,1.5), traditional R1 and BB(20,2.5) upper, RSI(14) 68-80,'
               ' %R(14) > -10, narrow CPR → buy the ≈500 CE; exit on a close below SuperTrend'),
+    # 8 is the Mine group's NIFTY tab, not one of the seven in the Simple Trader group. Bounce only (a
+    # Through setup is known only at the break candle's close); stop_touch 0 = exit on a close past the line.
+    Spec(8, 'ST Touch Break', StTouchBreakEngine, 'tb', 'NIFTY', 'spot', 3, 'long', 250, '09:15',
+         0, 0, 0, 5,
+         dict(st_period=7, st_mult=1.5, stop_touch=1, min_wick_pct=25.0, touch_tol_pct=0.0),
+         rule='NIFTY 3-min: a candle whose wick (≥ 25 % of its range) touches the SuperTrend(7,1.5) line and closes on the trend'
+              ' side arms the next candle; a break of its high buys the ≈250 CE (Bounce); exit when the index trades through'
+              ' the previous candle\'s SuperTrend line'),
 )}
 
 
@@ -204,6 +216,8 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any]) -> List[D
     if bars is None or bars.empty:
         return []
     spec = SPECS[int(s['spec'])]
+    if spec.kind == 'tb':
+        return tb.on_bar(day, bars, dict(s, direction=s.get('direction', spec.side)), spec.bar)
     rd = _Read(spec, bars, s)
     if rd.ts[:10] != day['date'] or rd.ts == day.get('last_bar'):
         return []

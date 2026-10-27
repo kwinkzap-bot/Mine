@@ -448,6 +448,7 @@ class StBbRsiAlgo:
                         events.append(ev)
         events = self._drop_round_trips(events)
         events += self._clock_exits(day, _hhmm(now), self._window()['exit_cutoff'])
+        events += self._price_events(day, now, dict(s, **self._window()))
 
         for ev in events:
             self._act(ev, now, s)
@@ -523,6 +524,15 @@ class StBbRsiAlgo:
 
     def _window(self) -> Dict[str, str]:
         return {'entry_start': '09:15', 'entry_end': '15:14', 'exit_cutoff': '15:14'}
+
+    def _price_events(self, day, now, s) -> List[Dict[str, Any]]:
+        """Events read off the index price between candles. None for the candle-close algos; ST Touch
+        Break (the Mine group) enters a setup the moment the price crosses its level."""
+        return []
+
+    def _signal_text(self, t) -> str:
+        """What the entry line of the log says triggered the trade."""
+        return f"RSI {t['signal'].get('rsi')}"
 
     def _next_bar_ready(self, last_ts: str) -> str:
         """Wall-clock time at which the candle after `last_ts` has closed and the feed has it."""
@@ -689,7 +699,7 @@ class StBbRsiAlgo:
         else:
             t['pending_entry'] = False
             t.pop('error', None)
-        self._note(f"#{t['n']} {t['type']}: RSI {t['signal'].get('rsi')} → BUY {self.p.symbol} {pick['strike']} {opt_type} "
+        self._note(f"#{t['n']} {t['type']}: {self._signal_text(t)} → BUY {self.p.symbol} {pick['strike']} {opt_type} "
                    f"≈{pick['premium']} — "
                    + (', '.join(f"{l['name']} {l['lots']} lot(s) @ {l.get('entry')}" for l in filled)
                       or 'NOTHING FILLED'))

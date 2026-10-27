@@ -12092,7 +12092,7 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
 
 
 # strategy key -> env prefix of the Simple Trader algos (1-7).
-_STBB_FLAGS = {f'st{n}': f'ST{n}' for n in range(1, 8)}
+_STBB_FLAGS = {f'st{n}': f'ST{n}' for n in range(1, 9)}      # 8 = ST Touch Break (the Mine group)
 
 
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
@@ -13421,6 +13421,19 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
                         if not 0 <= n <= 100:
                             return jsonify({'success': False, 'error': f'{key} must be 0-100'}), 400
                         saves[var] = f'{n:g}'
+            if simple and getattr(getattr(pr, 'spec', None), 'kind', '') == 'tb':
+                # ST Touch Break's own numbers: the SuperTrend, the "long wick" and which stop
+                for key, var, lo, hi in (('st_period', f'{pr.pfx}_ST_PERIOD', 2, 100), ('st_mult', f'{pr.pfx}_ST_MULT', 0.5, 10),
+                                         ('min_wick_pct', f'{pr.pfx}_MIN_WICK_PCT', 0, 100),
+                                         ('stop_touch', f'{pr.pfx}_STOP_TOUCH', 0, 1)):
+                    if key in data:
+                        try:
+                            n = float(data[key])
+                        except (TypeError, ValueError):
+                            return jsonify({'success': False, 'error': f'{key} must be a number'}), 400
+                        if not lo <= n <= hi:
+                            return jsonify({'success': False, 'error': f'{key} must be {lo:g}-{hi:g}'}), 400
+                        saves[var] = f'{n:g}'
             for var, val in saves.items():
                 if not UserEnvManager.save_user_var(username, var, val):
                     return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500
@@ -13486,7 +13499,7 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
         api_bp.route(f'/algo/{path}/{suffix}', methods=[method], endpoint=endpoint)(view)
 
 
-for _n in range(1, 8):      # Simple Trader 1-7: /algo/simple-trader-<n>/{status,settings,history,start,stop}
+for _n in range(1, 9):      # Simple Trader 1-7 and 8 = ST Touch Break (Mine): /algo/simple-trader-<n>/{status,settings,history,start,stop}
     _register_stbb_routes(f'simple-trader-{_n}', 'NIFTY', f'st{_n}', simple=_n)
 
 
