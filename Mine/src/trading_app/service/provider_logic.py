@@ -179,6 +179,46 @@ def get_data_provider(user: Optional[str] = None,
         return None
 
 
+def get_symbol_fallbacks(primary: Any, user: Optional[str] = None,
+                         context: Optional[Union[str, Sequence[str]]] = None) -> list:
+    """Later brokers in the flag chain that speak the SAME symbol strings as `primary`.
+
+    Fyers and ICICI both address a contract by Fyers-style symbol, so a fetch
+    that came back empty from one can be re-asked of the other with the very
+    same token. Kite cannot be: it needs a numeric instrument token the caller
+    has not resolved, so it is never offered here. Order is the flags' order,
+    and `primary` itself is left out.
+    """
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = user
+        if not username and has_request_context():
+            username = session.get('username')
+        username = username or 'Mine'
+        contexts = [context] if isinstance(context, str) else list(context or ())
+        names = [UserEnvManager.get_user_var(username, f'{c.upper()}_DATA_PROVIDER', '') for c in contexts if c]
+        names.append(UserEnvManager.get_user_var(username, 'DATA_PROVIDER', 'KITE'))
+        out, seen = [], set()
+        for raw in names:
+            for tok in (raw or '').split('#', 1)[0].replace(',', ' ').split():
+                t = tok.upper()
+                if t in seen:
+                    continue
+                seen.add(t)
+                if t in ('ICICI', 'BREEZE', 'ICICIDIRECT'):
+                    ad = _get_icici_adapter(username)
+                elif t == 'FYERS':
+                    ad = _get_fyers_adapter(username)
+                else:
+                    continue
+                if ad is not None and ad is not primary and ad not in out:
+                    out.append(ad)
+        return out
+    except Exception as exc:
+        logger.warning(f"Could not build data-provider fallbacks: {exc}")
+        return []
+
+
 def get_icici_adapter(user: Optional[str] = None) -> Optional[Any]:
     """The Breeze adapter specifically, whatever DATA_PROVIDER happens to be.
 

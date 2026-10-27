@@ -13780,7 +13780,15 @@ def _oi_profile_page_context(block: str = '') -> Tuple[str, ...]:
     """
     ref_path = (request.referrer or '').split('?', 1)[0].rstrip('/')
     page = 'replay' if ref_path.endswith('/replay') else 'oi_profile'
-    return (f'{page}_{block}', page) if block else (page,)
+    ctx = (f'{page}_{block}', page) if block else (page,)
+    # A request for a window that ended before today is historic data: it is
+    # read off the OI_PROFILE_HISTORIC_DATA_PROVIDER chain (ICICI first — it is
+    # the only broker that serves expired option contracts), then falls through
+    # to the page's ordinary chain.
+    end_date = (request.args.get('end_date') or '').strip()
+    if end_date and end_date < datetime.now().strftime('%Y-%m-%d'):
+        ctx = (f'{page}_historic',) + ctx
+    return ctx
 
 
 @api_bp.route('/oi-profile/candles', methods=['GET'])
@@ -14040,6 +14048,10 @@ def oi_profile_candles() -> EndpointResponse:
         # that caused it. A force=true refresh still goes to the broker: TTL 0
         # never satisfies a cache hit, and the rescue stays armed.
         _hist_ttl = 0.0 if force_refresh else 2.0
+        _symbol_fallbacks = []
+        if _is_symbol_provider and _data_provider:
+            from trading_app.service.provider_logic import get_symbol_fallbacks
+            _symbol_fallbacks = get_symbol_fallbacks(_data_provider, context=_page_ctx)
 
         def fetch_task(token, from_dt, to_dt, inter):
             try:
@@ -14059,6 +14071,20 @@ def oi_profile_candles() -> EndpointResponse:
                         reason = getattr(_data_provider, 'last_history_error', lambda: None)()
                         if reason:
                             _empty_fetch_reasons[str(token)] = reason
+                        # Empty from this broker: ask the next one in the flag
+                        # chain that reads the same symbol (Fyers <-> ICICI).
+                        for _alt in _symbol_fallbacks:
+                            try:
+                                res = _alt.historical_data(str(token), from_str, to_str, inter,
+                                                           use_cache=True, cache_ttl=_hist_ttl)
+                            except Exception as _alt_exc:
+                                logger.warning(f"[OI-Profile] {type(_alt).__name__} fallback failed for {token}: {_alt_exc}")
+                                res = []
+                            if res:
+                                logger.info(f"[OI-Profile] {token}: {type(_data_provider).__name__} empty, "
+                                            f"served by {type(_alt).__name__}")
+                                _empty_fetch_reasons.pop(str(token), None)
+                                break
                 elif kite:
                     # Use KiteService's retry logic and rate limiting
                     res = kite_service._historical_with_retry(instrument_token=int(token), from_date=from_dt, to_date=to_dt, interval=inter)
