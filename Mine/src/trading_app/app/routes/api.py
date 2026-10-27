@@ -5291,6 +5291,70 @@ def _run_simple_trader_optimise(strategy, data):
     return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
 
 
+def _run_st_touch_break_optimise(data):
+    """Find Best Params for ST Touch Break (Backtest/st_touch_break_optimise.py): swept on index
+    points, the best rows re-priced on the option as the run prices it. Same task table and
+    status route as the Simple Trader sweeps."""
+    from trading_app.Backtest import st_touch_break_optimise as stbo
+    symbol = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+    if symbol == 'ALL STOCKS':
+        symbol = 'NIFTY'
+    start_date_str = data.get('start_date')
+    end_date_str = data.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+    interval = data.get('interval', '3minute')
+    if not start_date_str:
+        return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+    from trading_app.service import cpr_option_service as _cos
+    if not _cos.is_index(symbol) and not _cos.stock_spec(symbol):
+        return jsonify({'success': False,
+                        'error': 'Pick an index (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX) '
+                                 'or an F&O stock.'}), 400
+    provider = get_fyers_adapter()
+    if provider is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    token = _sp_instrument_token(provider, symbol)
+    task_id = uuid.uuid4().hex
+    task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
+    with _sbr_opt_lock:
+        _sbr_opt_tasks[task_id] = task
+
+    def _run():
+        try:
+            minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
+                                                      end_date_str, interval)
+            if bars is None:
+                task.update(status='error', error='No historical data found for the given range')
+                return
+
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+
+            res = stbo.optimise(bars, data, from_date=start_date_str, progress=_progress, top=80)
+            if bool(data.get('price_options', True)):
+                try:
+                    def _pricing(done, total):
+                        task['progress'] = {'done': done, 'total': total, 'stage': 'pricing'}
+                    stbo.verify_on_option(res, bars, minutes, data, symbol, interval,
+                                          sorted(set(minutes.index.date)), start_date_str, progress=_pricing)
+                except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
+                    logger.warning('[ST-TOUCH-BREAK OPT] option verification failed: %s', e)
+                    res['option_error'] = str(e)
+                    res['results'] = res['results'][:25]
+            else:
+                res['results'] = res['results'][:25]
+            task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
+                               'start_date': start_date_str, 'end_date': end_date_str,
+                               'bars': n_bars, **res}
+            task['status'] = 'complete'
+        except Exception as e:      # noqa: BLE001
+            logger.error('[ST-TOUCH-BREAK OPT] %s', e, exc_info=True)
+            task.update(status='error', error=str(e))
+
+    threading.Thread(target=_run, name=f'stbopt-{task_id[:6]}', daemon=True).start()
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
 _OPT_SHORTLIST = 10        # index rows re-priced on the option (plus the current settings)
 
 
@@ -5366,6 +5430,8 @@ def run_st_bb_rsi_optimise():
         return auth_error
     try:
         data = request.get_json() or {}
+        if data.get('strategy') == 'st_touch_break':
+            return _run_st_touch_break_optimise(data)
         if data.get('strategy'):            # Simple Trader strategies 2-7 have their own engines
             return _run_simple_trader_optimise(str(data['strategy']), data)
         symbol = str(data.get('symbol', 'NIFTY')).strip().upper()
@@ -5848,6 +5914,270 @@ def run_hilega_milega_backtest_api():
         return jsonify({'success': True, 'task_id': task_id})
     except Exception as e:
         logger.error(f"Error in Hilega Milega backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/st-touch-break', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_st_touch_break_backtest_api():
+    """ST Touch Break: a candle's wick reaches the SuperTrend line, the next candle breaks
+    its high / low; the SuperTrend breaking the other way is the stop.
+
+    Signal on the index candles, re-priced on the ≈premium CE (long) / PE (short) with a
+    premium stop-loss / trailing stop and same-day re-entry, in the background and polled on
+    /backtest/st-bb-rsi/status/<task_id> (the same task table), as the Simple Trader runs.
+    Without `price_options` it answers at once in index points. See
+    Backtest/st_touch_break_engine.py.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json() or {}
+        symbol         = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '3minute')
+        _p             = data.get('premium', 250)
+        premium        = float(250 if _p in (None, '') else _p)    # 0 = ATM (stocks), never the 250 default
+        price_options  = bool(data.get('price_options', True))
+        compounding    = bool(data.get('compounding', False))
+        start_capital  = float(data.get('start_capital', 25000) or 25000)
+        per_lot        = float(data.get('per_lot') or 0)
+        max_lots       = int(data.get('max_lots', 27) or 27)
+        fixed_lots     = max(1, int(data.get('lots', 1) or 1))
+        sl_pct = max(0.0, float(data.get('sl_pct') or 0))      # premium stop-loss / trailing SL, 0 = none
+        tsl_x  = max(0.0, float(data.get('tsl_x') or 0))
+        tsl_y  = max(0.0, float(data.get('tsl_y') or 0))
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        if symbol == 'ALL STOCKS':
+            symbol = 'NIFTY'
+        from trading_app.service import cpr_option_service as _cos
+        if not _cos.is_index(symbol) and not _cos.stock_spec(symbol):
+            return jsonify({'success': False,
+                            'error': 'Pick an index (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX) '
+                                     'or an F&O stock.'}), 400
+
+        current_kite = get_fyers_adapter()
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+        import pandas as pd
+        from trading_app.Backtest.st_touch_break_engine import StTouchBreakEngine
+        from trading_app.Backtest.st_ema_rsi_cci_engine import price_with_reentries
+        from trading_app.Backtest.st_bb_rsi_engine import (
+            attach_option_legs, summarise, apply_compounding)
+
+        minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
+            warmup_days=45)
+        if minutes is None:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+        candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
+        minutes_per_bar = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 3)
+
+        def _f(key, default):
+            v = data.get(key)
+            return float(v) if v not in (None, '') else default
+
+        engine = StTouchBreakEngine(
+            df=candles_df,
+            st_period=int(_f('st_period', 10)), st_mult=_f('st_mult', 2),
+            touch_tol_pct=_f('touch_tol_pct', 0), min_wick_pct=_f('min_wick_pct', 0),
+            min_body_pct=_f('min_body_pct', 0),
+            modes=str(data.get('modes', 'both')), direction=str(data.get('direction', 'both')),
+            stop_mode=str(data.get('stop_mode', 'close')), outside_bar=str(data.get('outside_bar', 'close')),
+            entry_start=data.get('entry_start', '09:15'), entry_end=data.get('entry_end', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(_f('max_trades_per_day', 5)),
+            minutes=minutes, bar_minutes=minutes_per_bar,
+        )
+        trades, _ = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
+
+        _want = min(pd.Timestamp(end_date_str).date(), datetime.now().date())
+        while _want.weekday() >= 5:
+            _want -= timedelta(days=1)
+        _have = pd.Timestamp(candles[-1]['date']).date()
+        data_warning = (f"Candles end at {_have:%d %b}; {_want:%d %b} could not be loaded (data provider "
+                        f"limit or outage), so it is not in this run.") if _have < _want else None
+        ran = {
+            'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
+            'start_date': start_date_str, 'end_date': end_date_str,
+            'bars': n_bars, 'junk_bars_dropped': n_junk, 'first_bar': str(candles[0]['date']),
+            'last_bar': str(candles[-1]['date']),
+            'params': dict(st=[engine.st_period, engine.st_mult], modes=engine.modes,
+                           direction=engine.direction, stop_mode=engine.stop_mode,
+                           outside_bar=engine.outside_bar, touch_tol_pct=engine.touch_tol * 100, min_wick_pct=engine.min_wick * 100,
+                           min_body_pct=engine.min_body * 100,
+                           max_trades_per_day=engine.max_trades_per_day,
+                           sl_pct=sl_pct, tsl=[tsl_x, tsl_y], premium=premium,
+                           price_options=price_options, compounding=compounding),
+            'index_signals': len(trades),
+            'strategy': 'st_touch_break',            # backtest.js words the run banner by it
+        }
+
+        def _payload(priced_trades, option_info, warning):
+            summ = summarise(priced_trades)
+            summ['pnl_basis'] = 'option' if option_info else 'index'
+            extra = {}
+            if option_info:
+                extra = apply_compounding(
+                    priced_trades, option_info.get('lot') or 65,
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
+            return {
+                'success': True, 'trades': priced_trades, 'option': option_info,
+                'warning': warning, 'ran': ran,
+                'summary': {**{k: summ[k] for k in (
+                    'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
+                    'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
+                    'pnl_basis': summ['pnl_basis'], **extra},
+            }
+
+        logger.info('[ST-TOUCH-BREAK BT] %s %s %s→%s  %d bars  %d signals  options=%s',
+                    symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
+        if not (price_options and trades):
+            return jsonify(_payload(trades, None, data_warning))
+
+        sessions = sorted(set(minutes.index.date))
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': len(trades)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                priced, info = price_with_reentries(
+                    engine, trades,
+                    lambda batch, prog: attach_option_legs(
+                        symbol, batch, premium or None, minutes_per_bar, prog or _progress,
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                    _progress)
+                warn = None
+                if info['unpriced'] or info['truncated']:
+                    warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
+                            f"candles and {info['truncated']} older ones were not priced; "
+                            f"they are left out of the totals.")
+                task['payload'] = _payload(priced, info, ' '.join(w for w in (warn, data_warning) if w) or None)
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[ST-TOUCH-BREAK BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, None, ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.', data_warning) if w))
+            task['status'] = 'complete'
+
+        threading.Thread(target=_run, name=f'stb-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
+    except Exception as e:
+        logger.error(f"Error in ST-TOUCH-BREAK backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/st-touch-break/chart', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def st_touch_break_chart_api():
+    """One session of the ST Touch Break rule drawn: the day's candles, the SuperTrend line and
+    every entry / exit the rule takes that day, for the 💡 Logic popup.
+
+    Takes the page's own settings (symbol, interval, SuperTrend, setups, direction, stop mode…)
+    so the picture is the run it explains. `date` picks the session; without one it is the latest
+    session in the last ~30 days that carries a signal. Index points only — no option pricing.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data     = request.get_json() or {}
+        symbol   = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        interval = data.get('interval', '3minute')
+        if symbol == 'ALL STOCKS':
+            symbol = 'NIFTY'
+        current_kite = get_fyers_adapter()
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+        import pandas as pd
+        from trading_app.Backtest.st_touch_break_engine import StTouchBreakEngine
+
+        today = datetime.now().date()
+        want_day = pd.Timestamp(data['date']).date() if data.get('date') else None
+        anchor = want_day or today
+        start_str = (anchor - timedelta(days=30)).strftime('%Y-%m-%d')
+        end_str = min(anchor, today).strftime('%Y-%m-%d')
+        minutes, df, _junk, _n = _sbr_load_bars(
+            current_kite, _sp_instrument_token(current_kite, symbol), symbol, start_str, end_str,
+            interval, warmup_days=45)
+        if minutes is None:
+            return jsonify({'success': False, 'error': 'No candles for this symbol / range'}), 404
+        step = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 3)
+
+        def _f(key, default):
+            v = data.get(key)
+            return float(v) if v not in (None, '') else default
+
+        engine = StTouchBreakEngine(
+            df=df, st_period=int(_f('st_period', 10)), st_mult=_f('st_mult', 2),
+            touch_tol_pct=_f('touch_tol_pct', 0), min_wick_pct=_f('min_wick_pct', 0),
+            min_body_pct=_f('min_body_pct', 0), modes=str(data.get('modes', 'bounce')),
+            direction=str(data.get('direction', 'long')), stop_mode=str(data.get('stop_mode', 'close')),
+            outside_bar=str(data.get('outside_bar', 'close')),
+            entry_start=data.get('entry_start', '09:15'), entry_end=data.get('entry_end', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            max_trades_per_day=int(_f('max_trades_per_day', 5)), minutes=minutes, bar_minutes=step)
+        trades, _ = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_str]
+        trade_days = sorted({t['entry_time'][:10] for t in trades}, reverse=True)
+
+        sessions = sorted({d.date() for d in pd.to_datetime(df['date'])})
+        if want_day is None:
+            want_day = pd.Timestamp(trade_days[0]).date() if trade_days else sessions[-1]
+        if want_day not in sessions:
+            return jsonify({'success': False, 'error': f'No candles for {want_day:%d %b %Y}.'}), 404
+
+        ind = engine.indicators()
+        stamps = pd.to_datetime(df['date'])
+        mask = (stamps.dt.date == want_day).to_numpy()
+        # the IST wall clock read as UTC seconds, which is how the charts feed lightweight-charts
+        epoch = lambda ts: int((pd.Timestamp(ts) - pd.Timestamp('1970-01-01')).total_seconds())
+        candles, line = [], []
+        for i in range(len(df)):
+            if not mask[i]:
+                continue
+            r = df.iloc[i]
+            t = epoch(stamps.iloc[i])
+            candles.append({'time': t, 'open': float(r['open']), 'high': float(r['high']),
+                            'low': float(r['low']), 'close': float(r['close'])})
+            v = ind['line'][i]
+            if v == v and ind['trend'][i] != 0:
+                line.append({'time': t, 'value': float(v), 'trend': int(ind['trend'][i])})
+        day_trades = []
+        for t in trades:
+            if t['entry_time'][:10] != f'{want_day:%Y-%m-%d}':
+                continue
+            day_trades.append({
+                'type': t['type'], 'setup': t.get('setup'), 'result': t.get('result'),
+                'exit_reason': t.get('exit_reason'), 'pnl': t.get('pnl'),
+                'entry_price': t['entry_price'], 'exit_price': t['exit_price'],
+                'entry_t': epoch(t['entry_time']), 'exit_t': epoch(t['exit_time']),
+                'signal_t': epoch(t['signal_time']) if t.get('signal_time') else None,
+                'entry_time': t['entry_time'], 'exit_time': t['exit_time'],
+            })
+        return jsonify({'success': True, 'symbol': symbol, 'interval': interval, 'date': f'{want_day:%Y-%m-%d}',
+                        'bar_seconds': step * 60, 'candles': candles, 'line': line, 'trades': day_trades,
+                        'trade_days': trade_days[:20],
+                        'params': {'st': [engine.st_period, engine.st_mult], 'modes': engine.modes,
+                                   'direction': engine.direction, 'stop_mode': engine.stop_mode}})
+    except Exception as e:
+        logger.error(f"Error in ST-TOUCH-BREAK chart API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

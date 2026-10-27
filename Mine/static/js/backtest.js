@@ -417,7 +417,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // with TSL X 15 % / Y 10 %; 09:15-15:14, one transaction a day. Re-applied each time the strategy is picked.
     // Simple Trader strategies: 'simpler_trader' is #1; the rest each have their own engine.
     const SIMPLE_STRATS = ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut',
-                           'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx', 'st_all_indicators'];
+                           'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx', 'st_all_indicators', 'st_touch_break'];
 
     // BANKNIFTY runs different numbers. Swept offline on 2019-04 → 2026-10 candles, priced on the 500 option
     // from the cached Breeze minutes (the page's own pricing): max drawdown ₹8.8k at 1 lot (65/pt) against
@@ -451,6 +451,39 @@ document.addEventListener('DOMContentLoaded', function() {
             set('sbrSlPct', SIMPLER_BN.slPct); set('sbrTslX', SIMPLER_BN.tslX); set('sbrTslY', SIMPLER_BN.tslY);
             if (prem && [...prem.options].some(o => o.value === SIMPLER_BN.premium)) prem.value = SIMPLER_BN.premium;
         }
+    }
+
+    // ST Touch Break: every symbol has its own default settings. The board's Default button keeps a row's
+    // settings (and the premium / SL / TSL it was priced with) for the symbol on the page; selecting that
+    // symbol again puts them back, and a symbol with none saved starts from the factory values.
+    const STB_DEFAULT_KEY = 'stbDefaultsBySymbol';
+    const STB_DEFAULT_IDS = { st_period: 'stbStLen', st_mult: 'stbStFactor', modes: 'stbModes',
+                              stop_mode: 'stbStopMode', min_wick_pct: 'stbMinWick',
+                              premium: 'stbPremium', sl_pct: 'stbSlPct', tsl_x: 'stbTslX', tsl_y: 'stbTslY' };
+    function stbFactory(id) {                      // the value the page markup ships with
+        const el = document.getElementById(id);
+        if (!el) return undefined;
+        if (el.tagName === 'SELECT') { const o = el.querySelector('option[selected]'); return o ? o.value : el.options[0]?.value; }
+        return el.defaultValue;
+    }
+    function stbAllDefaults() {
+        try { return JSON.parse(localStorage.getItem(STB_DEFAULT_KEY) || '{}') || {}; } catch (e) { return {}; }
+    }
+    function stbSavedDefaults(sym) { return stbAllDefaults()[(sym || '').toUpperCase()] || null; }
+    function stbApplyDefaults(vals) {
+        Object.entries(STB_DEFAULT_IDS).forEach(([k, id]) => {
+            const el = document.getElementById(id);
+            if (el && vals && vals[k] !== undefined && vals[k] !== null) el.value = vals[k];
+        });
+    }
+    // Put `sym`'s defaults on the form: factory values first, its symbol-specific lot / premium, then what was saved.
+    function stbApplySymbol(sym, premiumBySymbol) {
+        const factory = {};
+        Object.entries(STB_DEFAULT_IDS).forEach(([k, id]) => { factory[k] = stbFactory(id); });
+        factory.premium = premiumBySymbol[sym] || '0';                       // a stock is bought ATM
+        stbApplyDefaults({ ...factory, ...(stbSavedDefaults(sym) || {}) });
+        const lot = document.getElementById('pcLotValue');
+        if (lot) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
     }
 
     function updateStrategyView() {
@@ -511,6 +544,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (swxParamsRow)  swxParamsRow.style.display  = 'none';
         const saiParamsRow  = document.getElementById('stSaiParamsRow');
         if (saiParamsRow)  saiParamsRow.style.display  = 'none';
+        const stbParamsRow  = document.getElementById('stTbParamsRow');
+        if (stbParamsRow)  stbParamsRow.style.display  = 'none';
         // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
         document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
         document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
@@ -807,6 +842,19 @@ document.addEventListener('DOMContentLoaded', function() {
             applySaiPositional();
             updatePcInvestment();
 
+        } else if (val === 'st_touch_break') {
+            // Index signal in POINTS on any timeframe (3-minute by default); lots / lot value reuse the Pivot Confluence boxes.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (stbParamsRow) stbParamsRow.style.display = 'grid';
+            if (pcLotRow)     pcLotRow.style.display     = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '3minute';
+            if (startDateInput) startDateInput.value = '2020-01-01';
+            updatePcInvestment();
+
         } else if (val === 'ma_htf') {
             // Index signal; optional CE/PE leg. Lots / lot value reuse the Pivot Confluence boxes.
             if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
@@ -938,7 +986,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['st_all_indicators'],
+        mine:    ['st_all_indicators', 'st_touch_break'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
@@ -1016,6 +1064,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (prem) prem.value = SAI_PREMIUM[sym] || '0';
     }
     setInterval(syncSaiSymbol, 400);
+
+    // ST Touch Break: the symbol sets the lot and the premium — NIFTY 250, BANKNIFTY 300, SENSEX 500,
+    // a stock is bought ATM (0) — and brings that symbol's saved defaults. All stay editable; re-set only when the symbol changes.
+    const STB_PREMIUM = { NIFTY: '250', FINNIFTY: '250', MIDCPNIFTY: '250', BANKNIFTY: '300', SENSEX: '500' };
+    let _stbKey = null;
+    function syncStbSymbol() {
+        if (!strategySelect || strategySelect.value !== 'st_touch_break' || !symbolSearch) { _stbKey = null; return; }
+        const sym = (symbolSearch.value || '').trim().toUpperCase();
+        if (!sym || sym === ALL_STOCKS || sym === _stbKey) return;
+        _stbKey = sym;
+        stbApplySymbol(sym, STB_PREMIUM);
+    }
+    setInterval(syncStbSymbol, 400);
 
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
@@ -1104,6 +1165,14 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Stop-loss', '17% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
             ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
             ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
+        st_touch_break: { sub: 'DEFAULT: SuperTrend(10, 2), BUY (CE) only, Bounce setup, stop when a candle closes under the line — any timeframe, any day', steps: [
+            ['Trend', 'SuperTrend(10, 2) under the price (green line) is an uptrend. The default takes BUY only, so only uptrends are traded, and the order is the current-week CE at the strike nearest the premium.'],
+            ['Touch candle', 'Any closed candle in that uptrend whose LOW reaches the SuperTrend line while it still CLOSES above it — a long lower wick tagging the line.'],
+            ['Entry (Bounce)', 'The NEXT candle trades above the touch candle\'s HIGH, i.e. the move leaves the line to the upside. BUY at that level (the open if it gaps over it), priced on the option at the minute the level was crossed.'],
+            ['Exit / stop', 'There is no target. The trade rides the trend until a candle CLOSES below the SuperTrend line (the flip) — out at that close. A trade whose entry candle itself closes under the line is out at that close, and anything still open leaves at the 15:14 square-off.'],
+            ['Option stop', 'The option\'s own stop-loss / trailing stop (off by default) can end the trade sooner. The next setup after that minute is then taken again (up to Max Trades / Day, default 5).'],
+            ['Other settings', 'Direction Both adds the mirror SELL (PE) on downtrend lines. Setups: Through takes a break of the touch candle\'s far side on which the SuperTrend flips (a long as a downtrend turns); Bounce + Through takes both. Stop "touch" exits as soon as price trades through the previous line. Min wick % / min break-body % (off) are the "long wick" and "strong candle" filters; the body filter reads the break candle\'s close, so it is a study filter.'],
+            ['Chart below', 'An illustration of the rule on any session — it opens on the latest day with a signal and uses the symbol, timeframe and settings on the page (Find Best Params\' Default button saves a row as your page default). Orange ● = touch candle, ▲ = entry, ▼ = exit with its index points. Pick any other day from the boxes above the chart.']] },
         st_all_indicators: { sub: 'ALL Simple Trader indicators in one rule — long NIFTY CE, 3-minute candles on the index', steps: [
             ['Entry rule', 'On a closed 3-min candle of the NIFTY index ALL the ticked indicators must agree: close above SuperTrend(10, 2) and EMA(200), RSI(14) between 60 and 85, CCI(20) above 100, Williams %R(14) above -30, close above the upper Bollinger Band(20, 2), close above R1 of today\'s Traditional pivots, and that CPR narrow (width under 0.2 %). Untick an indicator to drop it from the rule.'],
             ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
@@ -1162,6 +1231,101 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Re-entry', 'If a leg stops out, sell it again once when its premium returns to the original entry.'],
             ['Exit', 'No target. Anything still open is bought back at 10:30.']] },
     };
+    // ── ST Touch Break: the Logic popup's chart (one session, SuperTrend line, entries / exits) ──
+    let _stbLogicChart = null;
+    function stbLogicChartDestroy() {
+        if (_stbLogicChart) { try { _stbLogicChart.chart.remove(); } catch (e) { /* already gone */ } _stbLogicChart = null; }
+    }
+    function stbLogicChartHtml() {
+        return '<div style="padding:0 20px 16px;">'
+            + '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 8px;font-size:12.5px;">'
+            + '<b id="stbLcTitle">Chart</b>'
+            + '<select id="stbLcDays" title="Sessions in the last month where this rule took a trade" style="height:26px;"></select>'
+            + '<input type="date" id="stbLcDate" style="height:26px;">'
+            + '<span id="stbLcInfo" style="opacity:.75;"></span></div>'
+            + '<div id="stbLcChart" style="height:340px;width:100%;position:relative;"></div>'
+            + '<div id="stbLcTrades" style="margin-top:8px;font-size:12.5px;"></div></div>';
+    }
+    async function stbLogicChartLoad(date) {
+        const info = document.getElementById('stbLcInfo'), box = document.getElementById('stbLcChart');
+        if (!box) return;
+        const val = (id, d) => document.getElementById(id)?.value || d;
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        let sym = (document.getElementById('symbolSearch')?.value || 'NIFTY').trim().toUpperCase();
+        if (!sym || sym === 'ALL STOCKS') sym = 'NIFTY';
+        const body = { symbol: sym, interval: val('interval', '3minute'),
+            direction: val('stbDirection', 'long'), modes: val('stbModes', 'bounce'),
+            stop_mode: val('stbStopMode', 'close'), outside_bar: val('stbOutside', 'close'),
+            st_period: num('stbStLen', 10), st_mult: num('stbStFactor', 2),
+            touch_tol_pct: num('stbTouchTol', 0), min_wick_pct: num('stbMinWick', 0), min_body_pct: num('stbMinBody', 0),
+            entry_start: val('stbEntryStart', '09:15'), entry_end: val('stbEntryEnd', '15:14'),
+            exit_cutoff: val('stbExitCutoff', '15:14'), max_trades_per_day: num('stbMaxTrades', 5) };
+        if (date) body.date = date;
+        if (info) info.textContent = 'Loading ' + sym + ' candles…';
+        let j;
+        try {
+            const r = await fetch('/api/backtest/st-touch-break/chart', { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            j = await r.json();
+        } catch (e) { j = { success: false, error: String(e) }; }
+        if (!document.getElementById('stbLcChart')) return;            // popup closed meanwhile
+        stbLogicChartDestroy();
+        if (!j.success) { box.innerHTML = ''; if (info) info.textContent = j.error || 'Could not load the chart'; return; }
+
+        const dayEl = document.getElementById('stbLcDays'), dateEl = document.getElementById('stbLcDate');
+        dayEl.innerHTML = '<option value="">Signal days…</option>'
+            + (j.trade_days || []).map(d => `<option value="${d}"${d === j.date ? ' selected' : ''}>${d}</option>`).join('');
+        dateEl.value = j.date;
+        dayEl.onchange = () => { if (dayEl.value) stbLogicChartLoad(dayEl.value); };
+        dateEl.onchange = () => { if (dateEl.value) stbLogicChartLoad(dateEl.value); };
+        const p = j.params || {};
+        document.getElementById('stbLcTitle').textContent = `${j.symbol} ${j.interval.replace('minute', ' min')} · ${j.date}`;
+        if (info) info.textContent = `SuperTrend(${p.st[0]}, ${p.st[1]}) · ${p.direction} · ${p.modes} · stop on ${p.stop_mode} — your page settings`;
+
+        const dark = getComputedStyle(document.body).backgroundColor.match(/\d+/g)?.slice(0, 3).reduce((a, b) => a + +b, 0) < 384;
+        const txt = dark ? '#cbd5e1' : '#334155', grid = dark ? 'rgba(148,163,184,.12)' : 'rgba(100,116,139,.15)';
+        const chart = LightweightCharts.createChart(box, {
+            width: box.clientWidth, height: 340,
+            layout: { background: { color: 'transparent' }, textColor: txt },
+            grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+            timeScale: { timeVisible: true, secondsVisible: false, borderColor: grid },
+            rightPriceScale: { borderColor: grid },
+        });
+        const cs = chart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#16a34a', downColor: '#dc2626', borderUpColor: '#16a34a', borderDownColor: '#dc2626',
+            wickUpColor: '#16a34a', wickDownColor: '#dc2626' });
+        cs.setData(j.candles);
+        const ls = chart.addSeries(LightweightCharts.LineSeries, { lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+            crosshairMarkerVisible: false });
+        // one colour per point: green while the line is under price (up), red above it (down); a flip leaves a gap-free join
+        ls.setData(j.line.map(x => ({ time: x.time, value: x.value, color: x.trend === 1 ? '#16a34a' : '#dc2626' })));
+
+        const times = j.candles.map(c => c.time);
+        const snap = (t) => { let lo = 0, hi = times.length - 1, ans = times[0];
+            while (lo <= hi) { const m = (lo + hi) >> 1; if (times[m] <= t) { ans = times[m]; lo = m + 1; } else hi = m - 1; } return ans; };
+        const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+        const marks = [];
+        (j.trades || []).forEach((t, i) => {
+            const long = t.type === 'Long';
+            if (t.signal_t) marks.push({ time: snap(t.signal_t), position: long ? 'belowBar' : 'aboveBar', shape: 'circle', color: '#f59e0b' });
+            marks.push({ time: snap(t.entry_t), position: long ? 'belowBar' : 'aboveBar', shape: long ? 'arrowUp' : 'arrowDown',
+                         color: '#2563eb', text: `${long ? 'BUY' : 'SELL'} ${fmt(t.entry_price)}` });
+            marks.push({ time: snap(t.exit_t), position: long ? 'aboveBar' : 'belowBar', shape: long ? 'arrowDown' : 'arrowUp',
+                         color: (t.pnl || 0) >= 0 ? '#16a34a' : '#dc2626',
+                         text: `Exit ${fmt(t.exit_price)} (${(t.pnl || 0) >= 0 ? '+' : ''}${fmt(t.pnl || 0)})` });
+        });
+        marks.sort((a, b) => a.time - b.time);
+        if (LightweightCharts.createSeriesMarkers) LightweightCharts.createSeriesMarkers(cs, marks);
+        chart.timeScale().fitContent();
+        _stbLogicChart = { chart };
+        const rows = document.getElementById('stbLcTrades');
+        rows.innerHTML = (j.trades || []).length
+            ? (j.trades || []).map(t => `<div>${t.type === 'Long' ? '🟢' : '🔴'} <b>${t.setup}</b> ${t.entry_time.slice(11, 16)} @ ${fmt(t.entry_price)} → `
+                + `${t.exit_time.slice(11, 16)} @ ${fmt(t.exit_price)} · <b class="${(t.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(t.pnl || 0) >= 0 ? '+' : ''}${fmt(t.pnl || 0)} pts</b> · ${t.exit_reason || ''}</div>`).join('')
+            : '<div style="opacity:.75;">No trade on this session with these settings — pick another from “Signal days”.</div>';
+    }
+    function stbLogicChartInit() { stbLogicChartLoad(null); }
+
     const btLogicBtn   = document.getElementById('btLogicBtn');
     const btLogicModal = document.getElementById('btLogicModal');
     if (btLogicBtn && btLogicModal && strategySelect) {
@@ -1171,6 +1335,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const closeLogic = () => {
             btLogicModal.style.display = 'none';
             document.body.style.overflow = prevOverflow;
+            stbLogicChartDestroy();
         };
         btLogicBtn.addEventListener('click', () => {
             const key  = strategySelect.value;
@@ -1184,6 +1349,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     + '</ol>'
                     + (info.note ? `<div style="margin-top:10px;font-size:12.5px;opacity:.8;">ℹ️ ${esc(info.note)}</div>` : '')
                 : '<p>No explanation written for this strategy yet.</p>';
+            const box = btLogicModal.querySelector('.bt-modal-box');
+            if (box) box.style.width = key === 'st_touch_break' ? 'min(920px, 100%)' : '';
+            if (key === 'st_touch_break') {
+                document.getElementById('btLogicBody').insertAdjacentHTML('beforeend', stbLogicChartHtml());
+                stbLogicChartInit();
+            } else {
+                stbLogicChartDestroy();
+            }
             btLogicModal.style.display = 'flex';
             prevOverflow = document.body.style.overflow;
             document.body.style.overflow = 'hidden';
@@ -1689,6 +1862,42 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.per_lot        = sen('scwPerLot', 0);
             }
 
+            // ST Touch Break: index points only
+            if (strat === 'st_touch_break') {
+                endpoint = '/api/backtest/st-touch-break';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const tbv = (id, d) => document.getElementById(id)?.value || d;
+                const tbn = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = tbv('interval', '3minute');
+                payload.direction      = tbv('stbDirection', 'long');
+                payload.modes          = tbv('stbModes', 'bounce');
+                payload.stop_mode      = tbv('stbStopMode', 'close');
+                payload.outside_bar    = tbv('stbOutside', 'close');
+                payload.st_period      = tbn('stbStLen', 10);
+                payload.st_mult        = tbn('stbStFactor', 2);
+                payload.touch_tol_pct  = tbn('stbTouchTol', 0);
+                payload.min_wick_pct   = tbn('stbMinWick', 0);
+                payload.min_body_pct   = tbn('stbMinBody', 0);
+                payload.entry_start    = tbv('stbEntryStart', '09:15');
+                payload.entry_end      = tbv('stbEntryEnd', '15:14');
+                payload.exit_cutoff    = tbv('stbExitCutoff', '15:14');
+                payload.max_trades_per_day = tbn('stbMaxTrades', 5);
+                payload.premium        = parseFloat(tbv('stbPremium', 250));
+                payload.price_options  = document.getElementById('stbPriceOptions')?.checked ?? true;
+                payload.sl_pct         = tbn('stbSlPct', 0);
+                payload.tsl_x          = tbn('stbTslX', 0);
+                payload.tsl_y          = tbn('stbTslY', 0);
+                payload.compounding    = document.getElementById('stbCompound')?.checked ?? false;
+                payload.start_capital  = tbn('stbCapital', 25000);
+                payload.per_lot        = tbn('stbPerLot', 0);
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+            }
+
             // MA Cross + HTF: index signal, optionally priced on the CE/PE
             if (strat === 'ma_htf') {
                 endpoint = '/api/backtest/ma-htf';
@@ -1851,7 +2060,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Simple Trader / Hilega / MA: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators')) {
+            if (data.success && data.task_id && (strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators' || strat === 'st_touch_break')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -1861,8 +2070,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     const st = await (await fetch(`/api/backtest/st-bb-rsi/status/${taskId}`)).json();
                     if (st.status === 'running') {
                         const p = st.progress || {};
+                        const secs = st.elapsed || Math.round((Date.now() - t0) / 1000);
+                        // Breeze caps requests app-wide, so a cold run is steady: remaining ≈ pace so far × what is left
+                        const left = (p.done > 0 && p.total > p.done) ? Math.round(secs / p.done * (p.total - p.done)) : 0;
+                        const eta  = left >= 90 ? ` · ~${Math.round(left / 60)} min left` : (left > 0 ? ` · ~${left}s left` : '');
                         _showOptLoader('Pricing the ≈' + payload.premium + ' option legs',
-                            `${p.done || 0} / ${p.total || 0} trades · ${st.elapsed || Math.round((Date.now() - t0) / 1000)}s`);
+                            `${p.done || 0} / ${p.total || 0} trades · ${secs}s${eta}`);
                         continue;
                     }
                     data = st;
@@ -1913,6 +2126,12 @@ document.addEventListener('DOMContentLoaded', function() {
                         + `${r.index_signals} signals · ST ${p.st.join('/')}, EMA ${p.ema}, RSI ${p.rsi[0]} <${p.rsi[1]} exit >${p.rsi[2]}, `
                         + `CCI ${p.cci[0]} <${p.cci[1]}, %R ${p.wr[0]} <${p.wr[1]}, BB ${p.bb.join('/')}, `
                         + `CPR ${p.use_cpr_narrow ? '<' + p.cpr_narrow + '%' : 'any'}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`, 'info');
+                } else if (data.ran && data.ran.strategy === 'st_touch_break') {
+                    const r = data.ran, p = r.params;
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} signals · ST ${p.st.join('/')}, ${p.modes}, ${p.direction}, stop: ${p.stop_mode}, SL ${p.sl_pct}% TSL ${p.tsl.join('/')}%`
+                        + (p.min_wick_pct ? `, wick ≥${p.min_wick_pct}%` : '') + (p.min_body_pct ? `, body ≥${p.min_body_pct}%` : ''), 'info');
                 } else if (data.ran && data.ran.strategy === 'ma_htf') {
                     const r = data.ran;
                     window.showNotification(
@@ -2695,7 +2914,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // and Drawdown Days counts the trading days from the equity peak to the trough of the deepest drawdown.
     function applySimplerTraderStats(data) {
         const row  = document.getElementById('simplerStatsRow');
-        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators');
+        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_touch_break' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators');
         const setSub = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
         if (row) row.style.display = 'none';
         // Simple Trader's first row: Wins + Losses merge into one card and Net Outcome goes.
@@ -2795,7 +3014,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // breakout, so it takes the same ₹ cards off its own lot inputs.
         const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
         // Pivot Confluence is single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
+        const isPc   = strategySelect && (strategySelect.value === 'pivot_confluence' || strategySelect.value === 'st_touch_break' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
@@ -3843,7 +4062,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 // container's onSorted keeps in stateStore[tf].displayed — so
                 // the click handler can look the row back up by that same index.
                 return { label: '', cellClass: 'opt-td-use',
-                    render: (_, r, i) => `<button class="btn-opt-use" data-idx="${i}">Use</button>` };
+                    render: (_, r, i) => `<button class="btn-opt-use" data-idx="${i}">Use</button>`
+                        + (spec.withDefault ? ` <button class="btn-opt-def" data-idx="${i}" title="Make this row the default settings for this symbol">Default</button>` : '') };
             }
             const col = { key: c.key, label: c.label, sortable: !!c.key,
                 render: (_, r) => c.fmt(r) };
@@ -3924,10 +4144,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // A single (non-per-timeframe) sortable results grid. Same # /
     // best-row-highlight / Use-button shape as the
     // per-timeframe grids in _renderOptTfGrids, just without the grouping.
-    function _mountSingleOptGrid(gridId, rows, legacyCols, defaultSortKey, applyFn, derivedSort) {
+    function _mountSingleOptGrid(gridId, rows, legacyCols, defaultSortKey, applyFn, derivedSort, defaultFn) {
         const grid = document.getElementById(gridId);
         if (!grid) return;
-        const columns = _mapLegacyOptColumns(legacyCols, { isLive: () => false, derivedSort: derivedSort || {} })
+        const columns = _mapLegacyOptColumns(legacyCols, { isLive: () => false, derivedSort: derivedSort || {}, withDefault: !!defaultFn })
             // SM has no live-algo concept here — drop the column rather
             // than render one that's permanently off.
             .filter(c => c.label !== 'Live');
@@ -3937,6 +4157,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // "Find Best Params"), so it must always read whatever the CURRENT
         // render's rows are rather than closing over the first render's array.
         grid._displayed = rows.slice();
+        grid._defaultFn = defaultFn;
         grid._applyFn = applyFn;            // read by the once-wired click listener below, so a later board (another strategy) applies with ITS function
         let sortState = null;
         DataGrid.mountSortable(grid, {
@@ -3951,6 +4172,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!grid.dataset.optUseWired) {
             grid.dataset.optUseWired = '1';
             grid.addEventListener('click', (e) => {
+                const defBtn = e.target.closest('.btn-opt-def');
+                if (defBtn) {
+                    const dr = grid._displayed[parseInt(defBtn.dataset.idx, 10)];
+                    if (dr && grid._defaultFn) grid._defaultFn(dr);
+                    return;
+                }
                 const btn = e.target.closest('.btn-opt-use');
                 if (!btn) return;
                 const row = grid._displayed[parseInt(btn.dataset.idx, 10)];
@@ -4944,6 +5171,8 @@ document.addEventListener('DOMContentLoaded', function() {
         rsi_exit:   ['RSI exit',   'RsiExit'],   wr_level:  ['%R',         'WrLevel'],
         cci_level:  ['CCI',        'CciLevel'],  cpr_wide:  ['CPR wide <', 'CprWide'],
         cpr_narrow: ['CPR narrow <', 'CprNarrow'],
+        modes:      ['Setups',     'Modes'],     stop_mode: ['Stop',       'StopMode'],
+        min_wick_pct: ['Min wick %', 'MinWick'],
         gates:      ['Indicators', ''],      timeframe: ['Timeframe', ''],
     };
     // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
@@ -4952,7 +5181,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const SBR_TF_MIN = { minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '60minute': 60, day: 375 };
     const SBR_GATE_BOX = { st: 'St', rsi: 'Rsi', bb: 'Bb', wr: 'Wr', cci: 'Cci', ema: 'Ema', pivot: 'Pivot' };
     const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
-                         st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai' };
+                         st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai', st_touch_break: 'stb' };
 
     function sbrStrategyCols(swept) {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
@@ -5012,7 +5241,7 @@ document.addEventListener('DOMContentLoaded', function() {
             renderSbrBoard(board(data.boards.positional), 'sbrOptPosGrid', document.getElementById('sbrOptPosMeta'));
             if (posWrap) posWrap.style.display = '';
         } else {
-            if (title) title.textContent = '🚀 ST + BB + RSI Best Params';
+            if (title) title.textContent = data.strategy === 'st_touch_break' ? '🧲 ST Touch Break Best Params' : '🚀 ST + BB + RSI Best Params';
             if (posWrap) posWrap.style.display = 'none';
             renderSbrBoard(data, 'sbrOptGrid', document.getElementById('sbrOptMeta'));
         }
@@ -5056,7 +5285,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // The default (current page settings) is one row on the board: if the sweep already
             // holds that exact combination, flag it; otherwise add it, scored the same way.
             const keys = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
-                          'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit', 'gates', 'timeframe'];
+                          'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit', 'gates', 'timeframe',
+                          'modes', 'stop_mode', 'min_wick_pct'];
             const same = (r) => keys.every(k => r[k] === undefined || cur[k] === undefined || String(r[k]) === String(cur[k]));
             const hit = rows.findIndex(same);
             if (hit >= 0) rows = rows.map((r, i) => i === hit ? { ...r, _current: true, rank: cur.rank, option: r.option } : r);
@@ -5067,14 +5297,33 @@ document.addEventListener('DOMContentLoaded', function() {
             + `${cur.total_pnl >= 0 ? '+' : ''}${(cur.total_pnl ?? 0).toFixed(0)} pts `
             + (data.basis === 'option' ? '(on the option) ' : '(index points) ')
             + (cur.rank ? `— #${cur.rank} of ${data.basis === 'option' ? data.verified : (data.passed ?? data.qualified)}`
-                        : `— outside the quality filter (win < 50%, under ${data.min_board_trades ?? 150} trades, no recent profit or a net loss)`);
+                        : `— outside the quality filter (win < ${data.min_win ?? 50}%, under ${data.min_board_trades ?? 150} trades, no recent profit or a net loss)`);
         if (metaEl && data.option_error) metaEl.textContent += `. Option pricing unavailable (${data.option_error}); showing index points.`;
         _mountSingleOptGrid(gridId, rows,
                             withRs(strat ? sbrStrategyCols(data.swept || []) : SBR_SIMPLE_COLS),
                             (simple || strat) ? 'profit_factor' : 'total_pnl',
                             strat ? applySbrStrategyResult(data.strategy, data.swept || [])
                                   : applySbrSimpleResult,
-                            { timeframe: r => SBR_TF_MIN[r.timeframe] ?? 0 });
+                            { timeframe: r => SBR_TF_MIN[r.timeframe] ?? 0 },
+                            strat && data.strategy === 'st_touch_break' ? saveStbDefault : null);
+    }
+
+    function saveStbDefault(r) {
+        let sym = (symbolSearch?.value || 'NIFTY').trim().toUpperCase();
+        if (!sym || sym === ALL_STOCKS) sym = 'NIFTY';
+        const vals = {};
+        Object.keys(STB_DEFAULT_IDS).forEach(k => { if (r[k] !== undefined && r[k] !== null) vals[k] = r[k]; });
+        // what the board was priced with is the page's own, not part of the swept row
+        ['premium', 'sl_pct', 'tsl_x', 'tsl_y'].forEach(k => {
+            const el = document.getElementById(STB_DEFAULT_IDS[k]);
+            if (el) vals[k] = el.value;
+        });
+        const all = stbAllDefaults();
+        all[sym] = vals;
+        try { localStorage.setItem(STB_DEFAULT_KEY, JSON.stringify(all)); } catch (e) { /* private mode: applies for this page view only */ }
+        stbApplyDefaults(vals);
+        if (window.showNotification) window.showNotification(
+            `${sym} default set: SuperTrend ${vals.st_period}/${vals.st_mult} · ${vals.modes} · stop ${vals.stop_mode} · min wick ${vals.min_wick_pct}% · premium ${vals.premium === '0' ? 'ATM' : vals.premium} — the page opens on these for ${sym}`, 'success');
     }
 
     async function runSbrOptimise(simple, strategy) {

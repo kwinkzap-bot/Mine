@@ -500,6 +500,13 @@
     text-transform: uppercase; letter-spacing: .4px;
 }
 .opt-use-btn:hover, .btn-opt-use:hover { opacity: .8; }
+.btn-opt-def {
+    padding: 2px 8px; font-size: 9px; font-weight: 700; margin-left: 4px;
+    background: transparent; color: var(--oip-accent);
+    border: 1px solid var(--oip-accent); border-radius: 3px; cursor: pointer;
+    text-transform: uppercase; letter-spacing: .4px;
+}
+.btn-opt-def:hover { background: var(--oip-accent); color: #fff; }
 .btn-sm-golive {
     padding: 2px 8px; font-size: 9px; font-weight: 700;
     background: #16a34a; color: #fff;

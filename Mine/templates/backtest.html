@@ -48,7 +48,8 @@
                 <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
-                <option value="st_all_indicators" selected>🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
+                <option value="st_touch_break" selected>🧲 ST Touch Break (SuperTrend wick + break)</option>
+                <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
             <button id="btCombinedBtn" type="button" title="Run every Simple Trader strategy and see them merged into one book" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🧩 Combined</button>
@@ -700,6 +701,125 @@
                 <div class="form-group">
                     <label for="hmMaxTrades">Max Entries / Day</label>
                     <input type="number" id="hmMaxTrades" value="1" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- ST Touch Break: a candle's wick reaches the SuperTrend(10, 2) line, the next candle breaks its
+                 high / low; the SuperTrend breaking the other way is the stop. Priced on the CE / PE like the Simple
+                 Trader runs (shares the Pivot Confluence Lots boxes). See src/trading_app/Backtest/st_touch_break_engine.py. -->
+            <div id="stTbParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="stbPriceOptions">Price on options</label>
+                    <input type="checkbox" id="stbPriceOptions" checked title="Off = instant run in INDEX points. On = every long is bought on the CE and every short on the PE and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="stbPremium">Option Premium ≈</label>
+                    <select id="stbPremium" title="NIFTY 250, BANKNIFTY 300, SENSEX 500, a stock ATM — set from the symbol, change it if you like.">
+                        <option value="0">ATM</option>
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                        <option value="500">500</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="stbSlPct">Stop-loss %</label>
+                    <input type="number" id="stbSlPct" value="0" min="0" max="100" step="0.5" title="Premium stop-loss, % under the entry premium. 0 = none (the SuperTrend is the stop).">
+                </div>
+                <div class="form-group">
+                    <label for="stbTslX">TSL X %</label>
+                    <input type="number" id="stbTslX" value="0" min="0" max="100" step="0.5" title="For every X % the premium rises from entry ...">
+                </div>
+                <div class="form-group">
+                    <label for="stbTslY">TSL Y %</label>
+                    <input type="number" id="stbTslY" value="0" min="0" max="100" step="0.5" title="... the stop moves up Y % of the entry premium.">
+                </div>
+                <div class="form-group">
+                    <label for="stbCompound">Compounding</label>
+                    <input type="checkbox" id="stbCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="stbCapital">Start Capital (₹)</label>
+                    <input type="number" id="stbCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="stbPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="stbPerLot" value="25000" placeholder="Auto" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="stbDirection">Direction</label>
+                    <select id="stbDirection">
+                        <option value="both">Both</option>
+                        <option value="long" selected>Long only (BUY)</option>
+                        <option value="short">Short only</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="stbModes">Setups</label>
+                    <select id="stbModes" title="Bounce: the wick tests the line and the next candle breaks AWAY from it. Through: the next candle breaks the touch candle's far side and the SuperTrend flips on it.">
+                        <option value="both">Bounce + Through</option>
+                        <option value="bounce" selected>Bounce only</option>
+                        <option value="through">Through only</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="stbOutside">Candle breaking both sides</label>
+                    <select id="stbOutside" title="When the break candle trades beyond BOTH the touch candle's high and low: Close = take the side it closes on, a strong green candle is the long (how the chart reads it, but uses that candle's close). First = the side the 1-minute path broke first (no look-ahead).">
+                        <option value="close" selected>Side it closes on</option>
+                        <option value="first">Side broken first (1-min)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="stbStopMode">Stop</label>
+                    <select id="stbStopMode" title="Close: a candle closes beyond the SuperTrend line (the SuperTrend flips), exit at that close. Touch: exit as soon as price trades through the previous line.">
+                        <option value="close" selected>SuperTrend flip (close)</option>
+                        <option value="touch">SuperTrend touched (intrabar)</option>
+                    </select>
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>SuperTrend</legend>
+                <div class="form-group">
+                    <label for="stbStLen">ATR Length</label>
+                    <input type="number" id="stbStLen" value="10" min="2" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="stbStFactor">Factor</label>
+                    <input type="number" id="stbStFactor" value="2" min="0.5" max="10" step="0.1">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Candle filters (0 = off)</legend>
+                <div class="form-group">
+                    <label for="stbTouchTol">Touch tolerance %</label>
+                    <input type="number" id="stbTouchTol" value="0" min="0" max="2" step="0.01" title="How far short of the line a wick may stop and still count as a touch.">
+                </div>
+                <div class="form-group">
+                    <label for="stbMinWick">Min wick % of range</label>
+                    <input type="number" id="stbMinWick" value="0" min="0" max="100" step="5" title="The touch candle's wick on the line's side, as a share of its range (the 'long wick').">
+                </div>
+                <div class="form-group">
+                    <label for="stbMinBody">Min break-candle body %</label>
+                    <input type="number" id="stbMinBody" value="0" min="0" max="100" step="5" title="The breaking candle's body as a share of its range, closing the way it broke (the 'strong candle'). Reads that candle's close, so it is a study filter, not a live rule.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Window</legend>
+                <div class="form-group">
+                    <label for="stbEntryStart">Entry From</label>
+                    <input type="time" id="stbEntryStart" value="09:15">
+                </div>
+                <div class="form-group">
+                    <label for="stbEntryEnd">Entry Until</label>
+                    <input type="time" id="stbEntryEnd" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="stbExitCutoff">Square-off</label>
+                    <input type="time" id="stbExitCutoff" value="15:14">
+                </div>
+                <div class="form-group">
+                    <label for="stbMaxTrades">Max Trades / Day</label>
+                    <input type="number" id="stbMaxTrades" value="5" min="0" max="50" step="1">
                 </div>
                 </fieldset>
             </div>
