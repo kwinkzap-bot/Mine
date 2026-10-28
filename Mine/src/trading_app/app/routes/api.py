@@ -6181,6 +6181,141 @@ def st_touch_break_chart_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _logic_chart_indicators(df, stamps, want_day, params):
+    """Every indicator the Simple Trader rules read, on the bars `df`, for the 💡 Logic chart:
+    SuperTrend, Bollinger bands, EMA, RSI, Williams %R, CCI, plus the day's traditional pivot / R1 / S1
+    and CPR TC / BC from the previous session. Periods come from the page's own settings (`params`, the
+    payload its run would post), so the lines are the ones the rule is judged on. Returns per-bar series
+    (None while an indicator is still warming up) and the day's levels."""
+    import numpy as np
+    from trading_app.Backtest.st_bb_rsi_engine import supertrend, bollinger, rsi, williams_r
+    from trading_app.Backtest.st_ema_rsi_cci_engine import ema, cci
+
+    h = df['high'].to_numpy(dtype=float)
+    l = df['low'].to_numpy(dtype=float)
+    c = df['close'].to_numpy(dtype=float)
+
+    def num(key, default):
+        try:
+            v = float(params.get(key))
+            return v if v == v else default
+        except (TypeError, ValueError):
+            return default
+
+    def clean(arr):
+        return [None if (v is None or v != v or v in (float('inf'), float('-inf'))) else round(float(v), 2) for v in arr]
+
+    series, cfg = {}, {}
+    if 'st_period' in params:
+        line, direction = supertrend(h, l, c, int(num('st_period', 10)), num('st_mult', 2.0))
+        series['st'] = clean(line)
+        series['st_trend'] = [int(d) if d == d else 0 for d in direction]
+        cfg['st'] = [int(num('st_period', 10)), num('st_mult', 2.0)]
+    if 'bb_period' in params:
+        up, mid, lo = bollinger(c, int(num('bb_period', 20)), num('bb_mult', 2.0), 0)
+        series['bb_up'], series['bb_mid'], series['bb_lo'] = clean(up), clean(mid), clean(lo)
+        cfg['bb'] = [int(num('bb_period', 20)), num('bb_mult', 2.0)]
+    if 'ema_period' in params:
+        series['ema'] = clean(ema(c, int(num('ema_period', 200))))
+        cfg['ema'] = int(num('ema_period', 200))
+    if 'rsi_period' in params:
+        series['rsi'] = clean(rsi(c, int(num('rsi_period', 14))))
+        cfg['rsi'] = [int(num('rsi_period', 14)), num('rsi_level', 70.0), params.get('rsi_cap')]
+    if 'wr_period' in params:
+        series['wr'] = clean(williams_r(h, l, c, int(num('wr_period', 14))))
+        cfg['wr'] = [int(num('wr_period', 14)), num('wr_level', -30.0)]
+    if 'cci_period' in params:
+        series['cci'] = clean(cci(h, l, c, int(num('cci_period', 20))))
+        cfg['cci'] = [int(num('cci_period', 20)), num('cci_level', 100.0)]
+
+    if 'cpr_narrow' in params:
+        cfg['cpr'] = True
+    levels = {}
+    days = stamps.dt.date.to_numpy()
+    prev = [d for d in sorted(set(days)) if d < want_day]
+    if prev:
+        m = days == prev[-1]
+        ph, pl, pc = h[m].max(), l[m].min(), c[m][-1]
+        p = (ph + pl + pc) / 3.0
+        bc = (ph + pl) / 2.0
+        levels = {'P': p, 'R1': 2 * p - pl, 'S1': 2 * p - ph, 'BC': bc, 'TC': 2 * p - bc}
+        levels = {k: round(float(v), 2) for k, v in levels.items()}
+    return {'series': series, 'cfg': cfg, 'levels': levels}
+
+
+@api_bp.route('/backtest/logic-chart', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def backtest_logic_chart_api():
+    """Plain candles for the 💡 Logic popup of every Backtest strategy.
+
+    The popup draws the page's last run on top (entries / exits come from that run's own trades, so the
+    picture is the result being explained); this route only supplies the bars. `interval='day'` returns
+    the ~100 sessions before `date` and the month after it, anything else returns that one session.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data     = request.get_json() or {}
+        symbol   = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        interval = str(data.get('interval') or '5minute')
+        if symbol == 'ALL STOCKS':
+            symbol = 'NIFTY'
+        if interval == '30second':
+            interval = 'minute'
+        current_kite = get_fyers_adapter()
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+        import pandas as pd
+
+        today = datetime.now().date()
+        want_day = pd.Timestamp(data['date']).date() if data.get('date') else today
+        daily = interval == 'day'
+        start_str = (want_day - timedelta(days=100 if daily else 7)).strftime('%Y-%m-%d')
+        end_str = min(want_day + timedelta(days=30 if daily else 0), today).strftime('%Y-%m-%d')
+        minutes, df, _junk, _n = _sbr_load_bars(
+            current_kite, _sp_instrument_token(current_kite, symbol), symbol, start_str, end_str,
+            interval, warmup_days=0)
+        if minutes is None or df is None or df.empty:
+            return jsonify({'success': False, 'error': 'No candles for this symbol / range'}), 404
+        stamps = pd.to_datetime(df['date'])
+        if not data.get('date'):                 # no run to anchor on: the latest session there is
+            want_day = stamps.dt.date.max()
+        indicators = None
+        params = data.get('params') or {}
+        if not daily and any(k in params for k in ('st_period', 'rsi_period', 'bb_period', 'wr_period',
+                                                    'cci_period', 'ema_period', 'cpr_narrow')):
+            indicators = _logic_chart_indicators(df, stamps, want_day, params)
+        if not daily:
+            sel = (stamps.dt.date == want_day).to_numpy()
+            if not sel.any():
+                return jsonify({'success': False, 'error': f'No candles for {want_day:%d %b %Y}.'}), 404
+            df, stamps = df[sel], stamps[sel]
+            if indicators:
+                indicators['series'] = {k: [v for v, m in zip(vals, sel) if m] for k, vals in indicators['series'].items()}
+        # the IST wall clock read as UTC seconds, which is how the charts feed lightweight-charts
+        epoch = lambda ts: int((pd.Timestamp(ts) - pd.Timestamp('1970-01-01')).total_seconds())
+        candles = [{'time': epoch(stamps.iloc[i]), 'open': float(r['open']), 'high': float(r['high']),
+                    'low': float(r['low']), 'close': float(r['close'])}
+                   for i, (_, r) in enumerate(df.iterrows())]
+        if indicators:
+            ser = indicators.pop('series')
+            for k, vals in ser.items():
+                if k == 'st_trend':
+                    continue
+                indicators[k] = [
+                    ({'time': candles[i]['time'], 'value': v, 'trend': ser['st_trend'][i]} if k == 'st'
+                     else {'time': candles[i]['time'], 'value': v})
+                    for i, v in enumerate(vals) if v is not None]
+        return jsonify({'success': True, 'symbol': symbol, 'interval': interval,
+                        'date': f'{want_day:%Y-%m-%d}', 'candles': candles, 'indicators': indicators})
+    except Exception as e:
+        logger.error(f"Error in Backtest logic-chart API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/backtest/ma-htf', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth

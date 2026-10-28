@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "SRF",
+    "direction": "BUY",
+    "qty": 216,
+    "entry_price": 2312.2,
+    "exit_price": 2332.4,
+    "sl_price": 2300.3,
+    "target_price": 2332.4,
+    "pnl": 4363.2,
+    "reason": "Target Hit",
+    "entry_time": "2026-10-28T11:06:53.527835",
+    "exit_time": "2026-10-28T14:16:56.469690",
+    "broker_idx": 0,
+    "entry_order_id": "PAPER",
+    "sl_order_id": null,
+    "target_order_id": null,
+    "mode": "paper",
+    "date": "2026-10-28"
+  },
+  {
     "symbol": "PERSISTENT",
     "direction": "BUY",
     "qty": 86,

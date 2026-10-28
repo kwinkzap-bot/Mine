@@ -99,6 +99,7 @@
 /api/backtest/ha-supertrend	api.run_ha_supertrend_backtest_api	OPTIONS,POST	False
 /api/backtest/ha-supertrend/status/<task_id>	api.ha_supertrend_status	GET,HEAD,OPTIONS	True
 /api/backtest/hilega-milega	api.run_hilega_milega_backtest_api	OPTIONS,POST	False
+/api/backtest/logic-chart	api.backtest_logic_chart_api	OPTIONS,POST	False
 /api/backtest/ma-htf	api.run_ma_htf_backtest_api	OPTIONS,POST	False
 /api/backtest/option-breakout	api.run_option_breakout_backtest_api	OPTIONS,POST	False
 /api/backtest/option-breakout/optimise	api.run_option_breakout_optimise	OPTIONS,POST	False

@@ -1816,7 +1816,7 @@ body.ocean-theme .sm-gl-overlay {
 .ag-info-btn svg { flex-shrink: 0; }
 
 /* ── Strategy logic modal (compact) ────────────────────────────── */
-.rtp-logic-modal { max-width: 420px; }
+.rtp-logic-modal { max-width: 600px; }
 .rtp-logic-body { overflow-y: auto; flex: 1; padding: 14px 16px 16px; }
 .rtp-logic-body code {
     font-size: 0.68rem; font-weight: 700; padding: 1px 5px; border-radius: 4px;
@@ -2227,3 +2227,23 @@ body.ocean-theme .sm-gl-overlay {
 }
 .ag-subtab:hover { color: var(--ag-text); background: var(--ag-row-hover); }
 .ag-subtab.active { color: var(--ag-accent); border-bottom-color: var(--ag-accent); background: var(--ag-surface); }
+
+
+/* ── Popup look = the Backtest "Logic" popup (.bt-modal-* in dashboard.css) ──
+   Same box, compact header (title + small subtitle, no icon tile) and round
+   ✕ for every .sm-modal-* popup: the strategy Logic popups and the SIP
+   history. Kept as one override block so the two designs cannot drift. */
+.sm-modal-overlay { z-index: 100000000; overflow-y: auto; }
+.sm-modal-box {
+    border-radius: 12px;
+    max-width: 600px;
+    max-height: 82vh;
+    max-height: 82dvh;
+    margin: auto;
+}
+.sm-modal-hdr { gap: 10px; padding: 12px 14px; }
+.sm-modal-icon-wrap { display: none; }
+.sm-modal-title { font-size: 13px; line-height: 1.3; }
+.sm-modal-subtitle { font-size: 10px; }
+.sm-modal-close { width: 26px; height: 26px; }
+.rtp-logic-body { padding: 14px 18px 18px; }

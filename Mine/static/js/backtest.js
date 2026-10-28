@@ -1232,6 +1232,24 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Exit', 'No target. Anything still open is bought back at 10:30.']] },
     };
     // ── ST Touch Break: the Logic popup's chart (one session, SuperTrend line, entries / exits) ──
+
+    // Entry → exit drawn as a dashed segment between the two fills, plus the two prices as tags on the
+    // right-hand axis (never on the candles, where the old text labels landed on top of them). Only the
+    // first few trades get axis tags so a busy day does not stack them.
+    function btgDrawTrades(chart, cs, legs) {
+        legs.forEach((g, i) => {
+            if (g.t1 > g.t0) {
+                const seg = chart.addSeries(LightweightCharts.LineSeries, { color: g.win ? '#16a34a' : '#dc2626', lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle ? LightweightCharts.LineStyle.Dashed : 2,
+                    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+                seg.setData([{ time: g.t0, value: g.p0 }, { time: g.t1, value: g.p1 }]);
+            }
+            if (i < 3) {
+                cs.createPriceLine({ price: g.p0, color: '#2563eb', lineVisible: false, axisLabelVisible: true, title: 'Entry' });
+                cs.createPriceLine({ price: g.p1, color: g.win ? '#16a34a' : '#dc2626', lineVisible: false, axisLabelVisible: true, title: 'Exit' });
+            }
+        });
+    }
     let _stbLogicChart = null;
     function stbLogicChartDestroy() {
         if (_stbLogicChart) { try { _stbLogicChart.chart.remove(); } catch (e) { /* already gone */ } _stbLogicChart = null; }
@@ -1243,8 +1261,12 @@ document.addEventListener('DOMContentLoaded', function() {
             + '<select id="stbLcDays" title="Sessions in the last month where this rule took a trade" style="height:26px;"></select>'
             + '<input type="date" id="stbLcDate" style="height:26px;">'
             + '<span id="stbLcInfo" style="opacity:.75;"></span></div>'
-            + '<div id="stbLcChart" style="height:340px;width:100%;position:relative;"></div>'
-            + '<div id="stbLcTrades" style="margin-top:8px;font-size:12.5px;"></div></div>';
+            + '<div id="stbLcChart" style="height:380px;width:100%;position:relative;border:1px solid var(--oip-border);border-radius:8px;overflow:hidden;"></div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:11.5px;opacity:.8;">'
+            + '<span><span style="color:#f59e0b">●</span> touch candle</span>'
+            + '<span><span style="color:#2563eb">▲</span> entry</span>'
+            + '<span><span style="color:#16a34a">▼</span> exit (green = win, <span style="color:#dc2626">red</span> = loss)</span></div>'
+            + '<div id="stbLcTrades" style="margin-top:8px;font-size:12.5px;line-height:1.7;"></div></div>';
     }
     async function stbLogicChartLoad(date) {
         const info = document.getElementById('stbLcInfo'), box = document.getElementById('stbLcChart');
@@ -1285,11 +1307,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const dark = getComputedStyle(document.body).backgroundColor.match(/\d+/g)?.slice(0, 3).reduce((a, b) => a + +b, 0) < 384;
         const txt = dark ? '#cbd5e1' : '#334155', grid = dark ? 'rgba(148,163,184,.12)' : 'rgba(100,116,139,.15)';
         const chart = LightweightCharts.createChart(box, {
-            width: box.clientWidth, height: 340,
+            width: box.clientWidth, height: 380,
             layout: { background: { color: 'transparent' }, textColor: txt },
             grid: { vertLines: { color: grid }, horzLines: { color: grid } },
             timeScale: { timeVisible: true, secondsVisible: false, borderColor: grid },
-            rightPriceScale: { borderColor: grid },
+            rightPriceScale: { borderColor: grid, scaleMargins: { top: 0.12, bottom: 0.16 } },
         });
         const cs = chart.addSeries(LightweightCharts.CandlestickSeries, {
             upColor: '#16a34a', downColor: '#dc2626', borderUpColor: '#16a34a', borderDownColor: '#dc2626',
@@ -1309,13 +1331,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const long = t.type === 'Long';
             if (t.signal_t) marks.push({ time: snap(t.signal_t), position: long ? 'belowBar' : 'aboveBar', shape: 'circle', color: '#f59e0b' });
             marks.push({ time: snap(t.entry_t), position: long ? 'belowBar' : 'aboveBar', shape: long ? 'arrowUp' : 'arrowDown',
-                         color: '#2563eb', text: `${long ? 'BUY' : 'SELL'} ${fmt(t.entry_price)}` });
+                         color: '#2563eb' });
             marks.push({ time: snap(t.exit_t), position: long ? 'aboveBar' : 'belowBar', shape: long ? 'arrowDown' : 'arrowUp',
-                         color: (t.pnl || 0) >= 0 ? '#16a34a' : '#dc2626',
-                         text: `Exit ${fmt(t.exit_price)} (${(t.pnl || 0) >= 0 ? '+' : ''}${fmt(t.pnl || 0)})` });
+                         color: (t.pnl || 0) >= 0 ? '#16a34a' : '#dc2626' });
         });
         marks.sort((a, b) => a.time - b.time);
         if (LightweightCharts.createSeriesMarkers) LightweightCharts.createSeriesMarkers(cs, marks);
+        btgDrawTrades(chart, cs, (j.trades || []).map(t => ({ t0: snap(t.entry_t), p0: t.entry_price,
+            t1: snap(t.exit_t), p1: t.exit_price, win: (t.pnl || 0) >= 0 })));
         chart.timeScale().fitContent();
         _stbLogicChart = { chart };
         const rows = document.getElementById('stbLcTrades');
@@ -1325,6 +1348,219 @@ document.addEventListener('DOMContentLoaded', function() {
             : '<div style="opacity:.75;">No trade on this session with these settings — pick another from “Signal days”.</div>';
     }
     function stbLogicChartInit() { stbLogicChartLoad(null); }
+
+    // ── Generic Logic chart: every strategy but ST Touch Break (its own, above) ──
+    // Candles come from /api/backtest/logic-chart; the entries / exits are the page's last run (lastData),
+    // so the picture is the result the Logic text explains. Strategies priced on an option's own candles
+    // or run as a portfolio have no index chart to draw on.
+    const BT_LOGIC_NO_CHART = {
+        option_breakout: 'trades on the option’s own candles, not the index',
+        option_selling: 'a two-leg weekly strangle, not a single chart',
+        swing_momentum: 'a monthly stock portfolio, not a single chart',
+    };
+    const BT_LOGIC_DAILY = ['ema_pullback', 'ha_supertrend', 'hilega_milega', 'weekly_cpr_breakout'];
+    const BT_LOGIC_INTERVAL = { expiry_breakout: '60minute', thirty_min_fakeout: '5minute', second_candle: 'minute' };
+    function btgInterval(key) {
+        if (BT_LOGIC_DAILY.includes(key)) return 'day';
+        return BT_LOGIC_INTERVAL[key] || (document.getElementById('interval')?.value || '5minute');
+    }
+    const btgDir  = (t) => String(t.direction || t.type || '').toLowerCase();
+    const btgLong = (t) => ['buy', 'long'].includes(btgDir(t));
+    const btgEpoch = (str) => {
+        const m = String(str || '').match(/(\d{4})-(\d{2})-(\d{2})[ T]?(\d{2})?:?(\d{2})?/);
+        return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 9), +(m[5] || 15)) / 1000 : null;
+    };
+
+    // No run on the page yet (or it belongs to another strategy): ask the strategy's own run for its
+    // signals over the last couple of weeks, with the page's own settings and index points only. The run
+    // button's payload is read through the same capture hook Find Best Params uses, so the filters match;
+    // the button's side effects on the results panel are put back straight after.
+    const BT_LOGIC_SAMPLE = ['second_candle', 'scalp_pullback', 'pivot_confluence', 'ma_htf', 'hilega_milega',
+        'simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut',
+        'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx', 'st_all_indicators'];
+    function btgCapture(key) {
+        if (!BT_LOGIC_SAMPLE.includes(key) || typeof runBtn === 'undefined' || !runBtn) return null;
+        const ids = ['loading', 'resultsArea', 'btTradesSection', 'btRightPlaceholder', 'periodBreakdownSection'];
+        const snap = ids.map(id => { const el = document.getElementById(id); return [el, el && el.style.display]; });
+        let cap = null;
+        window._btCapture = (c) => { cap = c; };
+        try { runBtn.click(); } finally { window._btCapture = null; }
+        snap.forEach(([el, d]) => { if (el) el.style.display = d; });
+        try { _hideOptLoader(); } catch (e) { /* none showing */ }
+        return cap;
+    }
+    // the indicator settings the rule is judged on, as the page has them
+    const BT_IND_KEYS = ['st_period', 'st_mult', 'rsi_period', 'rsi_level', 'rsi_cap', 'bb_period', 'bb_mult',
+        'wr_period', 'wr_level', 'cci_period', 'cci_level', 'ema_period', 'cpr_narrow'];
+    function btgIndParams(cap) {
+        const out = {};
+        if (cap) BT_IND_KEYS.forEach(k => { if (cap.payload[k] != null) out[k] = cap.payload[k]; });
+        return out;
+    }
+    async function btgSampleTrades(key, cap) {
+        if (!cap) return null;
+        const iso = (d) => d.toISOString().slice(0, 10);
+        const end = new Date();
+        // a strict rule can go weeks without a signal: widen the look-back until one turns up
+        for (const days of (btgInterval(key) === 'day' ? [150, 700] : [14, 120, 500])) {
+            const start = new Date(end.getTime() - days * 86400000);
+            const body = { ...cap.payload, start_date: iso(start), end_date: iso(end), price_options: false };
+            const r = await fetch(cap.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body) });
+            const j = await r.json();
+            if (!(j.success && Array.isArray(j.trades))) return null;
+            if (j.trades.length) return j.trades;
+        }
+        return [];
+    }
+
+    // The indicators the rule reads, drawn the way a chart platform would: price-scale ones over the candles
+    // (SuperTrend, Bollinger, EMA, the day's pivot / R1 / S1 and CPR), oscillators in their own panes under
+    // them (RSI, Williams %R, CCI) with the rule's own threshold marked.
+    function btgDrawIndicators(chart, cs, ind) {
+        if (!ind) return;
+        const L = LightweightCharts, line = (color, w, pane, extra) => chart.addSeries(L.LineSeries,
+            { color, lineWidth: w, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...extra }, pane);
+        const cfg = ind.cfg || {}, legend = [];
+        if (ind.st) {
+            const s = line('#16a34a', 2, 0);
+            s.setData(ind.st.map(x => ({ time: x.time, value: x.value, color: x.trend === 1 ? '#16a34a' : '#dc2626' })));
+            legend.push(`<span style="color:#16a34a">━</span> SuperTrend ${cfg.st.join(', ')}`);
+        }
+        if (ind.bb_up) {
+            [['bb_up', 1], ['bb_lo', 1], ['bb_mid', 0]].forEach(([k, solid]) =>
+                line('#2563eb', 1, 0, { lineStyle: solid ? 0 : 2 }).setData(ind[k]));
+            legend.push(`<span style="color:#2563eb">━</span> Bollinger ${cfg.bb.join(', ')}`);
+        }
+        if (ind.ema) {
+            line('#f59e0b', 1, 0).setData(ind.ema);
+            legend.push(`<span style="color:#f59e0b">━</span> EMA ${cfg.ema}`);
+        }
+        const lv = ind.levels || {};
+        const tag = (price, title, color) => cs.createPriceLine({ price, color, lineWidth: 1, lineStyle: 2,
+            axisLabelVisible: true, title });
+        ['R1', 'P', 'S1'].forEach(k => { if (lv[k] != null) tag(lv[k], k, '#9333ea'); });
+        if (cfg.cpr && lv.TC != null) { tag(lv.TC, 'TC', '#0d9488'); tag(lv.BC, 'BC', '#0d9488'); }
+        if (lv.R1 != null) legend.push('<span style="color:#9333ea">┄</span> Pivot · R1 · S1 (prev. day)');
+        let pane = 1;
+        const osc = (key, color, title, marks) => {
+            if (!ind[key]) return;
+            const s = line(color, 1, pane, { priceLineVisible: false, title });
+            s.setData(ind[key]);
+            marks.forEach(([price, c2]) => s.createPriceLine({ price, color: c2, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' }));
+            legend.push(`<span style="color:${color}">━</span> ${title}`);
+            try { chart.panes()[pane].setStretchFactor(0.3); } catch (e) { /* older build: default split */ }
+            pane++;
+        };
+        if (cfg.rsi) osc('rsi', '#7c3aed', `RSI ${cfg.rsi[0]}`,
+            [[cfg.rsi[1], '#16a34a'], ...(cfg.rsi[2] ? [[+cfg.rsi[2], '#dc2626']] : [])]);
+        if (cfg.wr) osc('wr', '#0891b2', `Williams %R ${cfg.wr[0]}`, [[cfg.wr[1], '#16a34a']]);
+        if (cfg.cci) osc('cci', '#db2777', `CCI ${cfg.cci[0]}`, [[cfg.cci[1], '#16a34a']]);
+        const el = document.getElementById('btgLcLegend');
+        if (el) el.innerHTML = legend.map(x => `<span>${x}</span>`).join('');
+    }
+    function btgChartHtml(key) {
+        if (BT_LOGIC_NO_CHART[key]) {
+            return '<div style="padding:4px 20px 16px;font-size:12.5px;opacity:.75;">No chart for this strategy — it is '
+                + BT_LOGIC_NO_CHART[key] + '. Its trades are in the table below the results.</div>';
+        }
+        return '<div style="padding:0 20px 16px;">'
+            + '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0 8px;font-size:12.5px;">'
+            + '<b id="btgLcTitle">Chart</b>'
+            + '<select id="btgLcDays" title="Sessions where this run took a trade" style="height:26px;"></select>'
+            + '<span id="btgLcInfo" style="opacity:.75;"></span></div>'
+            + '<div id="btgLcLegend" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:6px;font-size:11.5px;opacity:.9;"></div>'
+            + '<div id="btgLcChart" style="height:380px;width:100%;position:relative;border:1px solid var(--oip-border);border-radius:8px;overflow:hidden;"></div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:11.5px;opacity:.8;">'
+            + '<span><span style="color:#2563eb">▲</span> entry</span>'
+            + '<span><span style="color:#16a34a">▼</span> exit (green = win, <span style="color:#dc2626">red</span> = loss)</span></div>'
+            + '<div id="btgLcTrades" style="margin-top:8px;font-size:12.5px;line-height:1.7;"></div></div>';
+    }
+    async function btgChartLoad(key, date) {
+        if (BT_LOGIC_NO_CHART[key]) return;
+        const info = document.getElementById('btgLcInfo'), box = document.getElementById('btgLcChart');
+        if (!box) return;
+        const interval = btgInterval(key), daily = interval === 'day';
+        let all = ((lastData && lastDataKey === key && lastData.trades) || []);
+        let sampled = false;
+        const cap = btgCapture(key);
+        const indParams = btgIndParams(cap);
+        if (!all.length) {
+            if (info) info.textContent = 'Looking for this strategy’s latest signals…';
+            try { all = (await btgSampleTrades(key, cap)) || []; sampled = all.length > 0; } catch (e) { all = []; }
+            if (!document.getElementById('btgLcChart')) return;            // popup closed meanwhile
+        }
+        all = all.filter(t => t.entry_time && t.exit_time && t.entry_price != null);
+        const dayEl = document.getElementById('btgLcDays'), rows = document.getElementById('btgLcTrades');
+        const fmt = (n) => Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+        const days = [...new Set(all.map(t => String(t.entry_time).slice(0, 10)))].sort().reverse().slice(0, 60);
+        date = date || days[0] || null;
+        dayEl.style.display = days.length ? '' : 'none';
+        dayEl.innerHTML = days.map(d => `<option value="${d}"${d === date ? ' selected' : ''}>${d}</option>`).join('');
+        dayEl.onchange = () => btgChartLoad(key, dayEl.value);
+        const first = all.find(t => String(t.entry_time).slice(0, 10) === date) || all[0] || {};
+        let sym = (first.symbol || document.getElementById('symbolSearch')?.value || 'NIFTY').trim().toUpperCase();
+        if (!sym || sym === 'ALL STOCKS') sym = 'NIFTY';
+        if (info) info.textContent = 'Loading ' + sym + ' candles…';
+        let j;
+        try {
+            const r = await fetch('/api/backtest/logic-chart', { method: 'POST',
+                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: sym, interval, date, params: indParams }) });
+            j = await r.json();
+        } catch (e) { j = { success: false, error: String(e) }; }
+        if (!document.getElementById('btgLcChart')) return;            // popup closed meanwhile
+        stbLogicChartDestroy();
+        if (!j.success) { box.innerHTML = ''; if (info) info.textContent = j.error || 'Could not load the chart'; return; }
+        document.getElementById('btgLcTitle').textContent = `${j.symbol} ${daily ? 'daily' : j.interval.replace('minute', ' min').replace(/^ min$/, '1 min')} · ${j.date}`;
+        if (info) info.textContent = !all.length ? 'no signal found in the last 500 days with the page’s settings — latest session shown'
+            : (sampled ? 'recent signals with your page settings (index points)' : 'this run’s trades on the chart');
+
+        const dark = getComputedStyle(document.body).backgroundColor.match(/\d+/g)?.slice(0, 3).reduce((a, b) => a + +b, 0) < 384;
+        const txt = dark ? '#cbd5e1' : '#334155', grid = dark ? 'rgba(148,163,184,.12)' : 'rgba(100,116,139,.15)';
+        const nPanes = ['rsi', 'wr', 'cci'].filter(k => j.indicators && j.indicators[k]).length;
+        box.style.height = (380 + nPanes * 110) + 'px';
+        const chart = LightweightCharts.createChart(box, {
+            width: box.clientWidth, height: box.clientHeight,
+            layout: { background: { color: 'transparent' }, textColor: txt },
+            grid: { vertLines: { color: grid }, horzLines: { color: grid } },
+            timeScale: { timeVisible: !daily, secondsVisible: false, borderColor: grid },
+            rightPriceScale: { borderColor: grid, scaleMargins: { top: 0.12, bottom: 0.16 } },
+        });
+        const cs = chart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#16a34a', downColor: '#dc2626', borderUpColor: '#16a34a', borderDownColor: '#dc2626',
+            wickUpColor: '#16a34a', wickDownColor: '#dc2626' });
+        cs.setData(j.candles);
+        btgDrawIndicators(chart, cs, j.indicators);
+        const times = j.candles.map(c => c.time);
+        const snap = (t) => { let lo = 0, hi = times.length - 1, ans = times[0];
+            while (lo <= hi) { const m = (lo + hi) >> 1; if (times[m] <= t) { ans = times[m]; lo = m + 1; } else hi = m - 1; } return ans; };
+        const lo = times[0], hi = times[times.length - 1] + 86400;
+        const shown = all.filter(t => (t.symbol || sym).toUpperCase() === j.symbol || !t.symbol).filter(t => {
+            const e = btgEpoch(t.entry_time);
+            return e != null && (daily ? e >= lo && e <= hi : String(t.entry_time).slice(0, 10) === j.date);
+        });
+        const marks = [];
+        shown.forEach(t => {
+            const long = btgLong(t), win = (t.pnl || 0) >= 0;
+            marks.push({ time: snap(btgEpoch(t.entry_time)), position: long ? 'belowBar' : 'aboveBar',
+                         shape: long ? 'arrowUp' : 'arrowDown', color: '#2563eb' });
+            const x = btgEpoch(t.exit_time);
+            if (x != null) marks.push({ time: snap(x), position: long ? 'aboveBar' : 'belowBar',
+                         shape: long ? 'arrowDown' : 'arrowUp', color: win ? '#16a34a' : '#dc2626' });
+        });
+        marks.sort((a, b) => a.time - b.time);
+        if (LightweightCharts.createSeriesMarkers) LightweightCharts.createSeriesMarkers(cs, marks);
+        btgDrawTrades(chart, cs, shown.filter(t => btgEpoch(t.exit_time) != null).map(t => ({
+            t0: snap(btgEpoch(t.entry_time)), p0: +t.entry_price, t1: snap(btgEpoch(t.exit_time)), p1: +t.exit_price,
+            win: (t.pnl || 0) >= 0 })));
+        chart.timeScale().fitContent();
+        _stbLogicChart = { chart };
+        const clock = (s) => daily ? String(s).slice(0, 10) : String(s).slice(11, 16);
+        rows.innerHTML = shown.length
+            ? shown.map(t => `<div>${btgLong(t) ? '🟢' : '🔴'} <b>${btgLong(t) ? 'BUY' : 'SELL'}</b> ${clock(t.entry_time)} @ ${fmt(t.entry_price)} → `
+                + `${clock(t.exit_time)} @ ${fmt(t.exit_price)} · <b class="${(t.pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(t.pnl || 0) >= 0 ? '+' : ''}${fmt(t.pnl || 0)}</b> · ${t.exit_reason || t.result || ''}</div>`).join('')
+            : `<div style="opacity:.75;">${all.length ? 'No trade from this run in the chart window.' : 'Nothing to mark here — run the backtest over a longer range to find signals.'}</div>`;
+    }
 
     const btLogicBtn   = document.getElementById('btLogicBtn');
     const btLogicModal = document.getElementById('btLogicModal');
@@ -1350,12 +1586,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     + (info.note ? `<div style="margin-top:10px;font-size:12.5px;opacity:.8;">ℹ️ ${esc(info.note)}</div>` : '')
                 : '<p>No explanation written for this strategy yet.</p>';
             const box = btLogicModal.querySelector('.bt-modal-box');
-            if (box) box.style.width = key === 'st_touch_break' ? 'min(920px, 100%)' : '';
+            if (box) box.style.width = 'min(920px, 100%)';
+            stbLogicChartDestroy();
             if (key === 'st_touch_break') {
                 document.getElementById('btLogicBody').insertAdjacentHTML('beforeend', stbLogicChartHtml());
                 stbLogicChartInit();
-            } else {
-                stbLogicChartDestroy();
+            } else if (info) {
+                document.getElementById('btLogicBody').insertAdjacentHTML('beforeend', btgChartHtml(key));
+                btgChartLoad(key, null);
             }
             btLogicModal.style.display = 'flex';
             prevOverflow = document.body.style.overflow;
@@ -2903,6 +3141,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     let lastData = null;
+    let lastDataKey = '';        // the strategy `lastData` belongs to — the Logic chart must not draw another's trades
 
     function displayResults(data) {
         _displayResultsCore(data);
@@ -2988,6 +3227,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function _displayResultsCore(data) {
         lastData = data;
+        lastDataKey = strategySelect ? strategySelect.value : '';
         const { summary } = data;
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
