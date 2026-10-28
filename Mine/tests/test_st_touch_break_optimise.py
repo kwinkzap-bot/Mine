@@ -44,3 +44,14 @@ def test_a_board_row_reproduces_as_a_plain_run():
     trades = stbo._trades(eng, '2026-01-01')
     assert len(trades) == row['total_trades']
     assert round(sum(t['pnl'] for t in trades), 2) == row['total_pnl']
+
+
+def test_each_direction_is_swept_on_its_own_trades():
+    df = _bars()
+    assert stbo.DIRECTIONS == ('both', 'long', 'short')
+    boards = {d: stbo.optimise(df, {'st_period': 10, 'st_mult': 2, 'direction': d}, from_date='2026-01-01', top=5)
+              for d in stbo.DIRECTIONS}
+    n = {d: boards[d]['current']['total_trades'] for d in boards}
+    # not additive: the two sides share one position slot and the day's trade cap
+    assert n['long'] and n['short'] and n['both']
+    assert len({n['long'], n['short']}) == 2 or boards['long']['current']['total_pnl'] != boards['short']['current']['total_pnl']

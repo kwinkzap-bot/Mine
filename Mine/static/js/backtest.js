@@ -458,7 +458,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // symbol again puts them back, and a symbol with none saved starts from the factory values.
     const STB_DEFAULT_KEY = 'stbDefaultsBySymbol';
     const STB_DEFAULT_IDS = { st_period: 'stbStLen', st_mult: 'stbStFactor', modes: 'stbModes',
-                              stop_mode: 'stbStopMode', min_wick_pct: 'stbMinWick',
+                              stop_mode: 'stbStopMode', min_wick_pct: 'stbMinWick', direction: 'stbDirection',
                               premium: 'stbPremium', sl_pct: 'stbSlPct', tsl_x: 'stbTslX', tsl_y: 'stbTslY' };
     function stbFactory(id) {                      // the value the page markup ships with
         const el = document.getElementById(id);
@@ -5472,7 +5472,26 @@ document.addEventListener('DOMContentLoaded', function() {
         const panel   = document.getElementById('stBbRsiOptimisePanel');
         const title   = document.getElementById('sbrOptTitle');
         const posWrap = document.getElementById('sbrOptPosBoard');
-        if (data.boards) {
+        const thirdWrap = document.getElementById('sbrOptThirdBoard');
+        if (thirdWrap) thirdWrap.style.display = 'none';
+        if (data.direction_boards) {
+            // ST Touch Break: one board per direction, each swept and ranked on its own trades.
+            const DIR = { both: ['🔀 Both (BUY + SELL)', 'CE on a long setup · PE on a short one'],
+                          long: ['📈 BUY only', 'CE'], short: ['📉 SELL only', 'PE'] };
+            const slots = [['sbrOptGrid', 'sbrOptMeta', null], ['sbrOptPosGrid', 'sbrOptPosMeta', 'sbrOptPosTitle'],
+                           ['sbrOptThirdGrid', 'sbrOptThirdMeta', 'sbrOptThirdTitle']];
+            data.direction_boards.forEach((d, i) => {
+                const [gridId, metaId, titleId] = slots[i];
+                const b = { ...data.boards[d], symbol: data.symbol, start_date: data.start_date,
+                            end_date: data.end_date, interval: data.interval };
+                const heading = `${DIR[d][0]}<br><small>${DIR[d][1]}</small>`;
+                if (titleId) document.getElementById(titleId).innerHTML = heading;
+                else if (title) title.innerHTML = '🧲 ST Touch Break Best Params · ' + heading;
+                renderSbrBoard(b, gridId, document.getElementById(metaId));
+            });
+            if (posWrap) posWrap.style.display = '';
+            if (thirdWrap) thirdWrap.style.display = '';
+        } else if (data.boards) {
             // ALL Indicators: one board per mode, every timeframe of it searched and ranked together.
             const board = (b) => ({ ...b, symbol: data.symbol, start_date: data.start_date, end_date: data.end_date,
                                     interval: (b.timeframes || []).map(tf => SBR_TF_LABEL[tf] || tf).join(' · ') });
@@ -5542,10 +5561,20 @@ document.addEventListener('DOMContentLoaded', function() {
         _mountSingleOptGrid(gridId, rows,
                             withRs(strat ? sbrStrategyCols(data.swept || []) : SBR_SIMPLE_COLS),
                             (simple || strat) ? 'profit_factor' : 'total_pnl',
-                            strat ? applySbrStrategyResult(data.strategy, data.swept || [])
+                            strat ? withDirection(applySbrStrategyResult(data.strategy, data.swept || []), data.direction)
                                   : applySbrSimpleResult,
                             { timeframe: r => SBR_TF_MIN[r.timeframe] ?? 0 },
-                            strat && data.strategy === 'st_touch_break' ? saveStbDefault : null);
+                            strat && data.strategy === 'st_touch_break' ? withDirection(saveStbDefault, data.direction) : null);
+    }
+
+    // A direction board's Use / Default also sets the Direction box the board was swept for.
+    function withDirection(fn, direction) {
+        if (!direction) return fn;
+        return (r) => {
+            const el = document.getElementById('stbDirection');
+            if (el) el.value = direction;
+            fn({ ...r, direction });
+        };
     }
 
     function saveStbDefault(r) {

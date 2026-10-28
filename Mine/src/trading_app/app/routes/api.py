@@ -5327,22 +5327,35 @@ def _run_st_touch_break_optimise(data):
                 task.update(status='error', error='No historical data found for the given range')
                 return
 
-            def _progress(done, total):
-                task['progress'] = {'done': done, 'total': total}
+            # One board per direction — the direction is part of the question, so each board is
+            # swept, re-priced and ranked on its own trades (the page's Direction box is not used).
+            dirs = stbo.DIRECTIONS
+            boards = {}
+            for n, d in enumerate(dirs):
+                ddata = dict(data, direction=d)
 
-            res = stbo.optimise(bars, data, from_date=start_date_str, progress=_progress, top=80)
-            if bool(data.get('price_options', True)):
-                try:
-                    def _pricing(done, total):
-                        task['progress'] = {'done': done, 'total': total, 'stage': 'pricing'}
-                    stbo.verify_on_option(res, bars, minutes, data, symbol, interval,
-                                          sorted(set(minutes.index.date)), start_date_str, progress=_pricing)
-                except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
-                    logger.warning('[ST-TOUCH-BREAK OPT] option verification failed: %s', e)
-                    res['option_error'] = str(e)
+                def _progress(done, total, n=n):
+                    task['progress'] = {'done': n * total + done, 'total': len(dirs) * total}
+
+                res = stbo.optimise(bars, ddata, from_date=start_date_str, progress=_progress, top=80)
+                if bool(data.get('price_options', True)):
+                    try:
+                        def _pricing(done, total, n=n):
+                            task['progress'] = {'done': n * total + done, 'total': len(dirs) * total,
+                                                'stage': 'pricing'}
+                        stbo.verify_on_option(res, bars, minutes, ddata, symbol, interval,
+                                              sorted(set(minutes.index.date)), start_date_str,
+                                              progress=_pricing)
+                    except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
+                        logger.warning('[ST-TOUCH-BREAK OPT] option verification failed: %s', e)
+                        res['option_error'] = str(e)
+                        res['results'] = res['results'][:25]
+                else:
                     res['results'] = res['results'][:25]
-            else:
-                res['results'] = res['results'][:25]
+                res['direction'] = d
+                boards[d] = res
+            res = {'strategy': 'st_touch_break', 'mode': 'strategy', 'boards': boards,
+                   'direction_boards': list(dirs)}
             task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
                                'start_date': start_date_str, 'end_date': end_date_str,
                                'bars': n_bars, **res}

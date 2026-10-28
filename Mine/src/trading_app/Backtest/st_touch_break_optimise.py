@@ -27,6 +27,7 @@ ST_MULT = (1.5, 2.0, 2.5, 3.0)
 MODES = ('both', 'bounce', 'through')
 STOP_MODE = ('close', 'touch')
 MIN_WICK = (0.0, 25.0, 40.0)
+DIRECTIONS = ('both', 'long', 'short')   # one board each: Both / BUY (CE) / SELL (PE)
 SWEPT = ['st_period', 'st_mult', 'modes', 'stop_mode', 'min_wick_pct']
 MIN_WIN = 25.0                     # the Simple Trader boards want 50 %; this rule rides trends and wins ~35 % of the time
 SHORTLIST = 10                     # index rows re-priced on the option (plus the current settings)
