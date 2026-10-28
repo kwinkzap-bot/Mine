@@ -925,10 +925,13 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
             leg.update(strike=con['strike'], option_type=con['option_type'], expiry=con['expiry'])
             b_in = bar_at(bars, t_in)
             b_out = bar_at(bars, t_out)
+            def _px(b, mid):
+                # `mid`: the trade filled somewhere inside this minute — its open/close average
+                return (b['open'] + b['close']) / 2 if mid and b.get('open') is not None else b['close']
             if b_in:
-                leg['entry'] = round(b_in['close'], 2)
+                leg['entry'] = round(_px(b_in, t.get('entry_mid')), 2)
             if b_out:
-                leg['exit'] = round(b_out['close'], 2)
+                leg['exit'] = round(_px(b_out, t.get('exit_mid')), 2)
             if sl_pct > 0 and leg['entry'] is not None and t_out:
                 hit = _premium_stop(bars, leg['entry'], t_in, t_out, sl_pct, tsl_x, tsl_y)
                 if hit:

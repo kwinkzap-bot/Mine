@@ -20114,6 +20114,20 @@
     "vwap": 22737.24,
     "idx_fut_oi": null,
     "fii_fut_oi": null,
-    "FII_Index_futures": 0
+    "FII_Index_futures": -2848.94
+  },
+  {
+    "date": "2026-10-28",
+    "symbol": "NIFTY",
+    "ce_oi": 122625165,
+    "pe_oi": 128038105,
+    "open": 22678.0,
+    "high": 22778.05,
+    "low": 22497.7,
+    "close": 22698.85,
+    "vwap": 22643.69,
+    "idx_fut_oi": 17365465,
+    "fii_fut_oi": -235042,
+    "FII_Index_futures": -2063.16
   }
 ]

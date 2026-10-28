@@ -5321,37 +5321,44 @@ def _run_st_touch_break_optimise(data):
 
     def _run():
         try:
-            minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str,
-                                                      end_date_str, interval)
-            if bars is None:
+            # One read of the minutes; every timeframe is resampled from it, so a row reads the
+            # same candles BACKTEST would at that timeframe.
+            minutes, _ = _sbr_load_minutes(provider, token, symbol, start_date_str, end_date_str)
+            if minutes is None:
                 task.update(status='error', error='No historical data found for the given range')
                 return
+            cache = {}
 
+            def bars_for(tf):
+                if tf not in cache:
+                    cache[tf] = _sbr_bars(minutes, tf, start_date_str)[0]
+                return cache[tf]
+
+            n_bars = _sbr_bars(minutes, interval, start_date_str)[1]
+            calendar = sorted(set(minutes.index.date))
             # One board per direction — the direction is part of the question, so each board is
             # swept, re-priced and ranked on its own trades (the page's Direction box is not used).
             dirs = stbo.DIRECTIONS
+            each = len(stbo.TIMEFRAMES) * (stbo.grid_size() + stbo.walk_size())
             boards = {}
             for n, d in enumerate(dirs):
                 ddata = dict(data, direction=d)
 
-                def _progress(done, total, n=n):
-                    task['progress'] = {'done': n * total + done, 'total': len(dirs) * total}
+                def _progress(done, total, n=n, **kw):
+                    task['progress'] = {'done': n * each + done, 'total': len(dirs) * each, **kw}
 
-                res = stbo.optimise(bars, ddata, from_date=start_date_str, progress=_progress, top=80)
+                res = stbo.optimise_timeframes(bars_for, ddata, from_date=start_date_str, top=80,
+                                               progress=_progress)
                 if bool(data.get('price_options', True)):
-                    try:
-                        def _pricing(done, total, n=n):
-                            task['progress'] = {'done': n * total + done, 'total': len(dirs) * total,
-                                                'stage': 'pricing'}
-                        stbo.verify_on_option(res, bars, minutes, ddata, symbol, interval,
-                                              sorted(set(minutes.index.date)), start_date_str,
-                                              progress=_pricing)
-                    except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
-                        logger.warning('[ST-TOUCH-BREAK OPT] option verification failed: %s', e)
-                        res['option_error'] = str(e)
-                        res['results'] = res['results'][:25]
+                    def _pricing(done, total, n=n, **kw):
+                        task['progress'] = {'done': n * total + done, 'total': len(dirs) * total,
+                                            'stage': 'pricing', **kw}
+                    stbo.verify_timeframes(res, bars_for, minutes, ddata, symbol, calendar, start_date_str,
+                                           progress=_pricing)
                 else:
                     res['results'] = res['results'][:25]
+                if res.get('option_error'):
+                    logger.warning('[ST-TOUCH-BREAK OPT] option verification failed: %s', res['option_error'])
                 res['direction'] = d
                 boards[d] = res
             res = {'strategy': 'st_touch_break', 'mode': 'strategy', 'boards': boards,

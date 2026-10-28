@@ -245,6 +245,10 @@ class StTouchBreakEngine:
                 'bars_held': int(exit_k - e + 1),
                 'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
                 'exit_reason': reason,
+                # Both fills happen INSIDE their minute (the index trades through the break level /
+                # the SuperTrend line), so the option leg is priced mid-minute, not at the close of the
+                # minute before — see attach_option_legs.
+                'intrabar_entry': True, 'intrabar_exit': reason == 'SuperTrend stop',
             })
         return trades
 

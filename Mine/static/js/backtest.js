@@ -459,6 +459,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const STB_DEFAULT_KEY = 'stbDefaultsBySymbol';
     const STB_DEFAULT_IDS = { st_period: 'stbStLen', st_mult: 'stbStFactor', modes: 'stbModes',
                               stop_mode: 'stbStopMode', min_wick_pct: 'stbMinWick', direction: 'stbDirection',
+                              touch_tol_pct: 'stbTouchTol', min_body_pct: 'stbMinBody', outside_bar: 'stbOutside',
+                              entry_start: 'stbEntryStart', entry_end: 'stbEntryEnd', exit_cutoff: 'stbExitCutoff',
+                              max_trades_per_day: 'stbMaxTrades',
                               premium: 'stbPremium', sl_pct: 'stbSlPct', tsl_x: 'stbTslX', tsl_y: 'stbTslY' };
     function stbFactory(id) {                      // the value the page markup ships with
         const el = document.getElementById(id);
@@ -5413,6 +5416,10 @@ document.addEventListener('DOMContentLoaded', function() {
         cpr_narrow: ['CPR narrow <', 'CprNarrow'],
         modes:      ['Setups',     'Modes'],     stop_mode: ['Stop',       'StopMode'],
         min_wick_pct: ['Min wick %', 'MinWick'],
+        touch_tol_pct: ['Touch tol %', 'TouchTol'],   min_body_pct: ['Min body %', 'MinBody'],
+        outside_bar:   ['Outside bar', 'Outside'],    entry_start:  ['From', 'EntryStart'],
+        entry_end:     ['Until', 'EntryEnd'],         exit_cutoff:  ['Square-off', 'ExitCutoff'],
+        max_trades_per_day: ['Trades/day', 'MaxTrades'],
         gates:      ['Indicators', ''],      timeframe: ['Timeframe', ''],
     };
     // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
@@ -5483,7 +5490,8 @@ document.addEventListener('DOMContentLoaded', function() {
             data.direction_boards.forEach((d, i) => {
                 const [gridId, metaId, titleId] = slots[i];
                 const b = { ...data.boards[d], symbol: data.symbol, start_date: data.start_date,
-                            end_date: data.end_date, interval: data.interval };
+                            end_date: data.end_date,
+                            interval: (data.boards[d].timeframes || []).map(tf => SBR_TF_LABEL[tf] || tf).join(' · ') || data.interval };
                 const heading = `${DIR[d][0]}<br><small>${DIR[d][1]}</small>`;
                 if (titleId) document.getElementById(titleId).innerHTML = heading;
                 else if (title) title.innerHTML = '🧲 ST Touch Break Best Params · ' + heading;
@@ -5545,7 +5553,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // holds that exact combination, flag it; otherwise add it, scored the same way.
             const keys = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
                           'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit', 'gates', 'timeframe',
-                          'modes', 'stop_mode', 'min_wick_pct'];
+                          'modes', 'stop_mode', 'min_wick_pct', 'touch_tol_pct', 'min_body_pct', 'outside_bar',
+                          'entry_end', 'exit_cutoff', 'max_trades_per_day'];
             const same = (r) => keys.every(k => r[k] === undefined || cur[k] === undefined || String(r[k]) === String(cur[k]));
             const hit = rows.findIndex(same);
             if (hit >= 0) rows = rows.map((r, i) => i === hit ? { ...r, _current: true, rank: cur.rank, option: r.option } : r);
@@ -5591,8 +5600,10 @@ document.addEventListener('DOMContentLoaded', function() {
         all[sym] = vals;
         try { localStorage.setItem(STB_DEFAULT_KEY, JSON.stringify(all)); } catch (e) { /* private mode: applies for this page view only */ }
         stbApplyDefaults(vals);
+        const tfSel = document.getElementById('interval');
+        if (r.timeframe && tfSel && [...tfSel.options].some(o => o.value === r.timeframe)) tfSel.value = r.timeframe;
         if (window.showNotification) window.showNotification(
-            `${sym} default set: SuperTrend ${vals.st_period}/${vals.st_mult} · ${vals.modes} · stop ${vals.stop_mode} · min wick ${vals.min_wick_pct}% · premium ${vals.premium === '0' ? 'ATM' : vals.premium} — the page opens on these for ${sym}`, 'success');
+            `${sym} default set: SuperTrend ${vals.st_period}/${vals.st_mult} · ${vals.modes} · stop ${vals.stop_mode} · min wick ${vals.min_wick_pct}% · ${r.timeframe ? (SBR_TF_LABEL[r.timeframe] || r.timeframe) + ' · ' : ''}premium ${vals.premium === '0' ? 'ATM' : vals.premium} — the page opens on these for ${sym}`, 'success');
     }
 
     async function runSbrOptimise(simple, strategy) {
@@ -5669,7 +5680,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
                 const where = p.board ? `${p.board === 'positional' ? 'Positional' : 'Intraday'}`
-                    + (p.timeframe ? ` ${SBR_TF_LABEL[p.timeframe] || p.timeframe}` : '') + ' · ' : '';
+                    + (p.timeframe ? ` ${SBR_TF_LABEL[p.timeframe] || p.timeframe}` : '') + ' · '
+                    : (p.timeframe ? `${SBR_TF_LABEL[p.timeframe] || p.timeframe} · ` : '');
                 _showOptLoader('Finding best params…', p.stage === 'pricing'
                     ? `${where}pricing the best on the option · ${p.done} / ${p.total} · ${data.elapsed || 0}s`
                     : (p.total ? `${where}${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`));

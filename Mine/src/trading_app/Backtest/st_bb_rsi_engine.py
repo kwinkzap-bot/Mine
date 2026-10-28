@@ -618,13 +618,23 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
 
     def exit_minute(t):
         # An exit on the final bar of the session has no "next open"; use its last minute.
-        return _prior_minute(t['exit_time'])
+        # A trade flagged `intrabar_exit` left when the index crossed a line INSIDE the minute it is
+        # stamped with, so that minute is the one to price — the one before is a price from
+        # before the cross.
+        return t['exit_time'][11:16] if t.get('intrabar_exit') else _prior_minute(t['exit_time'])
 
     reqs = []
     for n, t in enumerate(work):
+        # Same for an `intrabar_entry`: the order went out when the index traded through the
+        # break level, during the stamped minute. Priced at the close of the minute before it
+        # bought before the break and sold before the stop — on 28 Oct 2026 that was 2.6 pts
+        # better in and 2.5 pts better out than the live fills (₹361 on one lot). Those legs are
+        # read at the middle of the minute (open and close averaged), not at an edge of it.
+        ent = t['entry_time'][11:16] if t.get('intrabar_entry') else _prior_minute(t['entry_time'])
         reqs.append({'key': n, 'date': t['entry_time'][:10], 'side': 'BUY' if t.get('type') != 'Short' else 'SELL',
-                     'level': t.get('level', t['entry_price']), 'entry_time': _prior_minute(t['entry_time']),
-                     'exit_time': exit_minute(t), 'exit_price': t['exit_price']})
+                     'level': t.get('level', t['entry_price']), 'entry_time': ent,
+                     'exit_time': exit_minute(t), 'exit_price': t['exit_price'],
+                     'entry_mid': bool(t.get('intrabar_entry')), 'exit_mid': bool(t.get('intrabar_exit'))})
     # Breeze meters requests app-wide, so threads cannot beat that pace on a cold
     # run — but each strike probe also spends most of its time waiting on the
     # network, and a warm (disk-cached) run is CPU/IO bound. Small chunks across
