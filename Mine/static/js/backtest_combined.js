@@ -1,3 +1,296 @@
+/* The combined book's report — cards, equity curve, P&L breakdown, month by month and the trade
+ * history — drawn from normalised trade rows. Shared by the Simple Trader "Combined" popup below and
+ * the Find Best Params "Combined" popup (backtest.js), so both read the same way.
+ *
+ *   BtCombinedReport({ box, rows() → trades in entry order, groups() → [{id, name, color}] present in
+ *                      rows, basis() → 'gross' | 'net', empty() → html, meta() → text,
+ *                      groupLabel: 'Strategy', csvName }) → { paint() }
+ *
+ * A trade row: {sid, sname, color, symbol, side, strike, entry, exit, ep, xp, lots, reason, gross, brok,
+ * nb (net), net (gross or net, per basis)}.
+ */
+window.BtCombinedReport = function (o) {
+    'use strict';
+    const box = o.box;
+    const basis = o.basis || (() => 'net');
+    o.groupLabel = o.groupLabel || 'Strategy';
+    let equityChart = null, page = 0;
+    const PAGE = 25;
+    const inr = (v, sign) => (v < 0 ? '-' : (sign && v > 0 ? '+' : '')) + '₹' + Math.round(Math.abs(v)).toLocaleString('en-IN');
+    // Compact ₹ for the breakdown panels: 2.53L, 12.4k, 850.
+    const inrc = (v, sign) => {
+        const a = Math.abs(v), sg = v < 0 ? '-' : (sign && v > 0 ? '+' : '');
+        return sg + '₹' + (a >= 1e5 ? (a / 1e5).toFixed(2) + 'L' : a >= 1e3 ? (a / 1e3).toFixed(1) + 'k' : Math.round(a));
+    };
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const cls = (v) => v > 0 ? 'bc-pos' : (v < 0 ? 'bc-neg' : '');
+
+    function stats(rows) {
+        const s = { n: rows.length, wins: 0, losses: 0, net: 0, gross: 0, brok: 0, gp: 0, gl: 0,
+                    peak: 0, dd: 0, ddDays: 0, winStreak: 0, lossStreak: 0, best: null, worst: null };
+        let w = 0, l = 0, cum = 0, peakIdx = -1;
+        rows.forEach((r, i) => {
+            s.net += r.net; s.gross += r.gross; s.brok += r.brok;
+            if (r.net > 0) { s.wins++; s.gp += r.net; w++; l = 0; }
+            else if (r.net < 0) { s.losses++; s.gl += -r.net; l++; w = 0; }
+            else { w = l = 0; }
+            s.winStreak = Math.max(s.winStreak, w); s.lossStreak = Math.max(s.lossStreak, l);
+            cum += r.net;
+            if (cum > s.peak) { s.peak = cum; peakIdx = i; }
+            if (s.peak - cum > s.dd) {
+                s.dd = s.peak - cum;
+                s.ddDays = new Set(rows.slice(peakIdx + 1, i + 1).map(x => x.entry.slice(0, 10))).size;
+            }
+            if (!s.best || r.net > s.best.net) s.best = r;
+            if (!s.worst || r.net < s.worst.net) s.worst = r;
+        });
+        s.winRate = s.n ? s.wins / s.n * 100 : 0;
+        s.pf = s.gl > 0 ? s.gp / s.gl : (s.gp > 0 ? Infinity : 0);
+        s.avgWin = s.wins ? s.gp / s.wins : 0;
+        s.avgLoss = s.losses ? -s.gl / s.losses : 0;
+        return s;
+    }
+
+    // ── Results ─────────────────────────────────────────────────────────────────────────────
+    function card(label, value, sub, c) {
+        return `<div class="bc-card"><div class="bc-card-l">${label}</div><div class="bc-card-v ${c || ''}">${value}</div>${sub ? `<div class="bc-card-s">${sub}</div>` : ''}</div>`;
+    }
+
+    function groupBy(rows, keyFn) {
+        const m = new Map();
+        rows.forEach(r => {
+            const k = keyFn(r);
+            if (!m.has(k)) m.set(k, []);
+            m.get(k).push(r);
+        });
+        return m;
+    }
+
+    // ── Sortable grid: one renderer for every table in the popup ──────────────────────────
+    // cols: {k, label, get(row) → sort value, html(row) → cell html, cls(row)?, right?}
+    const sorts = {};      // grid id → {k, dir}
+    function sortRows(id, cols, data, dflt) {
+        const so = sorts[id] || dflt;
+        const col = so && cols.find(c => c.k === so.k);
+        if (!col) return data;
+        const sgn = so.dir === 'asc' ? 1 : -1;
+        return data.slice().sort((x, y) => {
+            const a = col.get(x), b = col.get(y);
+            return (typeof a === 'string' || typeof b === 'string'
+                ? String(a).localeCompare(String(b), undefined, { numeric: true })
+                : (a - b)) * sgn;
+        });
+    }
+    function gridHead(id, cols, dflt) {
+        const so = sorts[id] || dflt || {};
+        return '<thead><tr>' + cols.map(c => {
+            const on = so.k === c.k;
+            return `<th class="bc-sortable${c.right ? ' r' : ''}${on ? ' on ' + so.dir : ''}" data-grid="${id}" data-k="${c.k}">${c.label}<em></em></th>`;
+        }).join('') + '</tr></thead>';
+    }
+
+    function breakdown(id, entries, firstCol) {
+        const max = Math.max(1, ...entries.map(e => Math.abs(e.s.net)));
+        const cols = [
+            { k: 'name', label: firstCol, get: e => e.plain || e.label, html: e => e.label },
+            { k: 'n', label: 'Trades', right: true, get: e => e.s.n, html: e => e.s.n },
+            { k: 'win', label: 'Win%', right: true, get: e => e.s.winRate, html: e => e.s.winRate.toFixed(0) + '%' },
+            { k: 'net', label: basis() === 'gross' ? 'Gross' : 'Net', right: true, get: e => e.s.net,
+              html: e => `${inrc(e.s.net, true)}<span class="bc-bar ${e.s.net < 0 ? 'neg' : ''}" style="width:${Math.abs(e.s.net) / max * 100}%"></span>`,
+              cls: e => cls(e.s.net) },
+            { k: 'avg', label: 'Avg', right: true, get: e => e.s.n ? e.s.net / e.s.n : 0, html: e => inrc(e.s.n ? e.s.net / e.s.n : 0, true), cls: e => cls(e.s.net) },
+        ];
+        const body = sortRows(id, cols, entries).map(e => '<tr>' + cols.map(c =>
+            `<td class="${c.right ? 'r ' : ''}${c.cls ? c.cls(e) : ''}">${c.html(e)}</td>`).join('') + '</tr>').join('');
+        return `<table class="bc-tbl">${gridHead(id, cols)}<tbody>${body}</tbody></table>`;
+    }
+
+    const HIST_COLS = [
+        { k: 'no', label: '#', get: r => r.no, html: r => r.no },
+        { k: 'strat', label: o.groupLabel, get: r => r.sname, html: r => `<i class="bc-dot" style="background:${r.color}"></i>${esc(r.sname)}` },
+        { k: 'inst', label: 'Instrument', get: r => r.symbol + r.side, html: r => esc(r.symbol) + ' ' + esc(r.side) },
+        { k: 'entry', label: 'Entry', get: r => r.entry, html: r => esc(r.entry.slice(0, 16)) },
+        { k: 'exit', label: 'Exit', get: r => r.exit, html: r => esc(r.exit.slice(0, 16)) },
+        { k: 'strike', label: 'Strike', right: true, get: r => Number(r.strike) || 0, html: r => esc(r.strike ?? '—') },
+        { k: 'ep', label: 'Entry ₹', right: true, get: r => Number(r.ep) || 0, html: r => r.ep != null ? Number(r.ep).toFixed(2) : '—' },
+        { k: 'xp', label: 'Exit ₹', right: true, get: r => Number(r.xp) || 0, html: r => r.xp != null ? Number(r.xp).toFixed(2) : '—' },
+        { k: 'lots', label: 'Lots', right: true, get: r => r.lots, html: r => r.lots },
+        { k: 'why', label: 'Exit reason', get: r => r.reason, html: r => esc(r.reason) },
+        { k: 'net', label: 'P&amp;L', right: true, get: r => r.net, html: r => inr(r.net, true), cls: r => cls(r.net) },
+        { k: 'cum', label: 'Cumulative', right: true, get: r => r.cum, html: r => inr(r.cum) },
+    ];
+    const HIST_DEFAULT = { k: 'no', dir: 'desc' };
+
+    function heat(rows) {
+        const byYm = groupBy(rows, r => r.entry.slice(0, 7));
+        const years = [...new Set(rows.map(r => r.entry.slice(0, 4)))].sort();
+        let max = 1;
+        byYm.forEach(v => { max = Math.max(max, Math.abs(v.reduce((a, r) => a + r.net, 0))); });
+        const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        let h = '<table class="bc-heat"><thead><tr><th></th>' + mon.map(m => `<th>${m}</th>`).join('') + '<th>Year</th></tr></thead><tbody>';
+        years.forEach(y => {
+            let yt = 0;
+            h += `<tr><th>${y}</th>`;
+            for (let m = 1; m <= 12; m++) {
+                const v = byYm.get(y + '-' + String(m).padStart(2, '0'));
+                if (!v) { h += '<td></td>'; continue; }
+                const t = v.reduce((a, r) => a + r.net, 0); yt += t;
+                const a = 0.15 + 0.75 * Math.min(1, Math.abs(t) / max);
+                h += `<td style="background:${t >= 0 ? `rgba(22,163,74,${a})` : `rgba(220,38,38,${a})`}" title="${inr(t, true)} · ${v.length} trades">${Math.abs(t) >= 1000 ? (t / 1000).toFixed(1) + 'k' : Math.round(t)}</td>`;
+            }
+            h += `<td class="${cls(yt)}"><b>${inr(yt, true)}</b></td></tr>`;
+        });
+        return h + '</tbody></table>';
+    }
+
+    function paint() {
+        const rows = o.rows();
+        if (!rows.length) {
+            if (equityChart) { equityChart.destroy(); equityChart = null; }
+            box.innerHTML = `<div class="bc-empty">${o.empty()}</div>`;
+            return;
+        }
+        const s = stats(rows);
+        const first = rows[0].entry.slice(0, 10), last = rows[rows.length - 1].entry.slice(0, 10);
+
+        const dows = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        const byDow = groupBy(rows, r => (new Date(r.entry.slice(0, 10) + 'T00:00:00').getDay() + 6) % 7);
+        const dowEntries = dows.map((n, i) => byDow.has(i) ? { label: n, s: stats(byDow.get(i)) } : null).filter(Boolean);
+        const byYear = [...groupBy(rows, r => r.entry.slice(0, 4))].sort().map(([k, v]) => ({ label: k, s: stats(v) }));
+        const bySym = [...groupBy(rows, r => r.symbol)].map(([k, v]) => ({ label: k, s: stats(v) }));
+        const bySide = [...groupBy(rows, r => r.side === 'PE' ? 'Put Option Long' : 'Call Option Long')].map(([k, v]) => ({ label: k, s: stats(v) }));
+        const byStrat = o.groups().map(g => ({ label: `<i class="bc-dot" style="background:${g.color}"></i>${esc(g.name)}`,
+                                                plain: g.name, s: stats(rows.filter(r => r.sid === g.id)) }));
+        const byWhy = [...groupBy(rows, r => r.reason || 'unknown')].map(([k, v]) => ({ label: esc(k), s: stats(v) }));
+
+        const pages = Math.ceil(rows.length / PAGE);
+        if (page >= pages) page = pages - 1;
+        let cum = 0;
+        rows.forEach((r, i) => { cum += r.net; r.no = i + 1; r.cum = cum; });
+        const hist = sortRows('hist', HIST_COLS, rows, HIST_DEFAULT).slice(page * PAGE, page * PAGE + PAGE);
+
+        box.innerHTML = `
+          <div class="bc-meta">${esc(first)} → ${esc(last)} · ${esc(o.meta())}</div>
+          <div class="bc-cards">
+            ${card(basis() === 'gross' ? 'Gross P&amp;L' : 'Net P&amp;L', inr(s.net, true), basis() === 'gross' ? 'before brokerage (as Quantman)' : 'after brokerage', cls(s.net))}
+            ${card(basis() === 'gross' ? 'Net P&amp;L' : 'Gross P&amp;L', inr(basis() === 'gross' ? s.gross - s.brok : s.gross, true), basis() === 'gross' ? 'after brokerage' : 'before brokerage')}
+            ${card('Brokerage', inr(-s.brok), 'all trades')}
+            ${card('Trades', s.n, s.wins + ' wins · ' + s.losses + ' losses')}
+            ${card('Win rate', s.winRate.toFixed(2) + '%', 'win:loss ' + s.wins + ':' + s.losses)}
+            ${card('Profit factor', isFinite(s.pf) ? s.pf.toFixed(2) : '∞', 'gross win ÷ gross loss')}
+            ${card('Max drawdown', inr(-s.dd), s.ddDays + ' drawdown day' + (s.ddDays === 1 ? '' : 's'), 'bc-neg')}
+            ${card('Avg win / loss', inr(s.avgWin, true) + ' / ' + inr(s.avgLoss), 'per trade')}
+            ${card('Streak', s.winStreak + ' W / ' + s.lossStreak + ' L', 'unbroken, best / worst')}
+            ${card('Best trade', inr(s.best.net, true), esc(s.best.entry.slice(0, 10)) + ' · ' + esc(s.best.sname), 'bc-pos')}
+            ${card('Worst trade', inr(s.worst.net), esc(s.worst.entry.slice(0, 10)) + ' · ' + esc(s.worst.sname), 'bc-neg')}
+            ${card('Return / drawdown', s.dd > 0 ? (s.net / s.dd).toFixed(2) : '—', 'P&amp;L ÷ max drawdown')}
+          </div>
+
+          <div class="bc-sec">Equity curve <small>combined ${basis() === 'gross' ? 'gross' : 'net'} ₹ by trade date; thin lines are each ${o.groupLabel.toLowerCase()} alone</small></div>
+          <div class="bc-chart"><canvas class="bc-equity"></canvas></div>
+
+          <div class="bc-sec">P&amp;L breakdown</div>
+          <div class="bc-grid3">
+            <section class="bc-panel"><h4>By ${o.groupLabel.toLowerCase()}</h4>${breakdown('g-strat', byStrat, o.groupLabel)}</section>
+            <section class="bc-panel"><h4>By year</h4>${breakdown('g-year', byYear, 'Year')}</section>
+            <section class="bc-panel"><h4>By day of week (entry)</h4>${breakdown('g-dow', dowEntries, 'Day')}</section>
+            <section class="bc-panel"><h4>By instrument</h4>${breakdown('g-sym', bySym, 'Instrument')}</section>
+            <section class="bc-panel"><h4>By trade type</h4>${breakdown('g-side', bySide, 'Type')}</section>
+            <section class="bc-panel"><h4>By exit reason</h4>${breakdown('g-why', byWhy, 'Reason')}</section>
+          </div>
+          <section class="bc-panel bc-wide"><h4>Month by month</h4>
+          <div class="bc-scroll">${heat(rows)}</div></section>
+
+          <div class="bc-sec">Trade history <small>${rows.length} trades · click a header to sort</small>
+            <button type="button" class="bc-csv" data-csv="1">Download CSV</button></div>
+          <div class="bc-scroll"><table class="bc-tbl bc-hist">${gridHead('hist', HIST_COLS, HIST_DEFAULT)}<tbody>${
+            hist.map(r => '<tr>' + HIST_COLS.map(c =>
+                `<td class="${c.right ? 'r ' : ''}${c.cls ? c.cls(r) : ''}">${c.html(r)}</td>`).join('') + '</tr>').join('')
+          }</tbody></table></div>
+          <div class="bc-pager">${pager(page, pages)}</div>`;
+
+        drawEquity(rows);
+    }
+
+    function pager(p, n) {
+        if (n <= 1) return '';
+        const set = new Set([0, 1, p - 1, p, p + 1, n - 2, n - 1].filter(x => x >= 0 && x < n));
+        let out = '', prev = -1;
+        [...set].sort((a, b) => a - b).forEach(x => {
+            if (prev >= 0 && x - prev > 1) out += '<span>…</span>';
+            out += `<button type="button" data-page="${x}" class="${x === p ? 'on' : ''}">${x + 1}</button>`;
+            prev = x;
+        });
+        return out;
+    }
+
+    function drawEquity(rows) {
+        const cv = box.querySelector('canvas.bc-equity');
+        if (!cv || typeof Chart === 'undefined') return;
+        if (equityChart) { equityChart.destroy(); equityChart = null; }
+        const days = [...new Set(rows.map(r => r.entry.slice(0, 10)))].sort();
+        const series = (list) => {
+            const perDay = new Map();
+            list.forEach(r => { const d = r.entry.slice(0, 10); perDay.set(d, (perDay.get(d) || 0) + r.net); });
+            let c = 0;
+            return days.map(d => { c += perDay.get(d) || 0; return Math.round(c); });
+        };
+        const css = getComputedStyle(document.documentElement);
+        const grid = css.getPropertyValue('--oip-border').trim() || '#e5e7eb';
+        const datasets = [{
+            label: 'Combined', data: series(rows), borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.14)',
+            fill: true, borderWidth: 2, pointRadius: 0, tension: 0.15, order: 0,
+        }];
+        o.groups().forEach(g => {
+            datasets.push({ label: g.name, data: series(rows.filter(r => r.sid === g.id)), borderColor: g.color,
+                borderWidth: 1, pointRadius: 0, fill: false, tension: 0.15, order: 1, hidden: false });
+        });
+        equityChart = new Chart(cv, {
+            type: 'line', data: { labels: days, datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
+                           tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${inr(c.parsed.y, true)}` } } },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 10, font: { size: 10 } }, grid: { display: false } },
+                    y: { ticks: { callback: v => inr(v), font: { size: 10 } }, grid: { color: grid } },
+                },
+            },
+        });
+    }
+
+    function downloadCsv() {
+        const rows = o.rows();
+        const head = [o.groupLabel, 'Instrument', 'Type', 'Strike', 'Entry', 'Exit', 'Entry premium', 'Exit premium', 'Lots', 'Exit reason', 'Gross', 'Brokerage', 'Net'];
+        const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+        const csv = [head.map(q).join(',')].concat(rows.map(r => [r.sname, r.symbol, r.side, r.strike, r.entry, r.exit, r.ep, r.xp, r.lots,
+            r.reason, r.gross.toFixed(2), r.brok.toFixed(2), r.nb.toFixed(2)].map(q).join(','))).join('\n');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.download = o.csvName || 'combined.csv';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    box.addEventListener('click', (e) => {
+        const pg = e.target.closest('[data-page]');
+        if (pg) { page = parseInt(pg.dataset.page, 10); paint(); return; }
+        if (e.target.closest('[data-csv]')) { downloadCsv(); return; }
+        const th = e.target.closest('th[data-grid]');
+        if (th) {
+            const id = th.dataset.grid, k = th.dataset.k;
+            const cur = sorts[id] || (id === 'hist' ? HIST_DEFAULT : null);
+            sorts[id] = { k, dir: cur && cur.k === k && cur.dir === 'desc' ? 'asc' : 'desc' };
+            if (id === 'hist') page = 0;
+            const sc = box.closest('.bt-modal-body') || box, top = sc.scrollTop;
+            paint();
+            sc.scrollTop = top;
+        }
+    });
+    return { paint, resetPage: () => { page = 0; } };
+};
+
 /* Backtest page — "Combined" popup for the Simple Trader group.
  *
  * Runs every Simple Trader strategy (each on its own /api/backtest/* endpoint, with the
@@ -112,17 +405,9 @@
     let running = false, cancelled = false;
     // Quantman books gross (before brokerage), so Gross is the default for comparing with it.
     let basis = 'gross';
-    let modal = null, equityChart = null, page = 0;
-    const PAGE = 25;
-
-    const inr = (v, sign) => (v < 0 ? '-' : (sign && v > 0 ? '+' : '')) + '₹' + Math.round(Math.abs(v)).toLocaleString('en-IN');
-    // Compact ₹ for the breakdown panels: 2.53L, 12.4k, 850.
-    const inrc = (v, sign) => {
-        const a = Math.abs(v), sg = v < 0 ? '-' : (sign && v > 0 ? '+' : '');
-        return sg + '₹' + (a >= 1e5 ? (a / 1e5).toFixed(2) + 'L' : a >= 1e3 ? (a / 1e3).toFixed(1) + 'k' : Math.round(a));
-    };
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const cls = (v) => v > 0 ? 'bc-pos' : (v < 0 ? 'bc-neg' : '');
+    let modal = null, report = null;
+
     const todayIso = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 
     // ── Normalise one server trade into the combined book's row ──────────────────────────────
@@ -148,32 +433,6 @@
         DEFS.forEach(d => { if (selected.has(d.id)) state[d.id].trades.forEach(r => rows.push(r)); });
         rows.sort((a, b) => a.entry.localeCompare(b.entry) || a.sid.localeCompare(b.sid));
         return rows;
-    }
-
-    function stats(rows) {
-        const s = { n: rows.length, wins: 0, losses: 0, net: 0, gross: 0, brok: 0, gp: 0, gl: 0,
-                    peak: 0, dd: 0, ddDays: 0, winStreak: 0, lossStreak: 0, best: null, worst: null };
-        let w = 0, l = 0, cum = 0, peakIdx = -1;
-        rows.forEach((r, i) => {
-            s.net += r.net; s.gross += r.gross; s.brok += r.brok;
-            if (r.net > 0) { s.wins++; s.gp += r.net; w++; l = 0; }
-            else if (r.net < 0) { s.losses++; s.gl += -r.net; l++; w = 0; }
-            else { w = l = 0; }
-            s.winStreak = Math.max(s.winStreak, w); s.lossStreak = Math.max(s.lossStreak, l);
-            cum += r.net;
-            if (cum > s.peak) { s.peak = cum; peakIdx = i; }
-            if (s.peak - cum > s.dd) {
-                s.dd = s.peak - cum;
-                s.ddDays = new Set(rows.slice(peakIdx + 1, i + 1).map(x => x.entry.slice(0, 10))).size;
-            }
-            if (!s.best || r.net > s.best.net) s.best = r;
-            if (!s.worst || r.net < s.worst.net) s.worst = r;
-        });
-        s.winRate = s.n ? s.wins / s.n * 100 : 0;
-        s.pf = s.gl > 0 ? s.gp / s.gl : (s.gp > 0 ? Infinity : 0);
-        s.avgWin = s.wins ? s.gp / s.wins : 0;
-        s.avgLoss = s.losses ? -s.gl / s.losses : 0;
-        return s;
     }
 
     // ── Running ─────────────────────────────────────────────────────────────────────────────
@@ -253,7 +512,14 @@
         $('bcFrom').value = '2019-04-01';
         $('bcTo').value = todayIso();
         $('bcClose').addEventListener('click', close);
-        $('bcBasis').addEventListener('change', (e) => { basis = e.target.value; applyBasis(); page = 0; paintResults(); });
+        report = window.BtCombinedReport({
+            box: $('bcResults'), rows: book, basis: () => basis, csvName: 'combined_simpler_trader.csv',
+            groups: () => DEFS.filter(d => selected.has(d.id) && state[d.id].trades.length),
+            meta: () => `${selected.size} of ${DEFS.length} strategies`,
+            empty: () => running ? 'Running the strategies — results appear as each one finishes…'
+                : (DEFS.some(d => state[d.id].status === 'done') ? 'No trades for the selected strategies.' : 'Pick strategies above and press Run combined.'),
+        });
+        $('bcBasis').addEventListener('change', (e) => { basis = e.target.value; applyBasis(); report.resetPage(); paintResults(); });
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display !== 'none') close(); });
         $('bcRun').addEventListener('click', () => {
@@ -264,25 +530,12 @@
             const id = e.target.dataset && e.target.dataset.sid;
             if (!id) return;
             e.target.checked ? selected.add(id) : selected.delete(id);
-            page = 0; paintResults();
-        });
-        $('bcResults').addEventListener('click', (e) => {
-            const pg = e.target.closest('[data-page]');
-            if (pg) { page = parseInt(pg.dataset.page, 10); paintResults(true); return; }
-            if (e.target.id === 'bcCsv') { downloadCsv(); return; }
-            const th = e.target.closest('th[data-grid]');
-            if (th) {
-                const id = th.dataset.grid, k = th.dataset.k;
-                const cur = sorts[id] || (id === 'hist' ? HIST_DEFAULT : null);
-                sorts[id] = { k, dir: cur && cur.k === k && cur.dir === 'desc' ? 'asc' : 'desc' };
-                if (id === 'hist') page = 0;
-                const body = modal.querySelector('.bc-body'), top = body.scrollTop;
-                paintResults();
-                body.scrollTop = top;
-            }
+            report.resetPage(); paintResults();
         });
         paintStatus(); paintResults();
     }
+
+    function paintResults() { if (report) report.paint(); }
 
     function open() {
         if (!modal) build();
@@ -325,232 +578,6 @@
                 + `${sx.length > 1 ? 'Strategies' : 'Strategy'} ${esc(sx.map(d => d.name.split('.')[0]).join(' and '))} therefore cover that date onwards only, so the combined totals are lower than a full-history run would be.</span>`);
         }
         $('bcNote').innerHTML = notes.join('<br>');
-    }
-
-    // ── Results ─────────────────────────────────────────────────────────────────────────────
-    function card(label, value, sub, c) {
-        return `<div class="bc-card"><div class="bc-card-l">${label}</div><div class="bc-card-v ${c || ''}">${value}</div>${sub ? `<div class="bc-card-s">${sub}</div>` : ''}</div>`;
-    }
-
-    function groupBy(rows, keyFn) {
-        const m = new Map();
-        rows.forEach(r => {
-            const k = keyFn(r);
-            if (!m.has(k)) m.set(k, []);
-            m.get(k).push(r);
-        });
-        return m;
-    }
-
-    // ── Sortable grid: one renderer for every table in the popup ──────────────────────────
-    // cols: {k, label, get(row) → sort value, html(row) → cell html, cls(row)?, right?}
-    const sorts = {};      // grid id → {k, dir}
-    function sortRows(id, cols, data, dflt) {
-        const so = sorts[id] || dflt;
-        const col = so && cols.find(c => c.k === so.k);
-        if (!col) return data;
-        const sgn = so.dir === 'asc' ? 1 : -1;
-        return data.slice().sort((x, y) => {
-            const a = col.get(x), b = col.get(y);
-            return (typeof a === 'string' || typeof b === 'string'
-                ? String(a).localeCompare(String(b), undefined, { numeric: true })
-                : (a - b)) * sgn;
-        });
-    }
-    function gridHead(id, cols, dflt) {
-        const so = sorts[id] || dflt || {};
-        return '<thead><tr>' + cols.map(c => {
-            const on = so.k === c.k;
-            return `<th class="bc-sortable${c.right ? ' r' : ''}${on ? ' on ' + so.dir : ''}" data-grid="${id}" data-k="${c.k}">${c.label}<em></em></th>`;
-        }).join('') + '</tr></thead>';
-    }
-
-    function breakdown(id, entries, firstCol) {
-        const max = Math.max(1, ...entries.map(e => Math.abs(e.s.net)));
-        const cols = [
-            { k: 'name', label: firstCol, get: e => e.plain || e.label, html: e => e.label },
-            { k: 'n', label: 'Trades', right: true, get: e => e.s.n, html: e => e.s.n },
-            { k: 'win', label: 'Win%', right: true, get: e => e.s.winRate, html: e => e.s.winRate.toFixed(0) + '%' },
-            { k: 'net', label: basis === 'gross' ? 'Gross' : 'Net', right: true, get: e => e.s.net,
-              html: e => `${inrc(e.s.net, true)}<span class="bc-bar ${e.s.net < 0 ? 'neg' : ''}" style="width:${Math.abs(e.s.net) / max * 100}%"></span>`,
-              cls: e => cls(e.s.net) },
-            { k: 'avg', label: 'Avg', right: true, get: e => e.s.n ? e.s.net / e.s.n : 0, html: e => inrc(e.s.n ? e.s.net / e.s.n : 0, true), cls: e => cls(e.s.net) },
-        ];
-        const body = sortRows(id, cols, entries).map(e => '<tr>' + cols.map(c =>
-            `<td class="${c.right ? 'r ' : ''}${c.cls ? c.cls(e) : ''}">${c.html(e)}</td>`).join('') + '</tr>').join('');
-        return `<table class="bc-tbl">${gridHead(id, cols)}<tbody>${body}</tbody></table>`;
-    }
-
-    const HIST_COLS = [
-        { k: 'no', label: '#', get: r => r.no, html: r => r.no },
-        { k: 'strat', label: 'Strategy', get: r => r.sname, html: r => `<i class="bc-dot" style="background:${r.color}"></i>${esc(r.sname)}` },
-        { k: 'inst', label: 'Instrument', get: r => r.symbol + r.side, html: r => esc(r.symbol) + ' ' + esc(r.side) },
-        { k: 'entry', label: 'Entry', get: r => r.entry, html: r => esc(r.entry.slice(0, 16)) },
-        { k: 'exit', label: 'Exit', get: r => r.exit, html: r => esc(r.exit.slice(0, 16)) },
-        { k: 'strike', label: 'Strike', right: true, get: r => Number(r.strike) || 0, html: r => esc(r.strike ?? '—') },
-        { k: 'ep', label: 'Entry ₹', right: true, get: r => Number(r.ep) || 0, html: r => r.ep != null ? Number(r.ep).toFixed(2) : '—' },
-        { k: 'xp', label: 'Exit ₹', right: true, get: r => Number(r.xp) || 0, html: r => r.xp != null ? Number(r.xp).toFixed(2) : '—' },
-        { k: 'lots', label: 'Lots', right: true, get: r => r.lots, html: r => r.lots },
-        { k: 'why', label: 'Exit reason', get: r => r.reason, html: r => esc(r.reason) },
-        { k: 'net', label: 'P&amp;L', right: true, get: r => r.net, html: r => inr(r.net, true), cls: r => cls(r.net) },
-        { k: 'cum', label: 'Cumulative', right: true, get: r => r.cum, html: r => inr(r.cum) },
-    ];
-    const HIST_DEFAULT = { k: 'no', dir: 'desc' };
-
-    function heat(rows) {
-        const byYm = groupBy(rows, r => r.entry.slice(0, 7));
-        const years = [...new Set(rows.map(r => r.entry.slice(0, 4)))].sort();
-        let max = 1;
-        byYm.forEach(v => { max = Math.max(max, Math.abs(v.reduce((a, r) => a + r.net, 0))); });
-        const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        let h = '<table class="bc-heat"><thead><tr><th></th>' + mon.map(m => `<th>${m}</th>`).join('') + '<th>Year</th></tr></thead><tbody>';
-        years.forEach(y => {
-            let yt = 0;
-            h += `<tr><th>${y}</th>`;
-            for (let m = 1; m <= 12; m++) {
-                const v = byYm.get(y + '-' + String(m).padStart(2, '0'));
-                if (!v) { h += '<td></td>'; continue; }
-                const t = v.reduce((a, r) => a + r.net, 0); yt += t;
-                const a = 0.15 + 0.75 * Math.min(1, Math.abs(t) / max);
-                h += `<td style="background:${t >= 0 ? `rgba(22,163,74,${a})` : `rgba(220,38,38,${a})`}" title="${inr(t, true)} · ${v.length} trades">${Math.abs(t) >= 1000 ? (t / 1000).toFixed(1) + 'k' : Math.round(t)}</td>`;
-            }
-            h += `<td class="${cls(yt)}"><b>${inr(yt, true)}</b></td></tr>`;
-        });
-        return h + '</tbody></table>';
-    }
-
-    function paintResults(keepChart) {
-        if (!modal) return;
-        const rows = book();
-        const box = $('bcResults');
-        const anyDone = DEFS.some(d => state[d.id].status === 'done');
-        if (!rows.length) {
-            if (equityChart) { equityChart.destroy(); equityChart = null; }
-            box.innerHTML = `<div class="bc-empty">${running ? 'Running the strategies — results appear as each one finishes…' : (anyDone ? 'No trades for the selected strategies.' : 'Pick strategies above and press Run combined.')}</div>`;
-            return;
-        }
-        const s = stats(rows);
-        const first = rows[0].entry.slice(0, 10), last = rows[rows.length - 1].entry.slice(0, 10);
-
-        const dows = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-        const byDow = groupBy(rows, r => (new Date(r.entry.slice(0, 10) + 'T00:00:00').getDay() + 6) % 7);
-        const dowEntries = dows.map((n, i) => byDow.has(i) ? { label: n, s: stats(byDow.get(i)) } : null).filter(Boolean);
-        const byYear = [...groupBy(rows, r => r.entry.slice(0, 4))].sort().map(([k, v]) => ({ label: k, s: stats(v) }));
-        const bySym = [...groupBy(rows, r => r.symbol)].map(([k, v]) => ({ label: k, s: stats(v) }));
-        const bySide = [...groupBy(rows, r => r.side === 'PE' ? 'Put Option Long' : 'Call Option Long')].map(([k, v]) => ({ label: k, s: stats(v) }));
-        const byStrat = DEFS.filter(d => selected.has(d.id) && state[d.id].trades.length)
-            .map(d => ({ label: `<i class="bc-dot" style="background:${d.color}"></i>${esc(d.name)}`, plain: d.name, s: stats(state[d.id].trades) }));
-        const byWhy = [...groupBy(rows, r => r.reason || 'unknown')].map(([k, v]) => ({ label: esc(k), s: stats(v) }));
-
-        const pages = Math.ceil(rows.length / PAGE);
-        if (page >= pages) page = pages - 1;
-        let cum = 0;
-        rows.forEach((r, i) => { cum += r.net; r.no = i + 1; r.cum = cum; });
-        const hist = sortRows('hist', HIST_COLS, rows, HIST_DEFAULT).slice(page * PAGE, page * PAGE + PAGE);
-
-        box.innerHTML = `
-          <div class="bc-meta">${esc(first)} → ${esc(last)} · ${selected.size} of ${DEFS.length} strategies</div>
-          <div class="bc-cards">
-            ${card(basis === 'gross' ? 'Gross P&amp;L' : 'Net P&amp;L', inr(s.net, true), basis === 'gross' ? 'before brokerage (as Quantman)' : 'after brokerage', cls(s.net))}
-            ${card(basis === 'gross' ? 'Net P&amp;L' : 'Gross P&amp;L', inr(basis === 'gross' ? s.gross - s.brok : s.gross, true), basis === 'gross' ? 'after brokerage' : 'before brokerage')}
-            ${card('Brokerage', inr(-s.brok), 'all trades')}
-            ${card('Trades', s.n, s.wins + ' wins · ' + s.losses + ' losses')}
-            ${card('Win rate', s.winRate.toFixed(2) + '%', 'win:loss ' + s.wins + ':' + s.losses)}
-            ${card('Profit factor', isFinite(s.pf) ? s.pf.toFixed(2) : '∞', 'gross win ÷ gross loss')}
-            ${card('Max drawdown', inr(-s.dd), s.ddDays + ' drawdown day' + (s.ddDays === 1 ? '' : 's'), 'bc-neg')}
-            ${card('Avg win / loss', inr(s.avgWin, true) + ' / ' + inr(s.avgLoss), 'per trade')}
-            ${card('Streak', s.winStreak + ' W / ' + s.lossStreak + ' L', 'unbroken, best / worst')}
-            ${card('Best trade', inr(s.best.net, true), esc(s.best.entry.slice(0, 10)) + ' · ' + esc(s.best.sname), 'bc-pos')}
-            ${card('Worst trade', inr(s.worst.net), esc(s.worst.entry.slice(0, 10)) + ' · ' + esc(s.worst.sname), 'bc-neg')}
-            ${card('Return / drawdown', s.dd > 0 ? (s.net / s.dd).toFixed(2) : '—', 'P&amp;L ÷ max drawdown')}
-          </div>
-
-          <div class="bc-sec">Equity curve <small>combined net ₹ by trade date; thin lines are each strategy alone</small></div>
-          <div class="bc-chart"><canvas id="bcEquity"></canvas></div>
-
-          <div class="bc-sec">P&amp;L breakdown</div>
-          <div class="bc-grid3">
-            <section class="bc-panel"><h4>By strategy</h4>${breakdown('g-strat', byStrat, 'Strategy')}</section>
-            <section class="bc-panel"><h4>By year</h4>${breakdown('g-year', byYear, 'Year')}</section>
-            <section class="bc-panel"><h4>By day of week (entry)</h4>${breakdown('g-dow', dowEntries, 'Day')}</section>
-            <section class="bc-panel"><h4>By instrument</h4>${breakdown('g-sym', bySym, 'Instrument')}</section>
-            <section class="bc-panel"><h4>By trade type</h4>${breakdown('g-side', bySide, 'Type')}</section>
-            <section class="bc-panel"><h4>By exit reason</h4>${breakdown('g-why', byWhy, 'Reason')}</section>
-          </div>
-          <section class="bc-panel bc-wide"><h4>Month by month</h4>
-          <div class="bc-scroll">${heat(rows)}</div></section>
-
-          <div class="bc-sec">Trade history <small>${rows.length} trades · click a header to sort</small>
-            <button type="button" id="bcCsv" class="bc-csv">Download CSV</button></div>
-          <div class="bc-scroll"><table class="bc-tbl bc-hist">${gridHead('hist', HIST_COLS, HIST_DEFAULT)}<tbody>${
-            hist.map(r => '<tr>' + HIST_COLS.map(c =>
-                `<td class="${c.right ? 'r ' : ''}${c.cls ? c.cls(r) : ''}">${c.html(r)}</td>`).join('') + '</tr>').join('')
-          }</tbody></table></div>
-          <div class="bc-pager">${pager(page, pages)}</div>`;
-
-        drawEquity(rows);
-    }
-
-    function pager(p, n) {
-        if (n <= 1) return '';
-        const set = new Set([0, 1, p - 1, p, p + 1, n - 2, n - 1].filter(x => x >= 0 && x < n));
-        let out = '', prev = -1;
-        [...set].sort((a, b) => a - b).forEach(x => {
-            if (prev >= 0 && x - prev > 1) out += '<span>…</span>';
-            out += `<button type="button" data-page="${x}" class="${x === p ? 'on' : ''}">${x + 1}</button>`;
-            prev = x;
-        });
-        return out;
-    }
-
-    function drawEquity(rows) {
-        const cv = $('bcEquity');
-        if (!cv || typeof Chart === 'undefined') return;
-        if (equityChart) { equityChart.destroy(); equityChart = null; }
-        const days = [...new Set(rows.map(r => r.entry.slice(0, 10)))].sort();
-        const series = (list) => {
-            const perDay = new Map();
-            list.forEach(r => { const d = r.entry.slice(0, 10); perDay.set(d, (perDay.get(d) || 0) + r.net); });
-            let c = 0;
-            return days.map(d => { c += perDay.get(d) || 0; return Math.round(c); });
-        };
-        const css = getComputedStyle(document.documentElement);
-        const grid = css.getPropertyValue('--oip-border').trim() || '#e5e7eb';
-        const datasets = [{
-            label: 'Combined', data: series(rows), borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.14)',
-            fill: true, borderWidth: 2, pointRadius: 0, tension: 0.15, order: 0,
-        }];
-        DEFS.forEach(d => {
-            if (!selected.has(d.id) || !state[d.id].trades.length) return;
-            datasets.push({ label: d.name, data: series(rows.filter(r => r.sid === d.id)), borderColor: d.color,
-                borderWidth: 1, pointRadius: 0, fill: false, tension: 0.15, order: 1, hidden: false });
-        });
-        equityChart = new Chart(cv, {
-            type: 'line', data: { labels: days, datasets },
-            options: {
-                responsive: true, maintainAspectRatio: false, animation: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } },
-                           tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${inr(c.parsed.y, true)}` } } },
-                scales: {
-                    x: { ticks: { maxTicksLimit: 10, font: { size: 10 } }, grid: { display: false } },
-                    y: { ticks: { callback: v => inr(v), font: { size: 10 } }, grid: { color: grid } },
-                },
-            },
-        });
-    }
-
-    function downloadCsv() {
-        const rows = book();
-        const head = ['Strategy', 'Instrument', 'Type', 'Strike', 'Entry', 'Exit', 'Entry premium', 'Exit premium', 'Lots', 'Exit reason', 'Gross', 'Brokerage', 'Net'];
-        const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-        const csv = [head.map(q).join(',')].concat(rows.map(r => [r.sname, r.symbol, r.side, r.strike, r.entry, r.exit, r.ep, r.xp, r.lots,
-            r.reason, r.gross.toFixed(2), r.brok.toFixed(2), r.nb.toFixed(2)].map(q).join(','))).join('\n');
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-        a.download = 'combined_simpler_trader.csv';
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
     // ── Header button: only for the Simple Trader group ───────────────────────────────────

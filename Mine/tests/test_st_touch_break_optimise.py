@@ -92,3 +92,18 @@ def test_timeframes_are_searched_together_and_ranked_on_one_board():
     assert res['timeframes'] == list(stbo.TIMEFRAMES)
     assert 'timeframe' in res['swept'] and {r['timeframe'] for r in res['results']} >= {'3minute'}
     assert res['current']['timeframe'] == '3minute'
+
+
+def test_priced_rows_carry_their_book_for_the_combined_popup(monkeypatch):
+    # The 🧩 Combined popup merges ticked rows on `book` ([entry minute, net ₹] per trade); with the
+    # option leg stubbed to the index trade itself, the book must add up to the row's own net ₹.
+    df = _bars()
+    res = stbo.optimise(df, {'st_period': 10, 'st_mult': 2}, from_date='2026-01-01', top=5)
+    monkeypatch.setattr(stbo, 'attach_option_legs', lambda sym, batch, *a, **k: (batch, {'lot': 65}))
+    stbo.verify_on_option(res, df, None, {'st_period': 10, 'st_mult': 2}, 'NIFTY', '3minute', [],
+                          '2026-01-01', shortlist=2)
+    for row in res['results'] + [res['current']]:
+        assert len(row['book']) == row['total_trades']
+        assert all(len(e) == len(stbo.BOOK_FIELDS) and len(e[0]) == 16 for e in row['book'])
+        net = stbo.BOOK_FIELDS.index('net')
+        assert abs(sum(e[net] for e in row['book']) - row['net_rs']) <= len(row['book'])   # ₹1 rounding per trade

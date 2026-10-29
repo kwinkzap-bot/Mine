@@ -55,6 +55,9 @@
             <button id="btCombinedBtn" type="button" title="Run every Simple Trader strategy and see them merged into one book" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🧩 Combined</button>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
+            <!-- 🧩 Combined: every board of this sweep in one full-size popup; shown only while the Best Params boards are -->
+            <button type="button" id="sbrOptCombinedBtn" class="btn-optimise" style="display:none;"
+                    title="Open every Best Params board of this run in one full-size popup — sorting, USE and DEFAULT work there too">🧩 Combined</button>
             <button id="smGoLiveBtn" class="btn-sm-golive-main" style="display:none;">🚀 Go Live</button>
         </div>
     </div>
@@ -2442,6 +2445,8 @@
 
             <!-- ST + BB + RSI + R1/S1 Find Best Params — one flat leaderboard on INDEX points -->
             <div id="stBbRsiOptimisePanel" style="display:none;">
+                <div id="sbrOptBody">
+                <div id="sbrOptMainBoard">
                 <div class="opt-header">
                     <div style="display:flex;align-items:center;gap:8px;">
                         <h4 id="sbrOptTitle" style="margin:0;">🚀 ST + BB + RSI Best Params</h4>
@@ -2450,6 +2455,7 @@
                 </div>
                 <div class="opt-table-wrap">
                     <div id="sbrOptGrid"></div>
+                </div>
                 </div>
                 <!-- ALL Indicators: the positional board (1 Hour / 1 Day) under the intraday one -->
                 <div id="sbrOptPosBoard" style="display:none;margin-top:16px;">
@@ -2473,6 +2479,29 @@
                     </div>
                     <div class="opt-table-wrap">
                         <div id="sbrOptThirdGrid"></div>
+                    </div>
+                </div>
+                </div>
+            </div>
+
+            <div id="sbrOptCombinedModal" class="bt-modal-overlay bc-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Combined Best Params">
+                <div class="bt-modal-box bc-box">
+                    <div class="bt-modal-hdr">
+                        <div class="bt-modal-hdr-text">
+                            <div class="bt-modal-title">🧩 Combined — Best Params</div>
+                            <div class="bt-modal-subtitle">The ticked rows of this run merged into one book. ₹ = premium points × lots × lot size, as BACKTEST books it.</div>
+                        </div>
+                        <div class="bc-dates">
+                            <label>P&amp;L <select id="sbrCombBasis"><option value="net">Net of brokerage</option><option value="gross">Gross</option></select></label>
+                            <button type="button" id="sbrCombOptimize" class="bc-run"
+                                    title="Search the rows for the set whose combined book has the best net P&amp;L ÷ max drawdown, and tick only those">⚡ Optimize</button>
+                        </div>
+                        <button type="button" id="sbrOptCombinedClose" class="bt-modal-close" title="Close (Esc)">✕</button>
+                    </div>
+                    <div class="bt-modal-body bc-body">
+                        <div id="sbrCombChips"></div>
+                        <div class="bc-note" id="sbrCombNote"></div>
+                        <div id="sbrCombReport"></div>
                     </div>
                 </div>
             </div>

@@ -1205,3 +1205,16 @@ body.ocean-theme .sw-wrap {
 /* A yes/no field is one line — label left, a normal-sized box right — not a stacked 30px box. */
 .bt-left .form-group:has(> input[type="checkbox"]) { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; margin: 0; }
 .bt-left .form-group > input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; margin: 0; flex: none; accent-color: #2962ff; cursor: pointer; }
+
+/* Find Best Params → 🧩 Combined: the run's rows as tick chips, grouped by board, over the same
+   combined-book report as the Simple Trader "Combined" popup (.bc-* in backtest_combined.css). */
+.sbr-comb-gl { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--oip-text); margin: 6px 0 6px; }
+.sbr-comb-gl small { font-weight: 400; color: var(--oip-metric-lbl); }
+.sbr-comb-gl a { font-weight: 400; font-size: 11px; }
+.sbr-comb-gl .bc-dot { margin-right: 0; }
+#sbrCombChips .bc-chip b { font-weight: 600; min-width: 0; }
+/* Chips tile the popup's width in equal columns instead of one long chip per line. */
+#sbrCombChips .bc-strats { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 470px), 1fr)); gap: 6px 8px; }
+#sbrCombChips .bc-chip { min-width: 0; padding: 4px 8px; gap: 5px; font-size: 10.5px; }
+#sbrCombChips .bc-chip input, #sbrCombChips .bc-chip i, #sbrCombChips .bc-chip span { flex: none; }
+#sbrCombChips .bc-chip span { margin-left: auto; white-space: nowrap; font-size: 10px; }

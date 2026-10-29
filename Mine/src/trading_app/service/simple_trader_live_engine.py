@@ -103,14 +103,19 @@ SPECS: Dict[int, Spec] = {s.n: s for s in (
          fixed=dict(use_cpr_narrow=True),
          rule='SENSEX 5-min: close above SuperTrend(10,1.5), traditional R1 and BB(20,2.5) upper, RSI(14) 68-80,'
               ' %R(14) > -10, narrow CPR → buy the ≈500 CE; exit on a close below SuperTrend'),
-    # 8 is the Mine group's NIFTY tab, not one of the seven in the Simple Trader group. Bounce only (a
-    # Through setup is known only at the break candle's close); stop_touch 0 = exit on a close past the line.
-    Spec(8, 'ST Touch Break', StTouchBreakEngine, 'tb', 'NIFTY', 'spot', 3, 'long', 250, '09:15',
+    # 8 is the Mine group's "NIFTY - Both - 3m" tab, not one of the seven in the Simple Trader group. Bounce
+    # only (a Through setup is known only at the break candle's close); stop_touch 0 = exit on a close past the
+    # line. min_body_pct / outside_bar 'close' read the break candle's close, so the entry is confirmed there
+    # (st_touch_break_live_engine). The numbers are the Backtest form's of 2026-10-28; `fixed` holds the
+    # defaults of the two non-numeric settings (ST8_DIRECTION, ST8_OUTSIDE_BAR).
+    Spec(8, 'ST Touch Break', StTouchBreakEngine, 'tb', 'NIFTY', 'spot', 3, 'long', 250, '10:00',
          0, 0, 0, 5,
-         dict(st_period=7, st_mult=1.5, stop_touch=1, min_wick_pct=25.0, touch_tol_pct=0.0),
-         rule='NIFTY 3-min: a candle whose wick (≥ 25 % of its range) touches the SuperTrend(7,1.5) line and closes on the trend'
-              ' side arms the next candle; a break of its high buys the ≈250 CE (Bounce); exit when the index trades through'
-              ' the previous candle\'s SuperTrend line'),
+         dict(st_period=7, st_mult=1.5, stop_touch=1, min_wick_pct=40.0, min_body_pct=50.0, touch_tol_pct=0.0),
+         fixed=dict(direction='both', outside_bar='close'),
+         rule='NIFTY 3-min from 10:00: a candle whose wick (≥ 40 % of its range) touches the SuperTrend(7,1.5) line and closes'
+              ' on the trend side arms the next candle; if that candle breaks the touch high (low) and closes the way it broke'
+              ' with a body ≥ 50 % of its range (an outside bar goes the way it closes) the ≈250 CE (PE) is bought at its close'
+              ' (Bounce, both directions); exit when the index trades through the previous candle\'s SuperTrend line'),
 )}
 
 
@@ -217,7 +222,7 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any]) -> List[D
         return []
     spec = SPECS[int(s['spec'])]
     if spec.kind == 'tb':
-        return tb.on_bar(day, bars, dict(s, direction=s.get('direction', spec.side)), spec.bar)
+        return tb.on_bar(day, bars, dict(spec.fixed, **s), spec.bar)
     rd = _Read(spec, bars, s)
     if rd.ts[:10] != day['date'] or rd.ts == day.get('last_bar'):
         return []

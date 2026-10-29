@@ -5516,6 +5516,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderSbrBoard(data, gridId, metaEl) {
+        const gridEl = document.getElementById(gridId);
+        if (gridEl) gridEl._board = data;           // the 🧩 Combined popup's chips and cards read it
         if (data.timeframes && !data.timeframes.length) {
             if (metaEl) metaEl.textContent = 'No candles for these timeframes in the range.';
             _mountSingleOptGrid(gridId, [], sbrStrategyCols([]), 'profit_factor', () => {});
@@ -5576,6 +5578,196 @@ document.addEventListener('DOMContentLoaded', function() {
                             strat && data.strategy === 'st_touch_break' ? withDirection(saveStbDefault, data.direction) : null);
     }
 
+    // 🧩 Combined: every option-priced row of this run as a tick chip (grouped by board), and the
+    // ticked rows merged into one book under the same report as the Simple Trader "Combined" popup —
+    // cards, equity curve, P&L breakdown, month by month, trade history. Each priced row carries its
+    // own trades (`book`, BOOK_FIELDS in st_touch_break_optimise.py), so the book is the real one.
+    (function wireSbrCombined() {
+        const btn    = document.getElementById('sbrOptCombinedBtn');
+        const modal  = document.getElementById('sbrOptCombinedModal');
+        const chips  = document.getElementById('sbrCombChips');
+        const note   = document.getElementById('sbrCombNote');
+        const optBtn = document.getElementById('sbrCombOptimize');
+        const basisSel = document.getElementById('sbrCombBasis');
+        if (!btn || !modal || !chips || typeof window.BtCombinedReport !== 'function') return;
+        // A contained ancestor (main.css's .container has content-visibility:auto) makes
+        // position:fixed relative to IT, not the viewport — so the popup lives on <body>.
+        document.body.appendChild(modal);
+        // The button sits in the toolbar beside Find Best Params and follows the boards' panel.
+        const panel = document.getElementById('stBbRsiOptimisePanel');
+        if (panel) {
+            const sync = () => { btn.style.display = panel.style.display === 'none' ? 'none' : ''; };
+            new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['style'] });
+            sync();
+        }
+        const BOARDS = [['sbrOptMainBoard', 'sbrOptGrid', 'sbrOptTitle'],
+                        ['sbrOptPosBoard', 'sbrOptPosGrid', 'sbrOptPosTitle'],
+                        ['sbrOptThirdBoard', 'sbrOptThirdGrid', 'sbrOptThirdTitle']];
+        const BOARD_COLORS = ['#2563eb', '#dc2626', '#16a34a'];
+        const ROW_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777',
+                            '#65a30d', '#0f766e', '#9333ea', '#ea580c', '#475569'];
+        const B = { entry: 0, exit: 1, side: 2, strike: 3, ep: 4, xp: 5, lots: 6, reason: 7, gross: 8, net: 9 };
+        const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        let boards = [], items = [], picks = new Set(), runKey = null;
+
+        // The board's name is its heading's first line, without the panel's "… Best Params · " prefix.
+        const nameOf = (titleId, i) => {
+            const h = document.getElementById(titleId);
+            const tmp = document.createElement('div');
+            tmp.innerHTML = h ? (h.innerHTML.split(/<br\s*\/?>/i)[0] || '') : '';
+            return tmp.textContent.replace(/^.*Best Params · /, '').trim() || `Board ${i + 1}`;
+        };
+
+        // Every row that carries its trades, in the board's own ranking (★ = the page's settings).
+        function collect() {
+            boards = BOARDS.map(([wrapId, gridId, titleId], i) => {
+                const wrap = document.getElementById(wrapId), grid = document.getElementById(gridId);
+                if (!wrap || !grid || wrap.style.display === 'none' || !grid._board) return null;
+                return { data: grid._board, color: BOARD_COLORS[i], name: nameOf(titleId, i) };
+            }).filter(Boolean);
+            items = [];
+            boards.forEach(b => {
+                const swept = (b.data.swept || []);
+                const label = (r) => swept.filter(k => r[k] !== undefined)
+                    .map(k => k === 'timeframe' ? (SBR_TF_LABEL[r[k]] || r[k]) : r[k]).join(' / ');
+                const title = (r) => swept.filter(k => r[k] !== undefined)
+                    .map(k => `${(SBR_PARAM[k] || [k])[0]} ${k === 'timeframe' ? (SBR_TF_LABEL[r[k]] || r[k]) : r[k]}`).join(' · ');
+                (b.data.results || []).forEach((r, i) => {
+                    if (Array.isArray(r.book) && r.book.length) items.push({ r, b, tag: `#${i + 1}`, label: label(r), title: title(r) });
+                });
+                const cur = b.data.current;
+                const twin = (x) => (b.data.results || []).some(r => Array.isArray(r.book) && r.book.length === x.book.length
+                    && r.net_rs === x.net_rs && r.book[0][0] === x.book[0][0]);   // the ★ row is often a ranked row too
+                if (cur && Array.isArray(cur.book) && cur.book.length && !twin(cur))
+                    items.push({ r: cur, b, tag: '★ Default', label: label(cur), title: title(cur) });
+            });
+            items.forEach((it, i) => { it.id = 'r' + i; it.name = `${it.b.name} ${it.tag}`; });
+            // A new sweep starts over on its best row: the first board's leader.
+            const key = boards.map(b => b.data);
+            if (runKey === null || key.length !== runKey.length || key.some((d, i) => d !== runKey[i])) {
+                runKey = key;
+                picks = new Set(items.length ? [items[0].r] : []);
+                note.textContent = '';
+            }
+        }
+
+        const picked = () => items.filter(it => picks.has(it.r));
+        let rowsCache = null;
+        function rows() {
+            if (rowsCache) return rowsCache;
+            const gross = basisSel && basisSel.value === 'gross';
+            const out = [];
+            picked().forEach((it, k) => {
+                it.color = ROW_COLORS[k % ROW_COLORS.length];
+                it.r.book.forEach(e => {
+                    const g = Number(e[B.gross]) || 0, nb = Number(e[B.net]) || 0;
+                    out.push({ sid: it.id, sname: it.name, color: it.color, symbol: it.b.data.symbol || 'NIFTY',
+                               side: e[B.side], strike: e[B.strike], entry: e[B.entry], exit: e[B.exit],
+                               ep: e[B.ep], xp: e[B.xp], lots: e[B.lots], reason: e[B.reason],
+                               gross: g, brok: g - nb, nb, net: gross ? g : nb });
+                });
+            });
+            out.sort((a, b) => a.entry.localeCompare(b.entry) || a.sid.localeCompare(b.sid));
+            return (rowsCache = out);
+        }
+        const report = window.BtCombinedReport({
+            box: document.getElementById('sbrCombReport'), rows, groupLabel: 'Row',
+            basis: () => (basisSel && basisSel.value) || 'net', csvName: 'combined_best_params.csv',
+            groups: () => picked().map(it => ({ id: it.id, name: it.name, color: it.color })),
+            meta: () => `${picks.size} of ${items.length} rows`,
+            empty: () => items.length ? 'Tick rows above — their trades merge into one book here.'
+                : 'This run\'s rows carry no trades — run Find Best Params again (the rows are re-priced on the option with their trades).',
+        });
+
+        function paintChips() {
+            chips.innerHTML = boards.map(b => {
+                const mine = items.filter(it => it.b === b);
+                if (!mine.length) return '';
+                const n = mine.filter(it => picks.has(it.r)).length;
+                return `<div class="sbr-comb-gl"><i class="bc-dot" style="background:${b.color}"></i>${esc(b.name)}
+                    <small>${n} of ${mine.length} ticked</small>
+                    <a href="#" data-all="${esc(b.name)}">all</a><a href="#" data-none="${esc(b.name)}">none</a></div>
+                    <div class="bc-strats">${mine.map(it => `<label class="bc-chip done" title="${esc(it.title)}">
+                        <input type="checkbox" data-item="${it.id}" ${picks.has(it.r) ? 'checked' : ''}>
+                        ${picks.has(it.r) ? `<i style="background:${it.color}"></i>` : ''}<b>${esc(it.tag)} · ${esc(it.label)}</b>
+                        <span>${it.r.total_trades} trades · ₹${Math.round(it.r.net_rs || 0).toLocaleString('en-IN')}</span></label>`).join('')}</div>`;
+            }).join('');
+        }
+        function paint() {
+            rowsCache = null;
+            report.resetPage();
+            rows();                      // assigns each ticked row its colour before the chips draw
+            paintChips();
+            report.paint();
+        }
+
+        // One book from several rows' trades, merged in entry order — on NET ₹, whatever the P&L box shows.
+        function bookStats(list) {
+            const all = [].concat(...list.map(it => it.r.book)).sort((a, b) => a[B.entry] < b[B.entry] ? -1 : a[B.entry] > b[B.entry] ? 1 : 0);
+            let cum = 0, peak = 0, dd = 0;
+            all.forEach(e => { cum += Number(e[B.net]) || 0; peak = Math.max(peak, cum); dd = Math.max(dd, peak - cum); });
+            return { net: cum, dd, score: dd > 0 ? cum / dd : (cum > 0 ? Infinity : 0) };
+        }
+
+        // ⚡ Optimize: greedy forward search on the merged books — start from the best single row,
+        // keep adding the row that raises net ÷ max drawdown most, stop when none does.
+        function optimize() {
+            if (!items.length) { note.textContent = 'No row of this run carries its trades — run Find Best Params again.'; return; }
+            let chosen = [], best = null;
+            items.forEach(it => { const st = bookStats([it]); if (st.net > 0 && (!best || st.score > best.score)) { best = st; chosen = [it]; } });
+            if (!best) { note.textContent = 'No row made a net profit — nothing to combine.'; return; }
+            const single = best;
+            for (;;) {
+                let step = null;
+                items.forEach(it => {
+                    if (chosen.includes(it)) return;
+                    const st = bookStats([...chosen, it]);
+                    if (st.score > (step ? step.st.score : best.score) + 1e-9) step = { it, st };
+                });
+                if (!step) break;
+                chosen.push(step.it); best = step.st;
+            }
+            picks = new Set(chosen.map(it => it.r));
+            const inr0 = (v) => '₹' + Math.round(v).toLocaleString('en-IN');
+            note.textContent = `⚡ Optimize searched ${items.length} rows: ${chosen.length} row${chosen.length > 1 ? 's' : ''} `
+                + `give net ${inr0(best.net)} on a max drawdown of ${inr0(best.dd)} (net ÷ DD ${best.score.toFixed(2)}`
+                + (chosen.length > 1 ? `; the best single row alone: ${single.score.toFixed(2)}` : '; no row added to it improved that')
+                + '). Only those are ticked.';
+            paint();
+        }
+
+        const close = () => {
+            if (modal.style.display === 'none') return;
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+        };
+        btn.addEventListener('click', () => {
+            collect(); paint();
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        });
+        chips.addEventListener('change', (e) => {
+            const it = items.find(x => x.id === (e.target.dataset && e.target.dataset.item));
+            if (!it) return;
+            e.target.checked ? picks.add(it.r) : picks.delete(it.r);
+            paint();
+        });
+        chips.addEventListener('click', (e) => {
+            const a = e.target.closest('[data-all],[data-none]');
+            if (!a) return;
+            e.preventDefault();
+            const all = a.hasAttribute('data-all'), name = a.dataset.all || a.dataset.none;
+            items.filter(it => it.b.name === name).forEach(it => all ? picks.add(it.r) : picks.delete(it.r));
+            paint();
+        });
+        optBtn?.addEventListener('click', optimize);
+        basisSel?.addEventListener('change', paint);
+        document.getElementById('sbrOptCombinedClose')?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+        window._sbrCombinedClose = close;
+    })();
+
     // A direction board's Use / Default also sets the Direction box the board was swept for.
     function withDirection(fn, direction) {
         if (!direction) return fn;
@@ -5610,6 +5802,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const optimBtn = document.getElementById('runOptimiseBtn');
         const origText = optimBtn ? optimBtn.textContent : '';
         const panel    = document.getElementById('stBbRsiOptimisePanel');
+        window._sbrCombinedClose?.();
         if (optimBtn) { optimBtn.textContent = '⏳ Running…'; optimBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
         const myRun = ++_sbrOptRun;

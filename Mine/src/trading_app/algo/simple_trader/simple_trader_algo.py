@@ -59,11 +59,12 @@ PROFILES: Dict[int, SimpleProfile] = {n: SimpleProfile(sp) for n, sp in sim.SPEC
 
 def _direction(username, p: SimpleProfile) -> str:
     """Seven strategies are one-sided by their rule. ST Touch Break (8) is the Mine group's and takes
-    the tab's choice — long (BUY, the default), short or both — read at each setup."""
+    the tab's choice — long (BUY), short or both (the default) — read at each setup."""
     if p.spec.kind != 'tb':
         return p.spec.side
-    v = _uvar(username, f'{p.pfx}_DIRECTION', p.spec.side).lower()
-    return v if v in ('long', 'short', 'both') else p.spec.side
+    dflt = p.spec.fixed.get('direction', p.spec.side)
+    v = _uvar(username, f'{p.pfx}_DIRECTION', dflt).lower()
+    return v if v in ('long', 'short', 'both') else dflt
 
 
 def settings(username, p: SimpleProfile) -> Dict[str, Any]:
@@ -82,6 +83,9 @@ def settings(username, p: SimpleProfile) -> Dict[str, Any]:
         'enabled': _uvar(username, f'{p.pfx}_ENABLED', 'true').lower() != 'false',
     }
     s['backstop_pct'] = s['sl_pct']            # the broker-side SL-M rests at the initial stop
+    if sp.kind == 'tb':                        # an outside break candle: the side it closes on, or the first crossed
+        v = _uvar(username, f'{p.pfx}_OUTSIDE_BAR', sp.fixed.get('outside_bar', 'first')).lower()
+        s['outside_bar'] = v if v in ('close', 'first') else sp.fixed.get('outside_bar', 'first')
     for k, v in sp.params.items():
         n = _num(username, f'{p.pfx}_{k.upper()}', v)
         s[k] = int(n) if isinstance(v, int) and not isinstance(v, bool) else n
@@ -139,14 +143,22 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         t, kind = ev['trade'], ev['event']
         if self.spec.kind == 'tb' and kind in ('armed', 'expired', 'missed'):
             sg = t.get('signal') or {}
+            up = t['type'] == 'Long'
             if kind == 'armed':
                 self._note(f"#{t['n']} {t['type']}: touch candle {t['signal_bar'][11:16]} — SuperTrend {sg.get('supertrend')}, "
-                           f"waiting for the index to trade {'above' if t['type'] == 'Long' else 'below'} {t['level']:,.1f} "
-                           f"in the next candle")
+                           + (f"waiting for the next candle to close {'above' if up else 'below'} {t['level']:,.1f} "
+                              f"(body ≥ {s.get('min_body_pct', 0):g}% of its range, the way it broke)" if t.get('confirm') else
+                              f"waiting for the index to trade {'above' if up else 'below'} {t['level']:,.1f} in the next candle"))
             elif kind == 'expired':
-                self._note(f"#{t['n']} {t['type']}: the {t['level']:,.1f} level was not crossed in the break candle — setup dropped")
+                self._note(f"#{t['n']} {t['type']}: {t['error']} — setup dropped" if t.get('error') else
+                           f"#{t['n']} {t['type']}: the {t['level']:,.1f} level was not crossed in the break candle — setup dropped")
             else:
                 self._note(f"#{t['n']} {t['type']}: {t.get('error')}")
+            return
+        if self.spec.kind == 'tb' and kind == 'entry' and ev.get('stale'):
+            # confirmed at a close a restart is only now catching up on: the break is minutes old, not chased
+            t.update(status='missed', legs={}, error='the break candle closed while the algo was not watching — not chased')
+            self._note(f"#{t['n']} {t['type']}: {t['error']}")
             return
         super()._act(ev, now, s)
 

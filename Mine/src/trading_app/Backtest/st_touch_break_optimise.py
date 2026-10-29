@@ -251,6 +251,19 @@ def optimise_current(df: pd.DataFrame, data: Dict[str, Any], from_date: str, bar
     return out
 
 
+BOOK_FIELDS = ('entry', 'exit', 'side', 'strike', 'entry_premium', 'exit_premium', 'lots', 'reason',
+               'gross', 'net')
+
+
+def book_entry(t: Dict[str, Any]) -> list:
+    """One priced trade as a row of BOOK_FIELDS."""
+    num = lambda v, nd=2: round(float(v), nd) if v is not None else None      # noqa: E731
+    return [str(t.get('entry_time') or '')[:16], str(t.get('exit_time') or '')[:16],
+            t.get('option_type') or '', t.get('strike'), num(t.get('entry_premium')),
+            num(t.get('exit_premium')), int(t.get('lots') or 1), t.get('exit_reason') or '',
+            num(t.get('gross_pnl_rupees'), 0), num(t.get('pnl_rupees'), 0)]
+
+
 def verify_on_option(res: Dict[str, Any], df: pd.DataFrame, minutes: pd.DataFrame, data: Dict[str, Any],
                      symbol: str, interval: str, calendar, start_date: str,
                      progress: Optional[Callable] = None, shortlist: int = SHORTLIST) -> None:
@@ -291,6 +304,10 @@ def verify_on_option(res: Dict[str, Any], df: pd.DataFrame, minutes: pd.DataFram
         out.update(index_pnl=row['total_pnl'], index_pf=row['profit_factor'],
                    unpriced=info.get('unpriced', 0), reentries=info.get('reentries', 0),
                    recent_pnl=round(sum(t['pnl'] for t in priced if t['entry_time'][:10] >= cut), 2))
+        # The row's own trades, compact, one array each — [entry, exit, CE/PE, strike, entry ₹, exit ₹,
+        # lots, exit reason, gross ₹, net ₹] (BOOK_FIELDS): the 🧩 Combined popup merges the ticked
+        # rows on them into one book — cards, equity curve, breakdowns and trade history.
+        out['book'] = [book_entry(t) for t in priced if t.get('pnl_rupees') is not None]
         if row is cur:
             current = out
         else:

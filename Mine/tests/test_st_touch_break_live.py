@@ -211,18 +211,23 @@ def test_profile_8_is_the_mine_algo_with_its_own_flags_and_files():
     assert api._STBB_FLAGS['st8'] == 'ST8'
 
 
-def test_settings_default_to_the_backtest_form_buy_only_bounce_touch_stop_no_premium_stop(paper8, monkeypatch):
+def test_settings_default_to_the_backtest_form_both_bounce_touch_stop_body_50_no_premium_stop(paper8, monkeypatch):
+    # the Backtest form of 2026-10-28: "NIFTY - Both - 3m"
     s = algo.settings('u', algo.PROFILES[8])
-    assert (s['mode'], s['direction'], s['premium'], s['sl_pct'], s['tsl_x']) == ('paper', 'long', 250, 0, 0)
-    assert (s['st_period'], s['st_mult'], s['stop_touch'], s['min_wick_pct']) == (7, 1.5, 1, 25.0)
-    paper8.update(ST8_DIRECTION='both', ST8_ST_MULT='2.5', ST8_STOP_TOUCH='0')
+    assert (s['mode'], s['direction'], s['premium'], s['sl_pct'], s['tsl_x']) == ('paper', 'both', 250, 0, 0)
+    assert (s['st_period'], s['st_mult'], s['stop_touch'], s['min_wick_pct']) == (7, 1.5, 1, 40.0)
+    assert (s['min_body_pct'], s['outside_bar'], s['max_trades']) == (50.0, 'close', 5)
+    assert algo.PROFILES[8].spec.entry_start == '10:00' and algo.PROFILES[8].spec.bar == 3
+    paper8.update(ST8_DIRECTION='long', ST8_ST_MULT='2.5', ST8_STOP_TOUCH='0', ST8_OUTSIDE_BAR='first')
     s = algo.settings('u', algo.PROFILES[8])
-    assert s['direction'] == 'both' and s['st_mult'] == 2.5 and s['stop_touch'] == 0
-    paper8['ST8_DIRECTION'] = 'sideways'                                   # a bad value falls back, never trades both ways
-    assert algo.settings('u', algo.PROFILES[8])['direction'] == 'long'
+    assert s['direction'] == 'long' and s['st_mult'] == 2.5 and s['stop_touch'] == 0 and s['outside_bar'] == 'first'
+    paper8.update(ST8_DIRECTION='sideways', ST8_OUTSIDE_BAR='middle')       # a bad value falls back to the default
+    s = algo.settings('u', algo.PROFILES[8])
+    assert s['direction'] == 'both' and s['outside_bar'] == 'close'
 
 
 def test_paper_day_arm_then_cross_then_flip_books_a_history_row(paper8):
+    paper8.update(ST8_MIN_BODY_PCT='0', ST8_OUTSIDE_BAR='first')           # the intrabar entry
     rows, _, line = _touch_setup()
     df = _bars(rows)
     a = _FakeAlgo('u', algo.PROFILES[8], df)
@@ -270,3 +275,76 @@ def test_a_setup_that_expires_leaves_no_trade_and_no_order(paper8):
 def test_the_other_seven_never_poll_the_price_for_entries(paper8):
     a = _FakeAlgo('u', algo.PROFILES[3], _bars(_uptrend()))
     assert a._price_events(tb.new_day(DAY), _at(10, 0), {}) == []
+
+
+# ── confirmed at the break candle's close (min body % / an outside bar's close side) ──────────────
+
+SC = dict(S, min_body_pct=50.0, outside_bar='close')
+
+
+def test_with_a_body_filter_nothing_fills_intrabar_and_no_price_is_polled():
+    rows, _, _ = _touch_setup()
+    day = tb.new_day(DAY)
+    tb.on_bar(day, _bars(rows), SC)
+    t = day['trades'][0]
+    assert t['confirm']
+    hh = f"{t['break_start'] // 60:02d}:{t['break_start'] % 60:02d}"
+    assert not tb.watching(day, hh, SC) and tb.on_price(day, t['level'] + 0.3, hh, SC) == []
+    assert t['status'] == 'armed'
+
+
+def test_a_strong_break_candle_enters_at_its_close():
+    rows, _, _ = _touch_setup()
+    day = tb.new_day(DAY)
+    tb.on_bar(day, _bars(rows), SC)
+    t = day['trades'][0]
+    o = rows[-1][3]
+    rows.append((o, t['level'] + 3, o - 0.3, t['level'] + 2.8))              # green, body ≫ 50 %, through the high
+    ev = tb.on_bar(day, _bars(rows), SC)
+    assert [e['event'] for e in ev] == ['entry'] and t['status'] == 'open'
+    assert t['index_cross'] == round(t['level'] + 2.8, 2) and t['stop_line'] is not None
+
+
+def test_a_weak_break_candle_is_dropped_with_the_reason():
+    rows, _, _ = _touch_setup()
+    day = tb.new_day(DAY)
+    tb.on_bar(day, _bars(rows), SC)
+    t = day['trades'][0]
+    o = rows[-1][3]
+    rows.append((o, t['level'] + 3, o - 0.5, o + 0.2))                        # broke the high, closed near its open
+    ev = tb.on_bar(day, _bars(rows), SC)
+    assert [e['event'] for e in ev] == ['expired'] and 'body' in t['error']
+
+
+def test_an_outside_bar_closing_down_is_not_a_long():
+    rows, _, _ = _touch_setup()
+    day = tb.new_day(DAY)
+    tb.on_bar(day, _bars(rows), dict(SC, min_body_pct=0.0))
+    t = day['trades'][0]
+    o = rows[-1][3]
+    rows.append((o, t['level'] + 2, t['signal']['touch_low'] - 2, o - 1.5))   # both sides broken, closed red
+    ev = tb.on_bar(day, _bars(rows), dict(SC, min_body_pct=0.0))
+    assert 'entry' not in [e['event'] for e in ev] and t['status'] == 'expired' and 'outside bar' in t['error']
+
+
+def test_the_live_close_entries_are_the_backtests_trades():
+    """Every candle the backtest (body 50 %, side it closes on, bounce) enters on is entered live at its close."""
+    rng = np.random.default_rng(11)
+    rows, price = [], 22000.0
+    for k in range(355):                                                       # one session of 1-minute bars
+        o = price
+        price += 0.3 + rng.normal(0, 4)                                        # bodies big enough for the 50 % filter
+        rows.append((o, max(o, price) + abs(rng.normal(0, 1.5)), min(o, price) - abs(rng.normal(0, 1.5)), price))
+    df = _bars(rows, start=f'{DAY} 09:15', step=1)
+    s = dict(SC, direction='both', st_period=7, st_mult=1.5)
+    eng = StTouchBreakEngine(df, st_period=7, st_mult=1.5, modes='bounce', direction='both', min_body_pct=50,
+                             outside_bar='close', max_trades_per_day=99, bar_minutes=1)
+    want = {tr['entry_time'][:16] for tr in eng.simulate()}
+    day = tb.new_day(DAY)
+    got = set()
+    for k in range(12, len(df)):
+        for ev in tb.on_bar(day, df.iloc[:k + 1], dict(s, max_trades=99), bar_minutes=1):
+            if ev['event'] == 'entry':
+                got.add(ev['bar'][:16])
+                ev['trade']['status'] = 'closed'                               # one at a time: free the slot
+    assert want and want <= got

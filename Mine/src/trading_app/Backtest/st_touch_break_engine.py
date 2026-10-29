@@ -92,6 +92,20 @@ class StTouchBreakEngine:
         d.columns = [c.lower() for c in d.columns]
         d = d.sort_index()
         self.df = d[~d.index.duplicated(keep='last')]
+        self._cols = None
+
+    def _columns(self) -> Dict[str, np.ndarray]:
+        """The bars as arrays, plus each bar's session (YYYYMMDD) and minute of day. Built once
+        per frame: a sweep calls simulate() thousands of times on the same bars, and building the
+        per-bar day/minute lists was ~85 % of each call."""
+        df = self.df
+        if self._cols is None or self._cols[0] is not df:
+            idx = df.index
+            cols = {k: df[k].to_numpy(dtype=float) for k in ('open', 'high', 'low', 'close')}
+            cols['day'] = (idx.year * 10000 + idx.month * 100 + idx.day).to_numpy(dtype=np.int64)
+            cols['tmin'] = (idx.hour * 60 + idx.minute).to_numpy(dtype=np.int64)
+            self._cols = (df, cols)
+        return self._cols[1]
 
     # ── Signals ────────────────────────────────────────────────────────────────
 
@@ -107,7 +121,8 @@ class StTouchBreakEngine:
         """Per bar: +1 touch of an UPtrend line (low on it), -1 of a DOWNtrend line, else 0."""
         ind = ind or self.indicators()
         line, trend = ind['line'], ind['trend']
-        o, h, l, c = (self.df[k].to_numpy(dtype=float) for k in ('open', 'high', 'low', 'close'))
+        cols = self._columns()
+        o, h, l, c = (cols[k] for k in ('open', 'high', 'low', 'close'))
         rng = h - l
         prev = np.concatenate(([0], trend[:-1]))
         live = (trend != 0) & (prev == trend) & np.isfinite(line)     # a line, and no flip on this candle
@@ -151,22 +166,26 @@ class StTouchBreakEngine:
         if n < self.st_period + 3:
             return []
         idx = df.index
-        o, h, l, c = (df[k].to_numpy(dtype=float) for k in ('open', 'high', 'low', 'close'))
+        cols = self._columns()
+        o, h, l, c = (cols[k] for k in ('open', 'high', 'low', 'close'))
         ind = self.indicators()
         line, trend = ind['line'], ind['trend']
         touch = self.touches(ind)
-        day_arr = np.array([ts.date() for ts in idx])
-        tmin = np.array([ts.hour * 60 + ts.minute for ts in idx])
+        day_arr, tmin = cols['day'], cols['tmin']
+        want_day = int(day.replace('-', '')) if day else None
         stamp = lambda k: idx[k].strftime('%Y-%m-%d %H:%M:00')   # noqa: E731
         bar = pd.Timedelta(minutes=self.bar_minutes)
         trades: List[Dict[str, Any]] = []
         free_from = 0
         taken: Dict[Any, int] = {}
-        for t in np.flatnonzero(touch):
+        cands = np.flatnonzero(touch)
+        if want_day is not None:                           # trade_after: only that session's touches
+            cands = cands[day_arr[cands] == want_day]
+        for t in cands:
             e = int(t) + 1
             if e >= n or e < free_from or day_arr[e] != day_arr[t]:
                 continue
-            if day and str(day_arr[e]) != day:
+            if want_day is not None and day_arr[e] != want_day:
                 continue
             if limit and len(trades) >= limit:
                 break

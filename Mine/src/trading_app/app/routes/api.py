@@ -13580,6 +13580,7 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
                 # ST Touch Break's own numbers: the SuperTrend, the "long wick" and which stop
                 for key, var, lo, hi in (('st_period', f'{pr.pfx}_ST_PERIOD', 2, 100), ('st_mult', f'{pr.pfx}_ST_MULT', 0.5, 10),
                                          ('min_wick_pct', f'{pr.pfx}_MIN_WICK_PCT', 0, 100),
+                                         ('min_body_pct', f'{pr.pfx}_MIN_BODY_PCT', 0, 100),
                                          ('stop_touch', f'{pr.pfx}_STOP_TOUCH', 0, 1)):
                     if key in data:
                         try:
@@ -13589,6 +13590,11 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
                         if not lo <= n <= hi:
                             return jsonify({'success': False, 'error': f'{key} must be {lo:g}-{hi:g}'}), 400
                         saves[var] = f'{n:g}'
+                if 'outside_bar' in data:
+                    v = str(data['outside_bar']).strip().lower()
+                    if v not in ('close', 'first'):
+                        return jsonify({'success': False, 'error': 'outside_bar must be close or first'}), 400
+                    saves[f'{pr.pfx}_OUTSIDE_BAR'] = v
             for var, val in saves.items():
                 if not UserEnvManager.save_user_var(username, var, val):
                     return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500

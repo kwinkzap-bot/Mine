@@ -17,9 +17,17 @@ about — one closed candle at a time, a price poll in between, and a clock:
 
 **Bounce only.** A Through setup is known only once the break candle has CLOSED (it is the one the
 SuperTrend flips on), by which time the level was crossed minutes ago, so it cannot be traded live
-and the backtest's Through rows have no live twin. The same goes for ``min_body_pct`` (it reads the
-break candle's close) and ``outside_bar='close'`` (an outside bar goes with the side it closes on):
-live takes whichever side the index crosses first, which is the backtest's ``outside_bar='first'``.
+and the backtest's Through rows have no live twin.
+
+**Confirmed at the close** (since 2026-10-28, the "NIFTY - Both - 3m" tab). ``min_body_pct`` (the
+break candle's body share, closing the way it broke) and ``outside_bar='close'`` (an outside bar
+goes with the side it closes on) both read the break candle's CLOSE, so with either one on the
+order cannot go out intrabar: the setup is judged when the break candle closes and, if it broke
+the level, closed the way it broke with the body asked for and the SuperTrend still with it, the
+order goes out THEN — at that close, not at the level. That is a later (worse) fill than the
+backtest's, which fills at the level with the close already known; the backtest's numbers are the
+ceiling for this, not its forecast. With both off (``min_body_pct`` 0, ``outside_bar`` 'first')
+the intrabar entry above is unchanged.
 
 Everything takes plain dicts and a DataFrame of CLOSED candles, so it is tested without a broker.
 """
@@ -63,11 +71,43 @@ def engine_for(bars: pd.DataFrame, s: Dict[str, Any], bar_minutes: int) -> StTou
     return StTouchBreakEngine(
         bars, st_period=int(s.get('st_period', 10)), st_mult=float(s.get('st_mult', 2)),
         touch_tol_pct=float(s.get('touch_tol_pct', 0)), min_wick_pct=float(s.get('min_wick_pct', 0)),
+        min_body_pct=float(s.get('min_body_pct', 0)), outside_bar=s.get('outside_bar', 'first'),
         modes='bounce', direction=s.get('direction', 'long'),
         stop_mode='touch' if s.get('stop_touch') else 'close',
         entry_start=s.get('entry_start', '09:15'), entry_end=s.get('entry_end', '15:14'),
         exit_cutoff=s.get('exit_cutoff', '15:14'), max_trades_per_day=int(s.get('max_trades', 5)),
         bar_minutes=bar_minutes)
+
+
+def confirm_at_close(s: Dict[str, Any]) -> bool:
+    """Is the break judged at the break candle's close (see the module note) rather than intrabar."""
+    return float(s.get('min_body_pct') or 0) > 0 or s.get('outside_bar', 'first') == 'close'
+
+
+def _confirm(t: Dict[str, Any], eng: StTouchBreakEngine, df: pd.DataFrame, i: int, trend) -> Optional[str]:
+    """The break candle `i` has closed: None if it is the trade, else why not. The backtest's own
+    tests, in its order — which side broke (an outside bar goes the way it closed), then the body."""
+    long = t['type'] == 'Long'
+    o, h, l, c = (float(df[k].iloc[i]) for k in ('open', 'high', 'low', 'close'))
+    th, tl = t['signal']['touch_high'], t['signal']['touch_low']
+    up, dn = h > th, l < tl
+    if up and dn:
+        if eng.outside_bar == 'close' and c != o:
+            up = c > o
+        else:                                   # no minutes here: the backtest's tie-break, nearer level first
+            up = abs(th - o) <= abs(o - tl)
+        dn = not up
+    if not (up if long else dn):
+        return 'the break candle did not break the ' + (f"{th:,.1f} high" if long else f"{tl:,.1f} low") \
+            + (' (an outside bar, closed the other way)' if (h > th and l < tl) else '')
+    rng, body = h - l, abs(c - o)
+    if eng.min_body and (rng <= 0 or body / rng < eng.min_body or (c > o) != long):
+        pct = body / rng * 100 if rng > 0 else 0
+        return f"the break candle's body was {pct:.0f}% of its range{'' if (c > o) == long else ', closing the other way'}" \
+               f" — {eng.min_body * 100:.0f}% asked"
+    if int(trend[i]) == (-1 if long else 1):
+        return 'the SuperTrend turned against it on the break candle'
+    return None
 
 
 def _taken(day: Dict[str, Any]) -> int:
@@ -96,9 +136,18 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any], bar_minut
     close = float(df['close'].iloc[i])
     events: List[Dict[str, Any]] = []
 
-    # 1. the break candle has closed: a setup that never crossed its level is over
+    # 1. the break candle has closed: a setup that never crossed its level is over — or, confirmed
+    #    at the close, the setup is judged on that close and entered at it
     for t in day['trades']:
-        if t['status'] == 'armed' and tmin >= t['break_start']:
+        if t['status'] == 'armed' and t.get('confirm') and tmin == t['break_start']:
+            why = _confirm(t, eng, df, i, trend)
+            if why is None:
+                t.update(status='open', index_cross=round(close, 2))
+                events.append({'event': 'entry', 'trade': t, 'bar': ts_s})
+            else:
+                t.update(status='expired', error=why)
+                events.append({'event': 'expired', 'trade': t, 'bar': ts_s})
+        elif t['status'] == 'armed' and tmin >= t['break_start']:
             t['status'] = 'expired'
             events.append({'event': 'expired', 'trade': t, 'bar': ts_s})
 
@@ -129,7 +178,7 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any], bar_minut
     level = h if long else l
     t = {'n': len(day['trades']) + 1, 'type': 'Long' if long else 'Short', 'status': 'armed',
          'signal_bar': ts_s, 'break_start': bar_end, 'entry_bar_start': bar_end, 'level': round(level, 2),
-         'line': _r(line[i]),
+         'line': _r(line[i]), 'confirm': confirm_at_close(s),
          'signal': {'rsi': None, 'close': round(close, 2), 'level': round(level, 2), 'touch_high': round(h, 2),
                     'touch_low': round(l, 2), 'supertrend': _r(line[i])}}
     day['trades'].append(t)
@@ -149,7 +198,7 @@ def on_price(day: Dict[str, Any], ltp: Optional[float], hhmm: str, s: Dict[str, 
     for t in day['trades']:
         long = t['type'] == 'Long'
         if t['status'] == 'armed':
-            if not t['break_start'] <= now < t['break_start'] + bar_minutes:
+            if t.get('confirm') or not t['break_start'] <= now < t['break_start'] + bar_minutes:
                 continue
             crossed = ltp > t['level'] if long else ltp < t['level']
             if not crossed:
@@ -177,11 +226,12 @@ def watching(day: Dict[str, Any], hhmm: str, s: Dict[str, Any], bar_minutes: int
     open trade under a 'touch' stop."""
     now = _hm(hhmm)
     for t in day['trades']:
-        if t['status'] == 'armed' and t['break_start'] <= now < t['break_start'] + bar_minutes:
+        if t['status'] == 'armed' and not t.get('confirm') and t['break_start'] <= now < t['break_start'] + bar_minutes:
             return True
         if t['status'] == 'open' and s.get('stop_touch') and t.get('stop_line'):
             return True
     return False
 
 
-__all__ = ['new_day', 'option_type', 'on_bar', 'on_price', 'watching', 'engine_for', 'MAX_CHASE_RISK_FRAC']
+__all__ = ['new_day', 'option_type', 'on_bar', 'on_price', 'watching', 'engine_for', 'confirm_at_close',
+           'MAX_CHASE_RISK_FRAC']
