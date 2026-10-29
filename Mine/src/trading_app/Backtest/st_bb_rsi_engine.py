@@ -600,13 +600,37 @@ def _prior_minute(stamp: str) -> str:
     return (datetime.strptime(stamp[11:16], '%H:%M') - timedelta(minutes=1)).strftime('%H:%M')
 
 
+def _index_close_at(minutes: Optional[pd.DataFrame], stamp: str) -> Optional[float]:
+    """Close of the 1-minute bar stamped `stamp` ('YYYY-MM-DD HH:MM:SS'), else of the
+    last one before it on that day; None without minutes."""
+    if minutes is None or getattr(minutes, 'empty', True) or 'close' not in minutes:
+        return None
+    ts = pd.Timestamp(stamp)
+    idx = minutes.index
+    if getattr(idx, 'tz', None) is not None:
+        ts = ts.tz_localize(idx.tz)
+    try:
+        upto = minutes['close'].loc[:ts]
+    except Exception:                       # noqa: BLE001 — an unsorted / odd index: no re-read
+        return None
+    if upto.empty or upto.index[-1].date() != ts.date():
+        return None
+    v = float(upto.iloc[-1])
+    return v if np.isfinite(v) else None
+
+
 def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float = 250.0,
                        bar_minutes: int = 5, progress=None, calendar=None,
-                       sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                       sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0,
+                       index_minutes: Optional[pd.DataFrame] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Re-price each index trade on the ≈`premium` CE. Returns (priced trades,
     info). A priced trade keeps its index move in `index_*` and carries the
     premium points in `pnl`; a trade whose leg could not be priced is dropped
-    from the list and counted in info['unpriced']."""
+    from the list and counted in info['unpriced'].
+
+    `index_minutes` is the caller's 1-minute frame of the series the trade was
+    decided on (the one `entry_price` is in). When the premium stop ends a trade
+    early, its `exit_price` / `index_pnl` are re-read off it at the stop minute."""
     from trading_app.service import cpr_option_service as cos
 
     info: Dict[str, Any] = {'premium': premium, 'index_trades': len(trades),
@@ -673,11 +697,20 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
         # shows and what the signal and the SuperTrend exit were decided on.
         # Only the order is the option: its premiums and P&L ride beside them.
         stopped = {}
+        index_pnl = t['pnl']
         if leg.get('stop'):         # the premium's own stop (or its trail) ended the trade first
             stopped = dict(exit_reason=leg['stop'], exit_time=f"{t['entry_time'][:10]} {leg['exit_time']}:00")
+            # The index exit has to move with it: left alone it is the SuperTrend exit's,
+            # hours later — 29 Oct 2026 showed +199 index pts beside a -82 pt stopped CE,
+            # where the live leg left with the index at 73,396 (-96).
+            px = _index_close_at(index_minutes, stopped['exit_time'])
+            if px is not None:
+                index_pnl = round((px - t['entry_price']) if t.get('type') != 'Short'
+                                  else (t['entry_price'] - px), 2)
+                stopped['exit_price'] = round(px, 2)
         priced.append(dict(
             t, **stopped,
-            index_pnl=t['pnl'],
+            index_pnl=index_pnl,
             entry_premium=leg['entry'], exit_premium=leg['exit'], pnl=pnl,
             result='WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
             strike=leg['strike'], option_type=leg['option_type'], expiry=leg['expiry'],

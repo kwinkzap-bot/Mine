@@ -5742,7 +5742,8 @@ def run_st_bb_rsi_backtest_api():
                                                           min_sessions=max(0, int(data.get('min_sessions', 5) or 0)))
                 else:
                     priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
-                                                       calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y)
+                                                       calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                                                       index_minutes=minutes)
                 warn = None
                 if info['unpriced'] or info['truncated']:
                     warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
@@ -6080,7 +6081,8 @@ def run_st_touch_break_backtest_api():
                     engine, trades,
                     lambda batch, prog: attach_option_legs(
                         symbol, batch, premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -6696,7 +6698,8 @@ def run_st_ema_rsi_cci_backtest_api():
                     lambda batch, prog: attach_option_legs(
                         symbol, with_spot_level(batch, symbol) if on_future else batch,
                         premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -6857,7 +6860,8 @@ def run_st_rsi_pp_bb_backtest_api():
                     engine, trades,
                     lambda batch, prog: attach_option_legs(
                         symbol, batch, premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -7019,7 +7023,8 @@ def run_st_rsi_cpr_bb_sx_backtest_api():
                     engine, trades,
                     lambda batch, prog: attach_option_legs(
                         symbol, batch, premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -7183,7 +7188,8 @@ def run_st_rsi_cpr_bb_wr_sx_backtest_api():
                     engine, trades,
                     lambda batch, prog: attach_option_legs(
                         symbol, batch, premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -7371,7 +7377,8 @@ def run_st_all_indicators_backtest_api():
                         engine, trades,
                         lambda batch, prog: attach_option_legs(
                             symbol, batch, premium or None, minutes_per_bar, prog or _progress,
-                            calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                            calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                         _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -7559,7 +7566,8 @@ def run_st_rsi_pp_bb_fut_backtest_api():
                     lambda batch, prog: attach_option_legs(
                         symbol, with_spot_level(batch, symbol) if on_future else batch,
                         premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
@@ -7751,7 +7759,8 @@ def run_st_rsi_cci_wr_pp_bb_fut_backtest_api():
                     lambda batch, prog: attach_option_legs(
                         symbol, with_spot_level(batch, symbol) if on_future else batch,
                         premium or None, minutes_per_bar, prog or _progress,
-                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+                        calendar=sessions, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                        index_minutes=minutes),
                     _progress)
                 warn = None
                 if info['unpriced'] or info['truncated']:
