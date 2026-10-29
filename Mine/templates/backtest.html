@@ -2495,12 +2495,15 @@
                             <label>P&amp;L <select id="sbrCombBasis"><option value="net">Net of brokerage</option><option value="gross">Gross</option></select></label>
                             <button type="button" id="sbrCombOptimize" class="bc-run"
                                     title="Search the rows for the set whose combined book has the best net P&amp;L ÷ max drawdown, and tick only those">⚡ Optimize</button>
+                            <button type="button" id="sbrCombCapitalBtn" class="bc-run bc-run-alt"
+                                    title="The money needed to run the ticked rows live: the most premium ever open at once, plus the combined book's worst drawdown — and why">💰 Capital needed</button>
                         </div>
                         <button type="button" id="sbrOptCombinedClose" class="bt-modal-close" title="Close (Esc)">✕</button>
                     </div>
                     <div class="bt-modal-body bc-body">
                         <div id="sbrCombChips"></div>
                         <div class="bc-note" id="sbrCombNote"></div>
+                        <div id="sbrCombCapital" class="bc-cap" style="display:none"></div>
                         <div id="sbrCombReport"></div>
                     </div>
                 </div>

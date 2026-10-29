@@ -13,6 +13,14 @@
 .bc-chip.running { border-color: #d97706; }
 .bc-chip.error { border-color: #dc2626; }
 .bc-chip.done span { color: #16a34a; }
+.bc-run-alt { background: #0f766e; }
+.bc-run-alt.on { box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); }
+.bc-cap { border: 1px solid var(--oip-border); border-radius: 10px; background: var(--oip-card-bg, #fff); padding: 12px 14px; margin-bottom: 12px; }
+.bc-cap .bc-card.bc-total { border-color: #0f766e; }
+.bc-cap .bc-total .bc-card-v { color: #0f766e; }
+.bc-cap-why { font-size: 12px; line-height: 1.6; color: var(--oip-text); margin: 10px 0 0; padding-left: 18px; }
+.bc-cap-why li { margin-bottom: 4px; }
+.bc-cap-why b { font-variant-numeric: tabular-nums; }
 .bc-note { font-size: 12px; color: #b45309; margin-bottom: 8px; line-height: 1.5; }
 .bc-empty { padding: 60px 0; text-align: center; color: var(--oip-text-muted, #6b7280); font-size: 13px; }
 .bc-meta { font-size: 12px; color: var(--oip-text-muted, #6b7280); margin: 4px 0 8px; }

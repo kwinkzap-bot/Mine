@@ -5699,7 +5699,132 @@ document.addEventListener('DOMContentLoaded', function() {
             rows();                      // assigns each ticked row its colour before the chips draw
             paintChips();
             report.paint();
+            if (capOpen) paintCapital();
         }
+
+        // 💰 Capital needed: what running the ticked rows live would take. An option BUY needs its full
+        // premium in the account, and every ticked row is its own algo, so rows whose trades overlap hold
+        // their premiums at the same time. The need is the most premium ever open at once (entry premium
+        // × lots × TODAY's lot size, the Lot value box) plus the merged net book's worst drawdown, so that
+        // after the worst losing run seen there is still the cash for that peak.
+        const capBox = document.getElementById('sbrCombCapital');
+        const capBtn = document.getElementById('sbrCombCapitalBtn');
+        let capOpen = false;
+        function capitalNeeded(list, lot) {
+            const ev = [], perRow = [], days = new Map();       // 'YYYY-MM-DD' → { n, rows: Map(item → n) }
+            list.forEach(it => {
+                let max = 0, maxLots = 0;
+                const mine = new Map();
+                it.r.book.forEach(e => {
+                    const ep = Number(e[B.ep]), lots = Math.max(1, Number(e[B.lots]) || 1);
+                    if (!(ep > 0) || !e[B.entry]) return;
+                    const cost = ep * lots * lot;
+                    max = Math.max(max, cost); maxLots = Math.max(maxLots, lots);
+                    ev.push({ t: e[B.entry], d: cost, it, open: true });
+                    ev.push({ t: e[B.exit] || e[B.entry], d: -cost, it, open: false });
+                    const day = String(e[B.entry]).slice(0, 10);
+                    mine.set(day, (mine.get(day) || 0) + 1);
+                    const dd = days.get(day) || { n: 0, rows: new Map() };
+                    dd.n++; dd.rows.set(it, (dd.rows.get(it) || 0) + 1);
+                    days.set(day, dd);
+                });
+                let rowDay = 0, rowDayAt = '';
+                mine.forEach((n, d) => { if (n > rowDay) { rowDay = n; rowDayAt = d; } });
+                perRow.push({ it, max, maxLots, trades: [...mine.values()].reduce((s, n) => s + n, 0),
+                              days: mine.size, rowDay, rowDayAt });
+            });
+            // Trades per day across the ticked rows: how many days had 1, 2, 3, 4+ and the busiest one.
+            const hist = [0, 0, 0, 0];
+            let busy = null;
+            days.forEach((v, d) => {
+                hist[Math.min(v.n, 4) - 1]++;
+                if (!busy || v.n > busy.n || (v.n === busy.n && d > busy.day)) busy = { day: d, ...v };
+            });
+            const perDay = { days: days.size, trades: [...days.values()].reduce((s, v) => s + v.n, 0), hist, busy,
+                             multi: [...days.values()].filter(v => v.rows.size > 1).length };
+            // At one minute an exit settles before an entry: the sale's premium is usable again intraday.
+            ev.sort((a, b) => a.t < b.t ? -1 : a.t > b.t ? 1 : (a.open === b.open ? 0 : a.open ? 1 : -1));
+            const open = new Map();
+            let cur = 0, peak = 0, at = '', who = [], nOpen = 0, maxOpen = 0, maxOpenAt = '';
+            ev.forEach(x => {
+                cur += x.d;
+                nOpen += x.open ? 1 : -1;
+                if (nOpen > maxOpen) { maxOpen = nOpen; maxOpenAt = x.t; }
+                open.set(x.it, (open.get(x.it) || 0) + (x.open ? 1 : -1));
+                if (x.open && cur > peak + 1e-6) {
+                    peak = cur; at = x.t;
+                    who = [...open].filter(([, n]) => n > 0).map(([k]) => k);
+                }
+            });
+            return { peak, at, who, perRow, perDay, maxOpen, maxOpenAt, ...bookStats(list) };
+        }
+        function paintCapital() {
+            if (!capBox) return;
+            const list = picked();
+            if (!list.length) { capBox.innerHTML = '<div class="bc-meta">Tick at least one row to see the capital it needs.</div>'; return; }
+            const lot = Math.max(1, parseFloat(document.getElementById('pcLotValue')?.value) || 65);
+            const c = capitalNeeded(list, lot);
+            const inr = (v) => (v < 0 ? '−₹' : '₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+            const total = c.peak + c.dd;
+            const sumMax = c.perRow.reduce((s, p) => s + p.max, 0);
+            const stamp = c.at ? c.at.replace('T', ' ') : '—';
+            const grows = c.perRow.some(p => p.maxLots > 1);
+            const d = c.perDay;
+            const card = (l, v, s, cls = '') => `<div class="bc-card ${cls}"><div class="bc-card-l">${l}</div>`
+                + `<div class="bc-card-v">${v}</div><div class="bc-card-s">${s}</div></div>`;
+            capBox.innerHTML = `<h4>💰 Capital needed to run these ${list.length} row${list.length > 1 ? 's' : ''} live</h4>
+                <div class="bc-cards">
+                    ${card('Total capital needed', inr(total), 'premium peak + drawdown buffer', 'bc-total')}
+                    ${card('① Premium open at once (peak)', inr(c.peak), `${stamp} · ${c.who.length} position${c.who.length === 1 ? '' : 's'} open`)}
+                    ${card('② Drawdown buffer', inr(c.dd), 'worst fall of the merged net book')}
+                    ${card('Net P&L of the book', `<span class="${c.net >= 0 ? 'bc-pos' : 'bc-neg'}">${inr(c.net)}</span>`,
+                           total > 0 ? `${(c.net / total * 100).toFixed(0)} % on the capital needed` : '')}
+                </div>
+                <ul class="bc-cap-why">
+                    <li><b>Why ①:</b> an option buy is paid in full when it is placed — the broker blocks the whole premium
+                        (entry premium × lots × lot size ${lot}). Each ticked row runs as its own algo, so when their trades
+                        overlap they all hold premium together. Replaying every trade of the ticked rows, the most open at one
+                        moment was <b>${inr(c.peak)}</b> at ${esc(stamp)}${c.who.length ? ` (${c.who.map(it => esc(it.name)).join(', ')})` : ''}.
+                        Without that much free cash one of those entries is rejected for margin and the live book is no longer the backtest's.</li>
+                    <li><b>Why ②:</b> the merged book once fell <b>${inr(c.dd)}</b> from a high before recovering (net of brokerage).
+                        Money lost in that run is money no longer in the account, so the peak premium must still be affordable
+                        after it — hence ① + ②.</li>
+                    <li><b>Not just the sum:</b> the largest single trade of every ticked row added together is ${inr(sumMax)};
+                        ① is ${sumMax > c.peak ? 'smaller because those rows never all held their biggest trade at the same moment'
+                        : 'the same because those trades did overlap'}.</li>
+                    <li><b>Assumes</b> today's lot size (${lot}, the Lot value box) and the lots each trade was booked with${grows
+                        ? ' — some rows were booked with more than 1 lot (compounding), and those trades are counted at their booked size' : ' (1 lot)'};
+                        a brokerage/charges allowance is already inside ② as the book is net. Option buying needs no SPAN margin
+                        beyond the premium.</li>
+                </ul>
+                <h4 style="margin-top:14px">📅 Trades on the same day</h4>
+                <div class="bc-cards">
+                    ${card('Days with a trade', d.days.toLocaleString('en-IN'), `${d.trades.toLocaleString('en-IN')} trades · ${d.days ? (d.trades / d.days).toFixed(2) : '0'} a day on average`)}
+                    ${card('Busiest day', d.busy ? `${d.busy.n} trades` : '—', d.busy ? esc(d.busy.day) : '')}
+                    ${card('Most open at once', `${c.maxOpen}`, c.maxOpenAt ? esc(c.maxOpenAt.replace('T', ' ')) : '')}
+                    ${card('Days 2+ rows traded', d.multi.toLocaleString('en-IN'), d.days ? `${(d.multi / d.days * 100).toFixed(0)} % of trading days` : '')}
+                </div>
+                <div class="bc-scroll" style="margin-top:8px"><table class="bc-tbl">
+                    <thead><tr><th>Trades that day</th><th>Days</th><th>Share of days</th></tr></thead>
+                    <tbody>${['1', '2', '3', '4 or more'].map((l, i) => `<tr><td>${l}</td><td>${d.hist[i].toLocaleString('en-IN')}</td>`
+                        + `<td>${d.days ? (d.hist[i] / d.days * 100).toFixed(1) : '0'} %</td></tr>`).join('')}</tbody>
+                </table></div>
+                ${d.busy ? `<div class="bc-meta">Busiest day ${esc(d.busy.day)}: ${[...d.busy.rows].map(([it, n]) => `${esc(it.name)} × ${n}`).join(', ')}.
+                    Trades on one day are not all open together — a row takes its next trade only after the last one closed —
+                    so the capital follows "Most open at once", not the day's count.</div>` : ''}
+                <div class="bc-scroll" style="margin-top:8px"><table class="bc-tbl">
+                    <thead><tr><th>Row</th><th>Trades</th><th>Days traded</th><th>Most trades in a day</th><th>Biggest single trade</th><th>Max lots</th><th>Open at the peak</th></tr></thead>
+                    <tbody>${c.perRow.map(p => `<tr><td><i class="bc-dot" style="background:${p.it.color}"></i>${esc(p.it.name)}</td>`
+                        + `<td>${p.trades}</td><td>${p.days}</td><td>${p.rowDay}${p.rowDayAt ? ` <small>(${esc(p.rowDayAt)})</small>` : ''}</td>`
+                        + `<td>${inr(p.max)}</td><td>${p.maxLots}</td><td>${c.who.includes(p.it) ? 'yes' : '—'}</td></tr>`).join('')}</tbody>
+                </table></div>`;
+        }
+        capBtn?.addEventListener('click', () => {
+            capOpen = !capOpen;
+            capBtn.classList.toggle('on', capOpen);
+            if (capBox) capBox.style.display = capOpen ? '' : 'none';
+            if (capOpen) { rows(); paintCapital(); }
+        });
 
         // One book from several rows' trades, merged in entry order — on NET ₹, whatever the P&L box shows.
         function bookStats(list) {
