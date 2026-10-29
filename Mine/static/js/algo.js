@@ -7,7 +7,8 @@ let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade c
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
 const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr',
-    'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7', 'mine-nifty', 'ema-confluence', 'swing-momentum'];
+    'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7',
+    ...(window.MINE_TABS || [{ key: 'mine-nifty' }]).map(m => m.key), 'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do

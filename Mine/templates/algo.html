@@ -231,7 +231,9 @@
     {% with key='simple-6', p='sim6', n=6, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='SENSEX', pfx='ST6' %}{% include 'algo_simple.html' %}{% endwith %}
     {% with key='simple-7', p='sim7', n=7, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='SENSEX', pfx='ST7' %}{% include 'algo_simple.html' %}{% endwith %}
 
-    {% with key='mine-nifty', p='mnn', n=8, group='mine', names={8: 'ST Touch Break'}, symbol='NIFTY', pfx='ST8' %}{% include 'algo_simple.html' %}{% endwith %}
+    {# The Mine group: ST Touch Break, one sub-tab per row (simple_trader_live_engine.MINE_TABS; 8 = mine-nifty). #}
+    {% for m in mine_tabs %}{% with key=m.key, p=m.p, n=m.n, group='mine', names={m.n: m.tab}, symbol='NIFTY', pfx='ST' ~ m.n %}{% include 'algo_simple.html' %}{% endwith %}
+    {% endfor %}
     {% include 'algo_ema_confluence.html' %}
 
     <!-- ════════════════════════════════════════════════════════ -->
@@ -274,6 +276,7 @@
 <script src="{{ url_for('static', filename='js/algo_charges.js') }}?v={{ sv('js/algo_charges.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_cpr.js') }}?v={{ sv('js/algo_cpr.js') }}"></script>
+<script>window.MINE_TABS = {{ mine_tabs|tojson }};</script>
 <script src="{{ url_for('static', filename='js/algo_stbb.js') }}?v={{ sv('js/algo_stbb.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_simple_combined.js') }}?v={{ sv('js/algo_simple_combined.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_ema_confluence.js') }}?v={{ sv('js/algo_ema_confluence.js') }}"></script>

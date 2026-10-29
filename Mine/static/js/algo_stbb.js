@@ -8,9 +8,12 @@ const _STBB = {};
 for (let n = 1; n <= 7; n++) {
     _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true, group: 'simple' };
 }
-// The Mine group: ST Touch Break on NIFTY (strategy 8 of the same engine; its own tab and sub-tab).
-_STBB['mine-nifty'] = { p: 'mnn', api: '/api/algo/simple-trader-8', sym: 'NIFTY', pfx: 'ST8', simple: true, group: 'mine',
-                        label: 'Mine · NIFTY - Both - 3m (ST Touch Break)', touch: true };
+// The Mine group: ST Touch Break on NIFTY (strategies 8-15 of the same engine), one sub-tab each. The list
+// is the page's (window.MINE_TABS, from simple_trader_live_engine.MINE_TABS); 8 is 'mine-nifty'.
+(window.MINE_TABS || [{ n: 8, key: 'mine-nifty', p: 'mnn', tab: 'NIFTY - Both - 3m' }]).forEach(m => {
+    _STBB[m.key] = { p: m.p, api: '/api/algo/simple-trader-' + m.n, sym: 'NIFTY', pfx: 'ST' + m.n, simple: true,
+                     group: 'mine', label: `Mine · ${m.tab} (ST Touch Break)`, touch: true };
+});
 Object.values(_STBB).forEach(c => Object.assign(c, { timer: null, mode: null, book: 'all', history: [] }));
 
 const _stbbEl = (c, id) => document.getElementById(c.p + id);
@@ -72,13 +75,14 @@ function _stbbRender(c, key, d) {
     if (c.touch) {
         const dir = s.direction === 'both' ? 'BUY (CE) and SELL (PE)' : (s.direction === 'short' ? 'SELL (PE) only' : 'BUY (CE) only');
         const atClose = s.min_body_pct > 0 || s.outside_bar === 'close';
-        _stbbEl(c, 'Rule').textContent = `3-minute NIFTY candles from 10:00 · SuperTrend(${s.st_period}, ${s.st_mult}) · ${dir}, Bounce: a candle whose wick touches the line `
+        _stbbEl(c, 'Rule').textContent = `${s.bar || 3}-minute NIFTY candles, entries ${s.entry_start || '10:00'}–${s.entry_end || '15:14'} · SuperTrend(${s.st_period}, ${s.st_mult}) · ${dir}, Bounce: a candle whose wick touches the line `
+            + (s.touch_tol_pct ? `(within ${s.touch_tol_pct}% of it) ` : '')
             + `(wick ≥ ${s.min_wick_pct}% of its range) and closes on the trend side arms the NEXT candle; `
             + (atClose ? `if that candle breaks the touch candle's high (low for a sell)${s.min_body_pct > 0 ? ` and closes the way it broke with a body ≥ ${s.min_body_pct}% of its range` : ''}`
                          + `${s.outside_bar === 'close' ? ' (breaking both sides: the side it closes on)' : ''}, the order goes out at its CLOSE`
                        : `the order goes out the moment the index trades through the touch candle's high (low for a sell)`)
             + ` · ≈${Math.round(s.premium)} premium · exit when a candle ${s.stop_touch ? 'trades through' : 'closes beyond'} the SuperTrend line, `
-            + `no target, square-off 15:14` + (s.sl_pct ? ` · premium stop-loss ${s.sl_pct}% under the fill` : ', no premium stop')
+            + `no target, square-off ${s.exit_cutoff || '15:14'}` + (s.sl_pct ? ` · premium stop-loss ${s.sl_pct}% under the fill` : ', no premium stop')
             + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : '') + ` · up to ${s.max_trades} trade(s) a day`
             + ` · the Through setup (ST flips on the break candle) is backtest-only: it is known only at that candle's close`;
     } else if (c.simple) {

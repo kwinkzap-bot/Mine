@@ -234,7 +234,10 @@ def cpr_logic():
 @login_required
 def algo():
     """Live Algo trading page (2nd candle / swing momentum / TMF / EMA Confluence / CPR / ST+BB+RSI)."""
-    return render_template('algo.html')
+    from trading_app.service.simple_trader_live_engine import MINE_TABS, SPECS
+    mine_tabs = [{'n': n, 'key': key, 'p': p, 'tab': SPECS[n].tab, 'bar': SPECS[n].bar}
+                 for n, key, p in MINE_TABS]
+    return render_template('algo.html', mine_tabs=mine_tabs)
 
 
 @pages_bp.route('/trading')

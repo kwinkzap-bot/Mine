@@ -12255,8 +12255,9 @@ def route_scoped_exit(username, session_data, strategy, log_tag='exit-all'):
     return {**result, 'strategy': strategy}
 
 
-# strategy key -> env prefix of the Simple Trader algos (1-7).
-_STBB_FLAGS = {f'st{n}': f'ST{n}' for n in range(1, 9)}      # 8 = ST Touch Break (the Mine group)
+# strategy key -> env prefix of the Simple Trader algos (1-7) and the Mine group (8-15, ST Touch Break).
+from trading_app.service.simple_trader_live_engine import SPECS as _ST_SPECS
+_STBB_FLAGS = {f'st{n}': f'ST{n}' for n in _ST_SPECS}
 
 
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
@@ -13669,7 +13670,7 @@ def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: 
         api_bp.route(f'/algo/{path}/{suffix}', methods=[method], endpoint=endpoint)(view)
 
 
-for _n in range(1, 9):      # Simple Trader 1-7 and 8 = ST Touch Break (Mine): /algo/simple-trader-<n>/{status,settings,history,start,stop}
+for _n in _ST_SPECS:        # Simple Trader 1-7 and 8-15 = ST Touch Break (Mine): /algo/simple-trader-<n>/{status,settings,history,start,stop}
     _register_stbb_routes(f'simple-trader-{_n}', 'NIFTY', f'st{_n}', simple=_n)
 
 

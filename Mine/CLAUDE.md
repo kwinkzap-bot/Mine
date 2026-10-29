@@ -384,8 +384,21 @@ Load-bearing:
 * The sweep behind the Backtest page's Find Best Params does not reach here: the tab's boxes are the
   numbers it searches (SuperTrend length/factor, direction, stop, min wick) plus min body and the outside-bar side, set by hand.
 
-Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, and that every candle the
-backtest trades is armed live).
+**Mine sub-tabs 9-16 (added 2026-10-29, paper).** The other rows of the Backtest 🧩 Combined ⚡ Optimize
+set (the ★ Default row is 8) are strategies 9-16 of the same chassis, one sub-tab, thread, `ST<n>_*` flag
+set, `BROKER_N_ST<n>_*` and `simple_trader_<n>_*.json` each: `_touch_break()` in
+`simple_trader_live_engine.py` builds them from the row's numbers, `MINE_TABS` lists 8-16 for the page
+(8 keeps `mine-nifty`/`mnn`; the rest are `mine-<n>`/`mn<n>`), and `pages.algo` passes it to the
+template and `window.MINE_TABS`. A row's candles (3/5/15 m) and **entry window** are fixed in its spec
+(`fixed['entry_end']`, read by `_window()`), not settings. 11/12/13 differ only in the window, so between
+10:00 and 11:30 they take the same setup **three times** at one broker — that is what the combined book
+counted. Names: `NIFTY - Both - 3m - AM` (9), `- Both - 15m` (10), `- Both - 5m - AM` (11),
+`- Both - 5m - 09:30` (12), `- Both - 5m - 10:00` (13), `- Buy - 3m - AM` (14), `- Buy - 5m` (15),
+`- Sell - 3m - AM` (16, SELL-only #1: ST 14/1.5, 10:00-11:30, 5 a day).
+New routes put the api blueprint at 259 rules (`tests/route_inventory.txt`).
+
+Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
+backtest trades is armed live, and the same per row for 9-16).
 
 ## The env file is read by threads and rewritten whole
 

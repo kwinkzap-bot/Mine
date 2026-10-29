@@ -58,6 +58,8 @@
             <!-- 🧩 Combined: every board of this sweep in one full-size popup; shown only while the Best Params boards are -->
             <button type="button" id="sbrOptCombinedBtn" class="btn-optimise" style="display:none;"
                     title="Open every Best Params board of this run in one full-size popup — sorting, USE and DEFAULT work there too">🧩 Combined</button>
+            <!-- 🔖 Saved: rows bookmarked from the 🧩 Combined popup's 🔖 icon (this browser's localStorage) -->
+            <button id="btSavedBtn" type="button" title="Strategies saved with 🔖 in the Combined popup — use or remove them" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🔖 Saved <span id="btSavedCount" class="bt-saved-count"></span></button>
             <button id="smGoLiveBtn" class="btn-sm-golive-main" style="display:none;">🚀 Go Live</button>
         </div>
     </div>
@@ -2505,6 +2507,21 @@
                         <div class="bc-note" id="sbrCombNote"></div>
                         <div id="sbrCombCapital" class="bc-cap" style="display:none"></div>
                         <div id="sbrCombReport"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="btSavedModal" class="bt-modal-overlay bc-overlay" style="display:none;" role="dialog" aria-modal="true" aria-label="Saved strategies">
+                <div class="bt-modal-box bc-box">
+                    <div class="bt-modal-hdr">
+                        <div class="bt-modal-hdr-text">
+                            <div class="bt-modal-title">🔖 Saved strategies</div>
+                            <div class="bt-modal-subtitle">Rows saved with 🔖 in 🧩 Combined — Best Params. USE puts the row's numbers in the form; ✕ removes it.</div>
+                        </div>
+                        <button type="button" id="btSavedClose" class="bt-modal-close" title="Close (Esc)">✕</button>
+                    </div>
+                    <div class="bt-modal-body bc-body">
+                        <div id="btSavedList"></div>
                     </div>
                 </div>
             </div>

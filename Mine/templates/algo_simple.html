@@ -7,14 +7,15 @@
     <div class="ag-panel" id="algo-{{ key }}-panel">
 
     <div class="ag-subtabs">
-        {% if group == 'mine' %}<button class="ag-subtab active" onclick="algoSwitch('{{ key }}')" title="{{ names[n] }} on NIFTY, both directions, 3-minute candles">NIFTY - Both - 3m</button>
+        {% if group == 'mine' %}{% for m in mine_tabs %}<button class="ag-subtab{% if key == m.key %} active{% endif %}" onclick="algoSwitch('{{ m.key }}')" title="ST Touch Break · {{ m.tab }} (strategy {{ m.n }}, flags ST{{ m.n }}_*)">{{ m.tab }}</button>
+        {% endfor %}
         {% else %}{% for n in range(1, 8) %}<button class="ag-subtab{% if key == 'simple-' ~ n %} active{% endif %}" onclick="algoSwitch('simple-{{ n }}')" title="{{ names[n] }}">{{ n }}</button>
         {% endfor %}
         <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick="simpleCombinedOpen()" title="All seven live Simple Trader algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>{% endif %}
     </div>
 
     <div class="ag-header">
-        <span class="ag-title">{{ names[n] }} · {{ symbol }}</span>
+        <span class="ag-title">{% if group == 'mine' %}ST Touch Break · {{ names[n] }}{% else %}{{ names[n] }} · {{ symbol }}{% endif %}</span>
         <span id="{{ p }}ModeBadge" class="dg-badge dg-badge--warn">PAPER</span>
         <!-- {{ pfx }}_MODE, read at every entry: Paper records the option leg at its real
              premium and sends nothing; Live buys it at every account with

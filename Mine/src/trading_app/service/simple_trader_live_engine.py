@@ -39,12 +39,13 @@ class Spec:
     overridable by ``ST<n>_<NAME>`` in the env file)."""
 
     def __init__(self, n, name, cls, kind, symbol, data, bar, side, premium, entry_start,
-                 sl_pct, tsl_x, tsl_y, max_trades, params, fixed=None, rule=''):
+                 sl_pct, tsl_x, tsl_y, max_trades, params, fixed=None, rule='', tab=''):
         self.n, self.name, self.cls, self.kind = n, name, cls, kind
         self.symbol, self.data, self.bar, self.side = symbol, data, bar, side
         self.premium, self.entry_start = premium, entry_start
         self.sl_pct, self.tsl_x, self.tsl_y, self.max_trades = sl_pct, tsl_x, tsl_y, max_trades
         self.params, self.fixed, self.rule = params, fixed or {}, rule
+        self.tab = tab                      # the Mine group's sub-tab name ('' for Simple Trader 1-7)
 
     @property
     def option_type(self) -> str:
@@ -115,8 +116,48 @@ SPECS: Dict[int, Spec] = {s.n: s for s in (
          rule='NIFTY 3-min from 10:00: a candle whose wick (≥ 40 % of its range) touches the SuperTrend(7,1.5) line and closes'
               ' on the trend side arms the next candle; if that candle breaks the touch high (low) and closes the way it broke'
               ' with a body ≥ 50 % of its range (an outside bar goes the way it closes) the ≈250 CE (PE) is bought at its close'
-              ' (Bounce, both directions); exit when the index trades through the previous candle\'s SuperTrend line'),
+              ' (Bounce, both directions); exit when the index trades through the previous candle\'s SuperTrend line',
+         tab='NIFTY - Both - 3m'),
 )}
+
+
+def _touch_break(n, tab, bar, st_period, st_mult, min_wick, touch_tol, min_body, outside_bar,
+                 entry_start, entry_end, max_trades, direction):
+    """One more Mine sub-tab: ST Touch Break with the numbers of one Find Best Params row (the 🧩
+    Combined ⚡ Optimize set of 2026-10-29: 3/5/15m · ST len / factor · Bounce · stop on touch · wick /
+    tol / body · outside bar · entry window · square-off 15:14 · max trades). Premium 250 and no premium
+    SL / trail, as the run priced them. Each is its own thread, flags (ST<n>_*) and files, paper first."""
+    side = {'both': 'CE (PE)', 'long': 'CE', 'short': 'PE'}[direction]
+    dirs = {'both': 'both directions', 'long': 'BUY only', 'short': 'SELL only'}[direction]
+    return Spec(n, 'ST Touch Break', StTouchBreakEngine, 'tb', 'NIFTY', 'spot', bar,
+                'short' if direction == 'short' else 'long', 250, entry_start, 0, 0, 0, max_trades,
+                dict(st_period=st_period, st_mult=st_mult, stop_touch=1, min_wick_pct=float(min_wick),
+                     min_body_pct=float(min_body), touch_tol_pct=float(touch_tol)),
+                fixed=dict(direction=direction, outside_bar=outside_bar, entry_end=entry_end, exit_cutoff='15:14'),
+                rule=f'NIFTY {bar}-min, entries {entry_start}-{entry_end}: a wick (≥ {min_wick:g} % of the range) touching'
+                     f' SuperTrend({st_period},{st_mult:g}) arms the next candle; a break of the touch high (low) with a body'
+                     f' ≥ {min_body:g} % buys the ≈250 {side} ({dirs}, outside bar → {outside_bar}); exit when the index'
+                     f' trades through the previous candle\'s SuperTrend line; up to {max_trades} a day',
+                tab=tab)
+
+
+# The rest of the Mine group — 9-16 are the other ticked rows of that Optimize set (the ★ Default row
+# is 8 above). Names are "<symbol> - <direction> - <timeframe>" plus what tells two alike apart.
+for _sp in (
+    _touch_break(9,  'NIFTY - Both - 3m - AM',     3,  7,  1.5, 25, 0,   50, 'close', '10:00', '11:30', 1, 'both'),
+    _touch_break(10, 'NIFTY - Both - 15m',         15, 7,  1.5, 40, 0.1, 50, 'close', '10:00', '15:14', 1, 'both'),
+    _touch_break(11, 'NIFTY - Both - 5m - AM',     5,  14, 2,   40, 0,   50, 'first', '09:30', '11:30', 5, 'both'),
+    _touch_break(12, 'NIFTY - Both - 5m - 09:30',  5,  14, 2,   40, 0,   50, 'first', '09:30', '15:14', 5, 'both'),
+    _touch_break(13, 'NIFTY - Both - 5m - 10:00',  5,  14, 2,   40, 0,   50, 'first', '10:00', '15:14', 5, 'both'),
+    _touch_break(14, 'NIFTY - Buy - 3m - AM',      3,  7,  1.5, 25, 0,   50, 'close', '09:30', '11:30', 1, 'long'),
+    _touch_break(15, 'NIFTY - Buy - 5m',           5,  14, 2,   40, 0,   50, 'close', '09:30', '15:14', 1, 'long'),
+    _touch_break(16, 'NIFTY - Sell - 3m - AM',     3,  14, 1.5, 40, 0,   50, 'close', '10:00', '11:30', 5, 'short'),
+):
+    SPECS[_sp.n] = _sp
+
+# The Mine group's sub-tabs in order: (spec number, page key, DOM prefix). 8 keeps its original key.
+MINE_TABS = [(n, 'mine-nifty' if n == 8 else f'mine-{n}', 'mnn' if n == 8 else f'mn{n}')
+             for n, sp in SPECS.items() if sp.kind == 'tb']
 
 
 def new_day(date_str: str) -> Dict[str, Any]:

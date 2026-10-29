@@ -1,4 +1,4 @@
-"""Simple Trader 1-7 — the Backtest page's Simple Trader group (the Quantman runs) as live
+"""Simple Trader 1-7 (and the Mine group, 8-15) — the Backtest page's Simple Trader group (the Quantman runs) as live
 index-options algos, one independent algo per strategy.
 
 Each strategy is its own tab, thread, state and history files, Live/Paper toggle and flags:
@@ -43,7 +43,8 @@ class SimpleProfile(base.Profile):
     def __init__(self, spec: sim.Spec):
         super().__init__(spec.symbol, f'st{spec.n}', f'ST{spec.n}', spec.premium,
                          'BFO' if spec.symbol == 'SENSEX' else 'NFO',
-                         f'ST{spec.n}', 'Mine · ST Touch Break' if spec.kind == 'tb' else f'Simple Trader {spec.n}')
+                         f'ST{spec.n}', 'Mine · ST Touch Break' if spec.n == 8 else
+                         (f'Mine · {spec.tab}' if spec.kind == 'tb' else f'Simple Trader {spec.n}'))
         self.spec = spec
         self.rule = spec.rule
 
@@ -86,6 +87,9 @@ def settings(username, p: SimpleProfile) -> Dict[str, Any]:
     if sp.kind == 'tb':                        # an outside break candle: the side it closes on, or the first crossed
         v = _uvar(username, f'{p.pfx}_OUTSIDE_BAR', sp.fixed.get('outside_bar', 'first')).lower()
         s['outside_bar'] = v if v in ('close', 'first') else sp.fixed.get('outside_bar', 'first')
+        # what the tab's rule line shows: candles and the entry window are the row's, not settings
+        s.update(bar=sp.bar, entry_start=sp.entry_start, entry_end=sp.fixed.get('entry_end', '15:14'),
+                 exit_cutoff=sp.fixed.get('exit_cutoff', '15:14'), tab=sp.tab)
     for k, v in sp.params.items():
         n = _num(username, f'{p.pfx}_{k.upper()}', v)
         s[k] = int(n) if isinstance(v, int) and not isinstance(v, bool) else n
@@ -120,7 +124,9 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         return settings(self.username, self.p)
 
     def _window(self) -> Dict[str, str]:
-        return {'entry_start': self.spec.entry_start, 'entry_end': '15:14', 'exit_cutoff': '15:14'}
+        f = self.spec.fixed                 # the Mine rows carry their own entry window
+        return {'entry_start': self.spec.entry_start, 'entry_end': f.get('entry_end', '15:14'),
+                'exit_cutoff': f.get('exit_cutoff', '15:14')}
 
     def _decide(self, day, bars, s):
         return sim.on_bar(day, bars, s)

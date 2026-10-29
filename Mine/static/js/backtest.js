@@ -5651,6 +5651,20 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        // 🔖 A row as the Saved list keeps it: the swept numbers and the board's figures, not its trades
+        // (a 1,400-trade book is too big for localStorage many times over).
+        function savedEntry(it) {
+            const d = it.b.data, r = it.r, params = {};
+            Object.entries(r).forEach(([k, v]) => {
+                if (k !== 'book' && k !== 'option' && !k.startsWith('_') && (v === null || typeof v !== 'object')) params[k] = v;
+            });
+            return { key: [d.strategy, d.direction || '', d.symbol, it.label].join('|'),
+                     strategy: d.strategy, direction: d.direction || null, swept: d.swept || [],
+                     board: it.b.name, tag: it.tag, label: it.label, title: it.title,
+                     symbol: d.symbol || 'NIFTY', start_date: d.start_date, end_date: d.end_date, params };
+        }
+        const saved = (it) => !!(window.BtSaved && window.BtSaved.has(savedEntry(it).key));
+
         const picked = () => items.filter(it => picks.has(it.r));
         let rowsCache = null;
         function rows() {
@@ -5689,6 +5703,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     <a href="#" data-all="${esc(b.name)}">all</a><a href="#" data-none="${esc(b.name)}">none</a></div>
                     <div class="bc-strats">${mine.map(it => `<label class="bc-chip done" title="${esc(it.title)}">
                         <input type="checkbox" data-item="${it.id}" ${picks.has(it.r) ? 'checked' : ''}>
+                        <button type="button" class="bc-save${saved(it) ? ' on' : ''}" data-save="${it.id}"
+                                title="${saved(it) ? 'Saved — click to remove from 🔖 Saved' : 'Save this row to 🔖 Saved'}">${saved(it) ? '★' : '☆'}</button>
                         ${picks.has(it.r) ? `<i style="background:${it.color}"></i>` : ''}<b>${esc(it.tag)} · ${esc(it.label)}</b>
                         <span>${it.r.total_trades} trades · ₹${Math.round(it.r.net_rs || 0).toLocaleString('en-IN')}</span></label>`).join('')}</div>`;
             }).join('');
@@ -5878,6 +5894,18 @@ document.addEventListener('DOMContentLoaded', function() {
             paint();
         });
         chips.addEventListener('click', (e) => {
+            const sv = e.target.closest('[data-save]');
+            if (sv) {                                   // inside the chip's <label>: must not tick the row too
+                e.preventDefault();
+                const it = items.find(x => x.id === sv.dataset.save);
+                if (it && window.BtSaved) {
+                    const on = window.BtSaved.toggle(savedEntry(it));
+                    if (window.showNotification) window.showNotification(
+                        on ? `Saved ${it.name} — open it from 🔖 Saved` : `Removed ${it.name} from 🔖 Saved`, on ? 'success' : 'info');
+                    paintChips();
+                }
+                return;
+            }
             const a = e.target.closest('[data-all],[data-none]');
             if (!a) return;
             e.preventDefault();
@@ -5891,6 +5919,111 @@ document.addEventListener('DOMContentLoaded', function() {
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
         window._sbrCombinedClose = close;
+    })();
+
+    // 🔖 Saved: rows bookmarked from the Combined popup, kept in this browser. USE applies the row the
+    // way its board's USE does (direction included); ✕ removes it.
+    (function wireBtSaved() {
+        const KEY = 'bt_saved_strategies_v1';
+        const btn   = document.getElementById('btSavedBtn');
+        const modal = document.getElementById('btSavedModal');
+        const list  = document.getElementById('btSavedList');
+        const count = document.getElementById('btSavedCount');
+        const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch (e) { return []; } };
+        const store = (arr) => {
+            try { localStorage.setItem(KEY, JSON.stringify(arr)); }
+            catch (e) { if (window.showNotification) window.showNotification('Could not save — browser storage is unavailable', 'error'); }
+            paintCount();
+            if (modal && modal.style.display !== 'none') paint();
+        };
+        const paintCount = () => { if (count) { const n = load().length; count.textContent = n ? `(${n})` : ''; } };
+        window.BtSaved = {
+            has: (key) => load().some(x => x.key === key),
+            toggle(entry) {
+                const all = load();
+                const i = all.findIndex(x => x.key === entry.key);
+                if (i >= 0) { all.splice(i, 1); store(all); return false; }
+                all.unshift({ ...entry, id: 's' + Date.now().toString(36), saved_at: new Date().toISOString() });
+                store(all);
+                return true;
+            },
+        };
+        paintCount();
+        if (!btn || !modal || !list) return;
+        document.body.appendChild(modal);       // see wireSbrCombined: a contained ancestor breaks position:fixed
+
+        const inr = (v) => (v < 0 ? '−₹' : '₹') + Math.abs(Math.round(v || 0)).toLocaleString('en-IN');
+        const stratName = (v) => {
+            const o = [...(document.getElementById('strategySelect')?.options || [])].find(x => x.value === v);
+            return o ? o.textContent.trim() : v;
+        };
+        function paint() {
+            const all = load();
+            if (!all.length) {
+                list.innerHTML = '<div class="bc-empty">Nothing saved yet — click ☆ on a row in 🧩 Combined — Best Params.</div>';
+                return;
+            }
+            list.innerHTML = `<div class="bc-scroll"><table class="bc-tbl bt-saved-tbl">
+                <thead><tr><th></th><th>Strategy</th><th>Row</th><th>Params</th><th>Trades</th><th>Win%</th><th>PF</th>
+                    <th>Net P&amp;L</th><th>Max DD</th><th>Range</th><th>Saved</th></tr></thead>
+                <tbody>${all.map(x => {
+                    const p = x.params || {};
+                    return `<tr>
+                        <td class="bt-saved-act"><button type="button" class="bt-saved-use" data-use="${esc(x.id)}">USE</button>
+                            <button type="button" class="bt-saved-del" data-del="${esc(x.id)}" title="Remove from Saved">✕</button></td>
+                        <td><small>${esc(stratName(x.strategy))}</small></td>
+                        <td><b>${esc(x.board)} ${esc(x.tag)}</b></td>
+                        <td title="${esc(x.title)}">${esc(x.label)}</td>
+                        <td>${p.total_trades ?? ''}</td>
+                        <td>${p.win_rate != null ? Number(p.win_rate).toFixed(0) + '%' : ''}</td>
+                        <td>${p.profit_factor != null ? Number(p.profit_factor).toFixed(2) : ''}</td>
+                        <td class="${(p.net_rs || 0) >= 0 ? 'bc-pos' : 'bc-neg'}">${p.net_rs != null ? inr(p.net_rs) : ''}</td>
+                        <td class="bc-neg">${p.max_dd_rs != null ? inr(-Math.abs(p.max_dd_rs)) : ''}</td>
+                        <td><small>${esc(x.symbol)} ${esc(x.start_date)} → ${esc(x.end_date)}</small></td>
+                        <td><small>${esc((x.saved_at || '').slice(0, 10))}</small></td>
+                    </tr>`;
+                }).join('')}</tbody></table></div>`;
+        }
+        function use(x) {
+            const sel = document.getElementById('strategySelect');
+            if (sel && x.strategy && sel.value !== x.strategy) {
+                if (![...sel.options].some(o => o.value === x.strategy)) {
+                    if (window.showNotification) window.showNotification(`Strategy ${x.strategy} is not on this page any more`, 'error');
+                    return;
+                }
+                sel.value = x.strategy;
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            withDirection(applySbrStrategyResult(x.strategy, x.swept || []), x.direction)(x.params || {});
+            close();
+        }
+        const close = () => {
+            if (modal.style.display === 'none') return;
+            modal.style.display = 'none';
+            document.body.style.overflow = '';
+        };
+        btn.addEventListener('click', () => {
+            window._sbrCombinedClose?.();
+            paint();
+            modal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+        });
+        list.addEventListener('click', (e) => {
+            const u = e.target.closest('[data-use]'), d = e.target.closest('[data-del]');
+            if (!u && !d) return;
+            const all = load();
+            const x = all.find(s => s.id === (u || d).dataset[u ? 'use' : 'del']);
+            if (!x) return;
+            if (u) { use(x); return; }
+            if (!confirm(`Remove ${x.board} ${x.tag} (${x.label}) from Saved?`)) return;
+            store(all.filter(s => s.id !== x.id));
+        });
+        document.getElementById('btSavedClose')?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+        // Another tab saving or removing keeps this one's count honest.
+        window.addEventListener('storage', (e) => { if (e.key === KEY) { paintCount(); if (modal.style.display !== 'none') paint(); } });
     })();
 
     // A direction board's Use / Default also sets the Direction box the board was swept for.

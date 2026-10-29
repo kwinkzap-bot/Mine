@@ -348,3 +348,89 @@ def test_the_live_close_entries_are_the_backtests_trades():
                 got.add(ev['bar'][:16])
                 ev['trade']['status'] = 'closed'                               # one at a time: free the slot
     assert want and want <= got
+
+
+# ── The rest of the Mine group: 9-16, the other rows of the Combined ⚡ Optimize set of 2026-10-29 ──
+
+from types import SimpleNamespace                                              # noqa: E402
+
+from trading_app.service import simple_trader_live_engine as sim               # noqa: E402
+
+# n: (tab, bar, st len, st factor, wick, tol, body, outside bar, entry from, entry until, max trades, direction)
+MINE_ROWS = {
+    9:  ('NIFTY - Both - 3m - AM',    3,  7,  1.5, 25, 0,   50, 'close', '10:00', '11:30', 1, 'both'),
+    10: ('NIFTY - Both - 15m',        15, 7,  1.5, 40, 0.1, 50, 'close', '10:00', '15:14', 1, 'both'),
+    11: ('NIFTY - Both - 5m - AM',    5,  14, 2,   40, 0,   50, 'first', '09:30', '11:30', 5, 'both'),
+    12: ('NIFTY - Both - 5m - 09:30', 5,  14, 2,   40, 0,   50, 'first', '09:30', '15:14', 5, 'both'),
+    13: ('NIFTY - Both - 5m - 10:00', 5,  14, 2,   40, 0,   50, 'first', '10:00', '15:14', 5, 'both'),
+    14: ('NIFTY - Buy - 3m - AM',     3,  7,  1.5, 25, 0,   50, 'close', '09:30', '11:30', 1, 'long'),
+    15: ('NIFTY - Buy - 5m',          5,  14, 2,   40, 0,   50, 'close', '09:30', '15:14', 1, 'long'),
+    16: ('NIFTY - Sell - 3m - AM',    3,  14, 1.5, 40, 0,   50, 'close', '10:00', '11:30', 5, 'short'),
+}
+
+
+@pytest.mark.parametrize('n', sorted(MINE_ROWS))
+def test_each_mine_row_is_its_own_paper_algo_with_the_rows_numbers(n, tmp_path, monkeypatch):
+    tab, bar, stp, stm, wick, tol, body, outside, start, end, mx, direction = MINE_ROWS[n]
+    monkeypatch.setattr(algo, '_DIR', str(tmp_path))
+    fake = lambda u, name, default='': default                               # noqa: E731 — an empty env file
+    monkeypatch.setattr(algo, '_uvar', fake)
+    monkeypatch.setattr(algo.base, '_uvar', fake)
+    pr = algo.PROFILES[n]
+    assert pr.pfx == f'ST{n}' and pr.label == f'Mine · {tab}' and pr.spec.tab == tab and pr.spec.kind == 'tb'
+    assert pr.state_file().endswith(f'simple_trader_{n}_state.json')
+    s = algo.settings('u', pr)
+    assert s['mode'] == 'paper'                                               # nothing live until the tab says so
+    assert (s['bar'], s['st_period'], s['st_mult'], s['stop_touch'], s['min_wick_pct']) == (bar, stp, stm, 1, wick)
+    assert (s['touch_tol_pct'], s['min_body_pct'], s['outside_bar'], s['max_trades']) == (tol, body, outside, mx)
+    assert (s['direction'], s['premium'], s['sl_pct'], s['tsl_x'], s['tsl_y']) == (direction, 250, 0, 0, 0)
+    assert algo.SimpleTraderAlgo._window(SimpleNamespace(spec=pr.spec)) == {
+        'entry_start': start, 'entry_end': end, 'exit_cutoff': '15:14'}
+    from trading_app.app.routes import api
+    assert api._STBB_FLAGS[f'st{n}'] == f'ST{n}'
+
+
+def test_the_mine_tabs_are_8_to_16_with_8_keeping_its_key_and_unique_names():
+    assert [n for n, _, _ in sim.MINE_TABS] == list(range(8, 17))
+    assert sim.MINE_TABS[0] == (8, 'mine-nifty', 'mnn')
+    assert len({sim.SPECS[n].tab for n, _, _ in sim.MINE_TABS}) == 9
+    assert len({k for _, k, _ in sim.MINE_TABS}) == 9 and len({p for _, _, p in sim.MINE_TABS}) == 9
+
+
+@pytest.mark.parametrize('n', sorted(MINE_ROWS))
+def test_each_mine_row_enters_live_on_the_candles_its_backtest_trades(n):
+    """The row's own numbers and entry window: every candle its backtest enters on, over 20 sessions, is
+    entered live at that candle's close (and never outside the window)."""
+    tab, bar, stp, stm, wick, tol, body, outside, start, end, mx, direction = MINE_ROWS[n]
+    for seed in range(n, n + 30):                                            # the first data that gives it trades
+        rng = np.random.default_rng(seed)
+        frames, price = [], 22000.0
+        for d in pd.bdate_range('2026-09-01', periods=20):                   # 20 sessions of the row's candles
+            rows = []
+            for k in range(375 // bar):
+                o = price
+                price += rng.normal(0, 4 * bar ** 0.5) + (0.6 if (d.day // 3) % 2 else -0.6) * bar
+                rows.append((o, max(o, price) + abs(rng.normal(0, 2)), min(o, price) - abs(rng.normal(0, 2)), price))
+            frames.append(_bars(rows, start=f'{d.date()} 09:15', step=bar))
+        df = pd.concat(frames)
+        eng = StTouchBreakEngine(df, st_period=stp, st_mult=stm, modes='bounce', direction=direction,
+                                 min_wick_pct=wick, touch_tol_pct=tol, min_body_pct=body, outside_bar=outside,
+                                 entry_start=start, entry_end=end, exit_cutoff='15:14',
+                                 max_trades_per_day=99, bar_minutes=bar)
+        want = {tr['entry_time'][:16] for tr in eng.simulate()}
+        if want:
+            break
+    s = dict(sim.SPECS[n].params, direction=direction, outside_bar=outside, max_trades=99,
+             entry_start=start, entry_end=end, exit_cutoff='15:14', stop_touch=0)
+    got, day = set(), None
+    for k in range(3, len(df)):
+        date_str = str(df.index[k].date())
+        if day is None or day['date'] != date_str:
+            day = tb.new_day(date_str)
+        for ev in tb.on_bar(day, df.iloc[:k + 1], s, bar_minutes=bar):
+            if ev['event'] == 'entry':
+                got.add(ev['bar'][:16])
+                ev['trade']['status'] = 'closed'                               # one at a time: free the slot
+    assert want, 'the synthetic sessions gave the backtest nothing to compare'
+    assert want <= got
+    assert all(start <= t[11:16] < end for t in got)
