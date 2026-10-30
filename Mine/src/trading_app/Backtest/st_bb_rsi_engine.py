@@ -29,6 +29,7 @@ days (not reset each morning), as they do on a chart.
 """
 from __future__ import annotations
 
+import bisect
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -204,8 +205,15 @@ class StBbRsiEngine:
                  rsi_lower: Optional[float] = None, htf: str = 'off',
                  use_rsi: bool = True, use_bb: bool = True, use_st: bool = True,
                  use_pivot: bool = True, positional: bool = False,
-                 use_wr: bool = False, wr_period: int = 14, wr_level: float = -30.0):
+                 use_wr: bool = False, wr_period: int = 14, wr_level: float = -30.0,
+                 stop_mode: str = 'close', minutes: Optional[pd.DataFrame] = None):
         self.df = df.copy()
+        # The SuperTrend exit: 'close' = a candle closes past the line (sold at the next open);
+        # 'touch' = the index trades through the PREVIOUS candle's line, sold there inside the bar
+        # (ST Touch Break's stop). `minutes` (the 1-minute candles, optional) times that touch to
+        # the minute for the option leg; without them it is the bar's own stamp.
+        self.stop_mode = stop_mode if stop_mode in ('close', 'touch') else 'close'
+        self.minutes = minutes
         # Positional: no square-off and no end-of-day exit; a trade is carried across
         # sessions until SuperTrend turns against it (the 1-hour timeframe), and
         # `max_trades_per_day` then caps ENTRIES per day.
@@ -239,6 +247,7 @@ class StBbRsiEngine:
         self._prepare()
         self._base_cache: Optional[Dict[str, Any]] = None
         self._ind_cache: Dict[tuple, Any] = {}
+        self._exit_cache: Dict[str, Any] = {}
 
     def _prepare(self):
         if not pd.api.types.is_datetime64_any_dtype(self.df.index):
@@ -292,6 +301,66 @@ class StBbRsiEngine:
                 self._ind_cache[k] = supertrend(b['h'], b['l'], b['c'], key[0], key[1])
         return self._ind_cache[k]
 
+    def _exit_tables(self, st_dir: np.ndarray, cutoff: int) -> Tuple[Dict[int, np.ndarray], np.ndarray]:
+        """({side: per bar, the first bar at/after it whose SuperTrend direction is `side`
+        (len = none)}, per bar, the first bar of its session at/after the `cutoff` minute
+        (the session's last bar + 1 = none)). Built once per SuperTrend / cutoff and kept
+        (only the latest: a sweep walks one SuperTrend through all its other numbers)."""
+        cache = self._exit_cache
+        hit = cache.get('flip')
+        if hit is None or hit[0] is not st_dir:
+            n = len(st_dir)
+            ar = np.arange(n, dtype=np.int64)
+            cache['flip'] = hit = (st_dir, {v: np.minimum.accumulate(np.where(st_dir == v, ar, n)[::-1])[::-1]
+                                            for v in (-1, 1)})
+        cut = cache.get('cut')
+        if cut is None or cut[0] != cutoff:
+            b = self._base()
+            tmin, starts, ends = b['tmin'], b['starts'], b['ends']
+            first = np.minimum.reduceat(np.where(tmin >= cutoff, np.arange(len(tmin)), len(tmin)), starts)
+            first = np.minimum(first, ends + 1)
+            cache['cut'] = cut = (cutoff, np.repeat(first, ends - starts + 1))
+        return hit[1], cut[1]
+
+    def _touch_tables(self, st_dir: np.ndarray, st_line: np.ndarray) -> Dict[int, np.ndarray]:
+        """{side: per bar, the first bar at/after it that trades through the previous bar's
+        SuperTrend line while that line was on `side` (len = none)} — a long's stop (side 1, the
+        low reaches the line) and a short's (side -1, the high does). Cached like `_exit_tables`."""
+        hit = self._exit_cache.get('touch')
+        if hit is None or hit[0] is not st_dir:
+            b = self._base()
+            n = len(st_dir)
+            ar = np.arange(n, dtype=np.int64)
+            prev_dir = np.concatenate(([0], st_dir[:-1]))
+            prev = np.concatenate(([np.nan], st_line[:-1]))
+            with np.errstate(invalid='ignore'):
+                on = {1: (prev_dir == 1) & (b['l'] <= prev), -1: (prev_dir == -1) & (b['h'] >= prev)}
+            self._exit_cache['touch'] = hit = (st_dir, {v: np.minimum.accumulate(np.where(m, ar, n)[::-1])[::-1]
+                                                         for v, m in on.items()})
+        return hit[1]
+
+    def _cross_minute(self, k: int, level: float, falling: bool) -> str:
+        """The first minute of bar k that traded through `level` (down when `falling`), from
+        `self.minutes`; the bar's own stamp without them (or when no minute shows it)."""
+        ts = self._base()['ts']
+        m = self.minutes
+        if m is None or not len(m):
+            return ts[k]
+        hit = self._exit_cache.get('minutes')
+        if hit is None or hit[0] is not m:
+            mi = m.set_index('date' if 'date' in m.columns else 'datetime') if not isinstance(
+                m.index, pd.DatetimeIndex) else m
+            self._exit_cache['minutes'] = hit = (m, pd.to_datetime(mi.index).to_numpy(dtype='datetime64[ns]'),
+                                                 mi['low'].to_numpy(dtype=float), mi['high'].to_numpy(dtype=float))
+        _, m_ts, m_lo, m_hi = hit
+        start = np.datetime64(ts[k].replace(' ', 'T'), 'ns')
+        same_day = k + 1 < len(ts) and ts[k + 1][:10] == ts[k][:10]
+        end = np.datetime64(ts[k + 1].replace(' ', 'T'), 'ns') if same_day else start + np.timedelta64(7, 'h')
+        lo, hi = np.searchsorted(m_ts, start, 'left'), np.searchsorted(m_ts, end, 'left')
+        seg = (m_lo[lo:hi] <= level) if falling else (m_hi[lo:hi] >= level)
+        at = np.flatnonzero(seg)
+        return pd.Timestamp(m_ts[lo + at[0]]).strftime('%Y-%m-%d %H:%M:%S') if len(at) else ts[k]
+
     # ── Simulation ────────────────────────────────────────────────────────────
 
     def run(self) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -308,7 +377,7 @@ class StBbRsiEngine:
                  require_green=self.require_green, direction=self.direction, htf=self.htf,
                  use_rsi=self.use_rsi, use_bb=self.use_bb, use_st=self.use_st, use_pivot=self.use_pivot,
                  positional=self.positional, use_wr=self.use_wr, wr_period=self.wr_period,
-                 wr_level=self.wr_level)
+                 wr_level=self.wr_level, stop_mode=self.stop_mode)
         P.update(over)
         if 'rsi_level' in over and 'rsi_lower' not in over:     # a swept upper line keeps the mirror
             P['rsi_lower'] = 100.0 - P['rsi_level']
@@ -366,7 +435,8 @@ class StBbRsiEngine:
                 'lv': {'bb_up': bb_up, 'bb_lo': bb_lo, 'r1': b['r1'], 's1': b['s1']}}
 
     def simulate(self, **over) -> List[Dict[str, Any]]:
-        """Trades for this engine's settings, any of which `over` replaces."""
+        """Trades for this engine's settings, any of which `over` replaces. `lean=True` (a
+        sweep, which reads only times and P&L) leaves each trade's `signal` card out."""
         P = self._params(over)
         b = self._base()
         o, c, tmin = b['o'], b['c'], b['tmin']
@@ -383,28 +453,45 @@ class StBbRsiEngine:
         if P['positional']:                             # one continuous run, no day boundaries
             return self._day(0, len(c) - 1, cand, o, c, signal, st_dir, st_line, rsi_v, lv,
                              tmin, b['ts'], P)
+        # candidates are sorted, so each day's are one slice of them
         day_of = np.searchsorted(starts, cand, side='right') - 1
-        for d in np.unique(day_of):
-            a_, b_ = int(starts[d]), int(ends[d])
-            idxs = cand[day_of == d]
-            trades.extend(self._day(a_, b_, idxs, o, c, signal, st_dir, st_line, rsi_v, lv,
-                                    tmin, b['ts'], P))
+        cuts = np.flatnonzero(np.diff(day_of)) + 1
+        cand_l = cand.tolist()
+        for lo, hi in zip([0] + cuts.tolist(), cuts.tolist() + [len(cand_l)]):
+            d = day_of[lo]
+            trades.extend(self._day(int(starts[d]), int(ends[d]), cand_l[lo:hi], o, c, signal, st_dir,
+                                    st_line, rsi_v, lv, tmin, b['ts'], P))
         return trades
 
     def _day(self, a, b, idxs, o, c, signal, st_dir, st_line, rsi_v, lv, tmin, ts, P):
+        """The trades of bars a..b (one session, or the whole run when positional) from the
+        sorted signal bars `idxs`. A trade is filled at the next open and held until the first
+        of: the square-off minute (sold at that bar's open), SuperTrend closing against it (sold
+        at the next open), or bar b. Each exit is looked up, not walked to bar by bar: the sweep
+        runs this tens of thousands of times on 1-minute candles."""
         out = []
-        free_from = a                                   # a new trade cannot start before the last one ended
+        idxs = idxs.tolist() if isinstance(idxs, np.ndarray) else list(idxs)
+        if not idxs:
+            return out
         pos = P['positional']
         cutoff = 10 ** 9 if pos else P['exit_cutoff']   # positional: no clock exit
+        nxt, t_cuts = self._exit_tables(st_dir, P['exit_cutoff'])
+        touch = self._touch_tables(st_dir, st_line) if P['use_st'] and P['stop_mode'] == 'touch' else None
+        # the first bar at/after the square-off minute (times only rise inside a session)
+        t_cut = b + 1 if pos else int(t_cuts[a])
+        lean = P.get('lean', False)
         per_day: Dict[str, int] = {}
-        for i in idxs:
+        j, n_idx = 0, len(idxs)
+        while j < n_idx:
+            i = idxs[j]
+            if i >= b:
+                break
             if pos:
                 if per_day.get(ts[i][:10], 0) >= P['max_trades_per_day']:
+                    j += 1
                     continue
             elif len(out) >= P['max_trades_per_day']:
                 break
-            if i < free_from or i >= b:
-                continue
             e = i + 1                                   # filled at the next open
             if tmin[e] >= cutoff:
                 break
@@ -412,30 +499,43 @@ class StBbRsiEngine:
             exit_flip = -1 if is_long else 1             # SuperTrend turning against the trade
             entry = o[e]
             exit_k, exit_px, reason = b, c[b], ('Still Open' if pos else 'EOD Exit')
-            for k in range(e, b + 1):
-                if k > e and tmin[k] >= cutoff:
-                    exit_k, exit_px, reason = k, o[k], 'Time Exit'
-                    break
-                if P['use_st'] and st_dir[k] == exit_flip:               # SuperTrend broke against us on this close
-                    name = 'SuperTrend Down' if is_long else 'SuperTrend Up'
-                    if k < b and tmin[k + 1] < cutoff:
-                        exit_k, exit_px, reason = k + 1, o[k + 1], name
-                    else:
-                        # The flip is only known when this candle closes, which is at or
-                        # after the square-off minute: by then the clock has already
-                        # squared the trade off (the live algo does exactly that).
-                        exit_k, exit_px, reason = k, c[k], ('Still Open' if pos else 'Time Exit')
-                    break
+            k_flip = int(nxt[exit_flip][e]) if P['use_st'] else b + 1
+            # touch stop: from the bar after the entry, the index trading through the previous line
+            k_touch = int(touch[1 if is_long else -1][e + 1]) if touch is not None and e + 1 <= b else b + 1
+            intrabar = False
+            if t_cut <= b and t_cut <= min(k_flip, k_touch):    # t_cut > e: the entry bar is before the cutoff
+                exit_k, exit_px, reason = t_cut, o[t_cut], 'Time Exit'
+            elif k_touch <= b and k_touch <= k_flip:    # touched first (at the flip bar too: inside it)
+                line = st_line[k_touch - 1]
+                exit_k, intrabar = k_touch, True
+                exit_px = min(o[k_touch], line) if is_long else max(o[k_touch], line)
+                reason = 'SuperTrend stop'
+            elif k_flip <= b:                           # SuperTrend broke against us on this close
+                k = k_flip
+                name = 'SuperTrend Down' if is_long else 'SuperTrend Up'
+                if k < b and tmin[k + 1] < cutoff:
+                    exit_k, exit_px, reason = k + 1, o[k + 1], name
+                else:
+                    # The flip is only known when this candle closes, which is at or
+                    # after the square-off minute: by then the clock has already
+                    # squared the trade off (the live algo does exactly that).
+                    exit_k, exit_px, reason = k, c[k], ('Still Open' if pos else 'Time Exit')
             pnl = (exit_px - entry) if is_long else (entry - exit_px)
             if pos:
                 per_day[ts[i][:10]] = per_day.get(ts[i][:10], 0) + 1
+            d_in, d_out = ts[e][:10], ts[exit_k][:10]
+            if intrabar:
+                # gapped through the line: out at the open; else at the minute it crossed (not lean)
+                gapped = (o[exit_k] <= exit_px) if is_long else (o[exit_k] >= exit_px)
+                out_ts = ts[exit_k] if gapped or lean else self._cross_minute(exit_k, exit_px, is_long)
             out.append({
                 'entry_time': ts[e],
                 # A square-off is a clock event, not a candle one: Quantman sells at
                 # 15:14 itself, not at the open of the next 3-minute bar (15:15).
                 'exit_time': (ts[exit_k][:11] + f"{P['exit_cutoff'] // 60:02d}:{P['exit_cutoff'] % 60:02d}:00"
-                              if reason == 'Time Exit' else ts[exit_k]),
-                'days_held': (pd.Timestamp(ts[exit_k][:10]) - pd.Timestamp(ts[e][:10])).days,
+                              if reason == 'Time Exit' else (out_ts if intrabar else ts[exit_k])),
+                **({'intrabar_exit': True} if intrabar else {}),
+                'days_held': 0 if d_in == d_out else (pd.Timestamp(d_out) - pd.Timestamp(d_in)).days,
                 'type': 'Long' if is_long else 'Short',
                 'pattern': 'ST+BB+RSI+R1' if is_long else 'ST+BB+RSI+S1',
                 'entry_price': round(float(entry), 2), 'exit_price': round(float(exit_px), 2),
@@ -443,12 +543,14 @@ class StBbRsiEngine:
                 'pnl': round(float(pnl), 2),
                 'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
                 'exit_reason': reason,
-                'signal': {'rsi': _r(rsi_v[i], 1), 'close': _r(c[i]),
-                           'bb_band': _r((lv['bb_up'] if is_long else lv['bb_lo'])[i]),
-                           'supertrend': _r(st_line[i]),
-                           'pivot_level': _r((lv['r1'] if is_long else lv['s1'])[i])},
+                'signal': None if lean else {
+                    'rsi': _r(rsi_v[i], 1), 'close': _r(c[i]),
+                    'bb_band': _r((lv['bb_up'] if is_long else lv['bb_lo'])[i]),
+                    'supertrend': _r(st_line[i]),
+                    'pivot_level': _r((lv['r1'] if is_long else lv['s1'])[i])},
             })
-            free_from = max(exit_k, e) + 1
+            # a new trade cannot start before this one ended
+            j = bisect.bisect_left(idxs, max(exit_k, e) + 1, j)
         return out
 
 
@@ -478,18 +580,35 @@ MIN_WIN_RATE = 50.0      # the Simple Trader board keeps combinations that win a
 MIN_BOARD_TRADES = 150   # ...and that traded enough for a profit factor to mean something (30 trades gave PF 10)
 
 
+def return_dd(r: Dict[str, Any]) -> float:
+    """Net P&L over max drawdown (rupees when priced on the option, else index points): what the
+    sweep earned per unit of the worst fall it had to sit through."""
+    net = r.get('net_rs', r['total_pnl']) or 0.0
+    dd = abs(r.get('max_dd_rs', r['max_drawdown']) or 0.0)
+    return round(net / dd, 2) if dd > 0 else (999.0 if net > 0 else 0.0)
+
+
 def rank_quality(rows: List[Dict[str, Any]], current: Optional[Dict[str, Any]] = None,
-                 min_win: float = MIN_WIN_RATE, min_board: int = MIN_BOARD_TRADES) -> Tuple[List[Dict[str, Any]], int]:
+                 min_win: float = MIN_WIN_RATE, min_board: int = MIN_BOARD_TRADES,
+                 by: str = 'pf') -> Tuple[List[Dict[str, Any]], int]:
     """Order a sweep the way a trader reads it, not by raw points (raw points reward
     loose, high-trade settings that a premium stop then cuts down): keep win rate
     >= `min_win`, at least `min_board` trades and a profit over the most recent 30 % of the sessions, then rank on
     profit factor, then lowest max drawdown, then highest net P&L (rupees when priced on the option). Falls back to every row when too few
     pass, so the board is never empty. Stamps `current['rank']` (None when the current
-    settings do not pass the filter). Returns (ordered rows, how many passed)."""
+    settings do not pass the filter). Returns (ordered rows, how many passed).
+    `by='return_dd'` ranks on `return_dd` instead (stamped on every row as `ret_dd`), then net P&L:
+    profit factor rewards a rule that hardly trades, this rewards profit for the drawdown taken."""
     # An option-priced row carries the results cards' own rupee figures: drawdown and net P&L are
     # read from those (the numbers BACKTEST shows); an index row falls back to its points.
     def key(r):
+        if by == 'return_dd':
+            return (-r['ret_dd'], -r.get('net_rs', r['total_pnl']), r.get('max_dd_rs', r['max_drawdown']))
         return (-r['profit_factor'], r.get('max_dd_rs', r['max_drawdown']), -r.get('net_rs', r['total_pnl']))
+
+    if by == 'return_dd':
+        for r in rows + ([current] if current is not None else []):
+            r['ret_dd'] = return_dd(r)
 
     def passes(r):
         return (r['win_rate'] >= min_win and r.get('recent_pnl', 0) > 0 and r.get('net_rs', 1) > 0

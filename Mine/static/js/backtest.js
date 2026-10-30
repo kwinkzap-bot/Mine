@@ -1179,7 +1179,7 @@ document.addEventListener('DOMContentLoaded', function() {
         st_all_indicators: { sub: 'ALL Simple Trader indicators in one rule — long NIFTY CE, 3-minute candles on the index', steps: [
             ['Entry rule', 'On a closed 3-min candle of the NIFTY index ALL the ticked indicators must agree: close above SuperTrend(10, 2) and EMA(200), RSI(14) between 60 and 85, CCI(20) above 100, Williams %R(14) above -30, close above the upper Bollinger Band(20, 2), close above R1 of today\'s Traditional pivots, and that CPR narrow (width under 0.2 %). Untick an indicator to drop it from the rule.'],
             ['Entry', 'At the NEXT candle\'s open: buy 1 lot of the current-week CE whose premium is nearest 250.'],
-            ['Exit', 'A candle closes below SuperTrend, the option\'s stop-loss or trailing stop is hit, or the 15:14 square-off. With SuperTrend unticked only the stops and the square-off end a trade.'],
+            ['Exit', 'A candle closes below SuperTrend (Stop: flip), or — Stop: touched — the index trades through the previous candle\'s SuperTrend line, sold that minute; else the option\'s stop-loss or trailing stop, or the 15:14 square-off. With SuperTrend unticked only the stops and the square-off end a trade.'],
             ['Stop-loss', '15% under the entry premium; trailing: for every 15% (X) the premium rises, the stop moves up 10% (Y) of the entry premium.'],
             ['Re-entry', 'If the option\'s own stop ends a trade, the next candle that still signals buys again (Next Minute).'],
             ['Limit', 'Trade window 09:15-15:14, up to 5 transactions a day, one open at a time.']] },
@@ -2051,6 +2051,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     payload['use_' + k.toLowerCase()] = document.getElementById('saiUse' + k)?.checked ?? true;
                 });
                 payload.cpr_narrow     = sen('saiCprNarrow', 0.2);
+                payload.stop_mode      = sev('saiStopMode', 'close');
                 payload.sl_pct         = sen('saiSlPct', 0);
                 payload.tsl_x          = sen('saiTslX', 0);
                 payload.tsl_y          = sen('saiTslY', 0);
@@ -5425,13 +5426,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
     const SBR_TF_LABEL = { minute: '1m', '2minute': '2m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
                            '60minute': '1h', day: '1d' };
+    const SBR_TF_NAME = { minute: '1 Minute', '2minute': '2 Minute', '3minute': '3 Minute', '5minute': '5 Minute',
+                          '15minute': '15 Minute', '60minute': '1 Hour', day: '1 Day' };
     const SBR_TF_MIN = { minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '60minute': 60, day: 375 };
     const SBR_GATE_BOX = { st: 'St', rsi: 'Rsi', bb: 'Bb', wr: 'Wr', cci: 'Cci', ema: 'Ema', pivot: 'Pivot' };
     const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
                          st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai', st_touch_break: 'stb' };
 
-    function sbrStrategyCols(swept) {
+    function sbrStrategyCols(swept, rankBy) {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
+        // ALL Indicators ranks on net P&L ÷ max drawdown: shown beside the figures it is sorted on.
+        const retDd = rankBy !== 'return_dd' ? [] : [{ label: 'Return / DD', key: 'ret_dd',
+            fmt: r => `<b title="Net P&L ÷ max drawdown — the board's ranking">${(r.ret_dd ?? 0).toFixed(1)}</b>` }];
         return [
             { label: '#', key: null, fmt: (r, i) => r._current ? '★ Default' : i + 1 },
             ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k,
@@ -5440,6 +5446,7 @@ document.addEventListener('DOMContentLoaded', function() {
             { label: 'Win%', key: 'win_rate', fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
             { label: 'Total (pts)', key: 'total_pnl', fmt: r => pnl(r.total_pnl) },
             { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => pnl(r.recent_pnl) },
+            ...retDd,
             { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
             { label: 'Index PF', key: 'index_pf', fmt: r => r.index_pf != null ? r.index_pf.toFixed(2) : '' },
             { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
@@ -5475,12 +5482,36 @@ document.addEventListener('DOMContentLoaded', function() {
         };
     }
 
+    // Boards past the template's three (ALL Indicators: one per timeframe) are built here, with the
+    // same markup and id scheme; the 🧩 Combined popup finds them by their class.
+    function sbrExtraBoards(n) {
+        document.querySelectorAll('.sbr-extra-board').forEach(el => el.remove());
+        const body = document.getElementById('sbrOptBody');
+        const out = [];
+        for (let i = 0; i < n && body; i++) {
+            const id = `sbrOptX${i}`;
+            const wrap = document.createElement('div');
+            wrap.id = id + 'Board';
+            wrap.className = 'sbr-extra-board';
+            wrap.style.marginTop = '16px';
+            wrap.dataset.grid = id + 'Grid';
+            wrap.dataset.title = id + 'Title';
+            wrap.innerHTML = `<div class="opt-header"><div style="display:flex;align-items:center;gap:8px;">`
+                + `<h4 id="${id}Title" style="margin:0;"></h4></div><small id="${id}Meta"></small></div>`
+                + `<div class="opt-table-wrap"><div id="${id}Grid"></div></div>`;
+            body.appendChild(wrap);
+            out.push({ grid: id + 'Grid', meta: id + 'Meta', title: id + 'Title' });
+        }
+        return out;
+    }
+
     function renderSbrOptResults(data) {
         const panel   = document.getElementById('stBbRsiOptimisePanel');
         const title   = document.getElementById('sbrOptTitle');
         const posWrap = document.getElementById('sbrOptPosBoard');
         const thirdWrap = document.getElementById('sbrOptThirdBoard');
         if (thirdWrap) thirdWrap.style.display = 'none';
+        sbrExtraBoards(0);
         if (data.direction_boards) {
             // ST Touch Break: one board per direction, each swept and ranked on its own trades.
             const DIR = { both: ['🔀 Both (BUY + SELL)', 'CE on a long setup · PE on a short one'],
@@ -5499,8 +5530,22 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             if (posWrap) posWrap.style.display = '';
             if (thirdWrap) thirdWrap.style.display = '';
+        } else if (data.boards && data.board_order) {
+            // ALL Indicators: one board per timeframe (1m … 1d), each ranked on its own rows.
+            const order = data.board_order.filter(tf => data.boards[tf]);
+            const extra = sbrExtraBoards(Math.max(0, order.length - 1));
+            order.forEach((tf, i) => {
+                const b = data.boards[tf];
+                const heading = `${b.positional ? '📅' : '⚡'} Best Params · ${SBR_TF_NAME[tf] || tf}`
+                    + `<br><small>${b.positional ? 'Positional — carried across sessions' : 'Intraday'}</small>`;
+                const slot = i === 0 ? { grid: 'sbrOptGrid', meta: 'sbrOptMeta', title: 'sbrOptTitle' } : extra[i - 1];
+                document.getElementById(slot.title).innerHTML = heading;
+                renderSbrBoard({ ...b, symbol: data.symbol, start_date: data.start_date, end_date: data.end_date,
+                                 interval: SBR_TF_LABEL[tf] || tf }, slot.grid, document.getElementById(slot.meta));
+            });
+            if (posWrap) posWrap.style.display = 'none';
         } else if (data.boards) {
-            // ALL Indicators: one board per mode, every timeframe of it searched and ranked together.
+            // ALL Indicators before per-timeframe boards: one board per mode, its timeframes ranked together.
             const board = (b) => ({ ...b, symbol: data.symbol, start_date: data.start_date, end_date: data.end_date,
                                     interval: (b.timeframes || []).map(tf => SBR_TF_LABEL[tf] || tf).join(' · ') });
             if (title) title.innerHTML = '⚡ Intraday Best Params<br><small>1m · 2m · 3m · 5m · 15m</small>';
@@ -5518,6 +5563,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderSbrBoard(data, gridId, metaEl) {
         const gridEl = document.getElementById(gridId);
         if (gridEl) gridEl._board = data;           // the 🧩 Combined popup's chips and cards read it
+        const rankText = data.rank_by === 'return_dd'
+            ? 'ranked on net P&L ÷ max drawdown (most profit for the drawdown taken), then net P&L'
+            : 'ranked on profit factor, then lowest drawdown';
         if (data.timeframes && !data.timeframes.length) {
             if (metaEl) metaEl.textContent = 'No candles for these timeframes in the range.';
             _mountSingleOptGrid(gridId, [], sbrStrategyCols([]), 'profit_factor', () => {});
@@ -5528,9 +5576,9 @@ document.addEventListener('DOMContentLoaded', function() {
             + (data.passed != null ? ` · ${data.passed} also win ≥ ${data.min_win}% on ≥ ${data.min_board_trades ?? 150} trades with a recent profit` : '') + ` · `
             + `${data.symbol} ${data.interval} · ${data.start_date} → ${data.end_date} · `
             + (data.basis === 'option'
-                ? `the best index rows were re-priced on the option with your SL / TSL (${data.verified} checked) — these are the numbers BACKTEST shows; ranked on profit factor, then lowest drawdown, `
+                ? `the best index rows were re-priced on the option with your SL / TSL (${data.verified} checked) — these are the numbers BACKTEST shows; ${rankText}, `
                 : (data.mode === 'simple' || data.mode === 'strategy'
-                    ? 'ranked on profit factor, then lowest drawdown, on index points, ' : 'ranked on index points, '))
+                    ? `${rankText}, on index points, ` : 'ranked on index points, '))
             + `"recent" = since ${data.recent_from}`;
         const simple = data.mode === 'simple';
         const strat  = data.mode === 'strategy';
@@ -5570,8 +5618,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         : `— outside the quality filter (win < ${data.min_win ?? 50}%, under ${data.min_board_trades ?? 150} trades, no recent profit or a net loss)`);
         if (metaEl && data.option_error) metaEl.textContent += `. Option pricing unavailable (${data.option_error}); showing index points.`;
         _mountSingleOptGrid(gridId, rows,
-                            withRs(strat ? sbrStrategyCols(data.swept || []) : SBR_SIMPLE_COLS),
-                            (simple || strat) ? 'profit_factor' : 'total_pnl',
+                            withRs(strat ? sbrStrategyCols((data.swept || []).filter(k => k !== 'timeframe'
+                                || (data.timeframes || []).length !== 1), data.rank_by) : SBR_SIMPLE_COLS),
+                            strat && data.rank_by === 'return_dd' ? 'ret_dd' : ((simple || strat) ? 'profit_factor' : 'total_pnl'),
                             strat ? withDirection(applySbrStrategyResult(data.strategy, data.swept || []), data.direction)
                                   : applySbrSimpleResult,
                             { timeframe: r => SBR_TF_MIN[r.timeframe] ?? 0 },
@@ -5603,7 +5652,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const BOARDS = [['sbrOptMainBoard', 'sbrOptGrid', 'sbrOptTitle'],
                         ['sbrOptPosBoard', 'sbrOptPosGrid', 'sbrOptPosTitle'],
                         ['sbrOptThirdBoard', 'sbrOptThirdGrid', 'sbrOptThirdTitle']];
-        const BOARD_COLORS = ['#2563eb', '#dc2626', '#16a34a'];
+        const BOARD_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777'];
+        const slots = () => [...BOARDS, ...[...document.querySelectorAll('.sbr-extra-board')]
+            .map(el => [el.id, el.dataset.grid, el.dataset.title])];
         const ROW_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777',
                             '#65a30d', '#0f766e', '#9333ea', '#ea580c', '#475569'];
         const B = { entry: 0, exit: 1, side: 2, strike: 3, ep: 4, xp: 5, lots: 6, reason: 7, gross: 8, net: 9 };
@@ -5620,10 +5671,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Every row that carries its trades, in the board's own ranking (★ = the page's settings).
         function collect() {
-            boards = BOARDS.map(([wrapId, gridId, titleId], i) => {
+            boards = slots().map(([wrapId, gridId, titleId], i) => {
                 const wrap = document.getElementById(wrapId), grid = document.getElementById(gridId);
                 if (!wrap || !grid || wrap.style.display === 'none' || !grid._board) return null;
-                return { data: grid._board, color: BOARD_COLORS[i], name: nameOf(titleId, i) };
+                return { data: grid._board, color: BOARD_COLORS[i % BOARD_COLORS.length], name: nameOf(titleId, i) };
             }).filter(Boolean);
             items = [];
             boards.forEach(b => {
@@ -6130,7 +6181,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (myRun !== _sbrOptRun) return;
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
-                const where = p.board ? `${p.board === 'positional' ? 'Positional' : 'Intraday'}`
+                const tfBoards = Object.keys(SBR_TF_LABEL);
+                const where = tfBoards.includes(p.board)
+                    ? `${SBR_TF_NAME[p.board]} (board ${tfBoards.indexOf(p.board) + 1} of ${tfBoards.length}) · `
+                    : p.board ? `${p.board === 'positional' ? 'Positional' : 'Intraday'}`
                     + (p.timeframe ? ` ${SBR_TF_LABEL[p.timeframe] || p.timeframe}` : '') + ' · '
                     : (p.timeframe ? `${SBR_TF_LABEL[p.timeframe] || p.timeframe} · ` : '');
                 _showOptLoader('Finding best params…', p.stage === 'pricing'

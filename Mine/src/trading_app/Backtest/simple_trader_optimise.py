@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from trading_app.Backtest.st_bb_rsi_engine import MIN_BOARD_TRADES, MIN_TRADES, MIN_WIN_RATE, _parse_hhmm, attach_option_legs, rank_quality, rupee_card, summarise
+from trading_app.Backtest.st_bb_rsi_engine import MIN_BOARD_TRADES, MIN_TRADES, MIN_WIN_RATE, _parse_hhmm, attach_option_legs, rank_quality, return_dd, rupee_card, summarise
 
 _ST_PERIOD = (7, 10, 14)
 _ST_MULT = (1.5, 2.0, 2.5, 3.0)
@@ -115,6 +115,7 @@ def _all_ind(df, d):
         cpr_narrow=_f(d, 'cpr_narrow', 0.2), use_cpr_narrow=_f(d, 'cpr_narrow', 0.2) > 0,
         use_st=on('use_st'), use_rsi=on('use_rsi'), use_bb=on('use_bb'), use_wr=on('use_wr'),
         use_cci=on('use_cci'), use_ema=on('use_ema'), use_pivot=on('use_pivot'),
+        stop_mode=str(d.get('stop_mode', 'close')), minutes=d.get('_minutes'),
         positional=bool(d.get('positional', False)), **_common(d))
 
 
@@ -143,7 +144,7 @@ def _base_grid(rsi: Tuple[float, ...]) -> List[Tuple[str, tuple]]:
 SPECS: Dict[str, Tuple[Callable, Callable[[Dict[str, Any]], List[Tuple[str, tuple]]], bool]] = {
     'st_ema_rsi_cci': (_ema_cci, lambda d: [
         ('st_mult', (1.5, 2.0, 2.5)), ('rsi_entry', (25, 30, 35)), ('rsi_exit', (40, 45, 50)),
-        ('cci_level', (-150, -200, -250)), ('wr_level', (-80, -85, -90))], True),
+        ('cci_level', (-150, -200, -250)), ('wr_level', (-80, -85, -90))], False),   # the index, as live
     'st_rsi_pp_bb': (_pp_bb, lambda d: _base_grid((65, 70, 75, 80)), False),
     'st_rsi_pp_bb_fut': (_pp_bb_fut, lambda d: _base_grid((62, 65, 68, 72)), True),
     'st_rsi_cci_wr_pp_bb_fut': (_cci_wr_fut, lambda d: _base_grid((72, 75, 78, 82)) + [
@@ -176,6 +177,26 @@ _GATE_PARAMS = {'st': ('st_period', 'st_mult'), 'bb': ('bb_period', 'bb_mult'), 
                 'wr': ('wr_level',), 'cci': ('cci_level',)}
 _DECIDERS = ('st', 'rsi', 'bb', 'wr', 'pivot')    # the base engine returns no signal unless one of these is on
 GATE_SHORTLIST = 12                               # gate subsets (best on the page's own numbers) given the full number sweep
+TF_SHORTLIST = 6                                  # the same, and the rows priced on the option, on each timeframe's own board
+# ALL Indicators ranks on net P&L over max drawdown, not profit factor: on NIFTY 2019-26 profit factor
+# put a +3,086-point row (507 DD) at the top of the 5-minute board above a +5,859-point one (524 DD).
+RANK_BY = {'st_all_indicators': 'return_dd'}
+# The intraday session, walked one setting at a time from the best rows of the number sweep (as ST
+# Touch Break walks its own): on 15 minutes, entries from 10:00 at one a day took the best row from
+# +5,778 points / 792 DD to +6,735 / 740. A positional run has no session, so it is not walked.
+SESSION_AXES: Dict[str, Tuple[Any, ...]] = {
+    'entry_start': ('09:15', '09:30', '10:00', '10:30'),
+    'entry_end': ('11:30', '13:00', '14:30', '15:14'),
+    'max_trades_per_day': (1, 2, 3, 5),
+    'exit_cutoff': ('15:00', '15:14'),
+}
+# The SuperTrend exit is walked first, on every board (positional too): ST Touch Break's stop — out the
+# moment the index trades through the previous candle's line — took the 15-minute best row from +5,643
+# points / 661 DD to +7,208 / 423 and the 5-minute one from +5,453 / 456 to +6,645 / 368.
+EXIT_AXES: Dict[str, Tuple[Any, ...]] = {'stop_mode': ('close', 'touch')}
+EXIT_SEEDS = 12                                   # best rows the other stop is tried on before the session walk
+SESSION_SEEDS = 4                                 # best rows the session is walked from
+SESSION_PASSES = 2                                # most walks over the session axes per seed
 
 
 def _subset_label(on) -> str:
@@ -190,10 +211,29 @@ def _set_gates(eng, on, data: Dict[str, Any], cpr_narrow: float) -> None:
     eng.rsi_cap = _f(data, 'rsi_cap', 85) if 'rsi' in on else 1e9      # RSI off = no band either
 
 
+def _hhmm(minutes: int) -> str:
+    return f'{minutes // 60:02d}:{minutes % 60:02d}'
+
+
+def _session(eng) -> Dict[str, Any]:
+    """The engine's intraday session as a board row writes it (the Logic popup's own values)."""
+    return {'stop_mode': eng.stop_mode,
+            'entry_start': _hhmm(eng.entry_start), 'entry_end': _hhmm(eng.entry_end),
+            'exit_cutoff': _hhmm(eng.exit_cutoff), 'max_trades_per_day': int(eng.max_trades_per_day)}
+
+
 def _apply_row(eng, names, row: Dict[str, Any], data: Dict[str, Any]) -> None:
-    """Put a board row's numbers (and, for ALL Indicators, its gate switches) on the engine."""
+    """Put a board row's numbers (and, for ALL Indicators, its gate switches and session) on the engine."""
     for k in names:
-        if k in row and k not in ('gates', 'timeframe'):
+        if k not in row or k in ('gates', 'timeframe'):
+            continue
+        if k in ('entry_start', 'entry_end', 'exit_cutoff'):
+            setattr(eng, k, _parse_hhmm(row[k], getattr(eng, k)))
+        elif k == 'max_trades_per_day':
+            eng.max_trades_per_day = max(1, int(row[k]))
+        elif k == 'stop_mode':
+            eng.stop_mode = 'touch' if row[k] == 'touch' else 'close'
+        else:
             setattr(eng, k, _num(k, row[k]))
     if 'use_st' in row:
         on = {g for g in _GATES if row.get('use_' + g)}
@@ -206,21 +246,25 @@ def _simulate_one(eng, params: Dict[str, Any], from_date: str) -> List[Dict[str,
     for k, v in params.items():
         if k not in _OVERRIDES:
             setattr(eng, k, float(v))
-    trades = eng.simulate(**over)
+    trades = eng.simulate(lean=True, **over)          # no signal cards: the sweep reads times and P&L
     return [t for t in trades if t['entry_time'][:10] >= from_date] if from_date else trades
 
 
 def _optimise_gates(strategy: str, frames: List[Tuple[Optional[str], Dict[str, Any]]],
                     bars_for: Callable[[Optional[str]], Optional[pd.DataFrame]], from_date: str,
-                    top: int, progress, floor: int = 0, page_tf: Optional[str] = None) -> Dict[str, Any]:
+                    top: int, progress, floor: int = 0, page_tf: Optional[str] = None,
+                    shortlist: Optional[int] = None) -> Dict[str, Any]:
     """Find Best Params for ALL Indicators that also searches WHICH indicators to keep on —
     a rule with all eight gates is rarely the best one — and, given several frames, on which
     timeframe. `frames` is [(timeframe, fields)] and `bars_for(timeframe)` that frame's candles
     (one frame with timeframe None: the page's own run). Stage 1 scores every subset of the
     gates on every frame on the page's own numbers; stage 2 sweeps the numbers (only those of
-    gates that are on) of the best GATE_SHORTLIST (frame, subset) pairs, every frame's best
-    `floor`, and the page's own subset on the page's timeframe. One engine is held at a time:
-    a 1-minute one carries hundreds of MB of indicator arrays."""
+    gates that are on) of the best `shortlist` (default GATE_SHORTLIST) (frame, subset) pairs, every frame's best
+    `floor`, and the page's own subset on the page's timeframe. Stage 3 walks the SuperTrend exit (EXIT_AXES) and the
+    intraday session (SESSION_AXES) one setting at a time from the best SESSION_SEEDS rows. Every stage picks and
+    ranks on net P&L over max drawdown (RANK_BY), and rows that trade exactly alike (a gate that
+    never binds) are kept once, with the fewest gates. One engine is held at a time: a 1-minute
+    one carries hundreds of MB of indicator arrays."""
     build, grid_fn, _ = SPECS[strategy]
     named = frames[0][0] is not None            # rows say which timeframe they ran on
     subsets = [set(c) for r in range(1, len(_GATES) + 1) for c in itertools.combinations(_GATES, r)
@@ -236,6 +280,8 @@ def _optimise_gates(strategy: str, frames: List[Tuple[Optional[str], Dict[str, A
 
     def stamp(sm, i, on, params, trades):
         sm.update(params)
+        if held.get(i) is not None:                     # the exit (and intraday, the session) the row ran with
+            sm.update(_session(held[i]) if not held[i].positional else {'stop_mode': held[i].stop_mode})
         sm.update(gates=_subset_label(on), recent_pnl=round(sum(t['pnl'] for t in trades if t['entry_time'][:10] >= cuts[i]), 2),
                   cpr_narrow=cpr_val if 'cpr' in on else 0.0, **{'use_' + g: g in on for g in _GATES})
         if named:
@@ -295,8 +341,14 @@ def _optimise_gates(strategy: str, frames: List[Tuple[Optional[str], Dict[str, A
                 'mode': 'strategy', 'strategy': strategy, 'swept': [], 'timeframes': [],
                 'gate_subsets': len(subsets), 'gate_shortlist': 0}
     keep = [x for x in stage1 if x[2]['total_pnl'] > 0]
-    keep.sort(key=lambda x: (-x[2]['profit_factor'], x[2]['max_drawdown'], -x[2]['total_pnl']))
-    chosen = [(i, on) for i, on, _ in keep[:GATE_SHORTLIST]]
+    keep.sort(key=lambda x: (-return_dd(x[2]), -x[2]['total_pnl'], x[2]['max_drawdown']))
+    # Two thirds of the shortlist on return / drawdown, the rest on profit factor: a subset that is
+    # mediocre on the page's own numbers can be the best one once its numbers are swept (3 minutes:
+    # ST+BB+%R+EMA+PP+CPR, +3,200 pts at 245 DD, is a profit-factor pick).
+    n = GATE_SHORTLIST if shortlist is None else shortlist
+    chosen = [(i, on) for i, on, _ in keep[:n - n // 3]]
+    by_pf = sorted(keep, key=lambda x: (-x[2]['profit_factor'], x[2]['max_drawdown'], -x[2]['total_pnl']))
+    chosen += [(i, on) for i, on, _ in by_pf if (i, on) not in chosen][:n // 3]
     for f in cuts:
         chosen += [(i, on) for i, on, _ in [x for x in keep if x[0] == f][:floor] if (i, on) not in chosen]
     if page_i is not None and page_on and (page_i, page_on) not in chosen and page_on & set(_DECIDERS):
@@ -315,42 +367,107 @@ def _optimise_gates(strategy: str, frames: List[Tuple[Optional[str], Dict[str, A
                 if len(trades) >= min_trades:
                     rows.append(stamp(summarise(trades), i, on, params, trades))
         eng = None
+    # Stage 3: the exit, and the intraday session (none on a positional run), walked from the best rows of the sweep.
+    by = RANK_BY.get(strategy, 'pf')
+    walk = dict(EXIT_AXES, **({} if positional else SESSION_AXES))
+
+    def score(sm):
+        ok = (sm['win_rate'] >= MIN_WIN_RATE and sm.get('recent_pnl', 0) > 0
+              and sm['total_trades'] >= min_board)
+        return (ok, return_dd(sm) if by == 'return_dd' else sm['profit_factor'])
+    names = list(grid) + ['cpr_narrow'] + list(walk)
+    tried = {tuple(str(r.get(k)) for k in ['timeframe', 'gates'] + names) for r in rows}
+
+    def try_row(i, eng, cand):
+        nonlocal done
+        _apply_row(eng, names, cand, frames[i][1])
+        trades = _simulate_one(eng, {}, from_date)
+        done += 1
+        if done % 20 == 0:
+            tick()
+        if len(trades) < min_trades:
+            return None
+        on = {g for g in _GATES if cand.get('use_' + g)}
+        sm = stamp(summarise(trades), i, on, {k: cand[k] for k in grid if k in cand}, trades)
+        k = tuple(str(sm.get(x)) for x in ['timeframe', 'gates'] + names)
+        if k not in tried:
+            tried.add(k)
+            rows.append(sm)
+        return sm
+
+    def frame_of(row):
+        return next(j for j in cuts if not named or frames[j][0] == row.get('timeframe'))
+    # The other stop on the best EXIT_SEEDS rows first (one run each): it does not help every row — on
+    # 5 minutes it lifted the 5th row past the 1st (+6,645 / 368 DD vs +5,529 / 446) — so the session
+    # walk's seeds are picked after it.
+    firsts = rank_quality(list(rows), None, min_board=min_board, by=by)[0][:EXIT_SEEDS]
+    total += len(firsts)
+    for r in sorted(firsts, key=lambda r: str(r.get('timeframe'))):
+        i = frame_of(r)
+        try_row(i, engine(i), dict(r, stop_mode='touch' if r.get('stop_mode') == 'close' else 'close'))
+    seeds = [r for r in rank_quality(list(rows), None, min_board=min_board, by=by)[0][:SESSION_SEEDS]] if walk else []
+    total += len(seeds) * SESSION_PASSES * sum(len(v) for v in walk.values())
+    for seed in seeds:
+        i = frame_of(seed)
+        eng = engine(i)
+        here, best = dict(seed), score(seed)
+        for _ in range(SESSION_PASSES):
+            moved = False
+            for axis, values in walk.items():
+                for v in values:
+                    if str(v) == str(here[axis]):
+                        continue
+                    sm = try_row(i, eng, dict(here, **{axis: v}))
+                    if sm is None:
+                        continue
+                    if score(sm) > best:
+                        here, best, moved = sm, score(sm), True
+            if not moved:
+                break
+        eng = None
     held.clear()
+    # One row per distinct book: gates that never bind leave the same trades under another name.
+    alike: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        k = (r.get('timeframe'), r['total_trades'], r['wins'], r['total_pnl'], r['max_drawdown'])
+        if k not in alike or len(r['gates'].split('+')) < len(alike[k]['gates'].split('+')):
+            alike[k] = r
+    rows = list(alike.values())
     if progress:
         progress(total, total)
-    ordered, passed = rank_quality(rows, current, min_board=min_board)
+    ordered, passed = rank_quality(rows, current, min_board=min_board, by=by)
     return {'total_combos_tested': total, 'qualified': len(rows), 'passed': passed,
             'min_win': MIN_WIN_RATE, 'results': ordered[:top],
             'best': ordered[0] if ordered else None,
             'recent_from': cuts.get(page_i, next(iter(cuts.values()))), 'min_trades': min_trades,
             'min_board_trades': min_board, 'positional': positional,
             'mode': 'strategy', 'strategy': strategy,
-            'swept': (['timeframe'] if named else []) + ['gates'] + list(grid) + ['cpr_narrow'],
+            'swept': (['timeframe'] if named else []) + ['gates'] + list(grid) + ['cpr_narrow'] + list(walk),
+            'rank_by': by,
             'current': current, 'timeframes': [frames[i][0] for i in cuts] if named else [],
             'gate_subsets': len(subsets), 'gate_shortlist': len(chosen)}
 
 
-# ALL Indicators' Find Best Params also searches the timeframe, on two boards: intraday (in and
+# ALL Indicators' Find Best Params also searches the timeframe, one board per timeframe: intraday (in and
 # out the same session, inside the page's window) and positional (carried across sessions until
 # the SuperTrend turns or the premium stop is hit). The values are the Timeframe dropdown's own.
 TIMEFRAMES = {'intraday': ('minute', '2minute', '3minute', '5minute', '15minute'),
               'positional': ('60minute', 'day')}
-TF_FLOOR = 2        # every timeframe's best two go forward: subsets into the number sweep, rows onto the option
 
 
 def optimise_timeframes(strategy: str, bars_for: Callable[[str], Optional[pd.DataFrame]],
                         data: Dict[str, Any], from_date: str = '', top: int = 80,
                         progress=None) -> Dict[str, Dict[str, Any]]:
-    """{'intraday': board, 'positional': board}: the gate search above over every timeframe of
-    each mode at once, ranked together, each row carrying its `timeframe`. The page's own
-    settings are `current` on the board its Timeframe belongs to."""
+    """{timeframe: board}, one board per timeframe of TIMEFRAMES (1m ... 1d, in that order): the
+    gate search above on that timeframe's candles alone, ranked against its own rows (`positional`
+    says which kind it is). The page's own settings are `current` on its Timeframe's board."""
     page_tf = str(data.get('interval') or '')
     boards = {}
     for mode, tfs in TIMEFRAMES.items():
-        d = dict(data, positional=mode == 'positional')
-        tick = (lambda done, total, mode=mode, **kw: progress(done, total, board=mode, **kw)) if progress else None
-        boards[mode] = _optimise_gates(strategy, [(tf, dict(d, interval=tf)) for tf in tfs], bars_for,
-                                       from_date, top, tick, floor=TF_FLOOR, page_tf=page_tf)
+        for tf in tfs:
+            tick = (lambda done, total, tf=tf, **kw: progress(done, total, **dict(kw, board=tf))) if progress else None
+            boards[tf] = _optimise_gates(strategy, [(tf, dict(data, interval=tf, positional=mode == 'positional'))],
+                                         bars_for, from_date, top, tick, page_tf=page_tf, shortlist=TF_SHORTLIST)
     return boards
 
 
@@ -433,6 +550,7 @@ def verify_on_option(strategy: str, res: Dict[str, Any], df: pd.DataFrame, data:
     figures as index_pnl / index_pf. A priced row is what BACKTEST shows for the same values.
     `shortlist` = how many rows to price (default SHORTLIST / GATE_SHORTLIST); no current, none priced."""
     from trading_app.Backtest.st_ema_rsi_cci_engine import price_with_reentries, with_spot_level
+    from trading_app.Backtest.st_touch_break_optimise import book_entry
     build, _, _ = SPECS[strategy]
     eng = build(df, data)
     names = res['swept']
@@ -495,60 +613,38 @@ def verify_on_option(strategy: str, res: Dict[str, Any], df: pd.DataFrame, data:
         out.update(index_pnl=row['total_pnl'], index_pf=row['profit_factor'],
                    unpriced=info.get('unpriced', 0), reentries=info.get('reentries', 0),
                    recent_pnl=round(sum(t['pnl'] for t in priced if t['entry_time'][:10] >= cut), 2))
+        # The row's own trades, compact (BOOK_FIELDS): the 🧩 Combined popup merges ticked rows on them.
+        out['book'] = [book_entry(t) for t in priced if t.get('pnl_rupees') is not None]
         if row is cur:
             current = out
         else:
             rows.append(out)
     if progress:
         progress(len(todo), len(todo))
-    ordered, passed = rank_quality(rows, current, min_board=res.get('min_board_trades', MIN_BOARD_TRADES))
+    ordered, passed = rank_quality(rows, current, min_board=res.get('min_board_trades', MIN_BOARD_TRADES),
+                                   by=RANK_BY.get(strategy, 'pf'))
     res.update(results=ordered, best=ordered[0] if ordered else None, current=current,
                passed=passed, basis='option', verified=len(todo))
 
 
 def verify_timeframes(strategy: str, boards: Dict[str, Dict[str, Any]],
                       bars_for: Callable[[str], Optional[pd.DataFrame]], data: Dict[str, Any],
-                      symbol: str, calendar, start_date: str, progress=None) -> None:
-    """`verify_on_option` for `optimise_timeframes`' boards: each row is priced on its own
-    timeframe's candles and engine — the board's best GATE_SHORTLIST index rows, every
-    timeframe's best TF_FLOOR so none goes unseen, and the page's own settings — then the board
-    is re-ranked on those figures. A board whose pricing fails (no ICICI login) keeps its index
-    rows and says why in `option_error`."""
-    for mode, board in boards.items():
-        rows = board['results']
-        pick = list(rows[:GATE_SHORTLIST])
-        for tf in TIMEFRAMES[mode]:
-            pick += [r for r in [r for r in rows if r.get('timeframe') == tf][:TF_FLOOR]
-                     if not any(r is p for p in pick)]
-        cur = board.get('current')
-        # A timeframe's picks are the head of its own rows; verify_on_option walks those rows past
-        # any that trade exactly like one already taken (gates that never bind) until it has as many.
-        work = [(tf, [r for r in rows if r.get('timeframe') == tf], sum(1 for r in pick if r.get('timeframe') == tf),
-                 cur if cur and cur.get('timeframe') == tf else None) for tf in TIMEFRAMES[mode]]
-        work = [w for w in work if w[2] or w[3] is not None]
-        if not work:
+                      symbol: str, calendar, start_date: str, progress=None,
+                      minutes: Optional[pd.DataFrame] = None) -> None:
+    """`verify_on_option` for `optimise_timeframes`' boards: each board's best TF_SHORTLIST index
+    rows, and the page's own settings on its board, are priced on that timeframe's candles and
+    engine, and the board is re-ranked on those figures. A board whose pricing fails (no ICICI
+    login) keeps its index rows and says why in `option_error`. `minutes` (the 1-minute candles)
+    time a SuperTrend touch stop to its minute, so the option is sold where the index crossed."""
+    for tf, board in boards.items():
+        if not board.get('results') and board.get('current') is None:
             continue
-        total = sum(n + (c is not None) for _, _, n, c in work)
-        priced: List[Dict[str, Any]] = []
-        current, verified, done = None, 0, 0
+        tick = (lambda k, total, tf=tf: progress(k, total, stage='pricing', board=tf, timeframe=tf)) if progress else None
         try:
-            for tf, mine, n, c in work:
-                res = {'results': mine, 'current': c, 'swept': board['swept'],
-                       'recent_from': board['recent_from'], 'min_board_trades': board['min_board_trades']}
-                tick = (lambda k, _t, base=done, tf=tf: progress(
-                    base + k, total, stage='pricing', board=mode, timeframe=tf)) if progress else None
-                verify_on_option(strategy, res, bars_for(tf), dict(data, interval=tf, positional=mode == 'positional'),
-                                 symbol, tf, calendar, False, start_date, progress=tick, shortlist=n)
-                done += n + (c is not None)
-                priced += res['results']
-                verified += res['verified']
-                if c is not None:
-                    current = res['current']
+            verify_on_option(strategy, board, bars_for(tf),
+                             dict(data, interval=tf, positional=bool(board.get('positional')), _minutes=minutes),
+                             symbol, tf, calendar, False, start_date, progress=tick, shortlist=TF_SHORTLIST)
         except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
             logging.getLogger(__name__).warning('[SIMPLE-TRADER OPT] %s %s option verification failed: %s',
-                                                strategy, mode, e)
-            board.update(option_error=str(e), results=rows[:25])
-            continue
-        ordered, passed = rank_quality(priced, current, min_board=board['min_board_trades'])
-        board.update(results=ordered, best=ordered[0] if ordered else None, current=current,
-                     passed=passed, basis='option', verified=verified)
+                                                strategy, tf, e)
+            board.update(option_error=str(e), results=board['results'][:25])

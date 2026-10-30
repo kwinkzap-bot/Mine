@@ -48,6 +48,15 @@
           "note": "",
           "type": "sip",
           "manual": true
+        },
+        {
+          "date": "2026-10-30",
+          "amount": 0.0,
+          "proceeds": 29103.0,
+          "deployed": 24985.5,
+          "cash_after": 4342.16,
+          "note": "Manual rebalance: sold 4, bought 4",
+          "type": "rebalance"
         }
       ],
       "start_date": "2025-01-01",
@@ -94,20 +103,6 @@
             "order_id": "260702190121645",
             "status": "filled",
             "avg_price": 3628.5
-          }
-        },
-        {
-          "symbol": "KIRLOSENG",
-          "entry_price": 2363.5,
-          "qty": 4,
-          "entry_date": "2026-07-02",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 7,
-            "order_id": "260702190121701",
-            "status": "filled",
-            "avg_price": 2408.0
           }
         },
         {
@@ -166,52 +161,58 @@
           }
         },
         {
-          "symbol": "RRKABEL",
-          "entry_price": 2389.6,
-          "qty": 3,
-          "entry_date": "2026-07-02",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 7,
-            "order_id": "260702190121920",
-            "status": "filled",
-            "avg_price": 2389.6
-          }
-        },
-        {
-          "symbol": "EMMVEE",
-          "entry_price": 342.49,
-          "qty": 34,
-          "entry_date": "2026-07-02",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 7,
-            "order_id": "260702190121972",
-            "status": "filled",
-            "avg_price": 347.45
-          }
-        },
-        {
-          "symbol": "DATAPATTNS",
-          "entry_price": 4561.2,
-          "qty": 2,
-          "entry_date": "2026-07-02",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 7,
-            "order_id": "260702190122090",
-            "status": "filled",
-            "avg_price": 4561.2
-          }
-        },
-        {
           "symbol": "ATHERENERG",
           "entry_price": 1589.53,
           "qty": 7,
           "entry_date": "2026-08-31",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "STLTECH",
+          "entry_price": 824.5,
+          "qty": 8,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "CUPID",
+          "entry_price": 324.6,
+          "qty": 22,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "LAURUSLABS",
+          "entry_price": 2357.5,
+          "qty": 3,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "SANSERA",
+          "entry_price": 4175.8,
+          "qty": 1,
+          "entry_date": "2026-10-30",
           "order": {
             "broker": "Manual",
             "broker_type": "manual",
@@ -225,7 +226,7 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 224.66,
+      "cash_balance": 4342.16,
       "exit_history": [
         {
           "symbol": "SCHNEIDER",
@@ -238,6 +239,54 @@
           "final_value": 8309.0,
           "pnl": -1263.5,
           "pnl_pct": -13.2
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "qty": 4,
+          "entry_date": "2026-07-02",
+          "exit_date": "2026-10-30",
+          "entry_price": 2363.5,
+          "exit_price": 1802.4,
+          "invested": 9454.0,
+          "final_value": 7209.6,
+          "pnl": -2244.4,
+          "pnl_pct": -23.74
+        },
+        {
+          "symbol": "RRKABEL",
+          "qty": 3,
+          "entry_date": "2026-07-02",
+          "exit_date": "2026-10-30",
+          "entry_price": 2389.6,
+          "exit_price": 2074.4,
+          "invested": 7168.8,
+          "final_value": 6223.2,
+          "pnl": -945.6,
+          "pnl_pct": -13.19
+        },
+        {
+          "symbol": "EMMVEE",
+          "qty": 34,
+          "entry_date": "2026-07-02",
+          "exit_date": "2026-10-30",
+          "entry_price": 342.49,
+          "exit_price": 231.1,
+          "invested": 11644.66,
+          "final_value": 7857.4,
+          "pnl": -3787.26,
+          "pnl_pct": -32.52
+        },
+        {
+          "symbol": "DATAPATTNS",
+          "qty": 2,
+          "entry_date": "2026-07-02",
+          "exit_date": "2026-10-30",
+          "entry_price": 4561.2,
+          "exit_price": 3906.4,
+          "invested": 9122.4,
+          "final_value": 7812.8,
+          "pnl": -1309.6,
+          "pnl_pct": -14.36
         }
       ]
     },
@@ -307,6 +356,15 @@
           "note": "",
           "type": "sip",
           "manual": true
+        },
+        {
+          "date": "2026-10-30",
+          "amount": 0.0,
+          "proceeds": 22363.9,
+          "deployed": 17737.2,
+          "cash_after": 4652.52,
+          "note": "Manual rebalance: sold 3, bought 3",
+          "type": "rebalance"
         }
       ],
       "start_date": "2025-01-01",
@@ -371,20 +429,6 @@
           }
         },
         {
-          "symbol": "KIRLOSENG",
-          "entry_price": 2281.68,
-          "qty": 4,
-          "entry_date": "2026-07-03",
-          "order": {
-            "broker": "Saranya (Dhan)",
-            "broker_type": "dhan",
-            "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "No Dhan security_id for KIRLOSENG"
-          }
-        },
-        {
           "symbol": "AEGISLOG",
           "entry_price": 1278.18,
           "qty": 8,
@@ -410,20 +454,6 @@
             "order_id": null,
             "status": "failed",
             "error": "No Dhan security_id for WELCORP"
-          }
-        },
-        {
-          "symbol": "RRKABEL",
-          "entry_price": 2411.9,
-          "qty": 3,
-          "entry_date": "2026-07-03",
-          "order": {
-            "broker": "Saranya (Dhan)",
-            "broker_type": "dhan",
-            "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "No Dhan security_id for RRKABEL"
           }
         },
         {
@@ -455,10 +485,10 @@
           }
         },
         {
-          "symbol": "JINDALSAW",
-          "entry_price": 297.43,
-          "qty": 38,
-          "entry_date": "2026-08-31",
+          "symbol": "STLTECH",
+          "entry_price": 900.0,
+          "qty": 10,
+          "entry_date": "2026-10-01",
           "order": {
             "broker": "Manual",
             "broker_type": "manual",
@@ -467,10 +497,34 @@
           }
         },
         {
-          "symbol": "STLTECH",
-          "entry_price": 900.0,
-          "qty": 10,
-          "entry_date": "2026-10-01",
+          "symbol": "CUPID",
+          "entry_price": 325.05,
+          "qty": 22,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "SANSERA",
+          "entry_price": 4186.5,
+          "qty": 1,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "RUBICON",
+          "entry_price": 1599.9,
+          "qty": 4,
+          "entry_date": "2026-10-30",
           "order": {
             "broker": "Manual",
             "broker_type": "manual",
@@ -484,7 +538,7 @@
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       },
-      "cash_balance": 25.82,
+      "cash_balance": 4652.52,
       "exit_history": [
         {
           "symbol": "SCHNEIDER",
@@ -509,6 +563,42 @@
           "final_value": 9737.1,
           "pnl": -1182.96,
           "pnl_pct": -10.83
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "qty": 4,
+          "entry_date": "2026-07-03",
+          "exit_date": "2026-10-30",
+          "entry_price": 2281.68,
+          "exit_price": 1822.8,
+          "invested": 9126.72,
+          "final_value": 7291.2,
+          "pnl": -1835.52,
+          "pnl_pct": -20.11
+        },
+        {
+          "symbol": "RRKABEL",
+          "qty": 3,
+          "entry_date": "2026-07-03",
+          "exit_date": "2026-10-30",
+          "entry_price": 2411.9,
+          "exit_price": 2090.0,
+          "invested": 7235.7,
+          "final_value": 6270.0,
+          "pnl": -965.7,
+          "pnl_pct": -13.35
+        },
+        {
+          "symbol": "JINDALSAW",
+          "qty": 38,
+          "entry_date": "2026-08-31",
+          "exit_date": "2026-10-30",
+          "entry_price": 297.43,
+          "exit_price": 231.65,
+          "invested": 11302.34,
+          "final_value": 8802.7,
+          "pnl": -2499.64,
+          "pnl_pct": -22.12
         }
       ]
     },
@@ -578,6 +668,15 @@
           "note": "",
           "type": "sip",
           "manual": true
+        },
+        {
+          "date": "2026-10-30",
+          "amount": 0.0,
+          "proceeds": 22563.1,
+          "deployed": 19448.9,
+          "cash_after": 3213.37,
+          "note": "Manual rebalance: sold 4, bought 4",
+          "type": "rebalance"
         }
       ],
       "start_date": "2025-01-01",
@@ -610,12 +709,6 @@
           "entry_date": "2026-08-04"
         },
         {
-          "symbol": "KIRLOSENG",
-          "entry_price": 2260.0,
-          "qty": 3,
-          "entry_date": "2026-08-04"
-        },
-        {
           "symbol": "WELCORP",
           "entry_price": 1741.3,
           "qty": 4,
@@ -625,12 +718,6 @@
           "symbol": "LAURUSLABS",
           "entry_price": 1834.32,
           "qty": 4,
-          "entry_date": "2026-08-04"
-        },
-        {
-          "symbol": "RRKABEL",
-          "entry_price": 2606.8,
-          "qty": 3,
           "entry_date": "2026-08-04"
         },
         {
@@ -650,24 +737,6 @@
           "entry_price": 3216.5,
           "qty": 2,
           "entry_date": "2026-08-04"
-        },
-        {
-          "symbol": "DATAPATTNS",
-          "entry_price": 4575.0,
-          "qty": 1,
-          "entry_date": "2026-08-04"
-        },
-        {
-          "symbol": "JINDALSAW",
-          "entry_price": 302.0,
-          "qty": 30,
-          "entry_date": "2026-08-31",
-          "order": {
-            "broker": "Manual",
-            "broker_type": "manual",
-            "order_id": null,
-            "status": "manual"
-          }
         },
         {
           "symbol": "WELSPUNLIV",
@@ -692,6 +761,54 @@
             "order_id": null,
             "status": "manual"
           }
+        },
+        {
+          "symbol": "STLTECH",
+          "entry_price": 824.5,
+          "qty": 6,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "CUPID",
+          "entry_price": 324.7,
+          "qty": 17,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "SANSERA",
+          "entry_price": 4182.0,
+          "qty": 1,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "RUBICON",
+          "entry_price": 1600.0,
+          "qty": 3,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
         }
       ],
       "broker": {
@@ -699,7 +816,7 @@
         "broker_type": "zerodha",
         "broker_name": "Kavin (Kite)"
       },
-      "cash_balance": 99.17,
+      "cash_balance": 3213.37,
       "exit_history": [
         {
           "symbol": "HSCL",
@@ -748,6 +865,54 @@
           "final_value": 6817.68,
           "pnl": -2365.38,
           "pnl_pct": -25.76
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "qty": 3,
+          "entry_date": "2026-08-04",
+          "exit_date": "2026-10-30",
+          "entry_price": 2260.0,
+          "exit_price": 1817.2,
+          "invested": 6780.0,
+          "final_value": 5451.6,
+          "pnl": -1328.4,
+          "pnl_pct": -19.59
+        },
+        {
+          "symbol": "RRKABEL",
+          "qty": 3,
+          "entry_date": "2026-08-04",
+          "exit_date": "2026-10-30",
+          "entry_price": 2606.8,
+          "exit_price": 2083.5,
+          "invested": 7820.4,
+          "final_value": 6250.5,
+          "pnl": -1569.9,
+          "pnl_pct": -20.07
+        },
+        {
+          "symbol": "DATAPATTNS",
+          "qty": 1,
+          "entry_date": "2026-08-04",
+          "exit_date": "2026-10-30",
+          "entry_price": 4575.0,
+          "exit_price": 3904.0,
+          "invested": 4575.0,
+          "final_value": 3904.0,
+          "pnl": -671.0,
+          "pnl_pct": -14.67
+        },
+        {
+          "symbol": "JINDALSAW",
+          "qty": 30,
+          "entry_date": "2026-08-31",
+          "exit_date": "2026-10-30",
+          "entry_price": 302.0,
+          "exit_price": 231.9,
+          "invested": 9060.0,
+          "final_value": 6957.0,
+          "pnl": -2103.0,
+          "pnl_pct": -23.21
         }
       ]
     },
@@ -771,6 +936,15 @@
           "note": "",
           "type": "sip",
           "manual": true
+        },
+        {
+          "date": "2026-10-30",
+          "amount": 0.0,
+          "proceeds": 13446.3,
+          "deployed": 13090.0,
+          "cash_after": 448.48,
+          "note": "Manual rebalance: sold 2, bought 2",
+          "type": "rebalance"
         }
       ],
       "start_date": "2025-01-01",
@@ -800,18 +974,6 @@
           "symbol": "CPPLUS",
           "entry_price": 3662.0,
           "qty": 2,
-          "entry_date": "2026-09-01"
-        },
-        {
-          "symbol": "RRKABEL",
-          "entry_price": 2828.9,
-          "qty": 3,
-          "entry_date": "2026-09-01"
-        },
-        {
-          "symbol": "JINDALSAW",
-          "entry_price": 309.36,
-          "qty": 31,
           "entry_date": "2026-09-01"
         },
         {
@@ -849,6 +1011,30 @@
           "entry_price": 400.6,
           "qty": 27,
           "entry_date": "2026-09-01"
+        },
+        {
+          "symbol": "STLTECH",
+          "entry_price": 824.5,
+          "qty": 8,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
+        },
+        {
+          "symbol": "CUPID",
+          "entry_price": 324.7,
+          "qty": 20,
+          "entry_date": "2026-10-30",
+          "order": {
+            "broker": "Manual",
+            "broker_type": "manual",
+            "order_id": null,
+            "status": "manual"
+          }
         }
       ],
       "broker": {
@@ -856,7 +1042,33 @@
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
       },
-      "cash_balance": 92.18
+      "cash_balance": 448.48,
+      "exit_history": [
+        {
+          "symbol": "RRKABEL",
+          "qty": 3,
+          "entry_date": "2026-09-01",
+          "exit_date": "2026-10-30",
+          "entry_price": 2828.9,
+          "exit_price": 2092.0,
+          "invested": 8486.7,
+          "final_value": 6276.0,
+          "pnl": -2210.7,
+          "pnl_pct": -26.05
+        },
+        {
+          "symbol": "JINDALSAW",
+          "qty": 31,
+          "entry_date": "2026-09-01",
+          "exit_date": "2026-10-30",
+          "entry_price": 309.36,
+          "exit_price": 231.3,
+          "invested": 9590.16,
+          "final_value": 7170.3,
+          "pnl": -2419.86,
+          "pnl_pct": -25.23
+        }
+      ]
     },
     {
       "id": "b5e015b8",

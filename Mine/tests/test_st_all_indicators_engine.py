@@ -236,23 +236,26 @@ def test_timeframe_lists_are_the_dropdowns_own():
                               'positional': ('60minute', 'day')}
 
 
-def test_find_best_params_searches_timeframes_on_two_boards(monkeypatch):
+def test_find_best_params_has_one_board_per_timeframe(monkeypatch):
     from trading_app.Backtest import simple_trader_optimise as sto
     _small_grid(monkeypatch, sto)
-    monkeypatch.setattr(sto, 'GATE_SHORTLIST', 1)
+    monkeypatch.setattr(sto, 'TF_SHORTLIST', 1)
     monkeypatch.setattr(sto, 'TIMEFRAMES', {'intraday': ('3minute', '15minute'), 'positional': ('60minute', 'day')})
     calls = []
     boards = sto.optimise_timeframes('st_all_indicators', _bars_for(_minute_walk()),
                                      {'interval': '15minute', 'ema_period': 20}, from_date='2025-01-01',
                                      progress=lambda done, total, **kw: calls.append(kw))
-    intra, pos = boards['intraday'], boards['positional']
-    assert intra['swept'][:2] == ['timeframe', 'gates'] and intra['timeframes'] == ['3minute', '15minute']
-    assert (intra['positional'], pos['positional']) == (False, True)
-    assert {r['timeframe'] for r in intra['results']} == {'3minute', '15minute'}      # every frame gets its floor
-    assert {r['timeframe'] for r in pos['results']} <= {'60minute', 'day'}
-    assert intra['current']['timeframe'] == '15minute' and pos['current'] is None     # the page's own frame only
-    assert {kw['board'] for kw in calls} == {'intraday', 'positional'}
-    assert {kw.get('timeframe') for kw in calls} >= {'3minute', '15minute', '60minute'}
+    assert list(boards) == ['3minute', '15minute', '60minute', 'day']                 # the dropdown's order
+    for tf, b in boards.items():
+        assert b['swept'][:2] == ['timeframe', 'gates'] and b['timeframes'] in ([tf], [])
+        assert {r['timeframe'] for r in b['results']} <= {tf}                         # its own rows only
+        assert b['mode'] == 'strategy' and b['positional'] == (tf in ('60minute', 'day'))
+        assert b['gate_shortlist'] <= 2                                               # TF_SHORTLIST, + the page's own subset
+    assert boards['3minute']['results'] and boards['15minute']['results']
+    assert (boards['3minute']['positional'], boards['60minute']['positional']) == (False, True)
+    assert boards['15minute']['current']['timeframe'] == '15minute'                  # the page's own frame only
+    assert all(boards[tf]['current'] is None for tf in ('3minute', '60minute', 'day'))
+    assert {kw['board'] for kw in calls} == set(boards)
 
 
 def test_a_board_row_puts_its_numbers_but_not_its_timeframe_on_the_engine():
@@ -273,29 +276,28 @@ def _row(tf, pf, n=0):
                 recent_pnl=1, total_trades=10)
 
 
-def test_each_row_is_priced_on_its_own_timeframe(monkeypatch):
+def test_each_board_is_priced_on_its_own_timeframe(monkeypatch):
     from trading_app.Backtest import simple_trader_optimise as sto
-    monkeypatch.setattr(sto, 'GATE_SHORTLIST', 2)
+    monkeypatch.setattr(sto, 'TF_SHORTLIST', 2)
     seen = []
 
     def fake_verify(strategy, res, df, data, symbol, interval, calendar, on_future, start_date,
                     progress=None, shortlist=None):
         assert all(r['timeframe'] == interval for r in res['results'])
         seen.append((interval, data['positional'], shortlist, res['current'] is not None))
-        priced = [dict(r, net_rs=r['profit_factor'] * 100, basis='option') for r in res['results'][:shortlist]]
+        priced = [dict(r, net_rs=r['profit_factor'] * 100) for r in res['results'][:shortlist]]
         cur = dict(res['current'], net_rs=1) if res['current'] else None
-        res.update(results=priced, current=cur, verified=len(priced) + (cur is not None))
+        res.update(results=priced, current=cur, basis='option', verified=len(priced) + (cur is not None))
     monkeypatch.setattr(sto, 'verify_on_option', fake_verify)
-    intra = [_row('5minute', 3.0, 1), _row('5minute', 2.9, 2), _row('5minute', 2.8, 3), _row('minute', 1.2, 4)]
-    boards = {'intraday': _board('intraday', intra, current=_row('3minute', 1.0, 9)),
-              'positional': _board('positional', [_row('day', 2.0, 5), _row('60minute', 1.5, 6)])}
+    boards = {'5minute': _board('intraday', [_row('5minute', 3.0, 1), _row('5minute', 2.9, 2), _row('5minute', 2.8, 3)],
+                                current=_row('5minute', 1.0, 9)),
+              '15minute': _board('intraday', []),                                    # nothing to price: skipped
+              'day': _board('positional', [_row('day', 2.0, 5)])}
     sto.verify_timeframes('st_all_indicators', boards, lambda tf: None, {}, 'NIFTY', [], '2025-01-01')
-    # best two of the board, plus the 1-minute row its floor brings; the ★ settings on their own 3m engine
-    assert sorted(seen) == sorted([('5minute', False, 2, False), ('minute', False, 1, False),
-                                   ('3minute', False, 0, True), ('day', True, 1, False), ('60minute', True, 1, False)])
-    b = boards['intraday']
-    assert b['basis'] == 'option' and b['verified'] == 4 and b['current']['net_rs'] == 1
-    assert [r['gates'] for r in b['results']] == ['ST1', 'ST2', 'ST4']
+    assert seen == [('5minute', False, 2, True), ('day', True, 2, False)]
+    b = boards['5minute']
+    assert b['basis'] == 'option' and b['verified'] == 3 and b['current']['net_rs'] == 1
+    assert [r['gates'] for r in b['results']] == ['ST1', 'ST2'] and 'basis' not in boards['15minute']
 
 
 def test_a_board_whose_pricing_fails_keeps_its_index_rows(monkeypatch):
@@ -304,10 +306,10 @@ def test_a_board_whose_pricing_fails_keeps_its_index_rows(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError('ICICI not logged in')
     monkeypatch.setattr(sto, 'verify_on_option', boom)
-    boards = {'intraday': _board('intraday', [_row('5minute', 2.0)]), 'positional': _board('positional', [])}
+    boards = {'5minute': _board('intraday', [_row('5minute', 2.0)]), 'day': _board('positional', [])}
     sto.verify_timeframes('st_all_indicators', boards, lambda tf: None, {}, 'NIFTY', [], '2025-01-01')
-    assert boards['intraday']['option_error'] == 'ICICI not logged in'
-    assert boards['intraday']['results'][0]['profit_factor'] == 2.0 and 'basis' not in boards['positional']
+    assert boards['5minute']['option_error'] == 'ICICI not logged in'
+    assert boards['5minute']['results'][0]['profit_factor'] == 2.0 and 'basis' not in boards['day']
 
 
 def test_pricing_walks_past_rows_that_trade_alike(monkeypatch):
@@ -323,3 +325,106 @@ def test_pricing_walks_past_rows_that_trade_alike(monkeypatch):
     assert board['verified'] == 2 and board['current'] is None and len(board['results']) == 2
     assert {(r['gates'], r['total_trades']) for r in board['results']} == {
         (first['gates'], first['total_trades']), (other['gates'], other['total_trades'])}
+
+
+def test_a_priced_row_carries_its_trades_for_the_combined_popup(monkeypatch):
+    from trading_app.Backtest import simple_trader_optimise as sto, st_ema_rsi_cci_engine as sec
+    from trading_app.Backtest.st_touch_break_optimise import BOOK_FIELDS
+    _small_grid(monkeypatch, sto)
+
+    def priced(eng, trades, fn):
+        return [dict(t, option_type='CE', strike=24000, entry_premium=250, exit_premium=260, lots=1,
+                     gross_pnl_rupees=650, pnl_rupees=600) for t in trades], {'lot': 65}
+    monkeypatch.setattr(sec, 'price_with_reentries', priced)
+    res = sto.optimise('st_all_indicators', _walk_frame(), {}, from_date='2025-01-01')
+    sto.verify_on_option('st_all_indicators', res, _walk_frame(), {}, 'NIFTY', '3minute', [], False,
+                         '2025-01-01', shortlist=1)
+    for r in res['results'] + [res['current']]:
+        assert len(r['book']) == r['total_trades'] and all(len(e) == len(BOOK_FIELDS) for e in r['book'])
+        assert r['book'][0][2] == 'CE'
+        assert abs(sum(e[-1] for e in r['book']) - r['net_rs']) <= len(r['book'])      # the row's own net, per trade
+
+
+def test_return_dd_ranks_profit_for_the_drawdown_not_profit_factor():
+    from trading_app.Backtest.st_bb_rsi_engine import rank_quality, return_dd
+    lean = dict(gates='A', profit_factor=4.5, total_pnl=2000, max_drawdown=500, win_rate=60, recent_pnl=1, total_trades=155)
+    rich = dict(gates='B', profit_factor=1.5, total_pnl=6000, max_drawdown=520, win_rate=52, recent_pnl=1, total_trades=800)
+    pad = [dict(gates=f'P{i}', profit_factor=1.1, total_pnl=100, max_drawdown=400, win_rate=55, recent_pnl=1,
+                total_trades=200) for i in range(4)]
+    assert rank_quality([lean, rich] + pad)[0][0]['gates'] == 'A'                     # profit factor: the lean rule
+    ordered, _ = rank_quality([lean, rich] + pad, by='return_dd')
+    assert ordered[0]['gates'] == 'B' and ordered[0]['ret_dd'] == round(6000 / 520, 2)
+    assert return_dd(dict(net_rs=100000, max_dd_rs=-8000, total_pnl=1, max_drawdown=1)) == 12.5   # rupees, sign-free
+
+
+def test_the_session_is_walked_and_alike_rows_are_kept_once(monkeypatch):
+    from trading_app.Backtest import simple_trader_optimise as sto
+    _small_grid(monkeypatch, sto)
+    monkeypatch.setattr(sto, 'MIN_BOARD_TRADES', 1)
+    monkeypatch.setattr(sto, 'SESSION_AXES', {'entry_start': ('09:15', '10:00'), 'max_trades_per_day': (1, 5)})
+    res = sto.optimise('st_all_indicators', _walk_frame(), {'ema_period': 20}, from_date='2025-01-01')
+    assert res['rank_by'] == 'return_dd' and res['swept'][-2:] == ['entry_start', 'max_trades_per_day']
+    rows = res['results']
+    assert all({'entry_start', 'max_trades_per_day', 'ret_dd'} <= set(r) for r in rows)
+    assert {(r['entry_start'], r['max_trades_per_day']) for r in rows} - {('09:15', 5)}   # the walk added sessions
+    books = [(r['total_trades'], r['wins'], r['total_pnl'], r['max_drawdown']) for r in rows]
+    assert len(books) == len(set(books))                                              # one row per distinct book
+    assert [r['ret_dd'] for r in rows] == sorted((r['ret_dd'] for r in rows), reverse=True)    # the board's order
+
+
+def test_a_walked_row_is_re_run_with_its_own_session():
+    from trading_app.Backtest import simple_trader_optimise as sto
+    e = StAllIndicatorsEngine(_df())
+    sto._apply_row(e, ['stop_mode', 'entry_start', 'entry_end', 'exit_cutoff', 'max_trades_per_day'],
+                   dict(stop_mode='touch', entry_start='10:00', entry_end='13:00', exit_cutoff='15:00',
+                        max_trades_per_day=2), {})
+    assert (e.entry_start, e.entry_end, e.exit_cutoff, e.max_trades_per_day) == (600, 780, 900, 2)
+    assert sto._session(e) == dict(stop_mode='touch', entry_start='10:00', entry_end='13:00', exit_cutoff='15:00',
+                                   max_trades_per_day=2)
+
+
+ONLY_ST = dict(use_rsi=False, use_bb=False, use_wr=False, use_cci=False, use_ema=False, use_pivot=False,
+               use_cpr_narrow=False)
+
+
+def _wick_df():
+    """The rally day, with one candle in the flat top whose low (120) wicks through the SuperTrend
+    line (~136) while it closes back at 140: the close stop never sees it, the touch stop does."""
+    df = _frame([('2025-01-01', [100.0] * 75), ('2025-01-02', _rally_day())])
+    k = 75 + 30 + 14 + 6
+    df.loc[k, 'low'] = 120.0
+    return df, k
+
+
+def test_touch_stop_sells_where_the_index_trades_through_the_previous_line():
+    df, k = _wick_df()
+    close = StAllIndicatorsEngine(df, **ONLY_ST).simulate()
+    eng = StAllIndicatorsEngine(df, stop_mode='touch', **ONLY_ST)
+    touch = eng.simulate()
+    line, _ = eng._ind('st', eng.st_period, eng.st_mult)
+    held = next(t for t in close if t['entry_time'] == '2025-01-02 09:18:00')
+    assert held['exit_reason'] == 'EOD Exit' and 'intrabar_exit' not in held
+    stop = next(t for t in touch if t['entry_time'] == '2025-01-02 09:18:00')
+    assert stop['exit_reason'] == 'SuperTrend stop' and stop['intrabar_exit']
+    assert stop['exit_time'] == '2025-01-02 11:45:00'                 # no minutes: the bar's own stamp
+    assert stop['exit_price'] == round(line[k - 1], 2) < 140
+    assert touch[-1]['entry_time'] > stop['exit_time']               # the signal still on: bought again
+
+
+def test_touch_stop_is_timed_to_the_minute_it_crossed():
+    df, k = _wick_df()
+    bar = pd.Timestamp('2025-01-02 11:45')
+    idx = pd.date_range(bar, periods=3, freq='1min')
+    minutes = pd.DataFrame({'open': 140.0, 'high': 140.5, 'low': [139.0, 130.0, 120.0], 'close': 140.0,
+                            'volume': 0}, index=idx)
+    stop = next(t for t in StAllIndicatorsEngine(df, stop_mode='touch', minutes=minutes, **ONLY_ST).simulate()
+                if t['exit_reason'] == 'SuperTrend stop')
+    assert stop['exit_time'] == '2025-01-02 11:46:00'
+
+
+def test_find_best_params_walks_the_stop_on_every_board():
+    from trading_app.Backtest import simple_trader_optimise as sto
+    assert 'stop_mode' in sto.EXIT_AXES and 'stop_mode' not in sto.SESSION_AXES
+    e = StAllIndicatorsEngine(_df(), positional=True)
+    sto._apply_row(e, ['stop_mode'], {'stop_mode': 'touch'}, {})
+    assert e.stop_mode == 'touch'

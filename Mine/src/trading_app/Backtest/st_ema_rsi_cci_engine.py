@@ -38,7 +38,8 @@ Two readings are INFERRED from the screenshot, which shows only the settings:
   * CPR width % = |TC - BC| / pivot x 100, "narrow" when under `cpr_narrow`
     (Quantman lists Narrow 0.2 / Moderately 0.5 / Wide 0.5);
   * the "Future" badge on every indicator means Quantman computed them on the
-    NIFTY future; this run, like the ST + BB + RSI one, reads the index candles.
+    NIFTY future; this run, like the ST + BB + RSI one and the live Simple Trader 2,
+    reads the index candles (the route's `use_future` switches NIFTY to the future).
 """
 from __future__ import annotations
 

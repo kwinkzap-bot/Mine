@@ -1746,6 +1746,13 @@
                     <label for="saiUsePivot">Pivot R1 + narrow CPR</label>
                     <input type="checkbox" id="saiUsePivot" checked>
                 </div>
+                <div class="form-group">
+                    <label for="saiStopMode">Stop</label>
+                    <select id="saiStopMode" title="Close: a candle closes below the SuperTrend line, sold at the next open. Touch: sold the moment the index trades through the previous candle's line (ST Touch Break's stop) — smaller losses.">
+                        <option value="close" selected>SuperTrend flip (close)</option>
+                        <option value="touch">SuperTrend touched (intrabar)</option>
+                    </select>
+                </div>
                 </fieldset>
                 <fieldset class="ind-block sai-intraday"><legend>Window</legend>
                 <div class="form-group">

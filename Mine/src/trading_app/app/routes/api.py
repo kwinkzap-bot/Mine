@@ -5190,7 +5190,7 @@ def _run_simple_trader_optimise(strategy, data):
     if positional:
         data['positional'] = True
     on_future = sto.uses_future(strategy, symbol, data)
-    # ALL Indicators searches the timeframe as well, on two boards: intraday (1m-15m) and positional (1h, 1d).
+    # ALL Indicators searches the timeframe as well, one board per timeframe: intraday (1m-15m) and positional (1h, 1d).
     by_timeframe = strategy == 'st_all_indicators' and not on_future and bool(data.get('sweep_timeframes', True))
     provider = get_fyers_adapter()
     if provider is None and not on_future:
@@ -5222,13 +5222,14 @@ def _run_simple_trader_optimise(strategy, data):
                                          progress=_progress)
         if bool(data.get('price_options', True)):
             sto.verify_timeframes(strategy, boards, bars_for, data, symbol, sorted(set(minutes.index.date)),
-                                  start_date_str, progress=_progress)
+                                  start_date_str, progress=_progress, minutes=minutes)
         else:
             for board in boards.values():
                 board['results'] = board['results'][:25]
         task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
                            'start_date': start_date_str, 'end_date': end_date_str,
-                           'strategy': strategy, 'mode': 'strategy', 'boards': boards}
+                           'strategy': strategy, 'mode': 'strategy', 'boards': boards,
+                           'board_order': list(boards)}      # one board per timeframe, 1m … 1d
         task['status'] = 'complete'
 
     def _run():
@@ -6568,7 +6569,10 @@ def run_st_ema_rsi_cci_backtest_api():
                             'error': 'This strategy trades index options: pick NIFTY, BANKNIFTY, '
                                      'FINNIFTY, MIDCPNIFTY or SENSEX.'}), 400
 
-        on_future = symbol == 'NIFTY' and bool(data.get('use_future', True))   # ICICI, not Fyers
+        # The live algo (Simple Trader 2) reads the NIFTY INDEX, so this run does too unless asked
+        # for the future (`use_future`, Quantman's candles). On the future 28 Oct 2026 had no
+        # signal at all; on the index it is the live trade's own candle (09:15, RSI 27.1).
+        on_future = symbol == 'NIFTY' and bool(data.get('use_future', False))   # ICICI, not Fyers
         current_kite = get_fyers_adapter()      # Fyers history, as the ST+BB+RSI run (see there)
         if current_kite is None and not on_future:
             return jsonify({'success': False,
@@ -6583,8 +6587,8 @@ def run_st_ema_rsi_cci_backtest_api():
         # EMA(200) on 3-minute bars needs ~2 sessions of run-in; 45 days is ample.
         # Quantman reads every indicator off the NIFTY FUTURE ("Fields: Future"), and the
         # signals only line up with its trade list on those candles (see
-        # Backtest/futures_minute_store.py) — so NIFTY runs on the continuous future, the
-        # other indices on their spot candles.
+        # Backtest/futures_minute_store.py) — `use_future` runs NIFTY on the continuous
+        # future for that comparison; by default it reads the index, as the live algo does.
         if on_future:
             from trading_app.Backtest.futures_minute_store import continuous_minutes
             warm_from = (pd.Timestamp(start_date_str) - pd.Timedelta(days=45)).date()
@@ -7297,6 +7301,9 @@ def run_st_all_indicators_backtest_api():
             exit_cutoff=data.get('exit_cutoff', '15:14'),
             max_trades_per_day=int(_f('max_trades_per_day', 5)),
             direction='long', positional=positional,
+            # 'touch' = out the moment the index trades through the previous candle's SuperTrend line,
+            # timed to the minute (the option is sold there), as ST Touch Break's stop
+            stop_mode=str(data.get('stop_mode', 'close')), minutes=minutes,
         )
         trades, _ = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
@@ -7320,7 +7327,7 @@ def run_st_all_indicators_backtest_api():
                                ('st', 'rsi', 'bb', 'wr', 'cci', 'ema', 'pivot')},
                            bb=[engine.bb_period, engine.bb_mult], cpr_narrow=engine.cpr_narrow if engine.use_cpr_narrow else 0,
                            direction=engine.direction,
-                           max_trades_per_day=engine.max_trades_per_day,
+                           max_trades_per_day=engine.max_trades_per_day, stop_mode=engine.stop_mode,
                            sl_pct=sl_pct, tsl=[tsl_x, tsl_y], premium=premium,
                            positional=positional,
                            price_options=price_options, compounding=compounding),
