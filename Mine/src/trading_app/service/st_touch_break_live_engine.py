@@ -12,7 +12,10 @@ about — one closed candle at a time, a price poll in between, and a clock:
   without the level being crossed the setup is dropped (``expired``);
 * an open trade ends when a later candle CLOSES with the SuperTrend against it (``stop_mode``
   ``close``), or — with ``stop_mode`` ``touch`` — as soon as the index trades through the line of
-  the candle before, or at the square-off minute. There is no target;
+  the candle before, or at the square-off minute. There is no target. The touch is watched on a
+  5 s price poll, which can miss a spike that reverses between two reads; the closed candle's
+  low (high for a short) is the net for it — through the line, the trade is out at that close
+  (since 2026-10-30), so live takes every exit the backtest takes, if a few seconds later;
 * at most ``max_trades`` a day, one at a time.
 
 **Bounce and Through** (``modes``, a row's fixed setting; Through since 2026-10-30). A Bounce breaks
@@ -156,12 +159,21 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any], bar_minut
             t['status'] = 'expired'
             events.append({'event': 'expired', 'trade': t, 'bar': ts_s})
 
-    # 2. an open trade: its candle closed with the SuperTrend against it
+    # 2. an open trade: its candle traded through the stop line (a wick the 5 s price poll missed), or
+    #    closed with the SuperTrend against it
     open_t = next((t for t in day['trades'] if t['status'] == 'open'), None)
     if open_t is not None:
         side = 1 if open_t['type'] == 'Long' else -1
         if tmin >= open_t['entry_bar_start']:
-            if int(trend[i]) == -side:
+            sl = open_t.get('stop_line')
+            hi, lo = float(df['high'].iloc[i]), float(df['low'].iloc[i])
+            if (s.get('stop_touch') and sl and tmin >= open_t['entry_bar_start'] + bar_minutes
+                    and ((lo <= sl) if side == 1 else (hi >= sl))):
+                # the backtest exits on this candle's low/high (`stop_mode='touch'`); a spike shorter than
+                # the poll went unseen, so the trade is out now, at market, a few seconds after the close
+                events.append({'event': 'exit', 'trade': open_t, 'bar': ts_s, 'index_close': close,
+                               'reason': 'SuperTrend stop'})
+            elif int(trend[i]) == -side:
                 events.append({'event': 'exit', 'trade': open_t, 'bar': ts_s, 'index_close': close,
                                'reason': 'SuperTrend Down' if side == 1 else 'SuperTrend Up'})
             else:

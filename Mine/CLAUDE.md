@@ -367,6 +367,10 @@ Load-bearing:
   candle's SuperTrend line (`ST8_STOP_TOUCH=1`, the default; not on the entry candle) or, with
   `ST8_STOP_TOUCH=0`, a candle **closing** past it — or 15:14.
   Tab 8 is Bounce only; 9-15 may take Through setups (below).
+* **A touch stop the 5 s poll missed is caught at the close** (since 2026-10-30). The backtest exits on any
+  candle whose low (high) trades through the previous candle's line, even if it closes back; a spike that
+  reverses between two polls is invisible live, so `on_bar` also checks the closed candle's low/high against
+  `stop_line` and exits at that close (`SuperTrend stop`) — same decision as the backtest, a few seconds late.
 * **Price is read only while something waits on it** — an armed setup's break candle, or an open trade
   under a `touch` stop (`_price_events`, polled at the chassis's 5 s). The chassis gained two hooks for
   this, `_price_events` and `_signal_text`, both no-ops for the other seven.

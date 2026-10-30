@@ -132,6 +132,35 @@ def test_the_touch_stop_exits_between_candles_but_not_on_the_entry_candle():
     assert tb.on_price(day, t['stop_line'] - 1, hh(start + 3), dict(s, stop_touch=0)) == []
 
 
+def test_a_wick_through_the_stop_that_the_poll_missed_exits_at_that_candles_close():
+    """A candle whose low pokes through the stop line and closes back above it — no SuperTrend flip — is
+    the backtest's touch exit; live, the price poll may never have seen it, so the close is the net."""
+    rows, _, _ = _touch_setup()
+    day = tb.new_day(DAY)
+    s = dict(S, stop_touch=1)
+    tb.on_bar(day, _bars(rows), s)
+    t = day['trades'][0]
+    t['status'] = 'open'
+    rows.append((rows[-1][3], t['level'] + 2, rows[-1][3], t['level'] + 1.5))     # the entry candle
+    assert [e for e in tb.on_bar(day, _bars(rows), s) if e['event'] == 'exit'] == []
+    sl = t['stop_line']
+    last = rows[-1][3]
+    rows.append((last, last + 0.5, sl - 0.5, last + 0.2))                          # wick through, closes back up
+    df = _bars(rows)
+    eng = StTouchBreakEngine(df, st_period=S['st_period'], st_mult=S['st_mult'])
+    assert eng.indicators()['trend'][-1] == 1                                      # the SuperTrend did not flip
+    for st, out in ((0, False), (1, True)):
+        d = {**day, 'trades': [dict(t)], 'last_bar': day['last_bar']}
+        ev = [e for e in tb.on_bar(d, df, dict(s, stop_touch=st)) if e['event'] == 'exit']
+        assert bool(ev) is out
+        if out:
+            assert ev[0]['reason'] == 'SuperTrend stop' and ev[0]['index_close'] == pytest.approx(last + 0.2)
+    # and the backtest exits on that same candle
+    tr = StTouchBreakEngine(df, st_period=S['st_period'], st_mult=S['st_mult'], stop_mode='touch',
+                            modes='bounce', direction='long', outside_bar='first').simulate()
+    assert tr[-1]['exit_reason'] == 'SuperTrend stop' and tr[-1]['exit_time'][:16] >= df.index[-1].strftime('%Y-%m-%d %H:%M')
+
+
 def test_it_arms_on_the_very_candles_the_backtest_enters_on():
     """The live read is the backtest's own touches(): every touch candle the backtest trades is armed."""
     rng = np.random.default_rng(11)
@@ -251,10 +280,11 @@ def test_paper_day_arm_then_cross_then_flip_books_a_history_row(paper8):
     a.frame = _bars(rows)
     a.px = 262.0
     a.tick(close_at.to_pydatetime().replace(tzinfo=IST) + pd.Timedelta(minutes=6, seconds=10))
-    assert t['status'] == 'closed' and t['result'] == 'SuperTrend Down'
+    # it traded through the stop line before closing past it: the backtest's touch exit comes first
+    assert t['status'] == 'closed' and t['result'] == 'SuperTrend stop'
     assert t['legs']['paper']['exit'] == 262.0
     hist = algo.load_history(algo.PROFILES[8])
-    assert len(hist) == 1 and hist[0]['result'] == 'SuperTrend Down' and hist[0]['pnl'] > 0 and hist[0]['mode'] == 'paper'
+    assert len(hist) == 1 and hist[0]['result'] == 'SuperTrend stop' and hist[0]['pnl'] > 0 and hist[0]['mode'] == 'paper'
 
 
 def test_a_setup_that_expires_leaves_no_trade_and_no_order(paper8):
