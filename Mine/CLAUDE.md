@@ -366,8 +366,7 @@ Load-bearing:
   from 10:00 (`Spec.entry_start`). A close a restart is catching up on is `missed`, not chased. Exit is the index **trading through** the previous
   candle's SuperTrend line (`ST8_STOP_TOUCH=1`, the default; not on the entry candle) or, with
   `ST8_STOP_TOUCH=0`, a candle **closing** past it — or 15:14.
-  **Bounce only**: a *Through* setup is known only at the break candle's close (it is the one the SuperTrend
-  flips on), so it has no live twin.
+  Tab 8 is Bounce only; 9-15 may take Through setups (below).
 * **Price is read only while something waits on it** — an armed setup's break candle, or an open trade
   under a `touch` stop (`_price_events`, polled at the chassis's 5 s). The chassis gained two hooks for
   this, `_price_events` and `_signal_text`, both no-ops for the other seven.
@@ -384,18 +383,28 @@ Load-bearing:
 * The sweep behind the Backtest page's Find Best Params does not reach here: the tab's boxes are the
   numbers it searches (SuperTrend length/factor, direction, stop, min wick) plus min body and the outside-bar side, set by hand.
 
-**Mine sub-tabs 9-16 (added 2026-10-29, paper).** The other rows of the Backtest 🧩 Combined ⚡ Optimize
-set (the ★ Default row is 8) are strategies 9-16 of the same chassis, one sub-tab, thread, `ST<n>_*` flag
-set, `BROKER_N_ST<n>_*` and `simple_trader_<n>_*.json` each: `_touch_break()` in
-`simple_trader_live_engine.py` builds them from the row's numbers, `MINE_TABS` lists 8-16 for the page
-(8 keeps `mine-nifty`/`mnn`; the rest are `mine-<n>`/`mn<n>`), and `pages.algo` passes it to the
-template and `window.MINE_TABS`. A row's candles (3/5/15 m) and **entry window** are fixed in its spec
-(`fixed['entry_end']`, read by `_window()`), not settings. 11/12/13 differ only in the window, so between
-10:00 and 11:30 they take the same setup **three times** at one broker — that is what the combined book
-counted. Names: `NIFTY - Both - 3m - AM` (9), `- Both - 15m` (10), `- Both - 5m - AM` (11),
-`- Both - 5m - 09:30` (12), `- Both - 5m - 10:00` (13), `- Buy - 3m - AM` (14), `- Buy - 5m` (15),
-`- Sell - 3m - AM` (16, SELL-only #1: ST 14/1.5, 10:00-11:30, 5 a day).
-New routes put the api blueprint at 259 rules (`tests/route_inventory.txt`).
+**Mine sub-tabs 9-15 (2026-10-30, paper; replaced the 2026-10-29 rows 9-16).** The Backtest page's ★ Saved
+rows (the eighth, `Both ★ Default`, is 8) are strategies 9-15 of the same chassis, one sub-tab, thread,
+`ST<n>_*` flag set, `BROKER_N_ST<n>_*` and `simple_trader_<n>_*.json` each: `_touch_break()` in
+`simple_trader_live_engine.py` builds them from the saved row's numbers (timeframe · ST len/factor · setups ·
+stop · wick/tol/body · outside bar · from/until · square-off · trades a day), `MINE_TABS` lists 8-15 for the
+page. Tab names end in the saved row's label: `NIFTY - Sell - 5m - #15` (9), `- Sell - 5m - #9` (10),
+`- Sell - 5m - #8` (11), `- Sell - 3m - #6` (12), `- Sell - 3m - #2` (13), `- Buy - 3m - #8` (14),
+`- Buy - 5m - #2` (15). They briefly lived at 17-23 the same evening. The old rows' `ST9-16_MODE` (all
+`live`) / `BROKER_1_ST9-16_*` flags were deleted first and their `simple_trader_9-16_*.json` renamed
+`*.removed-20261030.json` (the 10/12/13/15 histories hold that day's real trades), so the new rows start
+paper with empty books (env backups `scratch/Mine.env.bak-20261030-*`). Candles, window, square-off and
+setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not settings.
+* **Through setups trade live since 2026-10-30** (9, 14; 12/13 take Bounce + Through on the SELL side). A
+  Through breaks THROUGH the line (uptrend touch → short under the touch low); it needs no SuperTrend flip to
+  enter — if the break candle closes with the trend still against it, it is out at that close, as the
+  backtest's `SuperTrend flip`. One side is armed per touch (every row is one-sided or Bounce only). The
+  chase guard measures a Through against the touch candle's range, since its level sits on the line.
+* **The backtest fills a close-judged break at the close** (`StTouchBreakEngine.confirm_at_close`: body > 0
+  or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
+  look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
+  overstate them.
+The api blueprint is at 254 rules (`tests/route_inventory.txt`).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).

@@ -339,39 +339,40 @@ def test_the_live_close_entries_are_the_backtests_trades():
     s = dict(SC, direction='both', st_period=7, st_mult=1.5)
     eng = StTouchBreakEngine(df, st_period=7, st_mult=1.5, modes='bounce', direction='both', min_body_pct=50,
                              outside_bar='close', max_trades_per_day=99, bar_minutes=1)
-    want = {tr['entry_time'][:16] for tr in eng.simulate()}
+    want = {(tr['entry_time'][:16], tr['entry_price']) for tr in eng.simulate()}     # the close, at the close
     day = tb.new_day(DAY)
     got = set()
     for k in range(12, len(df)):
         for ev in tb.on_bar(day, df.iloc[:k + 1], dict(s, max_trades=99), bar_minutes=1):
             if ev['event'] == 'entry':
-                got.add(ev['bar'][:16])
+                at = pd.Timestamp(ev['bar']) + pd.Timedelta(minutes=1)
+                got.add((at.strftime('%Y-%m-%d %H:%M'), ev['trade']['index_cross']))
                 ev['trade']['status'] = 'closed'                               # one at a time: free the slot
     assert want and want <= got
 
 
-# ── The rest of the Mine group: 9-16, the other rows of the Combined ⚡ Optimize set of 2026-10-29 ──
+# ── The rest of the Mine group: 9-15, the Backtest page's ★ Saved rows of 2026-10-30 ──
 
 from types import SimpleNamespace                                              # noqa: E402
 
 from trading_app.service import simple_trader_live_engine as sim               # noqa: E402
 
-# n: (tab, bar, st len, st factor, wick, tol, body, outside bar, entry from, entry until, max trades, direction)
+# n: (tab, bar, st len, st factor, setups, stop touch, wick, tol, body, outside bar, entry from, entry until,
+#     square-off, max trades, direction) — the saved rows' own order
 MINE_ROWS = {
-    9:  ('NIFTY - Both - 3m - AM',    3,  7,  1.5, 25, 0,   50, 'close', '10:00', '11:30', 1, 'both'),
-    10: ('NIFTY - Both - 15m',        15, 7,  1.5, 40, 0.1, 50, 'close', '10:00', '15:14', 1, 'both'),
-    11: ('NIFTY - Both - 5m - AM',    5,  14, 2,   40, 0,   50, 'first', '09:30', '11:30', 5, 'both'),
-    12: ('NIFTY - Both - 5m - 09:30', 5,  14, 2,   40, 0,   50, 'first', '09:30', '15:14', 5, 'both'),
-    13: ('NIFTY - Both - 5m - 10:00', 5,  14, 2,   40, 0,   50, 'first', '10:00', '15:14', 5, 'both'),
-    14: ('NIFTY - Buy - 3m - AM',     3,  7,  1.5, 25, 0,   50, 'close', '09:30', '11:30', 1, 'long'),
-    15: ('NIFTY - Buy - 5m',          5,  14, 2,   40, 0,   50, 'close', '09:30', '15:14', 1, 'long'),
-    16: ('NIFTY - Sell - 3m - AM',    3,  14, 1.5, 40, 0,   50, 'close', '10:00', '11:30', 5, 'short'),
+    9:  ('NIFTY - Sell - 5m - #15', 5, 10, 2.5, 'through', 1, 25, 0, 0,  'first', '09:15', '14:30', '15:00', 5, 'short'),
+    10: ('NIFTY - Sell - 5m - #9',  5, 14, 2,   'bounce',  1, 0,  0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
+    11: ('NIFTY - Sell - 5m - #8',  5, 14, 2,   'bounce',  1, 25, 0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
+    12: ('NIFTY - Sell - 3m - #6',  3, 7,  3,   'both',    1, 0,  0, 50, 'first', '10:00', '13:00', '15:00', 5, 'short'),
+    13: ('NIFTY - Sell - 3m - #2',  3, 7,  3,   'both',    1, 0,  0, 50, 'first', '10:30', '13:00', '15:00', 5, 'short'),
+    14: ('NIFTY - Buy - 3m - #8',   3, 14, 3,   'through', 0, 25, 0, 0,  'first', '10:30', '15:14', '15:14', 1, 'long'),
+    15: ('NIFTY - Buy - 5m - #2',   5, 10, 2,   'bounce',  1, 40, 0, 50, 'first', '09:30', '15:14', '15:14', 1, 'long'),
 }
 
 
 @pytest.mark.parametrize('n', sorted(MINE_ROWS))
 def test_each_mine_row_is_its_own_paper_algo_with_the_rows_numbers(n, tmp_path, monkeypatch):
-    tab, bar, stp, stm, wick, tol, body, outside, start, end, mx, direction = MINE_ROWS[n]
+    tab, bar, stp, stm, modes, stop, wick, tol, body, outside, start, end, cutoff, mx, direction = MINE_ROWS[n]
     monkeypatch.setattr(algo, '_DIR', str(tmp_path))
     fake = lambda u, name, default='': default                               # noqa: E731 — an empty env file
     monkeypatch.setattr(algo, '_uvar', fake)
@@ -381,56 +382,94 @@ def test_each_mine_row_is_its_own_paper_algo_with_the_rows_numbers(n, tmp_path, 
     assert pr.state_file().endswith(f'simple_trader_{n}_state.json')
     s = algo.settings('u', pr)
     assert s['mode'] == 'paper'                                               # nothing live until the tab says so
-    assert (s['bar'], s['st_period'], s['st_mult'], s['stop_touch'], s['min_wick_pct']) == (bar, stp, stm, 1, wick)
+    assert (s['bar'], s['st_period'], s['st_mult'], s['stop_touch'], s['min_wick_pct']) == (bar, stp, stm, stop, wick)
     assert (s['touch_tol_pct'], s['min_body_pct'], s['outside_bar'], s['max_trades']) == (tol, body, outside, mx)
-    assert (s['direction'], s['premium'], s['sl_pct'], s['tsl_x'], s['tsl_y']) == (direction, 250, 0, 0, 0)
+    assert (s['direction'], s['modes'], s['premium'], s['sl_pct'], s['tsl_x'], s['tsl_y']) == (direction, modes, 250, 0, 0, 0)
     assert algo.SimpleTraderAlgo._window(SimpleNamespace(spec=pr.spec)) == {
-        'entry_start': start, 'entry_end': end, 'exit_cutoff': '15:14'}
+        'entry_start': start, 'entry_end': end, 'exit_cutoff': cutoff}
     from trading_app.app.routes import api
     assert api._STBB_FLAGS[f'st{n}'] == f'ST{n}'
 
 
-def test_the_mine_tabs_are_8_to_16_with_8_keeping_its_key_and_unique_names():
-    assert [n for n, _, _ in sim.MINE_TABS] == list(range(8, 17))
+def test_the_mine_tabs_are_8_and_the_seven_saved_rows():
+    assert [n for n, _, _ in sim.MINE_TABS] == list(range(8, 16))
     assert sim.MINE_TABS[0] == (8, 'mine-nifty', 'mnn')
-    assert len({sim.SPECS[n].tab for n, _, _ in sim.MINE_TABS}) == 9
-    assert len({k for _, k, _ in sim.MINE_TABS}) == 9 and len({p for _, _, p in sim.MINE_TABS}) == 9
+    assert 16 not in sim.SPECS                                                # the 2026-10-29 rows are gone
+    assert len({sim.SPECS[n].tab for n, _, _ in sim.MINE_TABS}) == 8
+    assert sim.SPECS[9].tab == 'NIFTY - Sell - 5m - #15' and sim.SPECS[15].tab == 'NIFTY - Buy - 5m - #2'
+    assert len({k for _, k, _ in sim.MINE_TABS}) == 8 and len({p for _, _, p in sim.MINE_TABS}) == 8
 
 
 @pytest.mark.parametrize('n', sorted(MINE_ROWS))
-def test_each_mine_row_enters_live_on_the_candles_its_backtest_trades(n):
-    """The row's own numbers and entry window: every candle its backtest enters on, over 20 sessions, is
-    entered live at that candle's close (and never outside the window)."""
-    tab, bar, stp, stm, wick, tol, body, outside, start, end, mx, direction = MINE_ROWS[n]
-    for seed in range(n, n + 30):                                            # the first data that gives it trades
+def test_each_mine_row_enters_live_on_the_candles_its_backtest_trades(n, monkeypatch):
+    """The row's own numbers, setups and window, walked minute by minute over 20 sessions: every trade
+    its backtest enters is entered live — a close-confirmed row at that close and price, an intrabar row
+    in the same minute on the same side (Through setups included) — and never outside the window."""
+    tab, bar, stp, stm, modes, stop, wick, tol, body, outside, start, end, cutoff, mx, direction = MINE_ROWS[n]
+    monkeypatch.setattr(tb, 'MAX_CHASE_RISK_FRAC', 1e9)                       # a minute's extreme is not a chase
+    anchor = pd.Timedelta(hours=9, minutes=15)
+    for seed in range(n, n + 60):                                 # the first data that gives it trades (a Through too)
         rng = np.random.default_rng(seed)
-        frames, price = [], 22000.0
-        for d in pd.bdate_range('2026-09-01', periods=20):                   # 20 sessions of the row's candles
-            rows = []
-            for k in range(375 // bar):
+        rows, stamps, price = [], [], 22000.0
+        for d in pd.bdate_range('2026-09-01', periods=20):                   # 20 sessions of 1-minute candles
+            for k in range(375):
                 o = price
-                price += rng.normal(0, 4 * bar ** 0.5) + (0.6 if (d.day // 3) % 2 else -0.6) * bar
-                rows.append((o, max(o, price) + abs(rng.normal(0, 2)), min(o, price) - abs(rng.normal(0, 2)), price))
-            frames.append(_bars(rows, start=f'{d.date()} 09:15', step=bar))
-        df = pd.concat(frames)
-        eng = StTouchBreakEngine(df, st_period=stp, st_mult=stm, modes='bounce', direction=direction,
-                                 min_wick_pct=wick, touch_tol_pct=tol, min_body_pct=body, outside_bar=outside,
-                                 entry_start=start, entry_end=end, exit_cutoff='15:14',
-                                 max_trades_per_day=99, bar_minutes=bar)
-        want = {tr['entry_time'][:16] for tr in eng.simulate()}
-        if want:
+                price += rng.normal(0, 4) + (0.6 if (d.day // 3) % 2 else -0.6)
+                rows.append((o, max(o, price) + abs(rng.normal(0, 1)), min(o, price) - abs(rng.normal(0, 1)), price))
+                stamps.append(pd.Timestamp(f'{d.date()} 09:15') + pd.Timedelta(minutes=k))
+        mins = pd.DataFrame(rows, columns=['open', 'high', 'low', 'close'], index=pd.DatetimeIndex(stamps))
+        key = (mins.index - anchor).floor(f'{bar}min') + anchor
+        df = mins.groupby(key).agg(open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
+                                   close=('close', 'last'))
+        eng = StTouchBreakEngine(df.reset_index(names='date'), st_period=stp, st_mult=stm, modes=modes,
+                                 direction=direction, min_wick_pct=wick, touch_tol_pct=tol, min_body_pct=body,
+                                 outside_bar=outside, stop_mode='touch' if stop else 'close', entry_start=start,
+                                 entry_end=end, exit_cutoff=cutoff, max_trades_per_day=99, minutes=mins,
+                                 bar_minutes=bar)
+        trades = eng.simulate()
+        if trades and (modes == 'bounce' or any(tr['setup'] == 'Through' for tr in trades)):
             break
-    s = dict(sim.SPECS[n].params, direction=direction, outside_bar=outside, max_trades=99,
-             entry_start=start, entry_end=end, exit_cutoff='15:14', stop_touch=0)
-    got, day = set(), None
-    for k in range(3, len(df)):
-        date_str = str(df.index[k].date())
+    s = dict(sim.SPECS[n].fixed, **sim.SPECS[n].params)
+    s.update(max_trades=99, entry_start=sim.SPECS[n].entry_start)              # as settings() adds it
+    confirm = tb.confirm_at_close(s)
+    want = {(tr['entry_time'][:16], tr['entry_price'] if confirm else tr['type']) for tr in trades}
+    got, day, nxt = set(), None, 0
+    bar_starts = list(df.index)
+    for ts, m in mins.iterrows():
+        date_str = str(ts.date())
         if day is None or day['date'] != date_str:
             day = tb.new_day(date_str)
-        for ev in tb.on_bar(day, df.iloc[:k + 1], s, bar_minutes=bar):
-            if ev['event'] == 'entry':
-                got.add(ev['bar'][:16])
-                ev['trade']['status'] = 'closed'                               # one at a time: free the slot
+        while nxt < len(bar_starts) and bar_starts[nxt] + pd.Timedelta(minutes=bar) <= ts:
+            for ev in tb.on_bar(day, df.iloc[:nxt + 1], s, bar_minutes=bar):          # a candle closed
+                if ev['event'] == 'entry':
+                    at = pd.Timestamp(ev['bar']) + pd.Timedelta(minutes=bar)
+                    got.add((at.strftime('%Y-%m-%d %H:%M'), ev['trade']['index_cross']))
+                    ev['trade']['status'] = 'closed'                           # one at a time: free the slot
+            nxt += 1
+        for px in (m['high'], m['low']):                                       # the minute's two extremes
+            for ev in tb.on_price(day, px, ts.strftime('%H:%M'), s, bar_minutes=bar):
+                if ev['event'] == 'entry':
+                    got.add((ts.strftime('%Y-%m-%d %H:%M'), ev['trade']['type']))
+                    ev['trade']['status'] = 'closed'
     assert want, 'the synthetic sessions gave the backtest nothing to compare'
     assert want <= got
-    assert all(start <= t[11:16] < end for t in got)
+    if modes != 'bounce':
+        assert any(tr['setup'] == 'Through' for tr in trades)                  # the new path was exercised
+    first = pd.Timedelta(minutes=bar if confirm else 0)
+    bad = [t for t, _ in got if not start <= (pd.Timestamp(t) - first).strftime("%H:%M") <= end]
+    assert not bad, bad[:5]
+
+
+def test_a_through_setup_arms_the_side_that_breaks_through_the_line():
+    """An uptrend touch on a SELL-only Through row arms a short below the touch LOW; on a Bounce row it
+    arms nothing (the bounce side is a buy)."""
+    rows, _, _ = _touch_setup()
+    for modes, armed in (('through', True), ('bounce', False)):
+        day = tb.new_day(DAY)
+        ev = tb.on_bar(day, _bars(rows), dict(S, direction='short', modes=modes, outside_bar='first'))
+        if armed:
+            t = [e['trade'] for e in ev if e['event'] == 'armed'][0]
+            assert t['type'] == 'Short' and t['setup'] == 'Through' and t['level'] == round(rows[-1][2], 2)
+            assert t['risk'] == round(rows[-1][1] - rows[-1][2], 2)            # the touch candle's range
+        else:
+            assert not [e for e in ev if e['event'] == 'armed']

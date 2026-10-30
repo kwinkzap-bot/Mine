@@ -121,37 +121,45 @@ SPECS: Dict[int, Spec] = {s.n: s for s in (
 )}
 
 
-def _touch_break(n, tab, bar, st_period, st_mult, min_wick, touch_tol, min_body, outside_bar,
-                 entry_start, entry_end, max_trades, direction):
-    """One more Mine sub-tab: ST Touch Break with the numbers of one Find Best Params row (the 🧩
-    Combined ⚡ Optimize set of 2026-10-29: 3/5/15m · ST len / factor · Bounce · stop on touch · wick /
-    tol / body · outside bar · entry window · square-off 15:14 · max trades). Premium 250 and no premium
-    SL / trail, as the run priced them. Each is its own thread, flags (ST<n>_*) and files, paper first."""
+def _touch_break(n, tab, bar, st_period, st_mult, modes, stop_touch, min_wick, touch_tol, min_body, outside_bar,
+                 entry_start, entry_end, exit_cutoff, max_trades, direction):
+    """One more Mine sub-tab: ST Touch Break with the numbers of one saved Find Best Params row (the
+    Backtest page's ★ Saved list of 2026-10-30, in its order: timeframe · ST len / factor · setups ·
+    stop · wick / tol / body · outside bar · entry from / until · square-off · trades a day). Premium
+    250 and no premium SL / trail, as the run priced them. Each is its own thread, flags (ST<n>_*) and
+    files, paper first."""
     side = {'both': 'CE (PE)', 'long': 'CE', 'short': 'PE'}[direction]
     dirs = {'both': 'both directions', 'long': 'BUY only', 'short': 'SELL only'}[direction]
+    kind = {'bounce': 'Bounce', 'through': 'Through', 'both': 'Bounce + Through'}[modes]
     return Spec(n, 'ST Touch Break', StTouchBreakEngine, 'tb', 'NIFTY', 'spot', bar,
                 'short' if direction == 'short' else 'long', 250, entry_start, 0, 0, 0, max_trades,
-                dict(st_period=st_period, st_mult=st_mult, stop_touch=1, min_wick_pct=float(min_wick),
+                dict(st_period=st_period, st_mult=st_mult, stop_touch=stop_touch, min_wick_pct=float(min_wick),
                      min_body_pct=float(min_body), touch_tol_pct=float(touch_tol)),
-                fixed=dict(direction=direction, outside_bar=outside_bar, entry_end=entry_end, exit_cutoff='15:14'),
+                fixed=dict(direction=direction, outside_bar=outside_bar, modes=modes, entry_end=entry_end,
+                           exit_cutoff=exit_cutoff),
                 rule=f'NIFTY {bar}-min, entries {entry_start}-{entry_end}: a wick (≥ {min_wick:g} % of the range) touching'
-                     f' SuperTrend({st_period},{st_mult:g}) arms the next candle; a break of the touch high (low) with a body'
-                     f' ≥ {min_body:g} % buys the ≈250 {side} ({dirs}, outside bar → {outside_bar}); exit when the index'
-                     f' trades through the previous candle\'s SuperTrend line; up to {max_trades} a day',
+                     f' SuperTrend({st_period},{st_mult:g}) arms the next candle; a {kind} break of the touch high (low)'
+                     + (f' with a body ≥ {min_body:g} %' if min_body else '') +
+                     f' buys the ≈250 {side} ({dirs}, outside bar → {outside_bar}); exit when the index'
+                     f' {"trades through" if stop_touch else "closes beyond"} the previous candle\'s SuperTrend line,'
+                     f' square-off {exit_cutoff}; up to {max_trades} a day',
                 tab=tab)
 
 
-# The rest of the Mine group — 9-16 are the other ticked rows of that Optimize set (the ★ Default row
-# is 8 above). Names are "<symbol> - <direction> - <timeframe>" plus what tells two alike apart.
+# The rest of the Mine group — 9-15 are the Backtest page's ★ Saved rows of 2026-10-30 (the eighth,
+# Both ★ Default, is 8 above). They replaced the Combined ⚡ Optimize rows of 2026-10-29 under the same
+# numbers (9-16): those rows' ST9-16 flags were deleted and their simple_trader_<n>_*.json archived as
+# *.removed-20261030.json, so no new row inherits an old MODE=live or trade history. "#n" is the saved
+# row's own label.
+#   n   tab                          bar len fac  setups     stop wick tol body outside from     until    sq-off  /day dir
 for _sp in (
-    _touch_break(9,  'NIFTY - Both - 3m - AM',     3,  7,  1.5, 25, 0,   50, 'close', '10:00', '11:30', 1, 'both'),
-    _touch_break(10, 'NIFTY - Both - 15m',         15, 7,  1.5, 40, 0.1, 50, 'close', '10:00', '15:14', 1, 'both'),
-    _touch_break(11, 'NIFTY - Both - 5m - AM',     5,  14, 2,   40, 0,   50, 'first', '09:30', '11:30', 5, 'both'),
-    _touch_break(12, 'NIFTY - Both - 5m - 09:30',  5,  14, 2,   40, 0,   50, 'first', '09:30', '15:14', 5, 'both'),
-    _touch_break(13, 'NIFTY - Both - 5m - 10:00',  5,  14, 2,   40, 0,   50, 'first', '10:00', '15:14', 5, 'both'),
-    _touch_break(14, 'NIFTY - Buy - 3m - AM',      3,  7,  1.5, 25, 0,   50, 'close', '09:30', '11:30', 1, 'long'),
-    _touch_break(15, 'NIFTY - Buy - 5m',           5,  14, 2,   40, 0,   50, 'close', '09:30', '15:14', 1, 'long'),
-    _touch_break(16, 'NIFTY - Sell - 3m - AM',     3,  14, 1.5, 40, 0,   50, 'close', '10:00', '11:30', 5, 'short'),
+    _touch_break(9,  'NIFTY - Sell - 5m - #15', 5,  10, 2.5, 'through', 1, 25, 0, 0,  'first', '09:15', '14:30', '15:00', 5, 'short'),
+    _touch_break(10, 'NIFTY - Sell - 5m - #9',  5,  14, 2,   'bounce',  1, 0,  0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
+    _touch_break(11, 'NIFTY - Sell - 5m - #8',  5,  14, 2,   'bounce',  1, 25, 0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
+    _touch_break(12, 'NIFTY - Sell - 3m - #6',  3,  7,  3,   'both',    1, 0,  0, 50, 'first', '10:00', '13:00', '15:00', 5, 'short'),
+    _touch_break(13, 'NIFTY - Sell - 3m - #2',  3,  7,  3,   'both',    1, 0,  0, 50, 'first', '10:30', '13:00', '15:00', 5, 'short'),
+    _touch_break(14, 'NIFTY - Buy - 3m - #8',   3,  14, 3,   'through', 0, 25, 0, 0,  'first', '10:30', '15:14', '15:14', 1, 'long'),
+    _touch_break(15, 'NIFTY - Buy - 5m - #2',   5,  10, 2,   'bounce',  1, 40, 0, 50, 'first', '09:30', '15:14', '15:14', 1, 'long'),
 ):
     SPECS[_sp.n] = _sp
 

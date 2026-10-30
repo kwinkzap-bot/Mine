@@ -89,7 +89,7 @@ def settings(username, p: SimpleProfile) -> Dict[str, Any]:
         s['outside_bar'] = v if v in ('close', 'first') else sp.fixed.get('outside_bar', 'first')
         # what the tab's rule line shows: candles and the entry window are the row's, not settings
         s.update(bar=sp.bar, entry_start=sp.entry_start, entry_end=sp.fixed.get('entry_end', '15:14'),
-                 exit_cutoff=sp.fixed.get('exit_cutoff', '15:14'), tab=sp.tab)
+                 exit_cutoff=sp.fixed.get('exit_cutoff', '15:14'), modes=sp.fixed.get('modes', 'bounce'), tab=sp.tab)
     for k, v in sp.params.items():
         n = _num(username, f'{p.pfx}_{k.upper()}', v)
         s[k] = int(n) if isinstance(v, int) and not isinstance(v, bool) else n

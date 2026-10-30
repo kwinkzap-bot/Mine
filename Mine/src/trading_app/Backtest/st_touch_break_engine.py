@@ -32,8 +32,15 @@ Two entries read off the user's NIFTY 3-minute screenshots of 27 Oct 2026, Super
 `min_wick_pct` (share of the touch candle's range that is wick on the line's side) and
 `min_body_pct` (body share of the breaking candle's range, closing the way it broke) are the
 "long wick" / "strong candle" of the description. Both default to OFF — the screenshots do not
-fix a number — and `min_body_pct` reads the breaking candle's close, which is not known when
-the order would fill, so it is a study filter, not something a live rule can use.
+fix a number.
+
+Filled at the close (since 2026-10-30). `min_body_pct` above 0 and `outside_bar='close'` both
+read the break candle's CLOSE, so with either on the trade is entered AT that close (stamped the
+next bar's first minute, priced off the close), and dropped if the SuperTrend flipped against it
+on that candle — exactly what the live Mine tabs do. Until then it filled at the break level with
+the close already known: on 2020-26 NIFTY that look-ahead was roughly half to two-thirds of every
+Mine row's index points (tab 10: +15,626 vs +5,591), and the live tabs could never earn it. With
+both off (`min_body_pct` 0, `outside_bar='first'`) the fill is still at the level, intrabar.
 
 P&L is in INDEX points here; the page re-prices each trade on a CE (long) / PE (short) with
 `attach_option_legs`, exactly as the Simple Trader runs do, and the option's own stop-loss /
@@ -134,6 +141,13 @@ class StTouchBreakEngine:
 
     # ── Trades ─────────────────────────────────────────────────────────────────
 
+    @property
+    def confirm_at_close(self) -> bool:
+        """Does the entry read the break candle's close (a body filter, or an outside bar going the
+        way it closes)? Then the trade is entered AT that close, as the live tab does — not at the
+        level, which was crossed before the close was known."""
+        return self.min_body > 0 or self.outside_bar == 'close'
+
     def run(self) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         trades = self.simulate()
         return trades, summarise_points(trades)
@@ -178,6 +192,7 @@ class StTouchBreakEngine:
         trades: List[Dict[str, Any]] = []
         free_from = 0
         taken: Dict[Any, int] = {}
+        confirm = self.confirm_at_close
         cands = np.flatnonzero(touch)
         if want_day is not None:                           # trade_after: only that session's touches
             cands = cands[day_arr[cands] == want_day]
@@ -216,9 +231,15 @@ class StTouchBreakEngine:
                                   or (c[e] > o[e]) != is_long):
                 continue
             level = h[t] if is_long else l[t]
-            entry = max(o[e], level) if is_long else min(o[e], level)
             side = 1 if is_long else -1
-            entry_ts = idx[e] if entry == o[e] and o[e] != level else self._cross_minute(idx[e], level, is_long)
+            if confirm:                                    # judged on the close, so filled at it
+                if trend[e] == -side:                      # the line flipped against it on that close
+                    continue
+                entry = c[e]
+                entry_ts = idx[e] + bar                    # known at the close: the next bar's first minute
+            else:
+                entry = max(o[e], level) if is_long else min(o[e], level)
+                entry_ts = idx[e] if entry == o[e] and o[e] != level else self._cross_minute(idx[e], level, is_long)
             if after_ts and entry_ts.strftime('%Y-%m-%d %H:%M:%S') <= after_ts:
                 continue
             exit_ts = None
@@ -264,10 +285,10 @@ class StTouchBreakEngine:
                 'bars_held': int(exit_k - e + 1),
                 'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
                 'exit_reason': reason,
-                # Both fills happen INSIDE their minute (the index trades through the break level /
-                # the SuperTrend line), so the option leg is priced mid-minute, not at the close of the
-                # minute before — see attach_option_legs.
-                'intrabar_entry': True, 'intrabar_exit': reason == 'SuperTrend stop',
+                # A level / line fill happens INSIDE its minute (the index trades through the break
+                # level / the SuperTrend line), so the option leg is priced mid-minute, not at the close
+                # of the minute before — see attach_option_legs. A close entry is that minute-before close.
+                'intrabar_entry': not confirm, 'intrabar_exit': reason == 'SuperTrend stop',
             })
         return trades
 

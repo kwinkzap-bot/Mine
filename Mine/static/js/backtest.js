@@ -4391,10 +4391,18 @@ document.addEventListener('DOMContentLoaded', function() {
     function _mountSingleOptGrid(gridId, rows, legacyCols, defaultSortKey, applyFn, derivedSort, defaultFn) {
         const grid = document.getElementById(gridId);
         if (!grid) return;
-        const columns = _mapLegacyOptColumns(legacyCols, { isLive: () => false, derivedSort: derivedSort || {}, withDefault: !!defaultFn })
+        let columns = _mapLegacyOptColumns(legacyCols, { isLive: () => false, derivedSort: derivedSort || {}, withDefault: !!defaultFn })
             // SM has no live-algo concept here — drop the column rather
             // than render one that's permanently off.
             .filter(c => c.label !== 'Live');
+        // The Best Params boards honour the ☰ Columns chooser; '#' and the Use/Default
+        // column are never hideable. Re-mounting keeps the sort (DataGrid holds it per element).
+        if (grid.closest('#stBbRsiOptimisePanel')) {
+            grid._colLabels = columns.map(c => c.label).filter(_optColHideable);
+            grid._remount = () => _mountSingleOptGrid(gridId, rows, legacyCols, defaultSortKey, applyFn, derivedSort, defaultFn);
+            const hidden = _optHiddenCols();
+            columns = columns.filter(c => !(_optColHideable(c.label) && hidden.has(c.label)));
+        }
         // `_displayed` lives on the grid element itself, not a closure-local
         // var — the "Use" click listener below is wired only once (guarded by
         // optUseWired) and survives every later re-render (e.g. re-running
@@ -5626,6 +5634,74 @@ document.addEventListener('DOMContentLoaded', function() {
                             { timeframe: r => SBR_TF_MIN[r.timeframe] ?? 0 },
                             strat && data.strategy === 'st_touch_break' ? withDirection(saveStbDefault, data.direction) : null);
     }
+
+    // ☰ Columns: the Best Params boards' column chooser. One hidden set (by column label) for
+    // every board, kept in this browser; ticking a box re-mounts each board without that column.
+    const OPT_HIDDEN_COLS_KEY = 'btOptHiddenCols';
+    function _optColHideable(label) { return !!label && label !== '#'; }
+    function _optHiddenCols() {
+        try { return new Set(JSON.parse(localStorage.getItem(OPT_HIDDEN_COLS_KEY) || '[]')); }
+        catch (_) { return new Set(); }
+    }
+    function _saveOptHiddenCols(set) {
+        try { localStorage.setItem(OPT_HIDDEN_COLS_KEY, JSON.stringify([...set])); } catch (_) { /* private window */ }
+    }
+
+    (function wireSbrColumns() {
+        const btn   = document.getElementById('sbrOptColsBtn');
+        const panel = document.getElementById('stBbRsiOptimisePanel');
+        if (!btn || !panel) return;
+        const grids = () => [...panel.querySelectorAll('[id$="Grid"]')].filter(g => g._remount);
+        const sync = () => { btn.style.display = panel.style.display === 'none' ? 'none' : ''; };
+        new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['style'] });
+        sync();
+
+        // Lives on <body>: main.css's .container has content-visibility:auto, which would
+        // make position:fixed relative to it (same reason as the Combined popup).
+        const pop = document.createElement('div');
+        pop.className = 'opt-cols-pop';
+        pop.style.display = 'none';
+        document.body.appendChild(pop);
+
+        const render = () => {
+            const hidden = _optHiddenCols();
+            const labels = [];
+            grids().forEach(g => (g._colLabels || []).forEach(l => { if (!labels.includes(l)) labels.push(l); }));
+            const esc = DataGrid.escape;
+            pop.innerHTML = `<div class="opt-cols-hdr"><b>Columns</b>`
+                + `<span><a href="#" data-all="1">Show all</a> · <a href="#" data-all="0">Hide all</a></span></div>`
+                + (labels.length ? labels.map(l => `<label><input type="checkbox" value="${esc(l)}"${hidden.has(l) ? '' : ' checked'}> ${esc(l)}</label>`).join('')
+                                 : '<small>Run Find Best Params first.</small>');
+        };
+        const apply = (hidden) => { _saveOptHiddenCols(hidden); grids().forEach(g => g._remount()); render(); };
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (pop.style.display !== 'none') { pop.style.display = 'none'; return; }
+            render();
+            const r = btn.getBoundingClientRect();
+            pop.style.display = '';
+            pop.style.top = `${r.bottom + 4}px`;
+            pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+        });
+        pop.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const a = e.target.closest('a[data-all]');
+            if (!a) return;
+            e.preventDefault();
+            apply(a.dataset.all === '1' ? new Set()
+                : new Set([...pop.querySelectorAll('input[type=checkbox]')].map(cb => cb.value)));
+        });
+        pop.addEventListener('change', (e) => {
+            const cb = e.target.closest('input[type=checkbox]');
+            if (!cb) return;
+            const hidden = _optHiddenCols();
+            if (cb.checked) hidden.delete(cb.value); else hidden.add(cb.value);
+            apply(hidden);
+        });
+        document.addEventListener('click', () => { pop.style.display = 'none'; });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') pop.style.display = 'none'; });
+    })();
 
     // 🧩 Combined: every option-priced row of this run as a tick chip (grouped by board), and the
     // ticked rows merged into one book under the same report as the Simple Trader "Combined" popup —

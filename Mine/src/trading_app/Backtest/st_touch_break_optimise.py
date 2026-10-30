@@ -12,9 +12,9 @@ those are walked axis by axis through the remaining options (coordinate descent,
 until nothing improves). Every combination simulated lands on the board, not only the ones the
 walk kept, and the board ranks them all together.
 
-`min_body_pct` reads the break candle's CLOSE and a Through setup is only known at that close, so
-a row that uses either has no live twin (see st_touch_break_live_engine): fine for the Backtest,
-not for the live tab.
+`min_body_pct` / `outside_bar='close'` read the break candle's CLOSE, so the engine enters those
+rows at that close, as the live tab does. A Through setup is only known at that close too and has no
+live twin (see st_touch_break_live_engine): fine for the Backtest, not for the live tab.
 
 Like the Simple Trader boards, the best index rows (and the page's own settings) are then
 re-priced on the option exactly as BACKTEST prices them (`price_with_reentries` around

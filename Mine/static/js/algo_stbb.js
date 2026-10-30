@@ -75,16 +75,18 @@ function _stbbRender(c, key, d) {
     if (c.touch) {
         const dir = s.direction === 'both' ? 'BUY (CE) and SELL (PE)' : (s.direction === 'short' ? 'SELL (PE) only' : 'BUY (CE) only');
         const atClose = s.min_body_pct > 0 || s.outside_bar === 'close';
-        _stbbEl(c, 'Rule').textContent = `${s.bar || 3}-minute NIFTY candles, entries ${s.entry_start || '10:00'}–${s.entry_end || '15:14'} · SuperTrend(${s.st_period}, ${s.st_mult}) · ${dir}, Bounce: a candle whose wick touches the line `
+        _stbbEl(c, 'Rule').textContent = `${s.bar || 3}-minute NIFTY candles, entries ${s.entry_start || '10:00'}–${s.entry_end || '15:14'} · SuperTrend(${s.st_period}, ${s.st_mult}) · ${dir}, ${({ through: 'Through', both: 'Bounce + Through' })[s.modes] || 'Bounce'}: a candle whose wick touches the line `
             + (s.touch_tol_pct ? `(within ${s.touch_tol_pct}% of it) ` : '')
-            + `(wick ≥ ${s.min_wick_pct}% of its range) and closes on the trend side arms the NEXT candle; `
+            + `(wick ≥ ${s.min_wick_pct}% of its range) and closes on the trend side arms the NEXT candle`
+            + (s.modes === 'through' ? ' for a break THROUGH the line (the touch low for a sell under an uptrend, the high for a buy under a downtrend); '
+               : s.modes === 'both' ? ' for a break away from the line or through it, whichever the direction takes; ' : '; ')
             + (atClose ? `if that candle breaks the touch candle's high (low for a sell)${s.min_body_pct > 0 ? ` and closes the way it broke with a body ≥ ${s.min_body_pct}% of its range` : ''}`
                          + `${s.outside_bar === 'close' ? ' (breaking both sides: the side it closes on)' : ''}, the order goes out at its CLOSE`
                        : `the order goes out the moment the index trades through the touch candle's high (low for a sell)`)
             + ` · ≈${Math.round(s.premium)} premium · exit when a candle ${s.stop_touch ? 'trades through' : 'closes beyond'} the SuperTrend line, `
             + `no target, square-off ${s.exit_cutoff || '15:14'}` + (s.sl_pct ? ` · premium stop-loss ${s.sl_pct}% under the fill` : ', no premium stop')
             + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : '') + ` · up to ${s.max_trades} trade(s) a day`
-            + ` · the Through setup (ST flips on the break candle) is backtest-only: it is known only at that candle's close`;
+            + (s.modes && s.modes !== 'bounce' ? ` · a Through whose break candle closes with the SuperTrend still against it is out at that close` : '');
     } else if (c.simple) {
         _stbbEl(c, 'Rule').textContent = `${d.rule || ''} · stop-loss ${s.sl_pct}% under the fill`
             + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : ', no trail')

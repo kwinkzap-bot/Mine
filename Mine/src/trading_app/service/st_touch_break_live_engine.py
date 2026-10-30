@@ -15,18 +15,23 @@ about — one closed candle at a time, a price poll in between, and a clock:
   the candle before, or at the square-off minute. There is no target;
 * at most ``max_trades`` a day, one at a time.
 
-**Bounce only.** A Through setup is known only once the break candle has CLOSED (it is the one the
-SuperTrend flips on), by which time the level was crossed minutes ago, so it cannot be traded live
-and the backtest's Through rows have no live twin.
+**Bounce and Through** (``modes``, a row's fixed setting; Through since 2026-10-30). A Bounce breaks
+AWAY from the line (an uptrend touch, then the touch high); a Through breaks THROUGH it (an uptrend
+touch, then the touch LOW — a short against the trend; mirror for a downtrend). The backtest does not
+need the SuperTrend to flip for a Through: it fills at the level and, if the break candle's close
+leaves the trend still against the trade, exits at that close (``SuperTrend flip``) — which is what
+step 2 of ``on_bar`` does here too. Only one side is armed per touch: every Mine row is one-sided
+(BUY only / SELL only) or Bounce only, so that is always the one the backtest can take. With
+``modes='both'`` and the direction on Both the bounce side is armed.
 
 **Confirmed at the close** (since 2026-10-28, the "NIFTY - Both - 3m" tab). ``min_body_pct`` (the
 break candle's body share, closing the way it broke) and ``outside_bar='close'`` (an outside bar
 goes with the side it closes on) both read the break candle's CLOSE, so with either one on the
 order cannot go out intrabar: the setup is judged when the break candle closes and, if it broke
 the level, closed the way it broke with the body asked for and the SuperTrend still with it, the
-order goes out THEN — at that close, not at the level. That is a later (worse) fill than the
-backtest's, which fills at the level with the close already known; the backtest's numbers are the
-ceiling for this, not its forecast. With both off (``min_body_pct`` 0, ``outside_bar`` 'first')
+order goes out THEN — at that close, not at the level. Since 2026-10-30 the backtest fills these
+at the same close (it used to fill at the level with the close already known, a look-ahead the live
+tab could never earn). With both off (``min_body_pct`` 0, ``outside_bar`` 'first')
 the intrabar entry above is unchanged.
 
 Everything takes plain dicts and a DataFrame of CLOSED candles, so it is tested without a broker.
@@ -72,7 +77,7 @@ def engine_for(bars: pd.DataFrame, s: Dict[str, Any], bar_minutes: int) -> StTou
         bars, st_period=int(s.get('st_period', 10)), st_mult=float(s.get('st_mult', 2)),
         touch_tol_pct=float(s.get('touch_tol_pct', 0)), min_wick_pct=float(s.get('min_wick_pct', 0)),
         min_body_pct=float(s.get('min_body_pct', 0)), outside_bar=s.get('outside_bar', 'first'),
-        modes='bounce', direction=s.get('direction', 'long'),
+        modes=s.get('modes', 'bounce'), direction=s.get('direction', 'long'),
         stop_mode='touch' if s.get('stop_touch') else 'close',
         entry_start=s.get('entry_start', '09:15'), entry_end=s.get('entry_end', '15:14'),
         exit_cutoff=s.get('exit_cutoff', '15:14'), max_trades_per_day=int(s.get('max_trades', 5)),
@@ -167,16 +172,25 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any], bar_minut
     # 3. a touch candle that has just closed arms the next candle's break
     if any(t['status'] == 'armed' for t in day['trades']) or not touch[i]:
         return events
-    long = int(touch[i]) == 1                  # the wick is on an UPtrend's line: the break away is up
-    if (s.get('direction') == 'long' and not long) or (s.get('direction') == 'short' and long):
+    up_touch = int(touch[i]) == 1              # the wick is on an UPtrend's line: a bounce breaks up, a through down
+    modes = s.get('modes', 'bounce')
+    sides = [lg for lg, ok in ((up_touch, modes in ('bounce', 'both')), (not up_touch, modes in ('through', 'both')))
+             if ok and not (s.get('direction') == 'long' and not lg) and not (s.get('direction') == 'short' and lg)]
+    if not sides:
         return events
+    long = sides[0]
+    setup = 'Bounce' if long == up_touch else 'Through'
     entry_start = eng.entry_start
     if (_taken(day) >= eng.max_trades_per_day or not entry_start <= bar_end <= eng.entry_end
             or bar_end >= eng.exit_cutoff):
         return events
     h, l = float(df['high'].iloc[i]), float(df['low'].iloc[i])
     level = h if long else l
-    t = {'n': len(day['trades']) + 1, 'type': 'Long' if long else 'Short', 'status': 'armed',
+    # how far past the level is still "at" it: a bounce's risk runs to the line under it; a through's
+    # level sits ON the line, so its touch candle's range is the yardstick
+    risk = abs(level - line[i]) if setup == 'Bounce' and np.isfinite(line[i]) else h - l
+    t = {'n': len(day['trades']) + 1, 'type': 'Long' if long else 'Short', 'status': 'armed', 'setup': setup,
+         'risk': _r(risk),
          'signal_bar': ts_s, 'break_start': bar_end, 'entry_bar_start': bar_end, 'level': round(level, 2),
          'line': _r(line[i]), 'confirm': confirm_at_close(s),
          'signal': {'rsi': None, 'close': round(close, 2), 'level': round(level, 2), 'touch_high': round(h, 2),
@@ -203,7 +217,7 @@ def on_price(day: Dict[str, Any], ltp: Optional[float], hhmm: str, s: Dict[str, 
             crossed = ltp > t['level'] if long else ltp < t['level']
             if not crossed:
                 continue
-            risk = abs(t['level'] - (t.get('line') or t['level']))
+            risk = t['risk'] if t.get('risk') is not None else abs(t['level'] - (t.get('line') or t['level']))
             over = (ltp - t['level']) if long else (t['level'] - ltp)
             if risk > 0 and over > MAX_CHASE_RISK_FRAC * risk:
                 t.update(status='missed', error=f"the index was already {over:,.1f} pts past the "

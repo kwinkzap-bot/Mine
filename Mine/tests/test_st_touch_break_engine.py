@@ -28,7 +28,7 @@ def test_bounce_long_enters_on_the_break_and_rides_the_supertrend():
     # then the trend breaks: a close well under the line
     rows.append((last[3] + 2.5, last[3] + 2.6, line - 15, line - 14))
     rows.append((line - 14, line - 13, line - 16, line - 15))
-    trades, summ = StTouchBreakEngine(_bars(rows)).run()
+    trades, summ = StTouchBreakEngine(_bars(rows), outside_bar='first').run()     # nothing read off the close
     t = [x for x in trades if x['signal_time'][11:16] == _bars(rows)['date'].iloc[len(rows) - 4].strftime('%H:%M')]
     assert t and t[0]['type'] == 'Long' and t[0]['setup'] == 'Bounce'
     assert t[0]['entry_price'] == round(last[3] + 1.0, 2)          # the touch candle's high
@@ -87,7 +87,7 @@ def test_entry_carries_the_minute_the_level_was_crossed_and_trade_after_reenters
     mins = pd.DataFrame([{'date': bar_start + pd.Timedelta(minutes=m), 'open': 0, 'high': hi, 'low': 0,
                           'close': 0} for m, hi in enumerate([last + 0.8, last + 0.9, last + 1.5])]
                         ).set_index('date')
-    eng = StTouchBreakEngine(bars, minutes=mins, bar_minutes=3)
+    eng = StTouchBreakEngine(bars, minutes=mins, bar_minutes=3, outside_bar='first')
     trades, _ = eng.run()
     t = [x for x in trades if x['signal_time'][:16] == (bar_start - pd.Timedelta(minutes=3)).strftime('%Y-%m-%d %H:%M')][0]
     assert t['entry_time'] == (bar_start + pd.Timedelta(minutes=2)).strftime('%Y-%m-%d %H:%M:%S')   # 3rd minute broke the high
@@ -107,3 +107,26 @@ def test_outside_bar_follows_its_close_by_default():
     rows.append((last + 0.3, last + 3.0, line - 0.5, last + 2.8))            # breaks both, closes green
     long_t = [t for t in StTouchBreakEngine(_bars(rows)).run()[0] if t['signal_time'][:16] == _bars(rows)['date'].iloc[-2].strftime('%Y-%m-%d %H:%M')]
     assert long_t and long_t[0]['type'] == 'Long'
+
+
+def test_a_break_judged_on_its_close_is_filled_at_that_close():
+    """Body filter / outside bar 'close' read the break candle's close, so the fill is that close,
+    stamped the next bar's first minute — what the live tab does — never the level crossed before it."""
+    rows = _uptrend()
+    line = StTouchBreakEngine(_bars(rows)).indicators()['line'][len(rows) - 1]
+    last = rows[-1][3]
+    rows.append((last, last + 1.0, line - 0.2, last + 0.5))                     # touch
+    rows.append((last + 0.5, last + 3.0, last + 0.4, last + 2.5))               # break, body 2.0 of 2.6
+    rows += [(last + 2.5, last + 3.5, last + 2.0, last + 3.0)] * 3
+    bars = _bars(rows)
+    brk = bars['date'].iloc[len(_uptrend()) + 1]
+    for kw in (dict(min_body_pct=50, outside_bar='first'), dict(outside_bar='close')):
+        trades, _ = StTouchBreakEngine(bars, **kw).run()
+        t = [x for x in trades if x['signal_time'][:16] == (brk - pd.Timedelta(minutes=3)).strftime('%Y-%m-%d %H:%M')][0]
+        assert t['entry_price'] == round(last + 2.5, 2)                         # the close, not last + 1.0
+        assert t['entry_time'] == (brk + pd.Timedelta(minutes=3)).strftime('%Y-%m-%d %H:%M:%S')
+        assert t['intrabar_entry'] is False
+    # a long break candle the SuperTrend flips against on its (green) close is no trade at all
+    rows[len(_uptrend()) + 1] = (line - 22, last + 3.0, line - 30, line - 20)
+    trades, _ = StTouchBreakEngine(_bars(rows), outside_bar='close', modes='bounce').run()
+    assert not [x for x in trades if x['signal_time'][:16] == (brk - pd.Timedelta(minutes=3)).strftime('%Y-%m-%d %H:%M')]
