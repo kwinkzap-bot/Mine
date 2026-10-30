@@ -39422,8 +39422,44 @@
       "reason": "The CPRs and a box interlink into one zone on a Wide CPR (0.536% of price) \u2014 a break out of so wide a zone is not traded \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 121.9 pts (0.536%), 09:15 candle O 22708.8 H 22724.35 L 22653.2 C 22659.2 | Trade by rule: the CPRs and a box interlink into one zone on a Wide CPR (0.536% of price) \u2014 a break out of so wide a zone is not traded \u2014 no trade"
+    },
+    {
+      "date": "2026-10-28",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Below",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "Strong big candle red near S2",
+      "boxes": "Small",
+      "trade": "SELL",
+      "entry": 22560.0,
+      "target": 22450.0,
+      "sl": 22615.0,
+      "result": "SL",
+      "pnl": -55.0,
+      "reason": "09:15 candle opened at 22,678 over PDL/S1 22,637-22,648 and closed below both at 22,575, but a 136-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDL/S1 (22,613-22,561) -> SELL under it; SL over its high; target 1:2",
+      "setup_time": "09:20",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 11.0 pts (0.048%), 09:15 candle O 22678.0 H 22691.5 L 22555.9 C 22574.65 | Trade by rule: 09:15 candle opened at 22,678 over PDL/S1 22,637-22,648 and closed below both at 22,575, but a 136-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDL/S1 (22,613-22,561) -> SELL under it; SL over its high; target 1:2; chart replay SL 09:25 -> 09:45"
+    },
+    {
+      "date": "2026-10-29",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Dec",
+      "first_candle": "Candle green near CPR",
+      "boxes": "Medium",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "09:15 closed inside the CPR 22,638-22,774 on a 78-pt candle \u2014 no stop at its far end; 10:05 candle closed above the CPR at 22,793; 10:10 cross candle came back to TC (low 22,772) -> BUY over it; SL under its low; target R1 22,819; but the daily CPR 22,638-22,679, the weekly CPR 22,658-22,774 and the box interlink into one zone 22,638-22,819 and the entry sits inside it \u2014 no level to trade against \u2014 only a break out of the zone is traded \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 40.6 pts (0.179%), 09:15 candle O 22690.65 H 22734.6 L 22656.75 C 22717.05 | Trade by rule: 09:15 closed inside the CPR 22,638-22,774 on a 78-pt candle \u2014 no stop at its far end; 10:05 candle closed above the CPR at 22,793; 10:10 cross candle came back to TC (low 22,772) -> BUY over it; SL under its low; target R1 22,819; but the daily CPR 22,638-22,679, the weekly CPR 22,658-22,774 and the box interlink into one zone 22,638-22,819 and the entry sits inside it \u2014 no level to trade against \u2014 only a break out of the zone is traded"
     }
   ],
-  "extended_at": "2026-10-27 20:41",
+  "extended_at": "2026-10-30 09:24",
   "backfilled_from": "2018-01-01"
 }
