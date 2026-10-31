@@ -45,7 +45,8 @@ logger = logging.getLogger(__name__)
 # algos, so the run is a background task and settled sessions are disk-cached:
 # a second run over the same trades is nearly free. The most recent are kept.
 MAX_OPTION_LEGS = 3000
-_CHUNK = 4             # trades per legs_at call — small, so the calls spread over the workers
+MUHURAT_FROM = 13 * 60  # a session whose first candle is at/after this minute is a Muhurat one
+_CHUNK = 4           # trades per legs_at call — small, so the calls spread over the workers
 _WORKERS = 6
 
 
@@ -257,6 +258,14 @@ class StBbRsiEngine:
         self.df.columns = [c.lower() for c in self.df.columns]
         self.df = self.df.sort_index()
         self.df = self.df[~self.df.index.duplicated(keep='last')]
+        # Diwali Muhurat sessions (one evening hour, e.g. 24 Oct 2022 18:15-19:14) are not a
+        # trading day to Quantman: the next morning's pivots come from the last REGULAR session
+        # and its indicators do not run through that hour. Kept, they moved R1 and %R enough to
+        # drop the 17 Nov 2020 and 25 Oct 2022 entries. A session opening at/after 13:00 is one.
+        if len(self.df):
+            idx = self.df.index
+            first = pd.Series(idx.hour * 60 + idx.minute, index=idx).groupby(idx.normalize()).transform('min')
+            self.df = self.df[first.to_numpy() < MUHURAT_FROM]
 
     # ── Series that do not depend on any swept knob ───────────────────────────
 

@@ -205,3 +205,16 @@ def test_premium_stop_and_trail():
     assert hit == {'price': 107.0, 'time': '09:32', 'kind': 'Trailing SL'}
     # never hit, and bars after the exit minute are ignored
     assert _premium_stop(bars, 100, '09:30', '09:31', 13, 15, 10) is None
+
+
+def test_muhurat_session_is_not_a_trading_day():
+    # Quantman skips the one-hour Diwali evening session: the next morning's R1 comes from
+    # the last regular day, not from that hour's range.
+    df = _frame([('2025-01-01', [100.0] * 75), ('2025-01-03', [100.0] * 75)])
+    muhurat = pd.DataFrame([{'date': pd.Timestamp('2025-01-02 18:15') + pd.Timedelta(minutes=5 * k),
+                             'open': 500.0, 'high': 501.0, 'low': 499.0, 'close': 500.0, 'volume': 0}
+                            for k in range(12)])
+    with_m = StBbRsiEngine(pd.concat([df, muhurat], ignore_index=True))
+    plain = StBbRsiEngine(df)
+    assert len(with_m.df) == len(plain.df)
+    assert with_m._base()['r1'][-1] == plain._base()['r1'][-1] == 101.0
