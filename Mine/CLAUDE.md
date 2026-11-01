@@ -408,10 +408,25 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
   overstate them.
-The api blueprint is at 248 rules (`tests/route_inventory.txt`) since Scalp Pullback and Pivot Confluence went (below).
+The api blueprint is at 246 rules (`tests/route_inventory.txt`) since Scalp Pullback, Pivot Confluence and Heikin-Ashi + SuperTrend went (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## NIFTY Option Selling backtest — removed (ATM Straddle stays)
+
+Removed 2026-11-01 (it sat under 🧪 Testing on /backtest): the 💰 option, its strangle-only boxes (OTM / SL % /
+re-entry), logic card and JS, and its sweep (`option_selling_engine.sweep`, `OPT_*`). **Kept on purpose:** the
+⚖️ NIFTY ATM Straddle (Mine group) is the same engine (`run_day` with `otm_strikes=0`, `sl_pct=0`, no re-entry,
+plus `max_loss_rupees`), the same `#optionSellingParamsRow` / `os*` ids and both `/api/backtest/option-selling*`
+routes, so those keep the old name; the optimise route now runs only `sweep_straddle`.
+
+## Heikin-Ashi + SuperTrend backtest — removed
+
+Removed 2026-11-01 (it sat under 🧪 Testing on /backtest): `Backtest/ha_supertrend_engine.py`, the two
+`/api/backtest/ha-supertrend{,/status/<task_id>}` routes, its option, params row (`#haSupertrendParamsRow`),
+logic card, JS and both test files. It was a daily many-stock run that borrowed the Weekly CPR Breakout ₹
+cards (`isWcb`); those are Weekly CPR Breakout's alone again.
 
 ## Pivot Confluence backtest — removed
 

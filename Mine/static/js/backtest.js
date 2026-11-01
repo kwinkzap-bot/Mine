@@ -267,10 +267,6 @@ document.addEventListener('DOMContentLoaded', function() {
     function isWcbStrategy() {
         return (document.getElementById('strategySelect')?.value || '') === 'weekly_cpr_breakout';
     }
-    // Heikin-Ashi + SuperTrend runs over the same F&O stock universe.
-    function isHastStrategy() {
-        return (document.getElementById('strategySelect')?.value || '') === 'ha_supertrend';
-    }
 
     // Kicked off only after ALL_STOCKS above exists — its completion callback
     // runs applyLotValueForSymbol(), which reads it.
@@ -282,7 +278,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show every matching symbol (not just the first 15) — the list
         // itself scrolls (#symbolList has max-height + overflow-y in CSS),
         // same as the Open Interest page's symbol dropdown.
-        const pool = (isEmaStrategy() || isWcbStrategy() || isHastStrategy()) ? [ALL_STOCKS, ...allSymbols] : allSymbols;
+        const pool = (isEmaStrategy() || isWcbStrategy()) ? [ALL_STOCKS, ...allSymbols] : allSymbols;
         const matches = pool.filter(s => {
             if (!filter) return true;
             return s.includes(filter);
@@ -483,8 +479,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (lot) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
     }
 
-    // Which strategy's defaults the shared option-selling form holds (the HTML's are the strangle's).
-    let _osPreset = 'option_selling';
     function updateStrategyView() {
         if (!strategySelect) return;
 
@@ -542,10 +536,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // 1-Hour / 1-Day exist for Hilega Milega only (which offers nothing shorter); other strategies do not offer them.
         document.querySelectorAll('#interval option[data-hm]').forEach(o => o.remove());
         document.querySelectorAll('#interval option').forEach(o => { o.hidden = false; o.disabled = false; });
-        { const _iv = document.getElementById('interval'); if (_iv) _iv.disabled = false; }   // HA + SuperTrend locks it
         if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
-        const hastParamsRow = document.getElementById('haSupertrendParamsRow');
-        if (hastParamsRow) hastParamsRow.style.display = 'none';
         const osParamsRow   = document.getElementById('optionSellingParamsRow');
         if (osParamsRow)   osParamsRow.style.display   = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
@@ -580,7 +571,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'option_selling' || val === 'atm_straddle' || val === 'hilega_milega' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -848,48 +839,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const wcbEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2017-01-01';
             if (wcbEnd) wcbEnd.value = localToday();
-        } else if (val === 'ha_supertrend') {
-            if (hastParamsRow) hastParamsRow.style.display = 'grid';
-            // Daily candles, positional by rule: the Timeframe shows 1 Day and is locked.
-            // ALL STOCKS = every F&O future stock.
-            if (intFg) intFg.style.display = '';
-            if (intervalSelect) {
-                if (![...intervalSelect.options].some(o => o.value === 'day')) {
-                    const opt = new Option('1 Day (positional)', 'day');
-                    opt.dataset.hm = '1';
-                    intervalSelect.add(opt);
-                }
-                [...intervalSelect.options].forEach(o => { const ok = o.value === 'day'; o.hidden = !ok; o.disabled = !ok; });
-                intervalSelect.value = 'day';
-                intervalSelect.disabled = true;
-            }
-            selectedSymbol = ALL_STOCKS;
-            symbolSearch.value = ALL_STOCKS;
-            const hastEnd = document.getElementById('endDate');
-            if (startDateInput) startDateInput.value = '2019-01-01';
-            if (hastEnd) hastEnd.value = localToday();
-        } else if (val === 'option_selling' || val === 'atm_straddle') {
+        } else if (val === 'atm_straddle') {
             if (osParamsRow) osParamsRow.style.display = 'grid';
-            // The ATM Straddle is the same form with the strangle-only boxes
-            // (OTM / SL / re-entry) hidden and its own days and times. Switching
-            // between the two puts each one's defaults back.
-            const straddle = val === 'atm_straddle';
-            document.querySelectorAll('#optionSellingParamsRow .osStrangleOnly').forEach(el => {
-                el.style.display = straddle ? 'none' : (el.tagName === 'SMALL' ? 'block' : '');
-            });
-            document.querySelectorAll('#optionSellingParamsRow .osStraddleOnly').forEach(el => {
-                el.style.display = straddle ? '' : 'none';
-            });
-            const osRuleStraddle = document.getElementById('osRuleStraddle');
-            if (osRuleStraddle) osRuleStraddle.style.display = straddle ? 'block' : 'none';
-            if (_osPreset !== val) {
-                _osPreset = val;
-                const days = straddle ? [0, 1, 2, 3, 4] : [0, 1, 4];
-                document.querySelectorAll('.osDay').forEach(c => { c.checked = days.includes(parseInt(c.value)); });
-                const en = document.getElementById('osEntryTime'), ex = document.getElementById('osExitTime');
-                if (en) en.value = straddle ? '09:20' : '09:30';
-                if (ex) ex.value = straddle ? '15:14' : '10:30';
-            }
             // NIFTY only, on a fixed 1-minute basis: no Symbol / Timeframe.
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
@@ -905,7 +856,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // "All Stocks" only exists for EMA Confluence Breakout — every other
         // strategy backtests one symbol, so switching away falls back to the
         // default rather than posting a symbol the backend can't resolve.
-        if (val !== 'ema_pullback' && val !== 'weekly_cpr_breakout' && val !== 'ha_supertrend' && selectedSymbol === ALL_STOCKS) {
+        if (val !== 'ema_pullback' && val !== 'weekly_cpr_breakout' && selectedSymbol === ALL_STOCKS) {
             selectedSymbol = 'NIFTY';
             symbolSearch.value = selectedSymbol;
             applyLotValueForSymbol(selectedSymbol);
@@ -968,7 +919,7 @@ document.addEventListener('DOMContentLoaded', function() {
         mine:    ['st_all_indicators', 'st_touch_break', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
+        testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -1185,18 +1136,6 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Entry', 'After 10:15, when price breaks the first-hour candle\'s High (BUY) or Low (SELL).'],
             ['Stop / Target', 'Stop = candle\'s other end. Target = ratio × the candle\'s range.'],
             ['Exit', 'Stop (wins if both touched in one bar), target, or 15:20. One trade per stock per day.']] },
-        ha_supertrend: { sub: 'Daily Heikin-Ashi + SuperTrend swing', steps: [
-            ['Signal', 'SuperTrend (10,3) on Heikin-Ashi candles has just flipped to your side, and the HA candle is your colour.'],
-            ['Entry', 'Next day\'s open.'],
-            ['Stop', 'Recent swing low (long) / high (short). Too-wide stops are skipped.'],
-            ['Target', 'Ratio × risk — a part of the position is sold there.'],
-            ['Trail', 'The rest is held until SuperTrend flips back, two opposite HA candles appear, or the stop is hit.']] },
-        option_selling: { sub: 'NIFTY weekly short strangle', steps: [
-            ['Days', 'Monday, Tuesday and Friday (configurable).'],
-            ['Entry', 'At 09:30, SELL one OTM CE and one OTM PE of the current weekly expiry.'],
-            ['Stop', 'Each leg has its own stop, a % above its entry premium (e.g. 60 %).'],
-            ['Re-entry', 'If a leg stops out, sell it again once when its premium returns to the original entry.'],
-            ['Exit', 'No target. Anything still open is bought back at 10:30.']] },
         atm_straddle: { sub: 'NIFTY weekly ATM short straddle', steps: [
             ['Days', 'Every trading day, Monday to Friday.'],
             ['Entry', 'At 09:20, SELL the ATM CE and the ATM PE (strike nearest the spot) of the current weekly expiry.'],
@@ -1328,11 +1267,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // or run as a portfolio have no index chart to draw on.
     const BT_LOGIC_NO_CHART = {
         option_breakout: 'trades on the option’s own candles, not the index',
-        option_selling: 'a two-leg weekly strangle, not a single chart',
         atm_straddle: 'a two-leg weekly straddle, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
     };
-    const BT_LOGIC_DAILY = ['ema_pullback', 'ha_supertrend', 'hilega_milega', 'weekly_cpr_breakout'];
+    const BT_LOGIC_DAILY = ['ema_pullback', 'hilega_milega', 'weekly_cpr_breakout'];
     const BT_LOGIC_INTERVAL = { expiry_breakout: '60minute', thirty_min_fakeout: '5minute', second_candle: 'minute' };
     function btgInterval(key) {
         if (BT_LOGIC_DAILY.includes(key)) return 'day';
@@ -1651,17 +1589,13 @@ document.addEventListener('DOMContentLoaded', function() {
             await runOptionBreakout();
             return;
         }
-        if (_strat === 'option_selling' || _strat === 'atm_straddle') {
-            await runOptionSelling(_strat === 'atm_straddle');
+        if (_strat === 'atm_straddle') {
+            await runOptionSelling();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
         if (_strat === 'weekly_cpr_breakout') {
             await runWeeklyCprBreakout();
-            return;
-        }
-        if (_strat === 'ha_supertrend') {
-            await runHaSupertrend();
             return;
         }
         const symbol = symbolSearch.value.toUpperCase();
@@ -2365,27 +2299,27 @@ document.addEventListener('DOMContentLoaded', function() {
         return line;
     }
 
-    // ── NIFTY Option Selling — start + poll ────────────────────────────
+    // ── NIFTY ATM Straddle — start + poll ──────────────────────────────
     // Two Breeze requests per trading day (one per leg), disk-cached once the
     // day has settled: a year is a few minutes cold, instant warm. Own result
-    // panel — a row is one day's strangle, not a trade the shared cards fit.
+    // panel — a row is one day's straddle, not a trade the shared cards fit.
     let _osRun = 0;
-    // The ATM Straddle posts the same rule with ATM strikes, no stop and no
-    // re-entry (sl_pct 0 = no stop in option_selling_engine).
-    async function runOptionSelling(straddle = false) {
-        const title = straddle ? 'Running NIFTY ATM Straddle' : 'Running NIFTY Option Selling';
+    // The option-selling engine's rule with ATM strikes, no % stop and no
+    // re-entry (sl_pct 0 = no stop), plus a max ₹ loss per leg.
+    async function runOptionSelling() {
+        const title = 'Running NIFTY ATM Straddle';
         const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
         const payload = {
             start_date:  document.getElementById('startDate')?.value,
             end_date:    document.getElementById('endDate')?.value,
             days,
-            entry_time:  document.getElementById('osEntryTime')?.value || (straddle ? '09:20' : '09:30'),
-            exit_time:   document.getElementById('osExitTime')?.value || (straddle ? '15:14' : '10:30'),
-            otm_strikes: straddle ? 0 : parseInt(document.getElementById('osOtm')?.value ?? 2),
-            sl_pct:      straddle ? 0 : parseFloat(document.getElementById('osSlPct')?.value || 60),
-            reentry:     straddle ? false : document.getElementById('osReentry')?.value !== 'false',
+            entry_time:  document.getElementById('osEntryTime')?.value || '09:20',
+            exit_time:   document.getElementById('osExitTime')?.value || '15:14',
+            otm_strikes: 0,
+            sl_pct:      0,
+            reentry:     false,
             lots:        Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
-            max_loss_rupees: straddle ? Math.max(0, parseFloat(document.getElementById('osMaxLoss')?.value ?? 2000) || 0) : 0,
+            max_loss_rupees: Math.max(0, parseFloat(document.getElementById('osMaxLoss')?.value ?? 2000) || 0),
         };
         if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
         const myRun = ++_osRun;
@@ -2548,66 +2482,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (myRun !== _wcbRun) return;
             _hideOptLoader();
             console.error('Weekly CPR Breakout error:', err);
-            window.showNotification(err.message || 'Backtest failed', 'error');
-            const ph = document.getElementById('btRightPlaceholder');
-            if (ph) ph.style.display = '';
-        }
-    }
-
-    // ── Heikin-Ashi + SuperTrend — start + poll ─────────────────────────
-    // Daily bars for every F&O stock, mostly off the per-stock disk store.
-    let _hastRun = 0;
-    async function runHaSupertrend() {
-        const v = (id, d) => document.getElementById(id)?.value ?? d;
-        const payload = {
-            symbol:     selectedSymbol === ALL_STOCKS ? '' : (selectedSymbol || '').toUpperCase(),
-            start_date: v('startDate'), end_date: v('endDate'),
-            interval:   'day',
-            direction:  v('hastDirection', 'both'),
-            st_period:  parseInt(v('hastPeriod', 10)), st_mult: parseFloat(v('hastMult', 3)),
-            st_source:  v('hastSource', 'ha'),
-            swing_len:  parseInt(v('hastSwing', 8)), fresh_bars: parseInt(v('hastFresh', 2)),
-            rr:         parseFloat(v('hastRr', 2)), partial: parseFloat(v('hastPartial', 50)) / 100,
-            opp_candles: parseInt(v('hastOpp', 2)), max_risk_pct: parseFloat(v('hastMaxRisk', 25)),
-            be_after_t1: v('hastBe', 'no') === 'yes',
-            stop_on_close: v('hastStopClose', 'yes') === 'yes',
-            capital_per_trade: parseFloat(v('hastCapital', 25000)), cost_pct: parseFloat(v('hastCost', 0.2)),
-        };
-        const myRun = ++_hastRun;
-        resultsArea.style.display = 'none';
-        const btTradesSec = document.getElementById('btTradesSection');
-        const periodSec   = document.getElementById('periodBreakdownSection');
-        if (btTradesSec) btTradesSec.style.display = 'none';
-        if (periodSec)   periodSec.style.display   = 'none';
-        _showOptLoader('Running Heikin-Ashi + SuperTrend', 'Starting…');
-        try {
-            const resp = await fetch('/api/backtest/ha-supertrend', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            let data = await resp.json();
-            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
-            const taskId = data.task_id;
-            while (true) {
-                await new Promise(r => setTimeout(r, 2000));
-                if (myRun !== _hastRun) return;            // superseded
-                data = await (await fetch(`/api/backtest/ha-supertrend/status/${taskId}`)).json();
-                if (myRun !== _hastRun) return;
-                if (data.status !== 'running') break;
-                const p = data.progress || {};
-                _showOptLoader('Running Heikin-Ashi + SuperTrend',
-                    `${p.done || 0} / ${p.total || 0} stocks · ${data.elapsed || 0}s`);
-            }
-            _hideOptLoader();
-            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
-            const s = data.summary || {};
-            if (s.symbols_no_data) window.showNotification(
-                `${s.symbols_no_data} stock${s.symbols_no_data === 1 ? '' : 's'} had no Fyers data for this range`, 'info');
-            displayResults(data);
-        } catch (err) {
-            if (myRun !== _hastRun) return;
-            _hideOptLoader();
-            console.error('HA + SuperTrend error:', err);
             window.showNotification(err.message || 'Backtest failed', 'error');
             const ph = document.getElementById('btRightPlaceholder');
             if (ph) ph.style.display = '';
@@ -3180,9 +3054,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const isEmaAll = !!(isEma && summary && summary.multi_symbol);
         // Weekly CPR Breakout runs every F&O future stock, each trade sized
         // server-side (lots × that stock's lot size) — the same ₹ cards.
-        const isHast = strategySelect && strategySelect.value === 'ha_supertrend';
-        // HA + SuperTrend is a many-stock ₹ run shaped like Weekly CPR Breakout's.
-        const isWcb  = strategySelect && (strategySelect.value === 'weekly_cpr_breakout' || isHast);
+        const isWcb  = strategySelect && strategySelect.value === 'weekly_cpr_breakout';
         const isMultiSymbol = isTmf || isEmaAll || isWcb;
         // The strategies on the shared pcLots row are single-symbol and points-based too.
         const isPc   = strategySelect && (strategySelect.value === 'st_touch_break' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
@@ -3392,8 +3264,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // The EMA scan's per-entry figure is an average across very
                 // differently priced stocks, so say how many actually traded.
                 if (isEmaAll || isWcb) sub += ` · ${summary.symbols_with_trades || 0}/${summary.symbols_scanned || 0} stocks`;
-                if (isWcb && !isHast) sub += ` · ${summary.targets || 0} target / ${summary.stops || 0} SL / ${summary.time_exits || 0} time`;
-                if (isHast) sub += ` · ${summary.partial_hits || 0} 1:R hit / ${summary.stops || 0} SL / ${summary.trend_exits || 0} trend exit · ${summary.expectancy_r}R expectancy`;
+                if (isWcb) sub += ` · ${summary.targets || 0} target / ${summary.stops || 0} SL / ${summary.time_exits || 0} time`;
                 if (isWcb && summary.pnl_basis === 'stock_option') sub += ' · ATM option P&L';
                 netSubEl.textContent = sub;
             }
@@ -4877,9 +4748,9 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);
         else if (strat === 'ema_pullback') runEmaOptimise(false);
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
-        else if (strat === 'option_selling' || strat === 'atm_straddle') runOsOptimise(false);
+        else if (strat === 'atm_straddle') runOsOptimise(false);
         else if (strat === 'simpler_trader') runSbrOptimise(true);
-        else if (strat === 'hilega_milega') runSbrOptimise(false, strat);
+        else if (strat === 'hilega_milega' || strat === 'ma_htf') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
     });
 
@@ -4967,7 +4838,18 @@ document.addEventListener('DOMContentLoaded', function() {
         green_len:  ['Green EMA',  'GreenLen'],  pb_band:   ['PB band',    'PbBand'],
         chop_lookback: ['Sideways', 'Chop'],     htf:       ['Daily RSI',  'Htf'],
         sl_on_close: ['Stop on close', 'SlOnClose'], direction: ['Direction', 'Direction'],
+        // MA Cross + HTF (prefix 'mh')
+        fast_len:   ['Fast',       'Fast'],      slow_len:  ['Slow',       'Slow'],
+        htf_minutes: ['HTF min',   'HtfMin'],    htf_len:   ['HTF len',    'HtfLen'],
+        htf_type:   ['HTF type',   'HtfType'],   htf_calc:  ['HTF value',  'HtfCalc'],
+        confirm_bars: ['Confirm',  'Confirm'],   max_wait:  ['Within',     'MaxWait'],
+        sl_points:  ['Stop pts',   'Sl'],        exit_on_cross: ['Cross exit', 'ExitCross'],
+        trail_points: ['Trail',    'Trail'],     partial_pct: ['Partial %', 'PartialPct'],
+        adx_min:    ['ADX ≥',      'Adx'],       chop_max:  ['Max cross',  'ChopMax'],
+        day_bias:   ['Day agrees', 'DayBias'],
     };
+    // Where a strategy names the same field differently from the table above.
+    const SBR_PARAM_BY = { ma_htf: { chop_lookback: ['Whipsaw', 'ChopLb'] } };
     // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
     const SBR_TF_LABEL = { minute: '1m', '2minute': '2m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
                            '60minute': '1h', day: '1d' };
@@ -4977,16 +4859,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const SBR_GATE_BOX = { st: 'St', rsi: 'Rsi', bb: 'Bb', wr: 'Wr', cci: 'Cci', ema: 'Ema', pivot: 'Pivot' };
     const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
                          st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai', st_touch_break: 'stb',
-                         hilega_milega: 'hm' };
+                         hilega_milega: 'hm', ma_htf: 'mh' };
 
-    function sbrStrategyCols(swept, rankBy) {
+    function sbrStrategyCols(swept, rankBy, strategy) {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
         // ALL Indicators ranks on net P&L ÷ max drawdown: shown beside the figures it is sorted on.
         const retDd = rankBy !== 'return_dd' ? [] : [{ label: 'Return / DD', key: 'ret_dd',
             fmt: r => `<b title="Net P&L ÷ max drawdown — the board's ranking">${(r.ret_dd ?? 0).toFixed(1)}</b>` }];
         return [
             { label: '#', key: null, fmt: (r, i) => r._current ? '★ Default' : i + 1 },
-            ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k,
+            ...swept.map(k => ({ label: (((SBR_PARAM_BY[strategy] || {})[k]) || SBR_PARAM[k] || [k])[0], key: k,
                                  fmt: k === 'timeframe' ? r => SBR_TF_LABEL[r[k]] || r[k] || '–'
                                     : r => typeof r[k] === 'boolean' ? (r[k] ? 'on' : 'off') : (r[k] ?? '–') })),
             { label: 'Trades', key: 'total_trades', fmt: r => r.total_trades },
@@ -5013,10 +4895,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 if (r[k] === undefined || k === 'gates') return;     // a gate that is off has no number
-                const el = document.getElementById(pre + (SBR_PARAM[k] || [])[1]);
+                const spec = (SBR_PARAM_BY[strategy] || {})[k] || SBR_PARAM[k];
+                const el = document.getElementById(pre + (spec || [])[1]);
                 if (el && el.type === 'checkbox') el.checked = !!r[k];
                 else if (el) el.value = r[k];
-                if (r[k] !== 0 || k !== 'cpr_narrow') parts.push(`${(SBR_PARAM[k] || [k])[0]} ${typeof r[k] === 'boolean' ? (r[k] ? 'on' : 'off') : r[k]}`);
+                if (r[k] !== 0 || k !== 'cpr_narrow') parts.push(`${(spec || [k])[0]} ${typeof r[k] === 'boolean' ? (r[k] ? 'on' : 'off') : r[k]}`);
             });
             if (r.gates) {                                          // which indicators stay switched on
                 Object.entries(SBR_GATE_BOX).forEach(([g, box]) => {
@@ -5102,7 +4985,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (posWrap) posWrap.style.display = '';
         } else {
             if (title) title.textContent = data.strategy === 'st_touch_break' ? '🧲 ST Touch Break Best Params'
-                : data.strategy === 'hilega_milega' ? '🌀 Hilega Milega Best Params' : '🚀 ST + BB + RSI Best Params';
+                : data.strategy === 'hilega_milega' ? '🌀 Hilega Milega Best Params'
+                : data.strategy === 'ma_htf' ? '📈 MA Cross + HTF Best Params' : '🚀 ST + BB + RSI Best Params';
             if (posWrap) posWrap.style.display = 'none';
             renderSbrBoard(data, 'sbrOptGrid', document.getElementById('sbrOptMeta'));
         }
@@ -5170,7 +5054,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (metaEl && data.option_error) metaEl.textContent += `. Option pricing unavailable (${data.option_error}); showing index points.`;
         _mountSingleOptGrid(gridId, rows,
                             withRs(strat ? sbrStrategyCols((data.swept || []).filter(k => k !== 'timeframe'
-                                || (data.timeframes || []).length !== 1), data.rank_by) : SBR_SIMPLE_COLS),
+                                || (data.timeframes || []).length !== 1), data.rank_by, data.strategy) : SBR_SIMPLE_COLS),
                             strat && data.rank_by === 'return_dd' ? 'ret_dd' : ((simple || strat) ? 'profit_factor' : 'total_pnl'),
                             strat ? withDirection(applySbrStrategyResult(data.strategy, data.swept || []), data.direction)
                                   : applySbrSimpleResult,
@@ -5823,31 +5707,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // ── NIFTY Option Selling — Find Best Params ─────────────────────────
-    // Sweeps OTM strikes × stop % × re-entry × exit time (300 combos) over the
-    // days / entry time / lots / dates the page has set. Premiums for ATM..±4
-    // strikes are bought once per day; every combo replays them, so the cost is
-    // the fetch (up to 10 ICICI requests a day cold), not the combos.
+    // ── NIFTY ATM Straddle — Find Best Params ──────────────────────────
+    // Entry × exit × max ₹ loss per leg (200 combos), on /option-selling/optimise
+    // (option_selling_engine.sweep_straddle).
     let _osOptRun = 0;
-    const OS_OPT_COLS = [
-        { label: '#',            key: null,            fmt: (r, i) => i + 1 },
-        { label: 'OTM Strikes',  key: 'otm_strikes',   fmt: r => r.otm_strikes === 0 ? 'ATM' : `${r.otm_strikes} (${r.otm_strikes * 50} pts)` },
-        { label: 'Stop Loss',    key: 'sl_pct',        fmt: r => `${r.sl_pct}%` },
-        { label: 'Re-entry',     key: 'reentry',       fmt: r => r.reentry ? 'Once, at cost' : 'Off' },
-        { label: 'Exit',         key: 'exit_time',     fmt: r => r.exit_time },
-        { label: 'Days',         key: 'total_trades',  fmt: r => r.total_trades },
-        { label: 'Win%',         key: 'win_rate',      fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
-        { label: 'Total P&L (gross)', key: 'gross_pnl_rupees', fmt: r => _rs(r.gross_pnl_rupees || 0) },
-        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
-        { label: 'Avg / Day',    key: 'avg_pnl_rupees', fmt: r => _rs(r.avg_pnl_rupees) },
-        { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
-        { label: 'Stops',        key: 'sl_hits',       fmt: r => r.sl_hits },
-        { label: '',             key: null,            fmt: () => '' },   // Use button
-    ];
-
-    // ATM Straddle: entry × exit × max ₹ loss per leg (200 combos), same endpoint with
-    // strategy 'atm_straddle' (option_selling_engine.sweep_straddle).
     const _inrLoss = v => v ? '−₹' + Math.round(v).toLocaleString('en-IN') : 'Off';
     const STRADDLE_OPT_COLS = [
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
@@ -5875,30 +5738,18 @@ document.addEventListener('DOMContentLoaded', function() {
             + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
     }
 
-    function applyOsOptResult(r) {
-        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-        set('osOtm', String(r.otm_strikes));
-        set('osSlPct', String(r.sl_pct));
-        set('osReentry', r.reentry ? 'true' : 'false');
-        set('osExitTime', r.exit_time);
-        if (window.showNotification) window.showNotification(
-            `Applied: ${r.otm_strikes === 0 ? 'ATM' : r.otm_strikes + ' OTM'} · SL ${r.sl_pct}% · `
-            + `re-entry ${r.reentry ? 'on' : 'off'} · exit ${r.exit_time} · Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
-    }
-
     function renderOsOptResults(data) {
         const panel     = document.getElementById('optionSellingOptimisePanel');
         const metaEl    = document.getElementById('osOptMeta');
         const recalcBtn = document.getElementById('osRecalcOptBtn');
-        const straddle = strategySelect?.value === 'atm_straddle';
-        const apply = straddle ? applyStraddleOptResult : applyOsOptResult;
+        const apply = applyStraddleOptResult;
         const title = document.getElementById('osOptTitle');
-        if (title) title.textContent = straddle ? '⚖️ NIFTY ATM Straddle Best Params' : '💰 NIFTY Option Selling Best Params';
+        if (title) title.textContent = '⚖️ NIFTY ATM Straddle Best Params';
         if (metaEl) metaEl.textContent =
             `${data.total_combos_tested} combos · ${data.total} scored · ${data.days_priced}/${data.days_scanned} days priced (ICICI)`
-            + (straddle ? ` · max loss per leg at ${data.lots}×${data.lot_size}` : '')
+            + ` · max loss per leg at ${data.lots}×${data.lot_size}`
             + (data.breeze_errors ? ` · ${data.breeze_errors} ICICI requests failed` : '');
-        _mountSingleOptGrid('osOptGrid', data.results || [], straddle ? STRADDLE_OPT_COLS : OS_OPT_COLS, 'net_pnl_rupees', apply);
+        _mountSingleOptGrid('osOptGrid', data.results || [], STRADDLE_OPT_COLS, 'net_pnl_rupees', apply);
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
         if (data.best) apply(data.best);
@@ -5912,7 +5763,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const origText  = activeBtn ? activeBtn.textContent : '';
         const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
         if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
-        const straddle = strategySelect?.value === 'atm_straddle';
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
         const osRes = document.getElementById('osResults');
@@ -5928,9 +5778,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     start_date: document.getElementById('startDate')?.value,
                     end_date:   document.getElementById('endDate')?.value,
                     days,
-                    entry_time: document.getElementById('osEntryTime')?.value || '09:30',
+                    entry_time: document.getElementById('osEntryTime')?.value || '09:20',
                     lots:       Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
-                    strategy:   straddle ? 'atm_straddle' : 'option_selling',
+                    strategy:   'atm_straddle',
                 }),
             });
             let data = await resp.json();
@@ -5944,7 +5794,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
                 _showOptLoader('Finding best params…', p.stage === 'scoring'
-                    ? `Scoring ${straddle ? 200 : 300} combos · ${data.elapsed || 0}s`
+                    ? `Scoring 200 combos · ${data.elapsed || 0}s`
                     : `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
             }
             _hideOptLoader();

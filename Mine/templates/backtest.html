@@ -37,8 +37,6 @@
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="ma_htf">📈 MA Cross + HTF</option>
                 <option value="weekly_cpr_breakout" selected>📐 Weekly CPR Breakout</option>
-                <option value="ha_supertrend">🕯️ Heikin-Ashi + SuperTrend</option>
-                <option value="option_selling">💰 NIFTY Option Selling</option>
                 <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
                 <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
                 <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
@@ -1874,46 +1872,30 @@
                 </div>
             </div>
 
-            <!-- NIFTY Option Selling — short OTM strangle on the current weekly,
-                 each leg stopped on its own, one re-entry at cost. See
-                 Backtest/option_selling_engine.py. The ATM Straddle (Mine) uses
-                 this row too, with the .osStrangleOnly boxes hidden: ATM, no
-                 stop, no re-entry, every day, bought back at 15:14. -->
+            <!-- NIFTY ATM Straddle (Mine) — sell the ATM CE + PE of the current weekly,
+                 each leg capped at a max ₹ loss, bought back at 15:14. See
+                 Backtest/option_selling_engine.py (the strangle that shared this
+                 row was removed 2026-11-01). -->
             <div id="optionSellingParamsRow" class="form-row" style="display:none">
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Trading Days</label>
                     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;">
                         <label><input type="checkbox" class="osDay" value="0" checked> Mon</label>
                         <label><input type="checkbox" class="osDay" value="1" checked> Tue</label>
-                        <label><input type="checkbox" class="osDay" value="2"> Wed</label>
-                        <label><input type="checkbox" class="osDay" value="3"> Thu</label>
+                        <label><input type="checkbox" class="osDay" value="2" checked> Wed</label>
+                        <label><input type="checkbox" class="osDay" value="3" checked> Thu</label>
                         <label><input type="checkbox" class="osDay" value="4" checked> Fri</label>
                     </div>
                 </div>
                 <div class="form-group">
                     <label for="osEntryTime">Entry Time</label>
-                    <input type="time" id="osEntryTime" value="09:30">
+                    <input type="time" id="osEntryTime" value="09:20">
                 </div>
                 <div class="form-group">
                     <label for="osExitTime" title="No target: whatever is still open is bought back at this time.">Exit Time</label>
-                    <input type="time" id="osExitTime" value="10:30">
+                    <input type="time" id="osExitTime" value="15:14">
                 </div>
-                <div class="form-group osStrangleOnly">
-                    <label for="osOtm" title="How many strikes (of 50 points) away from the ATM on the entry-time spot each leg is sold. 0 = ATM straddle.">OTM Strikes</label>
-                    <input type="number" id="osOtm" value="2" min="0" max="20" step="1">
-                </div>
-                <div class="form-group osStrangleOnly">
-                    <label for="osSlPct" title="Each leg's stop is this % above ITS OWN entry premium (60 → 1.6× entry). Legs stop independently.">Stop Loss %</label>
-                    <input type="number" id="osSlPct" value="60" min="1" step="5">
-                </div>
-                <div class="form-group osStrangleOnly">
-                    <label for="osReentry" title="After a leg's stop is hit, sell it again once if its premium comes back down to the original entry (at cost). The new leg has the same stop % and is not re-entered again.">Re-entry</label>
-                    <select id="osReentry">
-                        <option value="true" selected>Once, at cost</option>
-                        <option value="false">Off</option>
-                    </select>
-                </div>
-                <div class="form-group osStraddleOnly" style="display:none">
+                <div class="form-group">
                     <label for="osMaxLoss" title="Per strike: a stop rests on the CE and on the PE at their own entry + this many ₹ (at Lots × lot size). The first minute whose high reaches it buys that leg back at the level — so a leg loses this much and no more, unless a minute opens beyond it. The other leg keeps running. Brokerage is on top. 0 = no stop.">Max Loss ₹ / Leg</label>
                     <input type="number" id="osMaxLoss" value="2000" min="0" step="500">
                 </div>
@@ -1923,16 +1905,10 @@
                 </div>
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Rule</label>
-                    <small id="osRuleStraddle" style="display:none;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
                         Every trading day, sell the ATM CE and the ATM PE (strike nearest the spot at Entry Time) of the
                         current weekly expiry · no target · each leg has its own stop at Max&nbsp;Loss&nbsp;₹&nbsp;/&nbsp;Leg above its entry,
                         filled at that level when a minute's high reaches it (that leg alone); whatever is still open is bought back at Exit Time (15:14).
-                        Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; run long ranges after market hours).
-                    </small>
-                    <small class="osStrangleOnly" style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
-                        Sell one OTM CE and one OTM PE of the current weekly expiry at Entry Time · no target, buy
-                        back at Exit Time · each leg's stop is Stop&nbsp;Loss&nbsp;% above its own entry ·
-                        a stopped leg is sold again once when its premium falls back to the original entry.
                         Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; run long ranges after market hours).
                     </small>
                 </div>
@@ -2021,78 +1997,6 @@
                         candle's range · no break before the cut-off = no trade. Signals on the stock
                         (Fyers); with Stock option basis the order is its ATM CE (BUY) / PE (SELL).
                     </small>
-                </div>
-            </div>
-
-            <!-- Heikin-Ashi + SuperTrend — a daily trend-following swing rule over every F&O future
-                 stock. See Backtest/ha_supertrend_engine.py. Backtest only. -->
-            <div id="haSupertrendParamsRow" class="form-row" style="display:none">
-                <div class="form-group" style="grid-column: 1 / -1;">
-                    <label>Rule</label>
-                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
-                        <b>Daily timeframe, positional</b> — trades are carried overnight for days or weeks, with no intraday square-off. Daily Heikin-Ashi candles + SuperTrend. <b>Entry</b>: SuperTrend flips to your side
-                        within the last <i>Fresh</i> candles and the HA candle is your colour; the order fills
-                        the NEXT open. <b>Stop</b>: swing low (long) / high (short) of the last <i>Swing</i>
-                        candles. <b>Target</b>: 1:<i>R</i> sells the <i>Partial</i> share; the rest trails until
-                        SuperTrend flips back or <i>N</i> opposite HA candles print (exit next open), or the stop.
-                        Equity P&amp;L: each trade is the Capital per trade, less the round-trip cost.
-                    </small>
-                </div>
-                <div class="form-group">
-                    <label for="hastDirection">Direction</label>
-                    <select id="hastDirection"><option value="both" selected>Both</option><option value="long">Long only</option><option value="short">Short only</option></select>
-                </div>
-                <div class="form-group">
-                    <label for="hastPeriod">ST Period</label>
-                    <input type="number" id="hastPeriod" value="10" min="1" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="hastMult">ST Factor</label>
-                    <input type="number" id="hastMult" value="3" min="0.5" step="0.5">
-                </div>
-                <div class="form-group">
-                    <label for="hastSource" title="SuperTrend computed on the HA candles (as a chart set to HA draws it) or on the raw candles.">ST on</label>
-                    <select id="hastSource"><option value="ha" selected>Heikin-Ashi candles</option><option value="raw">Raw candles</option></select>
-                </div>
-                <div class="form-group">
-                    <label for="hastSwing" title="Stop = lowest low / highest high of this many candles up to the signal candle.">Swing (candles)</label>
-                    <input type="number" id="hastSwing" value="8" min="1" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="hastFresh" title="Only a flip within this many candles is a new trend worth entering; older is skipped.">Fresh (candles)</label>
-                    <input type="number" id="hastFresh" value="2" min="1" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="hastRr">Target (1:R)</label>
-                    <input type="number" id="hastRr" value="2" min="0.5" step="0.5">
-                </div>
-                <div class="form-group">
-                    <label for="hastPartial" title="Share of the position sold at the target; the rest trails.">Partial at target %</label>
-                    <input type="number" id="hastPartial" value="50" min="0" step="10">
-                </div>
-                <div class="form-group">
-                    <label for="hastOpp" title="Exit (next open) after this many consecutive opposite-colour HA candles.">Opposite HA candles</label>
-                    <input type="number" id="hastOpp" value="2" min="1" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="hastMaxRisk" title="Skip a trade whose stop is wider than this % of the entry. 0 = off.">Max stop %</label>
-                    <input type="number" id="hastMaxRisk" value="25" min="0" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="hastStopClose" title="Yes: the stop triggers only when a daily candle CLOSES beyond it and exits at the next open, so a trade is never squared off the day it is taken. No: intrabar stop, filled at the stop (or the open on a gap).">Stop on daily close</label>
-                    <select id="hastStopClose"><option value="yes" selected>Yes (positional)</option><option value="no">No (intrabar)</option></select>
-                </div>
-                <div class="form-group">
-                    <label for="hastBe">Stop to entry after T1</label>
-                    <select id="hastBe"><option value="no" selected>No</option><option value="yes">Yes</option></select>
-                </div>
-                <div class="form-group">
-                    <label for="hastCapital">Capital / trade (₹)</label>
-                    <input type="number" id="hastCapital" value="25000" min="1000" step="1000">
-                </div>
-                <div class="form-group">
-                    <label for="hastCost" title="Brokerage + STT + charges, taken off every trade.">Cost % (round trip)</label>
-                    <input type="number" id="hastCost" value="0.2" min="0" step="0.05">
                 </div>
             </div>
 
@@ -2227,7 +2131,7 @@
             <div id="optionSellingOptimisePanel" style="display:none;">
                 <div class="opt-header">
                     <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 id="osOptTitle" style="margin:0;">💰 NIFTY Option Selling Best Params</h4>
+                        <h4 id="osOptTitle" style="margin:0;">⚖️ NIFTY ATM Straddle Best Params</h4>
                         <button id="osRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
                     </div>
                     <small id="osOptMeta"></small>

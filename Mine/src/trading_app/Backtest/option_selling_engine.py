@@ -283,57 +283,6 @@ def summarise(rows: List[Dict]) -> Dict:
     }
 
 
-# ── Find Best Params ─────────────────────────────────────────────────────────
-OPT_OTM = (0, 1, 2, 3, 4)
-OPT_SL = (30, 40, 50, 60, 80, 100)
-OPT_REENTRY = (True, False)
-OPT_EXITS = ((10, 0), (10, 30), (11, 0), (12, 0), (15, 15))
-MAX_OPT_OTM = max(OPT_OTM)
-
-
-def sweep(sessions: List[Dict], lots: int, lot_size: int, entry_hm=(9, 30),
-          brokerage_per_leg: float = 100.0, min_trades: int = 10,
-          otm_grid=OPT_OTM, sl_grid=OPT_SL, reentry_grid=OPT_REENTRY,
-          exit_grid=OPT_EXITS) -> List[Dict]:
-    """Score every combination on already-fetched sessions.
-
-    `sessions`: [{'day', 'spot', 'expiry', 'bars': {(strike, right): frame}}].
-    Nothing here touches a broker — premiums were bought once, up front, and
-    every combo (strike distance, stop %, re-entry, exit time) is a replay of
-    them. Ranked by net ₹."""
-    out: List[Dict] = []
-    for otm in otm_grid:
-        for sl in sl_grid:
-            for re in reentry_grid:
-                for exit_hm in exit_grid:
-                    rows = []
-                    for sess in sessions:
-                        bars = sess['bars']
-                        res = run_day(sess['day'], sess['spot'], sess['expiry'],
-                                      lambda e, k, r, _b=bars: _b.get((k, r)),
-                                      entry_hm=entry_hm, exit_hm=exit_hm, otm_strikes=otm,
-                                      sl_pct=float(sl), reentry=re)
-                        if res is not None:
-                            rows.append(trade_row(res, lots * lot_size, lots, lot_size,
-                                                  brokerage_per_leg, entry_hm, exit_hm))
-                    if len(rows) < min_trades:
-                        continue
-                    s = summarise(rows)
-                    out.append({
-                        'otm_strikes': otm, 'sl_pct': sl, 'reentry': re,
-                        'exit_time': f'{exit_hm[0]:02d}:{exit_hm[1]:02d}',
-                        'total_trades': s['total_trades'], 'win_rate': s['win_rate'],
-                        'gross_pnl_rupees': s['total_gross_pnl_rupees'],
-                        'net_pnl_rupees': s['total_pnl_rupees'],
-                        'avg_pnl_rupees': round(s['total_pnl_rupees'] / s['total_trades'], 2),
-                        'profit_factor': s['profit_factor'],
-                        'max_drawdown_rupees': s['max_drawdown_rupees'],
-                        'sl_hits': s['sl_hits'], 'reentries': s['reentries'],
-                    })
-    out.sort(key=lambda r: r['net_pnl_rupees'], reverse=True)
-    return out
-
-
 # ── ATM Straddle: Find Best Params ───────────────────────────────────────────
 STRADDLE_ENTRIES = ((9, 15), (9, 20), (9, 30), (9, 45), (10, 0))
 STRADDLE_EXITS = ((13, 0), (14, 0), (14, 30), (15, 0), (15, 14))
