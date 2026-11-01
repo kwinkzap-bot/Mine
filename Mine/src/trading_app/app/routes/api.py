@@ -5047,9 +5047,9 @@ def _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval, d
 
 
 def _run_hilega_milega_optimise(data):
-    """Find Best Params for Hilega Milega (Backtest/hilega_milega_optimise.py): swept on INDEX
-    points from the run's own payload, then the best rows re-priced on the option as the run
-    prices them. Same task table and status route as the ST + BB + RSI sweep."""
+    """Find Best Params for Hilega Milega (Backtest/hilega_milega_optimise.py): a grid and a
+    one-field-at-a-time walk on INDEX points from the run's own payload, then the best 15 rows
+    re-priced on the option as the run prices them. Same task table and status route as the ST + BB + RSI sweep."""
     from trading_app.Backtest import hilega_milega_optimise as hmo
     from trading_app.service import cpr_option_service as _cos
     symbol = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
@@ -5088,20 +5088,22 @@ def _run_hilega_milega_optimise(data):
             if bars is None:
                 task.update(status='error', error='No historical data found for the given range')
                 return
+            if _cos.is_index(symbol):   # a spot index has no volume of its own (see the run route)
+                bars = bars.assign(volume=0.0)
 
             def _progress(done, total, **extra):
                 task['progress'] = {'done': done, 'total': total, **extra}
 
-            res = hmo.optimise(bars, data, minutes_per_bar, from_date=start_date_str, top=80, progress=_progress)
+            res = hmo.optimise(bars, data, minutes_per_bar, from_date=start_date_str, progress=_progress)
             if price_options:
                 try:
                     hmo.verify_on_option(res, bars, data, minutes_per_bar, symbol,
                                          sorted(set(minutes.index.date)), start_date_str,
-                                         progress=lambda k, n: _progress(k, n, stage='pricing'))
+                                         progress=lambda k, n: _progress(k, n, stage='pricing'),
+                                         minutes=minutes)
                 except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
                     logger.warning('[HM OPT] option verification failed: %s', e)
                     res['option_error'] = str(e)
-            res['results'] = res['results'][:25]
             task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
                                'start_date': start_date_str, 'end_date': end_date_str,
                                'bars': n_bars, **res}
@@ -5504,6 +5506,11 @@ def run_hilega_milega_backtest_api():
             return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
         candles = [{'date': candles_df['date'].iloc[0]}, {'date': candles_df['date'].iloc[-1]}]
         minutes_per_bar = 1440 if daily else int(''.join(ch for ch in interval if ch.isdigit()) or 15)
+        if not is_stock:
+            # A spot index trades no volume. The stored NIFTY minutes carry some anyway, only from
+            # Jul 2025 to mid-Oct 2026, which turned the red line into a VWMA for that stretch and
+            # left it a WMA before and since — live included. Zeroed, it is one line throughout.
+            candles_df = candles_df.assign(volume=0.0)
 
         engine = HilegaMilegaEngine(
             df=candles_df,
@@ -5528,6 +5535,7 @@ def run_hilega_milega_backtest_api():
             max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
             bar_minutes=minutes_per_bar,
             positional=bool(data.get('positional', False)) or daily,
+            minutes=minutes,            # an intrabar stop is stamped at its 1-minute touch
         )
         trades, _ = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades

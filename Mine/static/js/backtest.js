@@ -4964,6 +4964,9 @@ document.addEventListener('DOMContentLoaded', function() {
         arm_bars:   ['Arm bars',   'ArmBars'],   min_gap:   ['Min gap',    'MinGap'],
         entry_mode: ['Entry',      'EntryMode'], exit_mode: ['Exit',       'ExitMode'],
         rr:         ['Target R:R', 'Rr'],
+        green_len:  ['Green EMA',  'GreenLen'],  pb_band:   ['PB band',    'PbBand'],
+        chop_lookback: ['Sideways', 'Chop'],     htf:       ['Daily RSI',  'Htf'],
+        sl_on_close: ['Stop on close', 'SlOnClose'], direction: ['Direction', 'Direction'],
     };
     // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
     const SBR_TF_LABEL = { minute: '1m', '2minute': '2m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
@@ -4984,7 +4987,8 @@ document.addEventListener('DOMContentLoaded', function() {
         return [
             { label: '#', key: null, fmt: (r, i) => r._current ? '★ Default' : i + 1 },
             ...swept.map(k => ({ label: (SBR_PARAM[k] || [k])[0], key: k,
-                                 fmt: k === 'timeframe' ? r => SBR_TF_LABEL[r[k]] || r[k] || '–' : r => r[k] ?? '–' })),
+                                 fmt: k === 'timeframe' ? r => SBR_TF_LABEL[r[k]] || r[k] || '–'
+                                    : r => typeof r[k] === 'boolean' ? (r[k] ? 'on' : 'off') : (r[k] ?? '–') })),
             { label: 'Trades', key: 'total_trades', fmt: r => r.total_trades },
             { label: 'Win%', key: 'win_rate', fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
             { label: 'Total (pts)', key: 'total_pnl', fmt: r => pnl(r.total_pnl) },
@@ -5010,8 +5014,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 if (r[k] === undefined || k === 'gates') return;     // a gate that is off has no number
                 const el = document.getElementById(pre + (SBR_PARAM[k] || [])[1]);
-                if (el) el.value = r[k];
-                if (r[k] !== 0 || k !== 'cpr_narrow') parts.push(`${(SBR_PARAM[k] || [k])[0]} ${r[k]}`);
+                if (el && el.type === 'checkbox') el.checked = !!r[k];
+                else if (el) el.value = r[k];
+                if (r[k] !== 0 || k !== 'cpr_narrow') parts.push(`${(SBR_PARAM[k] || [k])[0]} ${typeof r[k] === 'boolean' ? (r[k] ? 'on' : 'off') : r[k]}`);
             });
             if (r.gates) {                                          // which indicators stay switched on
                 Object.entries(SBR_GATE_BOX).forEach(([g, box]) => {
@@ -5148,6 +5153,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const keys = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
                           'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit', 'gates', 'timeframe',
                           'rsi_period', 'red_len', 'arm_bars', 'min_gap', 'entry_mode', 'exit_mode', 'rr',
+                          'green_len', 'pb_band', 'chop_lookback', 'htf', 'sl_on_close', 'direction',
                           'modes', 'stop_mode', 'min_wick_pct', 'touch_tol_pct', 'min_body_pct', 'outside_bar',
                           'entry_end', 'exit_cutoff', 'max_trades_per_day'];
             const same = (r) => keys.every(k => r[k] === undefined || cur[k] === undefined || String(r[k]) === String(cur[k]));

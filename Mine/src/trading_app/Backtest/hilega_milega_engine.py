@@ -8,7 +8,9 @@ The three lines, all of them the RSI's:
   green  EMA(3) of the RSI — it hugs the RSI; when the RSI falls back onto it,
          the move is tiring.
   red    volume-weighted MA(21) of the RSI (a plain WMA where the symbol has no
-         volume, e.g. a spot index). The line that decides the trade.
+         volume, e.g. a spot index). The line that decides the trade. The routes zero an
+         index's volume: the stored NIFTY minutes carry some only from Jul 2025 to mid-Oct
+         2026, which made the line a VWMA there and a WMA everywhere else, live included.
 
   Bull zone  RSI > 50, red > 50 and red under the RSI line
   Bear zone  RSI < 50, red < 50 and red over the RSI line
@@ -21,7 +23,9 @@ Stop. The signal candle's low (long) / high (short). The talk speaks of closing
 bases throughout, so by default the stop is hit when a candle CLOSES beyond it
 (`sl_on_close`) and the exit is the next open, exactly like the SuperTrend exit
 of the ST+BB+RSI engine; with it off the stop is intrabar and fills at the stop
-(at the open when the bar gaps through it).
+(at the open when the bar gaps through it), stamped at the 1-minute touch when `minutes`
+are given — the only exit a live run has to watch the price for; every other decision is
+read at a candle's close.
 
 Exit. First of: the stop; the optional `rr` target; the red line leaving the zone
 (`exit_mode='red'`: red crosses to the wrong side of the RSI, or the RSI loses 50)
@@ -98,8 +102,14 @@ class HilegaMilegaEngine:
                  direction: str = 'both', entry_start: str = '09:15', entry_end: str = '15:14',
                  exit_cutoff: str = '15:14', max_trades_per_day: int = 2, bar_minutes: Optional[int] = None,
                  positional: bool = False, entry_mode: str = 'breakout', pb_band: float = 5.0,
-                 chop_lookback: int = 0, chop_max: int = 2, htf: str = 'off'):
+                 chop_lookback: int = 0, chop_max: int = 2, htf: str = 'off',
+                 minutes: Optional[pd.DataFrame] = None):
         self.df = df.copy()
+        # The 1-minute candles the bars were built from (optional). An intrabar stop / target is
+        # then stamped at the minute the index first traded through it — when a live watcher
+        # would sell — so the option leg is read there, not at the end of the candle.
+        self.minutes = minutes
+        self._m_cache = None
         self.rsi_period = int(rsi_period)
         self.green_len = int(green_len)
         self.red_len = int(red_len)
@@ -271,6 +281,27 @@ class HilegaMilegaEngine:
     def _bar_end(self, ts, k: int) -> str:
         return str(pd.Timestamp(ts[k]) + pd.Timedelta(minutes=self.bar_minutes))
 
+    def _touch_stamp(self, ts, k: int, level: float, falling: bool) -> str:
+        """The end of the first minute of bar k that traded through `level` (down when
+        `falling`), so `_fill_minute` reads the option at that minute's close; the bar's end
+        without `self.minutes`, or when no minute shows the touch."""
+        m = self.minutes
+        if m is None or not len(m):
+            return self._bar_end(ts, k)
+        if self._m_cache is None:
+            mi = m if isinstance(m.index, pd.DatetimeIndex) else m.set_index(
+                'date' if 'date' in m.columns else 'datetime')
+            self._m_cache = (pd.to_datetime(mi.index).to_numpy(dtype='datetime64[ns]'),
+                             mi['low'].to_numpy(dtype=float), mi['high'].to_numpy(dtype=float))
+        m_ts, m_lo, m_hi = self._m_cache
+        start = np.datetime64(pd.Timestamp(ts[k]), 'ns')
+        end = start + np.timedelta64(self.bar_minutes, 'm')
+        lo, hi = np.searchsorted(m_ts, start, 'left'), np.searchsorted(m_ts, end, 'left')
+        at = np.flatnonzero((m_lo[lo:hi] <= level) if falling else (m_hi[lo:hi] >= level))
+        if not len(at):
+            return self._bar_end(ts, k)
+        return str(pd.Timestamp(m_ts[lo + at[0]]) + pd.Timedelta(minutes=1))
+
     def _day(self, a, b, idxs, o, h, l, c, signal, sg, tmin, ts):
         out = []
         free_from = a                                    # a new trade cannot start before the last one ended
@@ -307,13 +338,13 @@ class HilegaMilegaEngine:
                     if hit_sl:
                         gap = min(o[k], sl) if is_long else max(o[k], sl)
                         exit_k, exit_px, reason = k, (gap if k > e else sl), 'Stop Loss'
-                        stamp = self._bar_end(ts, k)
+                        stamp = self._touch_stamp(ts, k, sl, is_long)
                         break
                 if tgt is not None:
                     hit_t = (h[k] >= tgt) if is_long else (l[k] <= tgt)
                     if hit_t:
                         exit_k, exit_px, reason = k, tgt, 'Target'
-                        stamp = self._bar_end(ts, k)
+                        stamp = self._touch_stamp(ts, k, tgt, not is_long)
                         break
                 closed_through = (c[k] < sl) if is_long else (c[k] > sl)
                 sig_out = bool(exit_sig[k]) if np.isfinite(sg['red'][k]) else False

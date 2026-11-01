@@ -212,3 +212,34 @@ def test_sideways_filter_blocks_chop_and_daily_bias_gates_direction():
     assert (quiet != 0).sum() <= (base != 0).sum()
     daily = HilegaMilegaEngine(f, entry_start='09:15', positional=True, htf='daily').signals()['signal']
     assert (daily != 0).sum() <= (base != 0).sum()
+
+
+def _minutes_and_hours(n_days=120, seed=11):
+    rng = np.random.default_rng(seed)
+    days = pd.bdate_range('2024-01-01', periods=n_days)
+    idx = pd.DatetimeIndex([d + pd.Timedelta(hours=9, minutes=15 + k) for d in days for k in range(375)])
+    c = 20000 + np.cumsum(rng.normal(0, 6, len(idx)))
+    m = pd.DataFrame({'open': c, 'high': c + abs(rng.normal(2, 1, len(idx))),
+                      'low': c - abs(rng.normal(2, 1, len(idx))), 'close': c, 'volume': 0.0}, index=idx)
+    key = (m.index - pd.Timedelta(hours=9, minutes=15)).floor('60min') + pd.Timedelta(hours=9, minutes=15)
+    bars = m.groupby(key).agg(open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
+                              close=('close', 'last'), volume=('volume', 'sum'))
+    bars.index.name = 'date'
+    return m, bars.reset_index()
+
+
+def test_an_intrabar_stop_is_stamped_at_its_1_minute_touch():
+    """A live watcher sells when the index first trades through the stop; the option leg must be
+    read there, not at the end of the hour. Index figures do not move."""
+    m, bars = _minutes_and_hours()
+    kw = dict(rsi_period=7, red_len=14, arm_bars=5, sl_on_close=False, positional=True, bar_minutes=60)
+    plain = HilegaMilegaEngine(bars, **kw).simulate()
+    timed = HilegaMilegaEngine(bars, minutes=m, **kw).simulate()
+    assert [(t['entry_time'], t['pnl']) for t in plain] == [(t['entry_time'], t['pnl']) for t in timed]
+    stops = [(p, t) for p, t in zip(plain, timed) if t['exit_reason'] == 'Stop Loss']
+    assert stops
+    for p, t in stops:
+        end = pd.Timestamp(p['exit_time'])
+        seg = m[(m.index >= end - pd.Timedelta(minutes=60)) & (m.index < end)]
+        hit = seg[seg['low'] <= t['sl_price']] if t['type'] == 'Long' else seg[seg['high'] >= t['sl_price']]
+        assert pd.Timestamp(t['exit_time']) == hit.index[0] + pd.Timedelta(minutes=1) <= end
