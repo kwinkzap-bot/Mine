@@ -489,6 +489,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (lot) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
     }
 
+    // Which strategy's defaults the shared option-selling form holds (the HTML's are the strangle's).
+    let _osPreset = 'option_selling';
     function updateStrategyView() {
         if (!strategySelect) return;
 
@@ -564,6 +566,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (osOptPanel)    osOptPanel.style.display    = 'none';
         const osResultsEl   = document.getElementById('osResults');
         if (osResultsEl)   osResultsEl.style.display   = 'none';
+        const rcsParamsRow  = document.getElementById('rsiCreditSpreadParamsRow');
+        if (rcsParamsRow)  rcsParamsRow.style.display  = 'none';
+        const rcsResultsEl  = document.getElementById('rcsResults');
+        if (rcsResultsEl)  rcsResultsEl.style.display  = 'none';
+        const ricParamsRow  = document.getElementById('rsiIronCondorParamsRow');
+        if (ricParamsRow)  ricParamsRow.style.display  = 'none';
+        const ricResultsEl  = document.getElementById('ricResults');
+        if (ricResultsEl)  ricResultsEl.style.display  = 'none';
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
@@ -595,7 +605,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback' || val === 'pivot_confluence' || val === 'weekly_cpr_breakout' || val === 'option_selling' || val === 'atm_straddle' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -904,8 +914,51 @@ document.addEventListener('DOMContentLoaded', function() {
             const hastEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2019-01-01';
             if (hastEnd) hastEnd.value = localToday();
-        } else if (val === 'option_selling') {
+        } else if (val === 'rsi_credit_spread') {
+            if (rcsParamsRow) rcsParamsRow.style.display = 'grid';
+            // NIFTY only; RSI on 15-minute candles and premiums on 1-minute ones are fixed.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            selectedSymbol = 'NIFTY';
+            symbolSearch.value = 'NIFTY';
+            // A year back by default — ICICI's expired-contract candles do not reach further reliably.
+            const rcsEnd = document.getElementById('endDate');
+            const rcsStart = new Date(); rcsStart.setFullYear(rcsStart.getFullYear() - 1);
+            if (startDateInput) startDateInput.value = rcsStart.toISOString().slice(0, 10);
+            if (rcsEnd) rcsEnd.value = localToday();
+        } else if (val === 'rsi_iron_condor') {
+            if (ricParamsRow) ricParamsRow.style.display = 'grid';
+            // NIFTY only, daily RSI and monthly options are fixed.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            selectedSymbol = 'NIFTY';
+            symbolSearch.value = 'NIFTY';
+            // From 1 Jan 2025, as the video's own backtest.
+            const ricEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = '2025-01-01';
+            if (ricEnd) ricEnd.value = localToday();
+        } else if (val === 'option_selling' || val === 'atm_straddle') {
             if (osParamsRow) osParamsRow.style.display = 'grid';
+            // The ATM Straddle is the same form with the strangle-only boxes
+            // (OTM / SL / re-entry) hidden and its own days and times. Switching
+            // between the two puts each one's defaults back.
+            const straddle = val === 'atm_straddle';
+            document.querySelectorAll('#optionSellingParamsRow .osStrangleOnly').forEach(el => {
+                el.style.display = straddle ? 'none' : (el.tagName === 'SMALL' ? 'block' : '');
+            });
+            document.querySelectorAll('#optionSellingParamsRow .osStraddleOnly').forEach(el => {
+                el.style.display = straddle ? '' : 'none';
+            });
+            const osRuleStraddle = document.getElementById('osRuleStraddle');
+            if (osRuleStraddle) osRuleStraddle.style.display = straddle ? 'block' : 'none';
+            if (_osPreset !== val) {
+                _osPreset = val;
+                const days = straddle ? [0, 1, 2, 3, 4] : [0, 1, 4];
+                document.querySelectorAll('.osDay').forEach(c => { c.checked = days.includes(parseInt(c.value)); });
+                const en = document.getElementById('osEntryTime'), ex = document.getElementById('osExitTime');
+                if (en) en.value = straddle ? '09:20' : '09:30';
+                if (ex) ex.value = straddle ? '15:14' : '10:30';
+            }
             // NIFTY only, on a fixed 1-minute basis: no Symbol / Timeframe.
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
@@ -989,10 +1042,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // MOVE it here rather than copying it.
     const STRATEGY_STATUS = {
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['st_all_indicators', 'st_touch_break'],
+        mine:    ['st_all_indicators', 'st_touch_break', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
+        testing: ['scalp_pullback', 'pivot_confluence', 'weekly_cpr_breakout', 'option_selling', 'rsi_credit_spread', 'rsi_iron_condor', 'hilega_milega', 'ma_htf', 'ha_supertrend'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -1233,6 +1286,26 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Stop', 'Each leg has its own stop, a % above its entry premium (e.g. 60 %).'],
             ['Re-entry', 'If a leg stops out, sell it again once when its premium returns to the original entry.'],
             ['Exit', 'No target. Anything still open is bought back at 10:30.']] },
+        rsi_credit_spread: { sub: 'NIFTY intraday RSI(9) credit spread', steps: [
+            ['Signal', 'RSI(9) on 15-minute NIFTY, read at each candle close. Crossing above 60 is bullish, crossing below 40 bearish.'],
+            ['Entry', 'Bullish: SELL the ~20-delta PE of the current weekly and BUY the PE 1000 points further out (bear call spread with CEs when bearish). At the next candle\'s open, 09:30 to 14:45. At 09:30 with no crossing, the previous session\'s last RSI decides.'],
+            ['Stop', '30 % above the short leg\'s entry premium closes the spread.'],
+            ['Reverse', 'A close beyond the far band (below 40 in a put spread, above 60 in a call spread) closes it and opens the opposite one.'],
+            ['Re-entry', 'Once after a stop, if the short premium comes back down to its entry.'],
+            ['Exit', 'Anything open is squared off at 15:15. Nothing overnight.']] },
+        rsi_iron_condor: { sub: 'NIFTY monthly RSI(14) iron condor / 1:2:1', steps: [
+            ['Signal', 'RSI(14) on daily NIFTY, read at the close only. 40-60 sideways, above 60 bullish, below 40 bearish.'],
+            ['Entry', 'On each monthly expiry day, the next month\'s position from that day\'s RSI. 40-60: a 1:1 iron condor (credit = max loss, so a higher VIX puts the sold strikes further out). Below 40: buy ATM−50 PE, sell 2× ATM−200 PE, buy ATM−250 PE. Above 60: the same in CEs.'],
+            ['Switch', 'RSI leaving 40-60 closes the condor and opens that side\'s 1:2:1; RSI back inside closes the 1:2:1 and opens a condor.'],
+            ['Roll', 'A close past a condor breakeven with RSI still 40-60: close it and open a fresh 1:1 condor round the new price.'],
+            ['Book', 'The 1:2:1 at 80 % of its max profit: book and sit out until expiry.'],
+            ['Stop', 'The month\'s loss at 4 % of capital: close and wait for the next expiry. Otherwise held to expiry.']] },
+        atm_straddle: { sub: 'NIFTY weekly ATM short straddle', steps: [
+            ['Days', 'Every trading day, Monday to Friday.'],
+            ['Entry', 'At 09:20, SELL the ATM CE and the ATM PE (strike nearest the spot) of the current weekly expiry.'],
+            ['Stop', 'Max loss per strike (₹2,000 by default): a stop rests at each leg\'s entry + that loss and fills at that level, so a leg loses no more unless the premium gaps past it. The other leg keeps running.'],
+            ['Target', 'None.'],
+            ['Exit', 'Otherwise both legs are bought back at 15:14.']] },
     };
     // ── ST Touch Break: the Logic popup's chart (one session, SuperTrend line, entries / exits) ──
 
@@ -1359,6 +1432,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const BT_LOGIC_NO_CHART = {
         option_breakout: 'trades on the option’s own candles, not the index',
         option_selling: 'a two-leg weekly strangle, not a single chart',
+        atm_straddle: 'a two-leg weekly straddle, not a single chart',
+        rsi_credit_spread: 'a two-leg weekly credit spread, not a single chart',
+        rsi_iron_condor: 'a three- or four-leg monthly option position, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
     };
     const BT_LOGIC_DAILY = ['ema_pullback', 'ha_supertrend', 'hilega_milega', 'weekly_cpr_breakout'];
@@ -1680,8 +1756,16 @@ document.addEventListener('DOMContentLoaded', function() {
             await runOptionBreakout();
             return;
         }
-        if (_strat === 'option_selling') {
-            await runOptionSelling();
+        if (_strat === 'option_selling' || _strat === 'atm_straddle') {
+            await runOptionSelling(_strat === 'atm_straddle');
+            return;
+        }
+        if (_strat === 'rsi_credit_spread') {
+            await runRsiCreditSpread();
+            return;
+        }
+        if (_strat === 'rsi_iron_condor') {
+            await runRsiIronCondor();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
@@ -2447,18 +2531,22 @@ document.addEventListener('DOMContentLoaded', function() {
     // day has settled: a year is a few minutes cold, instant warm. Own result
     // panel — a row is one day's strangle, not a trade the shared cards fit.
     let _osRun = 0;
-    async function runOptionSelling() {
+    // The ATM Straddle posts the same rule with ATM strikes, no stop and no
+    // re-entry (sl_pct 0 = no stop in option_selling_engine).
+    async function runOptionSelling(straddle = false) {
+        const title = straddle ? 'Running NIFTY ATM Straddle' : 'Running NIFTY Option Selling';
         const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
         const payload = {
             start_date:  document.getElementById('startDate')?.value,
             end_date:    document.getElementById('endDate')?.value,
             days,
-            entry_time:  document.getElementById('osEntryTime')?.value || '09:30',
-            exit_time:   document.getElementById('osExitTime')?.value || '10:30',
-            otm_strikes: parseInt(document.getElementById('osOtm')?.value ?? 2),
-            sl_pct:      parseFloat(document.getElementById('osSlPct')?.value || 60),
-            reentry:     document.getElementById('osReentry')?.value !== 'false',
+            entry_time:  document.getElementById('osEntryTime')?.value || (straddle ? '09:20' : '09:30'),
+            exit_time:   document.getElementById('osExitTime')?.value || (straddle ? '15:14' : '10:30'),
+            otm_strikes: straddle ? 0 : parseInt(document.getElementById('osOtm')?.value ?? 2),
+            sl_pct:      straddle ? 0 : parseFloat(document.getElementById('osSlPct')?.value || 60),
+            reentry:     straddle ? false : document.getElementById('osReentry')?.value !== 'false',
             lots:        Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
+            max_loss_rupees: straddle ? Math.max(0, parseFloat(document.getElementById('osMaxLoss')?.value ?? 2000) || 0) : 0,
         };
         if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
         const myRun = ++_osRun;
@@ -2469,7 +2557,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const periodSec   = document.getElementById('periodBreakdownSection');
         if (btTradesSec) btTradesSec.style.display = 'none';
         if (periodSec)   periodSec.style.display   = 'none';
-        _showOptLoader('Running NIFTY Option Selling', 'Starting…');
+        _showOptLoader(title, 'Starting…');
         try {
             const resp = await fetch('/api/backtest/option-selling', {
                 method: 'POST',
@@ -2486,7 +2574,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (myRun !== _osRun) return;
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
-                _showOptLoader('Running NIFTY Option Selling',
+                _showOptLoader(title,
                     `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
             }
             _hideOptLoader();
@@ -2520,8 +2608,11 @@ document.addEventListener('DOMContentLoaded', function() {
             card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
                  `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
             card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red'),
-            card('Stops / Re-entries', `${s.sl_hits || 0} / ${s.reentries || 0}`, 'ac-blue',
-                 `${s.otm_strikes}-OTM · SL ${s.sl_pct}% · ${s.lots}×${s.lot_size}`),
+            s.max_loss_rupees
+                ? card('Max-Loss Legs', String(s.max_loss_legs || 0), 'ac-blue',
+                       `on ${s.max_loss_days || 0} days · ATM · −₹${Math.round(s.max_loss_rupees).toLocaleString('en-IN')} per leg · ${s.lots}×${s.lot_size}`)
+                : card('Stops / Re-entries', `${s.sl_hits || 0} / ${s.reentries || 0}`, 'ac-blue',
+                       `${s.otm_strikes ? s.otm_strikes + '-OTM' : 'ATM'} · ${s.sl_pct ? 'SL ' + s.sl_pct + '%' : 'no SL'} · ${s.lots}×${s.lot_size}`),
         ].join('');
         const prem = v => (v == null ? '—' : Number(v).toFixed(2));
         const leg = (k, label) => [
@@ -2553,6 +2644,311 @@ document.addEventListener('DOMContentLoaded', function() {
             `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — those days are missing, not zero`, 'warning');
         if (s.skipped_days) window.showNotification(
             `${s.skipped_days} day${s.skipped_days === 1 ? '' : 's'} left out — no ICICI option candles`, 'info');
+    }
+
+    // ── NIFTY RSI(9) Credit Spread — start + poll ──────────────────────
+    // RSI off Fyers' 1-minute NIFTY, premiums off ICICI: a few contracts per
+    // entry (the 20-delta search) plus the hedge, disk-cached once settled.
+    let _rcsRun = 0;
+    async function runRsiCreditSpread() {
+        const v = (id, d) => document.getElementById(id)?.value ?? d;
+        const payload = {
+            start_date:   v('startDate'), end_date: v('endDate'),
+            rsi_period:   parseInt(v('rcsRsiPeriod', 9)),
+            upper:        parseFloat(v('rcsUpper', 60)), lower: parseFloat(v('rcsLower', 40)),
+            target_delta: parseFloat(v('rcsDelta', 0.2)),
+            hedge_points: parseInt(v('rcsHedge', 1000)),
+            sl_pct:       Math.max(0, parseFloat(v('rcsSlPct', 30)) || 0),
+            reentry:      v('rcsReentry', 'true') !== 'false',
+            prev_day_bias: v('rcsPrevBias', 'true') !== 'false',
+            entry_start:  v('rcsEntryStart', '09:30') || '09:30',
+            entry_end:    v('rcsEntryEnd', '14:45') || '14:45',
+            exit_time:    v('rcsExitTime', '15:15') || '15:15',
+            lots:         Math.max(1, parseInt(v('rcsLots', 1)) || 1),
+            lot_size:     parseInt(v('rcsLotSize', '')) || 0,                 // 0 = NIFTY's current
+            brokerage_per_leg: Math.max(0, parseFloat(v('rcsBrokerage', 100)) || 0),
+        };
+        const title = 'Running NIFTY RSI Credit Spread';
+        const myRun = ++_rcsRun;
+        resultsArea.style.display = 'none';
+        const rcsRes = document.getElementById('rcsResults');
+        if (rcsRes) rcsRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/rsi-credit-spread', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _rcsRun) return;
+                data = await (await fetch(`/api/backtest/rsi-credit-spread/status/${taskId}`)).json();
+                if (myRun !== _rcsRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader(title,
+                    `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} spreads priced (ICICI) · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            renderRsiCreditSpread(data);
+        } catch (err) {
+            if (myRun !== _rcsRun) return;
+            _hideOptLoader();
+            console.error('RSI Credit Spread error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderRsiCreditSpread(data) {
+        const s = data.summary || {};
+        const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const stats = document.getElementById('rcsStats');
+        if (stats) stats.innerHTML = [
+            card('Spreads', String(s.total_trades || 0), 'ac-blue',
+                 `${s.bull_trades || 0} put · ${s.bear_trades || 0} call · on ${s.trading_days || 0} of ${s.days_scanned || 0} days`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green', `${s.wins || 0} W / ${s.losses || 0} L`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `gross ${inr(s.total_gross_pnl_rupees || 0)} · brok ₹${Math.round(s.total_brokerage || 0).toLocaleString('en-IN')}`),
+            card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
+                 `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
+            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red'),
+            card('Exits', `${s.sl_hits || 0} SL · ${s.reversals || 0} rev · ${s.time_exits || 0} time`, 'ac-blue',
+                 `${s.reentries || 0} re-entries · avg Δ ${s.avg_short_delta ?? '—'} · ${s.lots}×${s.lot_size} · ₹${s.brokerage_per_leg ?? 100}/leg`),
+        ].join('');
+        DataGrid.mountSortable('rcsYearGrid', {
+            rows: s.by_year || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                { key: 'trades', label: 'Spreads', sortable: true },
+                { key: 'win_rate', label: 'Win %', sortable: true, format: v => (v || 0).toFixed(1) },
+                { key: 'points', label: 'Points', sortable: true, format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
+                { key: 'net_pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: 'No spreads',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        // Net ₹ per month — laid out like the video's table, to compare with it.
+        const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        DataGrid.mountSortable('rcsMonthGrid', {
+            rows: s.by_month || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                ...MONTHS.map((m, i) => ({ key: `m${String(i + 1).padStart(2, '0')}`, label: m, sortable: true,
+                    format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign })),
+                { key: 'total', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: 'No spreads',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        const prem = v => (v == null ? '—' : Number(v).toFixed(2));
+        const hm = v => (v ? String(v).slice(11, 16) : '—');
+        DataGrid.mountSortable('rcsGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'date', label: 'Date', sortable: true },
+                { key: 'side', label: 'Spread', sortable: true },
+                { key: 'signal', label: 'Signal', sortable: true },
+                { key: 'entry_time', label: 'In', sortable: true, format: hm },
+                { key: 'exit_time', label: 'Out', sortable: true, format: hm },
+                { key: 'spot', label: 'Spot', sortable: true, format: v => (v || 0).toFixed(2) },
+                { key: 'short_strike', label: 'Short', sortable: true, format: (v, r) => v ? `${v} ${r.right}` : '—' },
+                { key: 'short_delta', label: 'Δ', sortable: true, format: v => (v ?? 0).toFixed(2) },
+                { key: 'short_entry', label: 'Sold', sortable: true, format: prem },
+                { key: 'short_exit', label: 'Bought', sortable: true, format: prem },
+                { key: 'hedge_strike', label: 'Hedge', sortable: true },
+                { key: 'hedge_entry', label: 'H In', sortable: true, format: prem },
+                { key: 'hedge_exit', label: 'H Out', sortable: true, format: prem },
+                { key: 'exit_reason', label: 'Exit', sortable: true },
+                { key: 'pnl', label: 'Points', sortable: true, format: prem, tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: s.last_breeze_error
+                ? `No spreads could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
+                : 'No spreads in this range',
+            defaultSort: { key: 'entry_time', dir: 'desc' },
+        });
+        const rcsRes = document.getElementById('rcsResults');
+        if (rcsRes) rcsRes.style.display = '';
+        if (s.breeze_errors) window.showNotification(
+            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — those entries are missing, not zero`, 'warning');
+        if (s.skipped_entries) window.showNotification(
+            `${s.skipped_entries} signal${s.skipped_entries === 1 ? '' : 's'} not traded — no ICICI premiums for the strike or hedge`, 'info');
+    }
+
+    // ── NIFTY RSI(14) Iron Condor / 1:2:1 — start + poll ───────────────
+    // Fyers' daily NIFTY for the RSI, ICICI daily candles for every leg: one
+    // request per contract for its whole life, cached once it has expired.
+    let _ricRun = 0;
+    async function runRsiIronCondor() {
+        const v = (id, d) => document.getElementById(id)?.value ?? d;
+        const payload = {
+            start_date: v('startDate'), end_date: v('endDate'),
+            rsi_period: parseInt(v('ricRsiPeriod', 14)),
+            upper: parseFloat(v('ricUpper', 60)), lower: parseFloat(v('ricLower', 40)),
+            wing: parseInt(v('ricWing', 200)), credit_rr: parseFloat(v('ricCreditRr', 1)),
+            roll_on_breakeven: v('ricRoll', 'true') !== 'false',
+            near_off: parseInt(v('ricNear', 50)), short_off: parseInt(v('ricShort', 200)),
+            far_off: parseInt(v('ricFar', 250)), book_pct: parseFloat(v('ricBookPct', 80)),
+            wait_after_book: v('ricWait', 'true') !== 'false',
+            month_sl_pct: Math.max(0, parseFloat(v('ricMonthSl', 4)) || 0),
+            capital_per_lot: parseFloat(v('ricCapital', 110000)) || 110000,
+            lots: Math.max(1, parseInt(v('ricLots', 1)) || 1),
+            lot_size: parseInt(v('ricLotSize', '')) || 0,                     // 0 = NIFTY's current
+            brokerage_per_leg: Math.max(0, parseFloat(v('ricBrokerage', 100)) || 0),
+            slippage: Math.max(0, parseFloat(v('ricSlippage', 1)) || 0),
+        };
+        const title = 'Running NIFTY RSI Iron Condor';
+        const myRun = ++_ricRun;
+        resultsArea.style.display = 'none';
+        const ricRes = document.getElementById('ricResults');
+        if (ricRes) ricRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/rsi-iron-condor', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _ricRun) return;
+                data = await (await fetch(`/api/backtest/rsi-iron-condor/status/${taskId}`)).json();
+                if (myRun !== _ricRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader(title, `${p.done || 0} / ${p.total || 0} sessions (ICICI premiums) · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            renderRsiIronCondor(data);
+        } catch (err) {
+            if (myRun !== _ricRun) return;
+            _hideOptLoader();
+            console.error('RSI Iron Condor error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderRsiIronCondor(data) {
+        const s = data.summary || {};
+        const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+        const pct = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const reasons = Object.entries(s.exit_reasons || {}).map(([k, n]) => `${n} ${k.toLowerCase()}`).join(' · ');
+        const stats = document.getElementById('ricStats');
+        if (stats) stats.innerHTML = [
+            card('Months', String(s.cycles || 0), 'ac-blue',
+                 `${s.cycles_won || 0} won · ${s.cycles_lost || 0} lost · ${s.total_trades || 0} positions`),
+            card('Month Win Rate', `${(s.cycle_win_rate || 0).toFixed(1)}%`, 'ac-green',
+                 `best ${pct(s.best_cycle_pct)} · worst ${pct(s.worst_cycle_pct)} · avg ${pct(s.avg_cycle_pct)}`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `${pct(s.total_pct_of_capital)} of ₹${Math.round(s.capital || 0).toLocaleString('en-IN')} · brok ₹${Math.round(s.total_brokerage || 0).toLocaleString('en-IN')}`),
+            card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
+                 `${s.wins || 0} W / ${s.losses || 0} L positions (${(s.win_rate || 0).toFixed(1)}%)`),
+            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red',
+                 `${(s.max_drawdown_pct || 0).toFixed(2)}% of capital`),
+            card('Structures', `${s.iron_condors || 0} IC · ${s.bull_trades || 0} bull · ${s.bear_trades || 0} bear`, 'ac-blue',
+                 `${reasons || '—'} · ${s.lots}×${s.lot_size} · ${s.breeze_requests || 0} ICICI requests`),
+        ].join('');
+        DataGrid.mountSortable('ricYearGrid', {
+            rows: s.by_year || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                { key: 'cycles', label: 'Months', sortable: true },
+                { key: 'won', label: 'Won', sortable: true },
+                { key: 'trades', label: 'Positions', sortable: true },
+                { key: 'pct_of_capital', label: 'Return %', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'net_pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: 'No months',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        // % of capital per expiry month — how the video reports it ("3 % in August").
+        const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        DataGrid.mountSortable('ricMonthGrid', {
+            rows: s.by_month_pct || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                ...MONTHS.map((m, i) => ({ key: `m${String(i + 1).padStart(2, '0')}`, label: m, sortable: true,
+                    format: v => (v == null ? '—' : pct(v)), tone: DataGrid.sign })),
+                { key: 'total', label: 'Year %', sortable: true, format: pct, tone: DataGrid.sign },
+            ],
+            empty: 'No months',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        DataGrid.mountSortable('ricCycleGrid', {
+            rows: data.cycles || [],
+            columns: [
+                { key: 'expiry', label: 'Expiry', sortable: true },
+                { key: 'started', label: 'From', sortable: true },
+                { key: 'trades', label: 'Positions', sortable: true },
+                { key: 'ended', label: 'Ended', sortable: true },
+                { key: 'pct_of_capital', label: 'Return %', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: 'No months',
+            defaultSort: { key: 'expiry', dir: 'desc' },
+        });
+        const num = v => (v == null ? '—' : Number(v).toFixed(2));
+        DataGrid.mountSortable('ricGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'entry_date', label: 'In', sortable: true },
+                { key: 'exit_date', label: 'Out', sortable: true },
+                { key: 'structure', label: 'Structure', sortable: true },
+                { key: 'signal', label: 'Why', sortable: true },
+                { key: 'expiry', label: 'Expiry', sortable: true },
+                { key: 'rsi_in', label: 'RSI', sortable: true, format: num },
+                { key: 'spot_in', label: 'Spot In', sortable: true, format: num },
+                { key: 'spot_out', label: 'Spot Out', sortable: true, format: num },
+                { key: 'legs', label: 'Legs', sortable: false },
+                { key: 'entries', label: 'Fills In', sortable: false },
+                { key: 'exits', label: 'Fills Out', sortable: false },
+                { key: 'net_premium', label: 'Credit', sortable: true, format: num, tone: DataGrid.sign },
+                { key: 'max_profit', label: 'Max Pts', sortable: true, format: num },
+                { key: 'exit_reason', label: 'Exit', sortable: true },
+                { key: 'pnl', label: 'Points', sortable: true, format: num, tone: DataGrid.sign },
+                { key: 'pct_of_capital', label: '%', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+            ],
+            empty: s.last_breeze_error
+                ? `Nothing could be priced — ICICI Breeze said: ${s.last_breeze_error}. Retry later.`
+                : 'No positions in this range',
+            defaultSort: { key: 'entry_date', dir: 'desc' },
+        });
+        const ricRes = document.getElementById('ricResults');
+        if (ricRes) ricRes.style.display = '';
+        if (s.breeze_errors) window.showNotification(
+            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — those legs fall back to their last close`, 'warning');
+        if (s.skipped_entries) window.showNotification(
+            `${s.skipped_entries} entr${s.skipped_entries === 1 ? 'y' : 'ies'} not opened — no ICICI premium for a leg (retried the next day)`, 'info');
     }
 
     // ── Weekly CPR Breakout — start + poll ─────────────────────────────
@@ -5349,7 +5745,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'scalp_pullback') runSpOptimise(false);
         else if (strat === 'pivot_confluence') runPcOptimise(false);
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
-        else if (strat === 'option_selling') runOsOptimise(false);
+        else if (strat === 'option_selling' || strat === 'atm_straddle') runOsOptimise(false);
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
     });
@@ -6303,6 +6699,35 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: '',             key: null,            fmt: () => '' },   // Use button
     ];
 
+    // ATM Straddle: entry × exit × max ₹ loss per leg (200 combos), same endpoint with
+    // strategy 'atm_straddle' (option_selling_engine.sweep_straddle).
+    const _inrLoss = v => v ? '−₹' + Math.round(v).toLocaleString('en-IN') : 'Off';
+    const STRADDLE_OPT_COLS = [
+        { label: '#',            key: null,             fmt: (r, i) => i + 1 },
+        { label: 'Entry',        key: 'entry_time',     fmt: r => r.entry_time },
+        { label: 'Exit',         key: 'exit_time',      fmt: r => r.exit_time },
+        { label: 'Max Loss / Leg', key: 'max_loss_rupees', fmt: r => _inrLoss(r.max_loss_rupees) },
+        { label: 'Days',         key: 'total_trades',   fmt: r => r.total_trades },
+        { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Total P&L (gross)', key: 'gross_pnl_rupees', fmt: r => _rs(r.gross_pnl_rupees || 0) },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
+        { label: 'Avg / Day',    key: 'avg_pnl_rupees', fmt: r => _rs(r.avg_pnl_rupees) },
+        { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
+        { label: 'Max-Loss Legs', key: 'max_loss_legs', fmt: r => `${r.max_loss_legs} <small>(${r.max_loss_days} days)</small>` },
+        { label: '',             key: null,             fmt: () => '' },   // Use button
+    ];
+
+    function applyStraddleOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('osEntryTime', r.entry_time);
+        set('osExitTime', r.exit_time);
+        set('osMaxLoss', String(r.max_loss_rupees));
+        if (window.showNotification) window.showNotification(
+            `Applied: entry ${r.entry_time} · exit ${r.exit_time} · max loss ${_inrLoss(r.max_loss_rupees)} per leg · `
+            + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
+    }
+
     function applyOsOptResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('osOtm', String(r.otm_strikes));
@@ -6318,13 +6743,18 @@ document.addEventListener('DOMContentLoaded', function() {
         const panel     = document.getElementById('optionSellingOptimisePanel');
         const metaEl    = document.getElementById('osOptMeta');
         const recalcBtn = document.getElementById('osRecalcOptBtn');
+        const straddle = strategySelect?.value === 'atm_straddle';
+        const apply = straddle ? applyStraddleOptResult : applyOsOptResult;
+        const title = document.getElementById('osOptTitle');
+        if (title) title.textContent = straddle ? '⚖️ NIFTY ATM Straddle Best Params' : '💰 NIFTY Option Selling Best Params';
         if (metaEl) metaEl.textContent =
             `${data.total_combos_tested} combos · ${data.total} scored · ${data.days_priced}/${data.days_scanned} days priced (ICICI)`
+            + (straddle ? ` · max loss per leg at ${data.lots}×${data.lot_size}` : '')
             + (data.breeze_errors ? ` · ${data.breeze_errors} ICICI requests failed` : '');
-        _mountSingleOptGrid('osOptGrid', data.results || [], OS_OPT_COLS, 'net_pnl_rupees', applyOsOptResult);
+        _mountSingleOptGrid('osOptGrid', data.results || [], straddle ? STRADDLE_OPT_COLS : OS_OPT_COLS, 'net_pnl_rupees', apply);
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
-        if (data.best) applyOsOptResult(data.best);
+        if (data.best) apply(data.best);
     }
 
     async function runOsOptimise(recalculate) {
@@ -6335,6 +6765,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const origText  = activeBtn ? activeBtn.textContent : '';
         const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
         if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
+        const straddle = strategySelect?.value === 'atm_straddle';
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
         const osRes = document.getElementById('osResults');
@@ -6352,6 +6783,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     days,
                     entry_time: document.getElementById('osEntryTime')?.value || '09:30',
                     lots:       Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
+                    strategy:   straddle ? 'atm_straddle' : 'option_selling',
                 }),
             });
             let data = await resp.json();
@@ -6365,7 +6797,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status !== 'running') break;
                 const p = data.progress || {};
                 _showOptLoader('Finding best params…', p.stage === 'scoring'
-                    ? `Scoring 300 combos · ${data.elapsed || 0}s`
+                    ? `Scoring ${straddle ? 200 : 300} combos · ${data.elapsed || 0}s`
                     : `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
             }
             _hideOptLoader();

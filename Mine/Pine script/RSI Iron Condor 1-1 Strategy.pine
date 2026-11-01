@@ -1,0 +1,369 @@
+//@version=6
+indicator("RSI Iron Condor + 1:1 (NIFTY monthly)", shorttitle="RSI IC 1:1", overlay=false,
+     max_labels_count=500, max_lines_count=500)
+
+// Uday Chandra's "Iron Condor" livestream (Sept 2026), run on a DAILY NIFTY chart.
+//
+//   Daily RSI(14), judged at the close only:
+//     40-60          → 1:1 iron condor   (max profit ≈ max loss, wings move with VIX)
+//     fresh close <40 → bearish 1:2:1 PE (buy ATM-50, sell 2× ATM-200, buy ATM-250)
+//     fresh close >60 → bullish 1:2:1 CE (mirror)
+//   Monthly expiry. At each expiry close the next month's structure is chosen from
+//   the RSI zone that day. Mid-month:
+//     • IC: RSI leaves 40-60 → exit, go directional. A breakeven closed through while
+//       RSI is still 40-60 → exit and re-centre a new 1:1 condor (the roll).
+//     • Directional: 80 % of max profit → book and sit out until expiry. RSI back
+//       inside 40-60 → exit, back to an iron condor. RSI across the far band → flip.
+//     • Month stop: realised + open P&L for the expiry cycle at −4 % of capital → flat
+//       until the next expiry.
+//
+// Options are priced with Black-Scholes on India VIX (flat smile), so this is a MODEL
+// of the premiums, not traded prices. Expiry = last Thursday, last Tuesday from
+// Sept 2025; a holiday shift is not known, so such a cycle settles on the next bar.
+
+const string TZ  = "Asia/Kolkata"
+const int    DAY = 86400000
+
+// ─── Inputs ────────────────────────────────────────────────────────────────────
+rsiLen = input.int(14,   "RSI length",    minval=2, group="Signal")
+upLvl  = input.float(60, "Bullish above", group="Signal")
+dnLvl  = input.float(40, "Bearish below", group="Signal")
+
+vixSym    = input.symbol("NSE:INDIAVIX", "IV source", group="Pricing")
+ivMult    = input.float(1.0, "IV multiplier", minval=0.1, step=0.05, group="Pricing",
+     tooltip="Scale VIX before pricing. OTM puts trade above VIX (skew); raise this to be conservative.")
+rfPct     = input.float(6.5, "Risk-free %", step=0.25, group="Pricing")
+step      = input.int(50, "Strike step", minval=1, group="Pricing")
+slip      = input.float(1.0, "Slippage per leg (pts)", minval=0, step=0.5, group="Pricing")
+chargeLeg = input.float(40, "Charges per leg per lot, each side (₹)", minval=0, group="Pricing")
+
+wing     = input.int(200, "Wing width (pts)", minval=50, step=50, group="Iron condor",
+     tooltip="Distance from each short strike to its hedge.")
+icRR     = input.float(1.0, "Min credit : max loss", minval=0.2, step=0.1, group="Iron condor",
+     tooltip="1.0 = the video's 1:1. The short strikes are pushed as far out as this still holds, so high VIX = wider condor.")
+rollOnBE = input.bool(true, "Roll when a breakeven closes breached", group="Iron condor")
+
+nearOff = input.int(50,  "Buy leg (pts from ATM)",       minval=0, step=50, group="Directional 1:2:1")
+sellOff = input.int(200, "Sell ×2 leg (pts from ATM)",   minval=0, step=50, group="Directional 1:2:1")
+farOff  = input.int(250, "Far buy leg (pts from ATM)",   minval=0, step=50, group="Directional 1:2:1")
+lockPct = input.float(80, "Book at % of max profit", minval=1, maxval=100, group="Directional 1:2:1")
+waitAfterBook = input.bool(true, "After a book, sit out until expiry", group="Directional 1:2:1",
+     tooltip="The video's recommendation. Off = re-enter from the RSI zone the same day.")
+
+capPerLot   = input.float(110000, "Capital per lot (₹)", minval=1, group="Risk",
+     tooltip="The video: ~1-1.1 L, the 1:2:1's margin.")
+lots        = input.int(1, "Lots", minval=1, group="Risk")
+lotOverride = input.int(0, "Lot size (0 = NIFTY history)", minval=0, group="Risk",
+     tooltip="0 = 75 → 50 (Jul-21) → 25 (Apr-24) → 75 (Nov-24) → 65 (Jan-26), approximately.")
+cycleSL     = input.float(4.0, "Month stop, % of capital (0 = off)", minval=0, step=0.5, group="Risk")
+startDate   = input.time(timestamp("2025-01-01"), "Start", group="Risk")
+tuesdayFrom = input.time(timestamp("2025-09-01"), "Monthly expiry Thu → Tue from", group="Risk")
+
+showLabels = input.bool(true, "Trade labels on the price chart", group="Display")
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+rf      = rfPct / 100
+capital = capPerLot * lots
+
+lotSizeAt(int t) =>
+    lotOverride > 0 ? lotOverride :
+     t < timestamp(TZ, 2021, 7, 1, 0, 0)   ? 75 :
+     t < timestamp(TZ, 2024, 4, 26, 0, 0)  ? 50 :
+     t < timestamp(TZ, 2024, 11, 20, 0, 0) ? 25 :
+     t < timestamp(TZ, 2026, 1, 1, 0, 0)   ? 75 : 65
+
+// last <dow> of the month, at 15:30 IST
+lastDow(int y, int m, int dow) =>
+    int ny   = m == 12 ? y + 1 : y
+    int nm   = m == 12 ? 1 : m + 1
+    int last = timestamp(TZ, ny, nm, 1, 15, 30) - DAY
+    int back = (dayofweek(last, TZ) - dow + 7) % 7
+    last - back * DAY
+
+expiryOf(int y, int m) =>
+    int thu = lastDow(y, m, dayofweek.thursday)
+    thu >= tuesdayFrom ? lastDow(y, m, dayofweek.tuesday) : thu
+
+// the first monthly expiry strictly after t15
+nextExpiry(int t15) =>
+    int y = year(t15, TZ)
+    int m = month(t15, TZ)
+    int e = expiryOf(y, m)
+    if t15 >= e
+        e := m == 12 ? expiryOf(y + 1, 1) : expiryOf(y, m + 1)
+    e
+
+ncdf(float x) =>
+    float t = 1.0 / (1.0 + 0.2316419 * math.abs(x))
+    float d = 0.3989422804014327 * math.exp(-x * x / 2)
+    float p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))))
+    x >= 0 ? 1 - p : p
+
+bs(float S, float K, float T, float sig, bool isCall) =>
+    float v = 0.0
+    if T <= 0 or sig <= 0
+        v := isCall ? math.max(S - K, 0) : math.max(K - S, 0)
+    else
+        float sq = sig * math.sqrt(T)
+        float d1 = (math.log(S / K) + (rf + sig * sig / 2) * T) / sq
+        float c  = S * ncdf(d1) - K * math.exp(-rf * T) * ncdf(d1 - sq)
+        v := isCall ? c : c - S + K * math.exp(-rf * T)
+    v
+
+// ─── Position (one unit = one lot of each leg) ─────────────────────────────────
+var array<float> lk = array.new<float>()   // strike
+var array<bool>  lc = array.new<bool>()    // true = call
+var array<int>   lq = array.new<int>()     // +buy / -sell
+var array<float> lp = array.new<float>()   // fill premium
+
+addLeg(float K, bool isCall, int q, float S, float T, float sig) =>
+    float px = bs(S, K, T, sig, isCall)
+    array.push(lk, K)
+    array.push(lc, isCall)
+    array.push(lq, q)
+    array.push(lp, math.max(px + (q > 0 ? slip : -slip), 0.05))
+
+clearLegs() =>
+    array.clear(lk)
+    array.clear(lc)
+    array.clear(lq)
+    array.clear(lp)
+
+legUnits() =>
+    int u = 0
+    int n = array.size(lq)
+    if n > 0
+        for i = 0 to n - 1
+            u += math.abs(array.get(lq, i))
+    u
+
+// net premium paid per unit (negative = credit)
+entryCost() =>
+    float c = 0.0
+    int n = array.size(lq)
+    if n > 0
+        for i = 0 to n - 1
+            c += array.get(lq, i) * array.get(lp, i)
+    c
+
+// P&L per unit if the position were closed now, after exit slippage `sl`
+closePts(float S, float T, float sig, float sl) =>
+    float v = 0.0
+    int n = array.size(lq)
+    if n > 0
+        for i = 0 to n - 1
+            int   q    = array.get(lq, i)
+            float px   = bs(S, array.get(lk, i), T, sig, array.get(lc, i))
+            float fill = math.max(px + (q > 0 ? -sl : sl), 0)
+            v += q * (fill - array.get(lp, i))
+    v
+
+legsText() =>
+    string s = ""
+    int n = array.size(lq)
+    if n > 0
+        for i = 0 to n - 1
+            int q = array.get(lq, i)
+            s += (i > 0 ? "  " : "") + (q > 0 ? "+" : "") + str.tostring(q) + " " +
+                 str.tostring(array.get(lk, i), "#") + (array.get(lc, i) ? "CE" : "PE")
+    s
+
+// the farthest symmetric short strikes whose condor still pays ≥ icRR × its max loss
+pickIC(float S, float T, float sig) =>
+    float atm  = math.round(S / step) * step
+    int   best = 1
+    for i = 1 to 80
+        float o  = i * step
+        float cr = bs(S, atm - o, T, sig, false) - bs(S, atm - o - wing, T, sig, false) +
+                   bs(S, atm + o, T, sig, true)  - bs(S, atm + o + wing, T, sig, true) - 4 * slip
+        if cr / math.max(wing - cr, 0.01) >= icRR
+            best := i
+        else
+            break
+    float off = best * step
+    [atm - off, atm - off - wing, atm + off, atm + off + wing]
+
+// ─── Data ──────────────────────────────────────────────────────────────────────
+rsiV  = ta.rsi(close, rsiLen)
+vix   = request.security(vixSym, "D", close, lookahead=barmerge.lookahead_off)
+sig   = nz(fixnan(vix), 15) * ivMult / 100
+t15   = timestamp(TZ, year(time, TZ), month(time, TZ), dayofmonth(time, TZ), 15, 30)
+zone  = rsiV > upLvl ? "BULL" : rsiV < dnLvl ? "BEAR" : "IC"
+
+// ─── State ─────────────────────────────────────────────────────────────────────
+var string mode     = "FLAT"
+var int    expTs    = 0
+var int    posLot   = 0
+var float  beLo     = na
+var float  beHi     = na
+var float  shortLo  = na
+var float  shortHi  = na
+var float  maxPts   = na
+var float  cyclePnl = 0.0
+var float  equity   = 0.0
+var float  peak     = 0.0
+var float  maxDD    = 0.0
+var int    nTrades  = 0
+var int    nCycles  = 0
+var int    nWin     = 0
+var float  bestCyc  = 0.0
+var float  worstCyc = 0.0
+var float  openRs   = 0.0
+
+fmtRs(float x) => (x >= 0 ? "+₹" : "−₹") + str.tostring(math.abs(x), "#,##0")
+
+live = barstate.isconfirmed and timeframe.isdaily and time >= startDate and not na(rsiV)
+
+if live
+    float S       = close
+    float T       = math.max(expTs - t15, 0) / (365.0 * DAY)
+    bool  expired = expTs > 0 and t15 >= expTs
+    string why    = ""
+    string nxt   = ""
+
+    if expired
+        if mode != "FLAT"
+            why := "Expiry"
+        nxt := zone
+    else if expTs == 0
+        nxt := zone
+    else if mode != "FLAT"
+        float pts = closePts(S, T, sig, slip)
+        float rs  = pts * posLot * lots - legUnits() * lots * chargeLeg
+        if cycleSL > 0 and cyclePnl + rs <= -cycleSL / 100 * capital
+            why := "Month SL"
+        else if mode == "IC"
+            if zone != "IC"
+                why  := zone == "BULL" ? "RSI > " + str.tostring(upLvl) : "RSI < " + str.tostring(dnLvl)
+                nxt := zone
+            else if rollOnBE and (S < beLo or S > beHi)
+                why  := "BE breached → roll"
+                nxt := "IC"
+        else
+            if maxPts > 0 and pts >= lockPct / 100 * maxPts
+                why := "Book " + str.tostring(lockPct) + "%"
+                if not waitAfterBook
+                    nxt := zone
+            else if zone != mode
+                why  := zone == "IC" ? "RSI back in band" : "RSI flipped"
+                nxt := zone
+
+    // close
+    if why != "" and mode != "FLAT"
+        float Tc  = expired ? 0.0 : T
+        float pts = closePts(S, Tc, sig, expired ? 0.0 : slip)
+        float rs  = pts * posLot * lots - (expired ? 0.0 : legUnits() * lots * chargeLeg)
+        cyclePnl += rs
+        equity   += rs
+        nTrades  += 1
+        log.info(str.format("{0} EXIT {1} ({2}) {3} pts/unit, {4} | {5}",
+             str.format_time(time, "yyyy-MM-dd", TZ), mode, why, str.tostring(pts, "#.0"), fmtRs(rs), legsText()))
+        if showLabels
+            label.new(bar_index, mode == "BEAR" ? low : high, mode + " out · " + why + "\n" + fmtRs(rs),
+                 style = mode == "BEAR" ? label.style_label_up : label.style_label_down,
+                 color = rs >= 0 ? color.new(color.green, 20) : color.new(color.red, 20),
+                 textcolor = color.white, size = size.small, force_overlay = true)
+        clearLegs()
+        mode    := "FLAT"
+        beLo    := na
+        beHi    := na
+        shortLo := na
+        shortHi := na
+        maxPts  := na
+
+    // the expiry cycle that just ended
+    if expired
+        nCycles  += 1
+        nWin     += cyclePnl > 0 ? 1 : 0
+        bestCyc  := math.max(bestCyc, cyclePnl)
+        worstCyc := math.min(worstCyc, cyclePnl)
+        log.info(str.format("{0} CYCLE {1}: {2} ({3}% of capital)",
+             str.format_time(time, "yyyy-MM-dd", TZ), str.format_time(expTs, "MMM-yy", TZ),
+             fmtRs(cyclePnl), str.tostring(cyclePnl / capital * 100, "#.00")))
+        cyclePnl := 0.0
+
+    // open
+    if nxt != ""
+        if expired or expTs == 0
+            expTs := nextExpiry(t15)
+        float To  = math.max(expTs - t15, 0) / (365.0 * DAY)
+        float atm = math.round(S / step) * step
+        posLot := lotSizeAt(time)
+        clearLegs()
+        string info = ""
+        if nxt == "IC"
+            [ps, pb, cs, cb] = pickIC(S, To, sig)
+            addLeg(pb, false,  1, S, To, sig)
+            addLeg(ps, false, -1, S, To, sig)
+            addLeg(cs, true,  -1, S, To, sig)
+            addLeg(cb, true,   1, S, To, sig)
+            float cr = -entryCost()
+            beLo    := ps - cr
+            beHi    := cs + cr
+            shortLo := ps
+            shortHi := cs
+            info := "credit " + str.tostring(cr, "#.0") + " / risk " + str.tostring(wing - cr, "#.0") +
+                     " · BE " + str.tostring(beLo, "#") + "–" + str.tostring(beHi, "#")
+        else
+            bool  isC = nxt == "BULL"
+            float sgn = isC ? 1.0 : -1.0
+            addLeg(atm + sgn * nearOff, isC,  1, S, To, sig)
+            addLeg(atm + sgn * sellOff, isC, -2, S, To, sig)
+            addLeg(atm + sgn * farOff,  isC,  1, S, To, sig)
+            float db = entryCost()
+            maxPts := (sellOff - nearOff) - db
+            info := "debit " + str.tostring(db, "#.0") + " · max " + str.tostring(maxPts, "#.0") +
+                     " · book at " + str.tostring(maxPts * lockPct / 100, "#.0")
+        float chg = legUnits() * lots * chargeLeg
+        cyclePnl -= chg
+        equity   -= chg
+        mode := nxt
+        log.info(str.format("{0} ENTER {1} exp {2} | {3} | {4} | VIX {5} RSI {6}",
+             str.format_time(time, "yyyy-MM-dd", TZ), mode, str.format_time(expTs, "dd-MMM-yy", TZ),
+             legsText(), info, str.tostring(sig * 100 / ivMult, "#.0"), str.tostring(rsiV, "#.0")))
+        if showLabels
+            label.new(bar_index, mode == "BEAR" ? high : low,
+                 mode + " · " + str.format_time(expTs, "dd-MMM", TZ) + "\n" + legsText() + "\n" + info,
+                 style = mode == "BEAR" ? label.style_label_down : label.style_label_up,
+                 color = mode == "IC" ? color.new(color.blue, 20) : mode == "BULL" ? color.new(color.teal, 20) : color.new(color.maroon, 20),
+                 textcolor = color.white, size = size.tiny, force_overlay = true)
+
+    peak  := math.max(peak, equity)
+    maxDD := math.max(maxDD, peak - equity)
+    float Tn = math.max(expTs - t15, 0) / (365.0 * DAY)
+    openRs := mode == "FLAT" ? 0.0 : closePts(S, Tn, sig, slip) * posLot * lots - legUnits() * lots * chargeLeg
+
+// ─── Visuals ───────────────────────────────────────────────────────────────────
+plot(rsiV, "RSI", color.purple, 2)
+hline(upLvl, "Bullish", color.teal,   hline.style_dashed)
+hline(dnLvl, "Bearish", color.maroon, hline.style_dashed)
+bgcolor(mode == "IC" ? color.new(color.blue, 88) : mode == "BULL" ? color.new(color.teal, 85) :
+         mode == "BEAR" ? color.new(color.maroon, 85) : na)
+
+plot(beLo,    "IC lower BE",    color.orange, 1, plot.style_linebr, force_overlay=true)
+plot(beHi,    "IC upper BE",    color.orange, 1, plot.style_linebr, force_overlay=true)
+plot(shortLo, "IC short put",   color.new(color.blue, 40), 1, plot.style_linebr, force_overlay=true)
+plot(shortHi, "IC short call",  color.new(color.blue, 40), 1, plot.style_linebr, force_overlay=true)
+plot(equity,           "Realised ₹",       display=display.data_window)
+plot(equity + openRs,  "Realised + open ₹", display=display.data_window)
+
+var table tb = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 15), border_width=1)
+if barstate.islast
+    if not timeframe.isdaily
+        table.cell(tb, 0, 0, "Use a DAILY chart", text_color=color.yellow)
+        table.merge_cells(tb, 0, 0, 1, 0)
+    else
+        rows = array.from("Position", "Expiry", "Legs", "Open P&L", "This cycle", "Total",
+                          "Cycles won", "Max drawdown", "Trades")
+        vals = array.from(mode,
+             expTs > 0 ? str.format_time(expTs, "dd-MMM-yy", TZ) : "—",
+             legsText() == "" ? "—" : legsText(),
+             fmtRs(openRs),
+             fmtRs(cyclePnl + openRs),
+             fmtRs(equity + openRs) + " (" + str.tostring((equity + openRs) / capital * 100, "#.0") + "%)",
+             str.tostring(nWin) + " / " + str.tostring(nCycles) + "  best " + fmtRs(bestCyc) + "  worst " + fmtRs(worstCyc),
+             "₹" + str.tostring(maxDD, "#,##0") + " (" + str.tostring(maxDD / capital * 100, "#.0") + "%)",
+             str.tostring(nTrades))
+        for i = 0 to 8
+            table.cell(tb, 0, i, array.get(rows, i), text_color=color.silver, text_size=size.small, text_halign=text.align_left)
+            table.cell(tb, 1, i, array.get(vals, i), text_color=color.white,  text_size=size.small, text_halign=text.align_left)

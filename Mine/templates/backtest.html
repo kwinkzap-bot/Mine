@@ -41,6 +41,8 @@
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="ha_supertrend">🕯️ Heikin-Ashi + SuperTrend</option>
                 <option value="option_selling">💰 NIFTY Option Selling</option>
+                <option value="rsi_credit_spread">📶 NIFTY RSI(9) Credit Spread (20Δ, 1000 hedge)</option>
+                <option value="rsi_iron_condor">🦅 NIFTY RSI(14) Iron Condor 1:1 + 1:2:1 (monthly)</option>
                 <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
                 <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
                 <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
@@ -50,6 +52,7 @@
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
                 <option value="st_touch_break" selected>🧲 ST Touch Break (SuperTrend wick + break)</option>
                 <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
+                <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (square off 15:14)</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
             <button id="btCombinedBtn" type="button" title="Run every Simple Trader strategy and see them merged into one book" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🧩 Combined</button>
@@ -2080,7 +2083,9 @@
 
             <!-- NIFTY Option Selling — short OTM strangle on the current weekly,
                  each leg stopped on its own, one re-entry at cost. See
-                 Backtest/option_selling_engine.py. -->
+                 Backtest/option_selling_engine.py. The ATM Straddle (Mine) uses
+                 this row too, with the .osStrangleOnly boxes hidden: ATM, no
+                 stop, no re-entry, every day, bought back at 15:14. -->
             <div id="optionSellingParamsRow" class="form-row" style="display:none">
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Trading Days</label>
@@ -2100,20 +2105,24 @@
                     <label for="osExitTime" title="No target: whatever is still open is bought back at this time.">Exit Time</label>
                     <input type="time" id="osExitTime" value="10:30">
                 </div>
-                <div class="form-group">
+                <div class="form-group osStrangleOnly">
                     <label for="osOtm" title="How many strikes (of 50 points) away from the ATM on the entry-time spot each leg is sold. 0 = ATM straddle.">OTM Strikes</label>
                     <input type="number" id="osOtm" value="2" min="0" max="20" step="1">
                 </div>
-                <div class="form-group">
+                <div class="form-group osStrangleOnly">
                     <label for="osSlPct" title="Each leg's stop is this % above ITS OWN entry premium (60 → 1.6× entry). Legs stop independently.">Stop Loss %</label>
                     <input type="number" id="osSlPct" value="60" min="1" step="5">
                 </div>
-                <div class="form-group">
+                <div class="form-group osStrangleOnly">
                     <label for="osReentry" title="After a leg's stop is hit, sell it again once if its premium comes back down to the original entry (at cost). The new leg has the same stop % and is not re-entered again.">Re-entry</label>
                     <select id="osReentry">
                         <option value="true" selected>Once, at cost</option>
                         <option value="false">Off</option>
                     </select>
+                </div>
+                <div class="form-group osStraddleOnly" style="display:none">
+                    <label for="osMaxLoss" title="Per strike: a stop rests on the CE and on the PE at their own entry + this many ₹ (at Lots × lot size). The first minute whose high reaches it buys that leg back at the level — so a leg loses this much and no more, unless a minute opens beyond it. The other leg keeps running. Brokerage is on top. 0 = no stop.">Max Loss ₹ / Leg</label>
+                    <input type="number" id="osMaxLoss" value="2000" min="0" step="500">
                 </div>
                 <div class="form-group">
                     <label for="osLots" title="Lots per leg, × NIFTY's lot size.">Lots</label>
@@ -2121,11 +2130,183 @@
                 </div>
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Rule</label>
-                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                    <small id="osRuleStraddle" style="display:none;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        Every trading day, sell the ATM CE and the ATM PE (strike nearest the spot at Entry Time) of the
+                        current weekly expiry · no target · each leg has its own stop at Max&nbsp;Loss&nbsp;₹&nbsp;/&nbsp;Leg above its entry,
+                        filled at that level when a minute's high reaches it (that leg alone); whatever is still open is bought back at Exit Time (15:14).
+                        Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; run long ranges after market hours).
+                    </small>
+                    <small class="osStrangleOnly" style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
                         Sell one OTM CE and one OTM PE of the current weekly expiry at Entry Time · no target, buy
                         back at Exit Time · each leg's stop is Stop&nbsp;Loss&nbsp;% above its own entry ·
                         a stopped leg is sold again once when its premium falls back to the original entry.
                         Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; run long ranges after market hours).
+                    </small>
+                </div>
+            </div>
+
+            <!-- NIFTY RSI(9) credit spread — RSI(9) on 15-min NIFTY crossing 60 / 40 →
+                 a 20-delta weekly short + a buy 1000 points further out; 30 % stop on the
+                 short, stop-and-reverse on the far band, 15:15 square-off.
+                 See Backtest/rsi_credit_spread_engine.py. -->
+            <div id="rsiCreditSpreadParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="rcsRsiPeriod" title="RSI length on 15-minute NIFTY candles (Wilder, as a chart draws it).">RSI Period</label>
+                    <input type="number" id="rcsRsiPeriod" value="9" min="2" max="50" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="rcsUpper" title="A 15-min close crossing above this sells a put spread; a close above it also closes a call spread and reverses.">Upper Band</label>
+                    <input type="number" id="rcsUpper" value="60" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="rcsLower" title="A 15-min close crossing below this sells a call spread; a close below it also closes a put spread and reverses.">Lower Band</label>
+                    <input type="number" id="rcsLower" value="40" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="rcsDelta" title="The short leg is the OTM strike whose |delta| at the entry minute is nearest this — from its own implied vol (Black-Scholes on spot).">Short Delta</label>
+                    <input type="number" id="rcsDelta" value="0.20" min="0.02" max="0.5" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="rcsHedge" title="The bought leg sits this many points further out than the short (the nearest printed strike inside it if that one has no candles).">Hedge Points</label>
+                    <input type="number" id="rcsHedge" value="1000" min="50" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="rcsSlPct" title="Stop on the SHORT leg, this % above its entry premium (30 → 1.3× entry). It closes the whole spread. 0 = no stop.">Stop Loss %</label>
+                    <input type="number" id="rcsSlPct" value="30" min="0" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="rcsReentry" title="After a stop, sell the same short strike again once if its premium comes back down to the original entry (with a fresh hedge and stop).">Re-entry</label>
+                    <select id="rcsReentry">
+                        <option value="true" selected>Once, at cost</option>
+                        <option value="false">Off</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rcsPrevBias" title="At 09:30, if the 09:15 candle did not cross a band, take the side of the previous session's last RSI (above upper → put spread, below lower → call spread).">09:30 Prev-day Bias</label>
+                    <select id="rcsPrevBias">
+                        <option value="true" selected>On</option>
+                        <option value="false">Off</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rcsEntryStart">First Entry</label>
+                    <input type="time" id="rcsEntryStart" value="09:30">
+                </div>
+                <div class="form-group">
+                    <label for="rcsEntryEnd" title="No new spread after this (re-entries included).">Last Entry</label>
+                    <input type="time" id="rcsEntryEnd" value="14:45">
+                </div>
+                <div class="form-group">
+                    <label for="rcsExitTime" title="Forced square-off: nothing is carried overnight.">Exit Time</label>
+                    <input type="time" id="rcsExitTime" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="rcsLots" title="Lots per leg, × the lot size.">Lots</label>
+                    <input type="number" id="rcsLots" value="1" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="rcsLotSize" title="Quantity per lot. Blank = NIFTY's current lot size (65). The video's 2021-25 table is priced at 75 for every year.">Lot Size</label>
+                    <input type="number" id="rcsLotSize" value="" min="1" step="1" placeholder="current">
+                </div>
+                <div class="form-group">
+                    <label for="rcsBrokerage" title="₹ per leg, sold and bought back — a spread is two legs. The video's table has no costs: set 0 to compare with it.">Brokerage ₹ / Leg</label>
+                    <input type="number" id="rcsBrokerage" value="100" min="0" step="10">
+                </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Rule</label>
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        RSI on 15-minute NIFTY, read at each candle close. Crossing above the upper band → sell the
+                        ~20-delta PE of the current weekly and buy the PE Hedge&nbsp;Points further out; crossing below the
+                        lower band → the same with CEs. Entries from 09:30 to 14:45 at the next candle's open; 15:15 square-off.
+                        Stop Loss&nbsp;% on the short premium closes the spread; a close beyond the far band closes it and
+                        opens the opposite one. Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; a few
+                        contracts per entry, so run long ranges after market hours).
+                    </small>
+                </div>
+            </div>
+
+            <!-- NIFTY RSI(14) iron condor / 1:2:1 — daily RSI(14) picks the monthly
+                 structure: 40-60 a 1:1 iron condor, <40 / >60 a bearish / bullish 1:2:1.
+                 Every decision at the daily close. See Backtest/rsi_iron_condor_engine.py. -->
+            <div id="rsiIronCondorParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="ricRsiPeriod" title="RSI length on DAILY NIFTY closes (Wilder).">RSI Period</label>
+                    <input type="number" id="ricRsiPeriod" value="14" min="2" max="50" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ricUpper" title="A daily close above this is bullish: the bullish 1:2:1 in CEs.">Upper Band</label>
+                    <input type="number" id="ricUpper" value="60" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ricLower" title="A daily close below this is bearish: the bearish 1:2:1 in PEs. Between the bands = iron condor.">Lower Band</label>
+                    <input type="number" id="ricLower" value="40" min="1" max="99" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ricWing" title="Points from each sold strike to its hedge.">IC Wing</label>
+                    <input type="number" id="ricWing" value="200" min="50" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="ricCreditRr" title="1 = the video’s 1:1 (max profit = max loss). The sold strikes go as far from ATM as this still holds, so a high VIX makes the condor wider by itself.">IC Credit : Loss</label>
+                    <input type="number" id="ricCreditRr" value="1.0" min="0.1" max="5" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="ricRoll" title="The index closing past a breakeven while RSI is still between the bands closes the condor and opens a fresh 1:1 one round the new price.">IC Breakeven Roll</label>
+                    <select id="ricRoll"><option value="true" selected>On</option><option value="false">Off</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="ricNear" title="The bought leg, points from ATM (CE above for bullish, PE below for bearish).">1:2:1 Buy</label>
+                    <input type="number" id="ricNear" value="50" min="0" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="ricShort" title="Two lots sold this many points from ATM.">1:2:1 Sell ×2</label>
+                    <input type="number" id="ricShort" value="200" min="50" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="ricFar" title="The far hedge, points from ATM.">1:2:1 Far Buy</label>
+                    <input type="number" id="ricFar" value="250" min="100" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="ricBookPct" title="The 1:2:1 is booked when its open profit reaches this share of its max profit.">Book at % of Max</label>
+                    <input type="number" id="ricBookPct" value="80" min="1" max="100" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="ricWait" title="The video: book and sit out the rest of the month.">After a Book</label>
+                    <select id="ricWait"><option value="true" selected>Wait for expiry</option><option value="false">Re-enter by RSI</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="ricMonthSl" title="The month’s booked + open loss at this % of capital closes everything until the next expiry. 0 = off.">Month Stop %</label>
+                    <input type="number" id="ricMonthSl" value="4" min="0" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="ricCapital" title="Margin per lot (the 1:2:1 needs the most, ~1-1.1 L). Every % on this page is of this × Lots.">Capital ₹ / Lot</label>
+                    <input type="number" id="ricCapital" value="110000" min="1" step="5000">
+                </div>
+                <div class="form-group">
+                    <label for="ricLots" title="Lots per leg (the 1:2:1 sells twice this).">Lots</label>
+                    <input type="number" id="ricLots" value="1" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ricLotSize" title="Quantity per lot. Blank = NIFTY’s current lot size.">Lot Size</label>
+                    <input type="number" id="ricLotSize" value="" min="1" step="1" placeholder="current">
+                </div>
+                <div class="form-group">
+                    <label for="ricBrokerage" title="₹ per leg, bought and sold back: a condor is 4 legs, a 1:2:1 is 3.">Brokerage ₹ / Leg</label>
+                    <input type="number" id="ricBrokerage" value="100" min="0" step="10">
+                </div>
+                <div class="form-group">
+                    <label for="ricSlippage" title="Taken off every fill, both ways (the video says to test with ~1 point).">Slippage pts / Leg</label>
+                    <input type="number" id="ricSlippage" value="1" min="0" step="0.5">
+                </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Rule</label>
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        RSI(14) on daily NIFTY, read at the close. Monthly expiry. On each expiry day the next month's position
+                        is opened from that day's RSI: between the bands a 1:1 iron condor; below the lower band a bearish 1:2:1
+                        (buy ATM−50 PE, sell 2× ATM−200 PE, buy ATM−250 PE); above the upper band the bullish 1:2:1 in CEs.
+                        Mid-month: RSI leaving the band switches the condor to the 1:2:1; a close past a condor breakeven rolls it;
+                        the 1:2:1 is booked at 80&nbsp;% of its max profit, and RSI back in the band switches it to a condor.
+                        Month stop at 4&nbsp;% of capital. Fills are each contract's daily close from ICICI (needs an ICICI login;
+                        one request per contract, cached once it has expired).
                     </small>
                 </div>
             </div>
@@ -2445,7 +2626,7 @@
             <div id="optionSellingOptimisePanel" style="display:none;">
                 <div class="opt-header">
                     <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 style="margin:0;">💰 NIFTY Option Selling Best Params</h4>
+                        <h4 id="osOptTitle" style="margin:0;">💰 NIFTY Option Selling Best Params</h4>
                         <button id="osRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
                     </div>
                     <small id="osOptMeta"></small>
@@ -2568,6 +2749,27 @@
                 <div class="results-section">
                     <div class="results-row results-row-6" id="osStats"></div>
                     <div style="margin-top:8px;"><div id="osGrid"></div></div>
+                </div>
+            </div>
+
+            <!-- NIFTY RSI credit spread results (own panel — rows are two-leg spreads) -->
+            <div id="rcsResults" style="display:none;">
+                <div class="results-section">
+                    <div class="results-row results-row-6" id="rcsStats"></div>
+                    <div style="margin-top:8px;"><div id="rcsYearGrid"></div></div>
+                    <div style="margin-top:8px;"><div id="rcsMonthGrid"></div></div>
+                    <div style="margin-top:8px;"><div id="rcsGrid"></div></div>
+                </div>
+            </div>
+
+            <!-- NIFTY RSI iron condor results (own panel — rows are monthly structures) -->
+            <div id="ricResults" style="display:none;">
+                <div class="results-section">
+                    <div class="results-row results-row-6" id="ricStats"></div>
+                    <div style="margin-top:8px;"><div id="ricYearGrid"></div></div>
+                    <div style="margin-top:8px;"><div id="ricMonthGrid"></div></div>
+                    <div style="margin-top:8px;"><div id="ricCycleGrid"></div></div>
+                    <div style="margin-top:8px;"><div id="ricGrid"></div></div>
                 </div>
             </div>
 
