@@ -408,10 +408,27 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
   overstate them.
-The api blueprint is at 254 rules (`tests/route_inventory.txt`).
+The api blueprint is at 248 rules (`tests/route_inventory.txt`) since Scalp Pullback and Pivot Confluence went (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## Pivot Confluence backtest — removed
+
+Removed 2026-11-01, after Scalp Pullback (both sat under 🧪 Testing on /backtest):
+`Backtest/pivot_confluence_engine.py`, the three `/api/backtest/pivot-confluence{,/optimise,/optimise/status/<id>}`
+routes, its option, params row, Best Params panel and JS. **Kept on purpose: the Lots / Lot Value row**
+(`#pivotConfluenceLotRow`, `pcLots`, `pcLotValue`, `updatePcInvestment`, the `isPc` ₹-card switch) — about ten
+other backtests (ST Touch Break, Simple Trader, MA HTF, the Quantman ones) "share the Pivot Confluence Lots
+boxes" and still do, under the old ids. Its `*_pc_multiTF_*` sweeps are dead entries in `rtp_opt_cache.json`.
+
+## 2-Min EMA Scalp Pullback backtest — removed
+
+Removed 2026-11-01 (it sat under 🧪 Testing on /backtest): `Backtest/scalp_pullback_engine.py`, the
+three `/api/backtest/scalp-pullback{,/optimise,/optimise/status/<id>}` routes, its option, params/lot rows,
+Best Params panel and JS. Kept: `_sp_instrument_token` in `api.py` is the index → token map about fifteen
+other backtests call, and still carries the name. Its old sweeps (`*_sp_multiTF_*` keys) are dead entries in
+the shared `rtp_opt_cache.json`.
 
 ## RSI Credit Spread / Iron Condor backtests — removed
 
@@ -546,8 +563,8 @@ was removed on 2026-09-15, with its `/api/algo/rtp*` routes, Algo-page tab,
 scheduler jobs and tests. Its **backtest** went the same evening:
 `Backtest/rtp_backtest_engine.py`, the `/api/backtest/rtp*` routes and the
 RTP strategy on `/backtest`. Two things kept the name: the shared optimiser
-cache is still `app/utils/rtp_opt_cache.json` (2nd-Candle / Scalp / Pivot
-sweeps write it), and `#rtpStatsRow` is still the id of the shared Row-2
+cache is still `app/utils/rtp_opt_cache.json` (2nd-Candle and other
+sweeps write it; Scalp / Pivot did until 2026-11-01), and `#rtpStatsRow` is still the id of the shared Row-2
 stat cards. The per-user `EMA_RTP_*` / `RTP_*_STRIKE_MODE` /
 `BROKER_N_RTP_*` variables were dropped from `env/Mine.env` on 2026-10-20
 (backup `scratch/Mine.env.bak-20261020-rtp`); nothing reads them. EMA Confluence (`algo/ema_confluence/`) was **not**

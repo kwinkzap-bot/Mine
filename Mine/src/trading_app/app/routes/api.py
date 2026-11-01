@@ -25,7 +25,7 @@ from trading_app.app.utils.helpers import is_market_hours, is_trading_day
 _pending_request_locks: Dict[Any, threading.Lock] = {}
 _pending_locks_manager = threading.Lock()
 
-# Backtest optimisation cache (2nd-Candle / Scalp Pullback / Pivot Confluence
+# Backtest optimisation cache (2nd-Candle and other
 # sweeps) — persisted to disk so results survive restarts. The file keeps its
 # historical name.
 _OPT_CACHE_PATH = os.path.normpath(
@@ -150,14 +150,6 @@ _sc_opt_tasks_lock = threading.Lock()
 # In-memory task store for long-running 30-Min Fakeout optimisation background jobs
 _tmf_opt_tasks: Dict[str, Dict] = {}
 _tmf_opt_tasks_lock = threading.Lock()
-
-# In-memory task store for long-running Scalp Pullback optimisation background jobs
-_sp_opt_tasks: Dict[str, Dict] = {}
-_sp_opt_tasks_lock = threading.Lock()
-
-# In-memory task store for long-running Pivot Confluence optimisation background jobs
-_pc_opt_tasks: Dict[str, Dict] = {}
-_pc_opt_tasks_lock = threading.Lock()
 
 # Rankings cache — keyed by index name, expires after 15 min
 _sm_rankings_cache: Dict[str, tuple] = {}
@@ -3554,18 +3546,9 @@ def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_dat
     which only lines up for timeframes that divide 555 minutes: 3, 5 and 15 do,
     but 2, 10, 30 and 60 do not, and a 2-minute run came back with its first bar
     stamped 09:14 — every bar straddling two real ones, one minute out of step
-    with the same series from the provider. Scalp Pullback defaults to 2-minute,
-    so that was every signal it produced.
+    with the same series from the provider. The (since removed) Scalp Pullback
+    backtest defaulted to 2-minute, so that was every signal it produced.
     """
-    import pandas as pd
-
-    _interval_mins = {
-        'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3,
-        '5minute': 5, '10minute': 10, '15minute': 15,
-        '30minute': 30, '60minute': 60, 'hour': 60,
-    }
-    target_mins = _interval_mins.get(interval, 5)
-
     # Always pull raw 1-minute data for maximum historical depth
     candles = provider.historical_data(
         instrument_token=instrument_token,
@@ -3574,6 +3557,19 @@ def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_dat
         interval='minute',
         use_cache=False,
     )
+    return _resample_1min(candles, interval)
+
+
+def _resample_1min(candles, interval):
+    """1-minute rows → `interval` bars anchored 09:15 (see `_fetch_1min_and_resample`)."""
+    import pandas as pd
+
+    _interval_mins = {
+        'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3,
+        '5minute': 5, '10minute': 10, '15minute': 15,
+        '30minute': 30, '60minute': 60, 'hour': 60,
+    }
+    target_mins = _interval_mins.get(interval, 5)
 
     if not candles:
         return candles
@@ -4645,8 +4641,9 @@ def run_option_breakout_optimise_status(task_id):
 
 
 
-# Index symbol → provider token. Shared by the Scalp Pullback backtest and its
-# optimiser (same maps the 2nd-Candle route above builds inline).
+# Index symbol → provider token, shared by the index backtests below (same maps the
+# 2nd-Candle route above builds inline). Named for the Scalp Pullback backtest it
+# was written for, removed 2026-11-01.
 def _sp_instrument_token(provider, symbol: str):
     fyers_indices = {
         'NIFTY':      'NSE:NIFTY50-INDEX',
@@ -4662,396 +4659,6 @@ def _sp_instrument_token(provider, symbol: str):
     if _speaks_symbols(provider):
         return fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
     return kite_indices.get(symbol, symbol)
-
-
-@api_bp.route('/backtest/scalp-pullback', methods=['POST'], strict_slashes=False)
-@csrf.exempt
-@require_user_auth
-def run_scalp_pullback_backtest_api():
-    """Run the 2-Min EMA Scalp Pullback backtest (index spot points)."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    try:
-        data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date')
-        end_date_str   = data.get('end_date')
-        interval       = data.get('interval', '2minute')
-        touch_level    = data.get('touch_level', 'ema20')
-        rr_ratio       = float(data.get('rr_ratio', 2.0))
-        max_sl_points  = float(data.get('max_sl_points', 30) or 0)
-        max_trades     = int(data.get('max_trades_per_day', 3))
-        entry_cutoff   = data.get('entry_cutoff', '11:30')
-        exit_cutoff    = data.get('exit_cutoff', '15:15')
-        require_hunt   = bool(data.get('require_sl_hunt', True))
-        first_three    = bool(data.get('first_trade_three_candle', True))
-        direction      = data.get('direction', 'both')
-        trail_points   = data.get('trail_points')
-        trail_points   = float(trail_points) if trail_points else None
-
-        if not symbol or not start_date_str or not end_date_str:
-            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-
-        current_kite = get_data_provider(context='backtest')
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
-
-        instrument_token = _sp_instrument_token(current_kite, symbol)
-
-        # Pull 1-minute and resample: Fyers keeps 10+ years of 1-minute data but
-        # only ~1 year of pre-aggregated 2/3/5-minute bars.
-        candles = _fetch_1min_and_resample(
-            current_kite, instrument_token, start_date_str, end_date_str, interval
-        )
-
-        if not candles:
-            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
-
-        logger.info('[ScalpPB BT] %d %s bars received  first=%s  last=%s',
-                    len(candles), interval,
-                    candles[0].get('date', '?'),
-                    candles[-1].get('date', '?'))
-
-        import pandas as pd
-        import importlib
-        import trading_app.Backtest.scalp_pullback_engine as _sp_mod
-        importlib.reload(_sp_mod)
-        from trading_app.Backtest.scalp_pullback_engine import ScalpPullbackEngine
-
-        engine = ScalpPullbackEngine(
-            df=pd.DataFrame(candles),
-            touch_level=touch_level,
-            rr_ratio=rr_ratio,
-            trail_points=trail_points,
-            max_sl_points=max_sl_points,
-            max_trades_per_day=max_trades,
-            entry_cutoff=entry_cutoff,
-            exit_cutoff=exit_cutoff,
-            require_sl_hunt=require_hunt,
-            first_trade_three_candle=first_three,
-            direction=direction,
-        )
-        trades, summary = engine.run()
-
-        logger.info('[ScalpPB BT] engine done: %d trades', len(trades))
-
-        return jsonify({
-            'success': True,
-            'trades':  trades,
-            '_debug': {
-                'bars_fetched': len(candles),
-                'first_bar':    str(candles[0].get('date', '?')),
-                'last_bar':     str(candles[-1].get('date', '?')),
-            },
-            'summary': {
-                'total_trades':  summary['total_trades'],
-                'wins':          summary['wins'],
-                'losses':        summary['losses'],
-                'total_pnl':     summary['total_pnl'],
-                'win_rate':      summary['win_rate'],
-                'profit_factor': summary['profit_factor'],
-                'max_drawdown':  summary['max_drawdown'],
-                'avg_win':       summary['avg_win'],
-                'avg_loss':      summary['avg_loss'],
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"Error in Scalp Pullback backtest API: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/backtest/scalp-pullback/optimise', methods=['POST'], strict_slashes=False)
-@csrf.exempt
-@require_user_auth
-def run_scalp_pullback_optimise():
-    """Sweep the Scalp Pullback (SL:Target × EMA touch × direction × SL-hunt ×
-    entry cut-off) grid across the 2/3/5-minute timeframes and return one
-    leaderboard per timeframe — same shape as /backtest/second-candle/optimise."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    try:
-        data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date', '2017-01-01')
-        end_date_str   = data.get('end_date')
-        exit_cutoff    = data.get('exit_cutoff', '15:15')
-        max_trades     = int(data.get('max_trades_per_day', 3))
-        trail_points   = data.get('trail_points')
-        trail_points   = float(trail_points) if trail_points else None
-        recalculate    = bool(data.get('recalculate', False))
-
-        if not symbol or not start_date_str:
-            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-        if not end_date_str:
-            end_date_str = datetime.today().strftime('%Y-%m-%d')
-
-        # One run sweeps every timeframe, so the cache key only needs the inputs
-        # that are NOT part of the swept grid.
-        cache_key = (f"{symbol}_sp_multiTF_{str(exit_cutoff).replace(':', '')}"
-                     f"_{max_trades}_{trail_points or 0}_v1")
-
-        if not recalculate:
-            cache = _load_opt_cache()
-            if cache_key in cache:
-                entry = cache[cache_key]
-                return jsonify({
-                    'success':             True,
-                    'from_cache':          True,
-                    'cached_at':           entry.get('cached_at'),
-                    'symbol':              entry['symbol'],
-                    'interval':            entry['interval'],
-                    'total_combos_tested': entry['total_combos_tested'],
-                    'best':                entry['best'],
-                    'timeframes':          entry.get('timeframes', []),
-                })
-
-        current_kite = get_data_provider(context='backtest')
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
-
-        task_id = str(uuid.uuid4())
-        with _sp_opt_tasks_lock:
-            _sp_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
-
-        def _run():
-            try:
-                instrument_token = _sp_instrument_token(current_kite, symbol)
-
-                import pandas as pd
-                import importlib
-                import trading_app.Backtest.scalp_pullback_engine as _sp_mod
-                importlib.reload(_sp_mod)
-                from trading_app.Backtest.scalp_pullback_engine import optimise_scalp_pullback
-
-                grid_size = (len(_sp_mod._RR_GRID) * len(_sp_mod._TOUCH_GRID)
-                             * len(_sp_mod._DIR_GRID) * len(_sp_mod._HUNT_GRID)
-                             * len(_sp_mod._ENTRY_CUTOFF_GRID) * len(_sp_mod._SL_GRID))
-                lot_value     = _bt_lot_value(symbol)   # ₹/pt
-                tf_groups     = []
-                combos_tested = 0
-
-                for minutes, interval_str, tf_label in [
-                    (2, '2minute', '2m'), (3, '3minute', '3m'), (5, '5minute', '5m'),
-                ]:
-                    try:
-                        candles = _fetch_1min_and_resample(
-                            current_kite, instrument_token,
-                            start_date_str, end_date_str, interval_str,
-                        )
-                        if not candles:
-                            logger.info("[ScalpPB OPT] timeframe %s: no data — skipped", interval_str)
-                            continue
-
-                        tf_results = optimise_scalp_pullback(
-                            pd.DataFrame(candles),
-                            exit_cutoff=exit_cutoff,
-                            max_trades_per_day=max_trades,
-                            trail_points=trail_points,
-                        )
-                        combos_tested += grid_size
-                        for r in tf_results:
-                            r['tf_label'] = tf_label
-                            r['interval'] = interval_str
-                            brok = _bt_brokerage_per_trade(1) * (r.get('total_trades') or 0)
-                            r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
-
-                        # Only combos still profitable after brokerage belong on the board.
-                        profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
-                        top_by_pnl = sorted(
-                            profitable, key=lambda r: r.get('total_pnl', 0), reverse=True
-                        )[:10]
-                        tf_groups.append({
-                            'tf_label': tf_label,
-                            'tf_min':   minutes,
-                            'interval': interval_str,
-                            'total':    len(tf_results),
-                            'results':  top_by_pnl,
-                        })
-                    except Exception as tf_exc:
-                        logger.warning(f"[ScalpPB OPT] timeframe {interval_str} failed: {tf_exc}")
-
-                if not tf_groups:
-                    with _sp_opt_tasks_lock:
-                        _sp_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
-                    return
-
-                tf_groups.sort(key=lambda g: g['tf_min'])
-
-                all_top = [g['results'][0] for g in tf_groups if g['results']]
-                best_overall = max(all_top, key=lambda r: r.get('total_pnl', 0), default=None)
-
-                payload = {
-                    'symbol':              symbol,
-                    'interval':            'multi-TF (2–5 min)',
-                    'total_combos_tested': combos_tested,
-                    'best':                best_overall,
-                    'timeframes':          tf_groups,
-                    'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
-                }
-
-                disk_cache            = _load_opt_cache()
-                disk_cache[cache_key] = payload
-                _save_opt_cache(disk_cache)
-
-                with _sp_opt_tasks_lock:
-                    _sp_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
-            except Exception as e:
-                logger.error(f"[ScalpPB OPT] background error: {e}", exc_info=True)
-                with _sp_opt_tasks_lock:
-                    _sp_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
-
-        threading.Thread(target=_run, daemon=True).start()
-        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
-
-    except Exception as e:
-        logger.error(f"Error in Scalp Pullback optimise API: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/backtest/scalp-pullback/optimise/status/<task_id>', methods=['GET'])
-@csrf.exempt
-@require_user_auth
-def run_scalp_pullback_optimise_status(task_id):
-    """Poll the status of a background Scalp Pullback optimisation job."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    with _sp_opt_tasks_lock:
-        task = _sp_opt_tasks.get(task_id)
-    if not task:
-        return jsonify({'success': False, 'error': 'Task not found'}), 404
-    if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running'})
-    if task['status'] == 'error':
-        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
-    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
-
-
-@api_bp.route('/backtest/pivot-confluence', methods=['POST'], strict_slashes=False)
-@csrf.exempt
-@require_user_auth
-def run_pivot_confluence_backtest_api():
-    """Run the Pivot Confluence backtest (index spot points).
-
-    Yesterday's floor pivots decide the side, yesterday's High/Low or the pivot
-    itself is the trigger, VWAP + 20 EMA is the confluence filter, and entries
-    are confined to the video's 09:30–09:45 / 13:30 windows. See
-    src/trading_app/Backtest/pivot_confluence_engine.py for the full rule list.
-    """
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    try:
-        data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date')
-        end_date_str   = data.get('end_date')
-        interval       = data.get('interval', '5minute')
-        entry_trigger  = data.get('entry_trigger', 'either')
-        full_body      = bool(data.get('full_body', True))
-        require_no_wick = bool(data.get('require_no_wick', False))
-        confluence     = data.get('confluence', 'vwap_ema')
-        golden_cross   = bool(data.get('require_golden_cross', False))
-        block_r2       = bool(data.get('block_beyond_r2', True))
-        fib_ext        = float(data.get('fib_ext', 0) or 0)
-        target_mode    = data.get('target_mode', 'next_level')
-        rr_ratio       = float(data.get('rr_ratio', 2.0))
-        target_points  = float(data.get('target_points', 0) or 0)
-        sl_mode        = data.get('sl_mode', 'candle')
-        sl_points      = float(data.get('sl_points', 0) or 0)
-        max_sl_points  = float(data.get('max_sl_points', 0) or 0)
-        trail_points   = data.get('trail_points')
-        trail_points   = float(trail_points) if trail_points else None
-        entry_windows  = data.get('entry_windows', 'both')
-        # 'morning_exit' is deliberately falsy-tolerant: '' / 0 / null all mean
-        # "let the morning trade run to its SL/Target".
-        morning_exit   = data.get('morning_exit', '10:00')
-        exit_cutoff    = data.get('exit_cutoff', '15:15')
-        max_trades     = int(data.get('max_trades_per_day', 2))
-        direction      = data.get('direction', 'both')
-
-        if not symbol or not start_date_str or not end_date_str:
-            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-
-        current_kite = get_data_provider(context='backtest')
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
-
-        instrument_token = _sp_instrument_token(current_kite, symbol)
-
-        # Pull 1-minute and resample: Fyers keeps 10+ years of 1-minute data but
-        # only ~1 year of pre-aggregated 5-minute bars.
-        candles = _fetch_1min_and_resample(
-            current_kite, instrument_token, start_date_str, end_date_str, interval
-        )
-
-        if not candles:
-            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
-
-        logger.info('[PivotConf BT] %d %s bars received  first=%s  last=%s',
-                    len(candles), interval,
-                    candles[0].get('date', '?'),
-                    candles[-1].get('date', '?'))
-
-        import pandas as pd
-        import importlib
-        import trading_app.Backtest.pivot_confluence_engine as _pc_mod
-        importlib.reload(_pc_mod)
-        from trading_app.Backtest.pivot_confluence_engine import PivotConfluenceEngine
-
-        engine = PivotConfluenceEngine(
-            df=pd.DataFrame(candles),
-            entry_trigger=entry_trigger,
-            full_body=full_body,
-            require_no_wick=require_no_wick,
-            confluence=confluence,
-            require_golden_cross=golden_cross,
-            block_beyond_r2=block_r2,
-            fib_ext=fib_ext,
-            target_mode=target_mode,
-            rr_ratio=rr_ratio,
-            target_points=target_points,
-            sl_mode=sl_mode,
-            sl_points=sl_points,
-            max_sl_points=max_sl_points,
-            trail_points=trail_points,
-            entry_windows=entry_windows,
-            morning_exit=morning_exit,
-            exit_cutoff=exit_cutoff,
-            max_trades_per_day=max_trades,
-            direction=direction,
-        )
-        trades, summary = engine.run()
-
-        logger.info('[PivotConf BT] engine done: %d trades', len(trades))
-
-        return jsonify({
-            'success': True,
-            'trades':  trades,
-            '_debug': {
-                'bars_fetched': len(candles),
-                'first_bar':    str(candles[0].get('date', '?')),
-                'last_bar':     str(candles[-1].get('date', '?')),
-            },
-            'summary': {
-                'total_trades':  summary['total_trades'],
-                'wins':          summary['wins'],
-                'losses':        summary['losses'],
-                'total_pnl':     summary['total_pnl'],
-                'win_rate':      summary['win_rate'],
-                'profit_factor': summary['profit_factor'],
-                'max_drawdown':  summary['max_drawdown'],
-                'avg_win':       summary['avg_win'],
-                'avg_loss':      summary['avg_loss'],
-            }
-        })
-
-    except Exception as e:
-        logger.error(f"Error in Pivot Confluence backtest API: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def _positional_warmup(interval) -> int:
@@ -5439,6 +5046,74 @@ def _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval, d
                passed=passed, basis='option', verified=len(todo), min_trades=res.get('min_trades'))
 
 
+def _run_hilega_milega_optimise(data):
+    """Find Best Params for Hilega Milega (Backtest/hilega_milega_optimise.py): swept on INDEX
+    points from the run's own payload, then the best rows re-priced on the option as the run
+    prices them. Same task table and status route as the ST + BB + RSI sweep."""
+    from trading_app.Backtest import hilega_milega_optimise as hmo
+    from trading_app.service import cpr_option_service as _cos
+    symbol = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+    start_date_str = data.get('start_date')
+    end_date_str = data.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+    interval = data.get('interval', '60minute')
+    if not start_date_str:
+        return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+    if symbol == 'ALL STOCKS':
+        symbol = 'NIFTY'
+    price_options = bool(data.get('price_options', True))
+    if not _cos.is_index(symbol):
+        if _cos.stock_spec(symbol) is None and price_options:
+            return jsonify({'success': False,
+                            'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                     "turn off Price on options or pick an index."}), 400
+        data['premium'] = 0           # a stock is bought ATM, as the run does
+        data['lot_value'] = 0
+    provider = get_fyers_adapter()
+    if provider is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    token = _sp_instrument_token(provider, symbol)
+    daily = interval == 'day'
+    minutes_per_bar = 1440 if daily else int(''.join(ch for ch in interval if ch.isdigit()) or 15)
+
+    task_id = uuid.uuid4().hex
+    task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
+    with _sbr_opt_lock:
+        _sbr_opt_tasks[task_id] = task
+
+    def _run():
+        try:
+            minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str,
+                                                      interval, warmup_days=150 if daily else 45)
+            if bars is None:
+                task.update(status='error', error='No historical data found for the given range')
+                return
+
+            def _progress(done, total, **extra):
+                task['progress'] = {'done': done, 'total': total, **extra}
+
+            res = hmo.optimise(bars, data, minutes_per_bar, from_date=start_date_str, top=80, progress=_progress)
+            if price_options:
+                try:
+                    hmo.verify_on_option(res, bars, data, minutes_per_bar, symbol,
+                                         sorted(set(minutes.index.date)), start_date_str,
+                                         progress=lambda k, n: _progress(k, n, stage='pricing'))
+                except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
+                    logger.warning('[HM OPT] option verification failed: %s', e)
+                    res['option_error'] = str(e)
+            res['results'] = res['results'][:25]
+            task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
+                               'start_date': start_date_str, 'end_date': end_date_str,
+                               'bars': n_bars, **res}
+            task['status'] = 'complete'
+        except Exception as e:      # noqa: BLE001
+            logger.error('[HM OPT] %s', e, exc_info=True)
+            task.update(status='error', error=str(e))
+
+    threading.Thread(target=_run, name=f'hmopt-{task_id[:6]}', daemon=True).start()
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
 @api_bp.route('/backtest/st-bb-rsi/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -5453,6 +5128,8 @@ def run_st_bb_rsi_optimise():
         data = request.get_json() or {}
         if data.get('strategy') == 'st_touch_break':
             return _run_st_touch_break_optimise(data)
+        if data.get('strategy') == 'hilega_milega':
+            return _run_hilega_milega_optimise(data)
         if data.get('strategy'):            # Simple Trader strategies 2-7 have their own engines
             return _run_simple_trader_optimise(str(data['strategy']), data)
         symbol = str(data.get('symbol', 'NIFTY')).strip().upper()
@@ -7786,179 +7463,6 @@ def run_st_rsi_cci_wr_pp_bb_fut_backtest_api():
     except Exception as e:
         logger.error(f"Error in ST-RSI-CCI-WR-PP-BB-FUT backtest API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/backtest/pivot-confluence/optimise', methods=['POST'], strict_slashes=False)
-@csrf.exempt
-@require_user_auth
-def run_pivot_confluence_optimise():
-    """Sweep the Pivot Confluence (trigger × confluence × direction × target ×
-    entry window) grid across the 3/5/15-minute timeframes and return one
-    leaderboard per timeframe — same shape as /backtest/scalp-pullback/optimise."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    try:
-        data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date', '2017-01-01')
-        end_date_str   = data.get('end_date')
-        exit_cutoff    = data.get('exit_cutoff', '15:15')
-        max_trades     = int(data.get('max_trades_per_day', 2))
-        max_sl_points  = float(data.get('max_sl_points', 0) or 0)
-        trail_points   = data.get('trail_points')
-        trail_points   = float(trail_points) if trail_points else None
-        recalculate    = bool(data.get('recalculate', False))
-
-        if not symbol or not start_date_str:
-            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
-        if not end_date_str:
-            end_date_str = datetime.today().strftime('%Y-%m-%d')
-
-        # One run sweeps every timeframe, so the cache key only needs the inputs
-        # that are NOT part of the swept grid.
-        cache_key = (f"{symbol}_pc_multiTF_{str(exit_cutoff).replace(':', '')}"
-                     f"_{max_trades}_{max_sl_points}_{trail_points or 0}_v1")
-
-        if not recalculate:
-            cache = _load_opt_cache()
-            if cache_key in cache:
-                entry = cache[cache_key]
-                return jsonify({
-                    'success':             True,
-                    'from_cache':          True,
-                    'cached_at':           entry.get('cached_at'),
-                    'symbol':              entry['symbol'],
-                    'interval':            entry['interval'],
-                    'total_combos_tested': entry['total_combos_tested'],
-                    'best':                entry['best'],
-                    'timeframes':          entry.get('timeframes', []),
-                })
-
-        current_kite = get_data_provider(context='backtest')
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
-
-        task_id = str(uuid.uuid4())
-        with _pc_opt_tasks_lock:
-            _pc_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
-
-        def _run():
-            try:
-                instrument_token = _sp_instrument_token(current_kite, symbol)
-
-                import pandas as pd
-                import importlib
-                import trading_app.Backtest.pivot_confluence_engine as _pc_mod
-                importlib.reload(_pc_mod)
-                from trading_app.Backtest.pivot_confluence_engine import optimise_pivot_confluence
-
-                grid_size = (len(_pc_mod._TRIGGER_GRID) * len(_pc_mod._CONFLUENCE_GRID)
-                             * len(_pc_mod._DIR_GRID) * len(_pc_mod._TARGET_GRID)
-                             * len(_pc_mod._WINDOW_GRID))
-                lot_value     = _bt_lot_value(symbol)   # ₹/pt
-                tf_groups     = []
-                combos_tested = 0
-
-                # The 09:30–09:45 morning window is only 15 minutes wide, so a
-                # timeframe coarser than 15 minutes would leave it with a single
-                # signal bar — hence 3/5/15 rather than the scalp sweep's 2/3/5.
-                for minutes, interval_str, tf_label in [
-                    (3, '3minute', '3m'), (5, '5minute', '5m'), (15, '15minute', '15m'),
-                ]:
-                    try:
-                        candles = _fetch_1min_and_resample(
-                            current_kite, instrument_token,
-                            start_date_str, end_date_str, interval_str,
-                        )
-                        if not candles:
-                            logger.info("[PivotConf OPT] timeframe %s: no data — skipped", interval_str)
-                            continue
-
-                        tf_results = optimise_pivot_confluence(
-                            pd.DataFrame(candles),
-                            exit_cutoff=exit_cutoff,
-                            max_trades_per_day=max_trades,
-                            trail_points=trail_points,
-                            max_sl_points=max_sl_points,
-                        )
-                        combos_tested += grid_size
-                        for r in tf_results:
-                            r['tf_label'] = tf_label
-                            r['interval'] = interval_str
-                            brok = _bt_brokerage_per_trade(1) * (r.get('total_trades') or 0)
-                            r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
-
-                        # Only combos still profitable after brokerage belong on the board.
-                        profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
-                        top_by_pnl = sorted(
-                            profitable, key=lambda r: r.get('total_pnl', 0), reverse=True
-                        )[:10]
-                        tf_groups.append({
-                            'tf_label': tf_label,
-                            'tf_min':   minutes,
-                            'interval': interval_str,
-                            'total':    len(tf_results),
-                            'results':  top_by_pnl,
-                        })
-                    except Exception as tf_exc:
-                        logger.warning(f"[PivotConf OPT] timeframe {interval_str} failed: {tf_exc}")
-
-                if not tf_groups:
-                    with _pc_opt_tasks_lock:
-                        _pc_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
-                    return
-
-                tf_groups.sort(key=lambda g: g['tf_min'])
-
-                all_top = [g['results'][0] for g in tf_groups if g['results']]
-                best_overall = max(all_top, key=lambda r: r.get('total_pnl', 0), default=None)
-
-                payload = {
-                    'symbol':              symbol,
-                    'interval':            'multi-TF (3–15 min)',
-                    'total_combos_tested': combos_tested,
-                    'best':                best_overall,
-                    'timeframes':          tf_groups,
-                    'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
-                }
-
-                disk_cache            = _load_opt_cache()
-                disk_cache[cache_key] = payload
-                _save_opt_cache(disk_cache)
-
-                with _pc_opt_tasks_lock:
-                    _pc_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
-            except Exception as e:
-                logger.error(f"[PivotConf OPT] background error: {e}", exc_info=True)
-                with _pc_opt_tasks_lock:
-                    _pc_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
-
-        threading.Thread(target=_run, daemon=True).start()
-        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
-
-    except Exception as e:
-        logger.error(f"Error in Pivot Confluence optimise API: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/backtest/pivot-confluence/optimise/status/<task_id>', methods=['GET'])
-@csrf.exempt
-@require_user_auth
-def run_pivot_confluence_optimise_status(task_id):
-    """Poll the status of a background Pivot Confluence optimisation job."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    with _pc_opt_tasks_lock:
-        task = _pc_opt_tasks.get(task_id)
-    if not task:
-        return jsonify({'success': False, 'error': 'Task not found'}), 404
-    if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running'})
-    if task['status'] == 'error':
-        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
-    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
 @api_bp.route('/backtest/expiry-breakout', methods=['POST'], strict_slashes=False)
