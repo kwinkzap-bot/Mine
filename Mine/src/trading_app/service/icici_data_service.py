@@ -928,32 +928,6 @@ class IciciDataServiceAdapter:
             _slice_cache_put(ckey, bars)
         return bars or []
 
-    def historical_option_daily(self, root: str, expiry: dt_date, strike: float,
-                                option_type: str, life_days: int = 120,
-                                exchange_code: str = 'NFO') -> List[Dict[str, Any]]:
-        """Daily candles over one option's whole listed life, ending at its expiry.
-
-        One request a contract (a 1day chunk is 500 days), which is what makes a
-        monthly positional backtest affordable: marking four legs every session
-        off minute bars would be a request per leg per day. Disk-cached once
-        the contract has expired — its candles can no longer change."""
-        symbol = (f"{root}:{expiry.isoformat()}:{int(float(strike))}:"
-                  f"{'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'}")
-        ckey = f"{symbol}:1d:life{int(life_days)}"
-        cached = _slice_cache_get(ckey)
-        if cached is not None:
-            _HIST_ERROR.msg = None
-            return cached
-
-        today = datetime.now(IST).date()
-        start = expiry - timedelta(days=int(life_days))
-        bars = self.historical_option(root, expiry, strike, option_type,
-                                      start.isoformat(), min(expiry, today).isoformat(), 'day',
-                                      exchange_code=exchange_code)
-        if bars and expiry < today:
-            _slice_cache_put(ckey, bars)
-        return bars or []
-
     def historical_option_window(self, root: str, expiry: dt_date, strike: float,
                                  option_type: str, day: dt_date, index: int,
                                  bar_seconds: int = 30, exchange_code: str = 'NFO'

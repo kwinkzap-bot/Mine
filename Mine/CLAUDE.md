@@ -408,39 +408,18 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
   overstate them.
-The api blueprint is at 258 rules (`tests/route_inventory.txt`).
+The api blueprint is at 254 rules (`tests/route_inventory.txt`).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
 
-## RSI Credit Spread backtest (backtest only)
+## RSI Credit Spread / Iron Condor backtests — removed
 
-**📶 NIFTY RSI(9) Credit Spread** on /backtest (Testing group), added 2026-11-01 from a Lemon YouTube
-video: `Backtest/rsi_credit_spread_engine.py`, `POST /api/backtest/rsi-credit-spread` (+ `/status/<id>`,
-same `_os_tasks` store as option selling). RSI(9) on 15-min NIFTY crossing 60 → bull put spread, crossing
-40 → bear call spread; short = the weekly strike nearest **20 delta from its own IV** (Black-Scholes on
-spot, `RISK_FREE` 6.5 %), hedge 1000 points further out; 30 % stop on the short closes the spread; a close
-past the far band reverses; one re-entry at cost; 09:30 uses the previous session's last RSI when the
-09:15 candle did not cross; entries 09:30-14:45, 15:15 square-off. ~6 Breeze requests per session (the
-delta search + hedge). The video's "1000 OTM hedge" and "40/30 lower band" wording was ambiguous —
-1000 points past the short and 40 are what it uses on the chart. Tests: `tests/test_rsi_credit_spread_engine.py`.
-
-## RSI Iron Condor backtest (backtest only)
-
-**🦅 NIFTY RSI(14) Iron Condor 1:1 + 1:2:1 (monthly)** on /backtest (Testing group), added 2026-11-01
-from Uday Chandra's Iron Condor livestream: `Backtest/rsi_iron_condor_engine.py`,
-`POST /api/backtest/rsi-iron-condor` (+ `/status/<id>`, the `_os_tasks` store). Positional, monthly
-expiry, every decision at the DAILY close: RSI(14) 40-60 → a 1:1 iron condor (200-point wings, shorts
-pushed as far out as credit ≥ max loss still holds — no fixed delta), <40 → buy ATM−50 / sell 2× ATM−200
-/ buy ATM−250 PE, >60 the CE mirror. Each expiry close opens next month's from that day's zone; RSI
-leaving/re-entering the band switches structure; a close past a condor breakeven rolls it; the 1:2:1 books
-at 80 % of its **expiry** max profit and sits out the month; −4 % of capital (₹1.1 L / lot) stops the
-month. Fills are each contract's **daily close**, from the new `IciciAdapter.historical_option_daily`
-(one Breeze request per contract for its whole life, slice-cache on disk once expired). Interpretation
-calls: the video's mid-day breakeven alert is read at the close, the condor's "2 % profit lock" and the
-re-push-OTM variant are left out, and "80 % of max profit" may mean the payoff tool's live curve, not
-the expiry max (a monthly 1:2:1 rarely reaches 80 % of that before its last days — try ~40). Tests:
-`tests/test_rsi_iron_condor_engine.py`.
+Both added 2026-11-01 and removed the same day: `Backtest/rsi_credit_spread_engine.py`,
+`Backtest/rsi_iron_condor_engine.py`, the four `/api/backtest/rsi-{credit-spread,iron-condor}*` routes,
+their /backtest options, panels and JS, `icici_data_service.historical_option_daily` (Iron Condor was its
+only caller) and both test files. `Pine script/RSI Iron Condor 1-1 Strategy.pine` is a TradingView script,
+not part of the app, and was left.
 
 ## The env file is read by threads and rewritten whole
 
