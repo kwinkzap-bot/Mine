@@ -60,14 +60,24 @@ OPTION_EXCHANGE = {'SENSEX': 'BFO'}
 # off NSE's Tuesday regime asked Breeze for contracts that never existed — every leg
 # came back unpriced and the backtest returned zero trades.
 _BSE_WEEKDAY_REGIMES = [(date(1900, 1, 1), 4), (date(2025, 1, 1), 1), (date(2025, 9, 1), 3)]
+# BANKNIFTY's monthly ran on the last WEDNESDAY from March 2024 until NSE moved every monthly
+# back to Thursday on 2025-01-01 (None = NSE's own table either side). Read off NSE's Thursday,
+# Mar-Dec 2024 asked Breeze for contracts that never existed: the option cache holds no
+# BANKNIFTY monthly in those months, and every such trade walked ten dead strikes, uncached,
+# on every run — the ST Touch Break sweep sat at 0 / 93 on them.
+_EXPIRY_WEEKDAY_REGIMES = {
+    'SENSEX': _BSE_WEEKDAY_REGIMES,
+    'BANKNIFTY': [(date(1900, 1, 1), None), (date(2024, 3, 1), 2), (date(2025, 1, 1), None)],
+}
 
 
 def expiry_weekday(symbol: str, day: date) -> Optional[int]:
     """The symbol's own expiry weekday on `day`; None = NSE's regime table."""
-    if (symbol or '').upper() != 'SENSEX':
+    regimes = _EXPIRY_WEEKDAY_REGIMES.get((symbol or '').upper())
+    if not regimes:
         return None
-    wd = _BSE_WEEKDAY_REGIMES[0][1]
-    for cutover, w in _BSE_WEEKDAY_REGIMES:
+    wd = regimes[0][1]
+    for cutover, w in regimes:
         if cutover <= day:
             wd = w
     return wd
@@ -179,7 +189,7 @@ def contract(symbol: str, day: date, trade: str, entry: float,
     cadence = EXPIRY_CADENCE.get(symbol.upper(), 'monthly')
     if cadence == 'weekly' and day < WEEKLY_SINCE.get(symbol.upper(), date.min):
         cadence = 'monthly'                    # 2018: there was no weekly contract to buy
-    expiry = expiry_on_or_after(day, trading_days, cadence, expiry_weekday(symbol, day))
+    expiry = expiry_on_or_after(day, trading_days, cadence, lambda d: expiry_weekday(symbol, d))
     if expiry is None:
         return None
     if trading_days and expiry > max(trading_days):

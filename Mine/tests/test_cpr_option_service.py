@@ -313,3 +313,18 @@ def test_premium_stop_sits_on_the_005_tick_rounded_up():
             {'time': '09:20', 'open': 250.0, 'high': 250.0, 'low': 200.0, 'close': 205.0}]
     hit = _premium_stop(rise, 237.5, '09:18', '15:14', 13, 15, 10)
     assert hit['price'] == 230.4 and hit['kind'] == 'Trailing SL'
+
+
+def test_banknifty_monthly_ran_on_wednesday_through_2024():
+    """Mar-Dec 2024 BANKNIFTY's monthly expired on the last Wednesday; NSE's Thursday either side."""
+    from datetime import date, timedelta
+    from trading_app.service import cpr_option_service as cos
+    days = [date(2023, 12, 1) + timedelta(n) for n in range(450)]
+    days = [d for d in days if d.weekday() < 5 and d != date(2024, 12, 25)]
+    exp = lambda d: cos.contract('BANKNIFTY', date.fromisoformat(d), 'BUY', 48000, days)['expiry']  # noqa: E731
+    assert exp('2024-02-20') == '2024-02-29'          # Thursday, before the switch
+    assert exp('2024-03-05') == '2024-03-27'          # Wednesday
+    assert exp('2024-05-10') == '2024-05-29'
+    assert exp('2024-12-10') == '2024-12-24'          # 25 Dec a holiday: snapped to the Tuesday
+    assert exp('2024-12-27') == '2025-01-30'          # held into January's Thursday regime
+    assert cos.contract('NIFTY', date(2024, 5, 10), 'BUY', 22000, days)['expiry'] == '2024-05-16'

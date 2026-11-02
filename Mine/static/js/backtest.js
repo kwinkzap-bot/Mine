@@ -5691,7 +5691,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     + (p.timeframe ? ` ${SBR_TF_LABEL[p.timeframe] || p.timeframe}` : '') + ' · '
                     : (p.timeframe ? `${SBR_TF_LABEL[p.timeframe] || p.timeframe} · ` : '');
                 _showOptLoader('Finding best params…', p.stage === 'pricing'
-                    ? `${where}pricing the best on the option · ${p.done} / ${p.total} · ${data.elapsed || 0}s`
+                    ? `${where}pricing the best on the option · ${p.done} / ${p.total}${p.legs_total ? ` (row ${p.legs_done} / ${p.legs_total} legs)` : ''} · ${data.elapsed || 0}s`
                     : (p.total ? `${where}${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`));
             }
             _hideOptLoader();

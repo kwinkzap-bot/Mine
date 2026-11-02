@@ -152,9 +152,13 @@ def _month_expiry(day: date, wd_for) -> date:
 
 def expiry_on_or_after(day: date, trading_days: Iterable[date],
                        cadence: str = 'weekly',
-                       weekday: Optional[int] = None) -> Optional[date]:
+                       weekday=None) -> Optional[date]:
     """The expiry a contract bought on `day` would be held into — the nearest
     one on or after it.
+
+    `weekday` is an int, None (the NSE regime table) or a callable taking the
+    candidate date and returning either — the callable is for a symbol whose own
+    weekday changed, so a December trade is held into January's regime, not its own.
 
     The forward mirror of `past_expiries`, and it exists because a backtest
     replaying a past day needs the ONE contract that was actually trading then,
@@ -175,7 +179,8 @@ def expiry_on_or_after(day: date, trading_days: Iterable[date],
     latest = max(trading)
 
     def wd_for(d: date) -> int:
-        return expiry_weekday_for(d) if weekday is None else weekday
+        w = weekday(d) if callable(weekday) else weekday
+        return expiry_weekday_for(d) if w is None else w
 
     probe = day
     limit = day + timedelta(days=_FORWARD_LIMIT_DAYS)

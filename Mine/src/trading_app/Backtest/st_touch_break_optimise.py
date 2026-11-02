@@ -294,10 +294,15 @@ def verify_on_option(res: Dict[str, Any], df: pd.DataFrame, minutes: pd.DataFram
         if progress:
             progress(n - 1, len(todo))
         _apply(eng, row)                         # trade_after() re-reads the engine's numbers
+        # A row is hundreds of legs and a cold one takes minutes: report the legs too, or the
+        # loader sits on 0 / N until the whole first row is priced.
+        legs = ((lambda dn, tot, n=n: progress(n - 1, len(todo), legs_done=dn, legs_total=tot))
+                if progress else None)
         priced, info = price_with_reentries(
             eng, trades,
             lambda batch, prog: attach_option_legs(symbol, batch, premium, mpb, prog, calendar=calendar,
-                                                   sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y))
+                                                   sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y),
+            progress=legs)
         out = {k: row[k] for k in SWEPT if k in row}
         out.update(summarise(priced))
         out.update(rupee_card(priced, data, info.get('lot')))
@@ -344,7 +349,7 @@ def verify_timeframes(board: Dict[str, Any], bars_for: Callable[[str], Optional[
     try:
         for tf, mine, n, c in work:
             res = {'results': mine, 'current': c, 'recent_from': board['recent_from']}
-            tick = (lambda k, _t, base=done, tf=tf: progress(base + k, total, timeframe=tf)) if progress else None
+            tick = (lambda k, _t, base=done, tf=tf, **kw: progress(base + k, total, timeframe=tf, **kw)) if progress else None
             verify_on_option(res, bars_for(tf), minutes, dict(data, interval=tf), symbol, tf, calendar,
                              start_date, progress=tick, shortlist=n)
             done += n + (c is not None)
