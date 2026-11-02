@@ -39458,8 +39458,26 @@
       "reason": "09:15 closed inside the CPR 22,638-22,774 on a 78-pt candle \u2014 no stop at its far end; 10:05 candle closed above the CPR at 22,793; 10:10 cross candle came back to TC (low 22,772) -> BUY over it; SL under its low; target R1 22,819; but the daily CPR 22,638-22,679, the weekly CPR 22,658-22,774 and the box interlink into one zone 22,638-22,819 and the entry sits inside it \u2014 no level to trade against \u2014 only a break out of the zone is traded \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 40.6 pts (0.179%), 09:15 candle O 22690.65 H 22734.6 L 22656.75 C 22717.05 | Trade by rule: 09:15 closed inside the CPR 22,638-22,774 on a 78-pt candle \u2014 no stop at its far end; 10:05 candle closed above the CPR at 22,793; 10:10 cross candle came back to TC (low 22,772) -> BUY over it; SL under its low; target R1 22,819; but the daily CPR 22,638-22,679, the weekly CPR 22,658-22,774 and the box interlink into one zone 22,638-22,819 and the entry sits inside it \u2014 no level to trade against \u2014 only a break out of the zone is traded"
+    },
+    {
+      "date": "2026-10-30",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Wide",
+      "cpr_direction": "Asc",
+      "first_candle": "Small candle red near Prev High",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "09:20 candle rejected from PDH (high 22,967, closed 22,936) -> SELL under it; SL over PDH 22,962; target CPR 22,894 \u2014 yesterday moved 1.04% against this SELL and the 09:15 candle is only 0.23% of price: a quiet open has not turned yesterday's move \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 84.9 pts (0.37%), 09:15 candle O 22964.5 H 22976.6 L 22923.8 C 22938.85 | Trade by rule: 09:20 candle rejected from PDH (high 22,967, closed 22,936) -> SELL under it; SL over PDH 22,962; target CPR 22,894 \u2014 yesterday moved 1.04% against this SELL and the 09:15 candle is only 0.23% of price: a quiet open has not turned yesterday's move \u2014 no trade"
     }
   ],
-  "extended_at": "2026-10-30 09:24",
+  "extended_at": "2026-11-02 10:15",
   "backfilled_from": "2018-01-01"
 }

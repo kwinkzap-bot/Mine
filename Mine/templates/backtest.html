@@ -22,9 +22,9 @@
             <select id="strategyStatusSelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="live">🔴 Live</option>
                 <option value="simpler">🎓 Simple Trader</option>
-                <option value="mine">⛏️ Mine</option>
+                <option value="mine" selected>⛏️ Mine</option>
                 <option value="success">✅ Success</option>
-                <option value="testing" selected>🧪 Testing</option>
+                <option value="testing">🧪 Testing</option>
                 <option value="failure">❌ Failure</option>
             </select>
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
@@ -36,7 +36,7 @@
                 <option value="ema_pullback">📉 EMA Confluence Breakout</option>
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="ma_htf">📈 MA Cross + HTF</option>
-                <option value="weekly_cpr_breakout" selected>📐 Weekly CPR Breakout</option>
+                <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
                 <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
                 <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
                 <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
@@ -44,7 +44,7 @@
                 <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
-                <option value="st_touch_break">🧲 ST Touch Break (SuperTrend wick + break)</option>
+                <option value="st_touch_break" selected>🧲 ST Touch Break (SuperTrend wick + break)</option>
                 <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
                 <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (square off 15:14)</option>
             </select>
