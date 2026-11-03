@@ -47,6 +47,7 @@
                 <option value="st_touch_break" selected>🧲 ST Touch Break (SuperTrend wick + break)</option>
                 <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
                 <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (square off 15:14)</option>
+                <option value="call_ratio">🧠 NIFTY Monthly Call Ratio 1:2 (No-Brainer)</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
             <button id="btCombinedBtn" type="button" title="Run every Simple Trader strategy and see them merged into one book" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🧩 Combined</button>
@@ -1914,6 +1915,83 @@
                 </div>
             </div>
 
+            <!-- NIFTY Monthly Call Ratio ("No-Brainer") — last Friday of the month,
+                 buy 1 CE / sell 2 CE / buy 1 far CE of next month's expiry, held to
+                 +2.5 % / −3 % of the capital. See Backtest/call_ratio_engine.py. -->
+            <div id="callRatioParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="crEntryDay" title="Last Friday: the last Friday of every month (the session before it when it is a holiday). After expiry: the first session after that month's monthly expiry — the same Friday under the old Thursday expiry.">Entry Day</label>
+                    <select id="crEntryDay">
+                        <option value="last_friday" selected>Last Friday of month</option>
+                        <option value="after_expiry">Day after monthly expiry</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="crEntryTime">Entry Time</label>
+                    <input type="time" id="crEntryTime" value="15:16">
+                </div>
+                <div class="form-group">
+                    <label for="crMinDistance" title="The bought CE starts this many points above the ATM (100-step) and walks out in 100s while the downside credit is above Max Credit %.">Min Distance (pts)</label>
+                    <input type="number" id="crMinDistance" value="300" min="100" step="100">
+                </div>
+                <div class="form-group">
+                    <label for="crRatioGap" title="Points between the bought CE and the two sold CEs.">Sell Gap (pts)</label>
+                    <input type="number" id="crRatioGap" value="300" min="100" step="100">
+                </div>
+                <div class="form-group">
+                    <label for="crHedgeGap" title="The far hedge CE is bought this many points above the sold strike.">Hedge Gap (pts)</label>
+                    <input type="number" id="crHedgeGap" value="1000" min="100" step="100">
+                </div>
+                <div class="form-group">
+                    <label for="crMaxCredit" title="Downside credit (2 × sold − bought − hedge, what the trade books if NIFTY falls and all expire worthless) must be at most this % of capital — more means the strikes are too close, so they move out 100 pts.">Max Credit %</label>
+                    <input type="number" id="crMaxCredit" value="1" min="0" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="crMaxDebit" title="A downside DEBIT above this % of capital is not deployed that month.">Max Debit %</label>
+                    <input type="number" id="crMaxDebit" value="1" min="0" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="crTarget">Target % of Capital</label>
+                    <input type="number" id="crTarget" value="2.5" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="crStop">Stop % of Capital</label>
+                    <input type="number" id="crStop" value="3" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="crExitBefore" title="Whatever is still open is closed this many sessions before the expiry, at Exit Time — the position never rides into the expiry week's gamma.">Exit Sessions Before Expiry</label>
+                    <input type="number" id="crExitBefore" value="5" min="0" max="15" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="crExitTime">Exit Time</label>
+                    <input type="time" id="crExitTime" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="crSpotExit" title="Exit as soon as NIFTY closes a minute at or above the bought strike — beyond it the extra sold call is naked.">Exit if Spot ≥ Buy Strike</label>
+                    <select id="crSpotExit">
+                        <option value="true" selected>Yes</option>
+                        <option value="false">No</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="crSets" title="One set = 1 lot bought, 2 lots sold, 1 lot hedge — × NIFTY's lot size.">Sets</label>
+                    <input type="number" id="crSets" value="1" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="crCapital" title="Margin per set, in ₹. There is no historical SPAN here, so this is the number every % is on. The author's live trade: 5 sets on about ₹6.6 L.">Capital ₹ / Set</label>
+                    <input type="number" id="crCapital" value="130000" min="10000" step="5000">
+                </div>
+                <div class="form-group" style="grid-column: 1 / -1;">
+                    <label>Rule</label>
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        Once a month at Entry Time, on NEXT month's expiry: BUY 1 CE at ATM + distance, SELL 2 CE Sell&nbsp;Gap above it,
+                        BUY 1 CE Hedge&nbsp;Gap above the sold strike. Zero adjustments. Out at Target % or Stop % of capital (mark-to-market on
+                        minute closes), when NIFTY crosses the bought strike, or Exit&nbsp;Sessions&nbsp;Before&nbsp;Expiry. Premiums are ICICI's
+                        recorded 1-minute candles (needs an ICICI login; ~60 requests a month cold, instant once cached).
+                    </small>
+                </div>
+            </div>
+
             <!-- Swing Momentum params -->
             <!-- Weekly CPR Breakout — the /scanners "W CPR Open" rule traded
                  over every F&O future stock: open inside the weekly CPR, first
@@ -2141,6 +2219,20 @@
                 </div>
             </div>
 
+            <!-- NIFTY Monthly Call Ratio Find Best Params (call_ratio_engine.SWEEP_GRID) -->
+            <div id="callRatioOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">🧠 NIFTY Monthly Call Ratio Best Params</h4>
+                        <button id="crRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="crOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="crOptGrid"></div>
+                </div>
+            </div>
+
             <!-- ST + BB + RSI + R1/S1 Find Best Params — one flat leaderboard on INDEX points -->
             <div id="stBbRsiOptimisePanel" style="display:none;">
                 <div id="sbrOptBody">
@@ -2254,6 +2346,14 @@
                 <div class="results-section">
                     <div class="results-row results-row-6" id="osStats"></div>
                     <div style="margin-top:8px;"><div id="osGrid"></div></div>
+                </div>
+            </div>
+
+            <!-- NIFTY Monthly Call Ratio results (own panel — a row is one month's position) -->
+            <div id="crResults" style="display:none;">
+                <div class="results-section">
+                    <div class="results-row results-row-6" id="crStats"></div>
+                    <div style="margin-top:8px;"><div id="crGrid"></div></div>
                 </div>
             </div>
 

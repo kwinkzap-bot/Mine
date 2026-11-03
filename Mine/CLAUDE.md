@@ -408,10 +408,44 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
   overstate them.
-The api blueprint is at 246 rules (`tests/route_inventory.txt`) since Scalp Pullback, Pivot Confluence and Heikin-Ashi + SuperTrend went (below).
+The api blueprint is at 249 rules (`tests/route_inventory.txt`) since the Monthly Call Ratio backtest added three (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## NIFTY Monthly Call Ratio backtest ("No-Brainer")
+
+Added 2026-11-03 under 🧪 Testing on /backtest, from an interview transcript (the author trades it by hand,
+zero adjustment). `Backtest/call_ratio_engine.py` (pure), routes `/api/backtest/call-ratio{,/optimise,/status/<id>}`,
+panels `#callRatioParamsRow` / `#crResults` / `#callRatioOptimisePanel`, JS `runCallRatio` / `runCrOptimise`. Last
+Friday of the month (or the day after the monthly expiry) at 15:16, on **next** month's expiry: BUY 1 CE at
+ATM(100-step) + D, SELL 2 CE 300 above, BUY 1 CE 1000 above the sold strike. D starts at 300 and walks out in
+100s while the downside credit (2·sell − buy − hedge) is above 1 % of capital; a downside debit above 1 % is
+not traded. Exits on mark-to-market: +2.5 % / −3 % of capital, NIFTY closing at/above the bought strike, or 5
+sessions before expiry. **Capital is the page's ₹ per set** (no historical SPAN; the author's live 5 sets ≈
+₹6.6 L), so every % is on that guess.
+
+* **Data is 5-minute bars, one fetch per contract over its whole life** (`contract_window`: a few days
+  before the previous monthly expiry → the expiry), via `IciciAdapter.historical_option_range` — 2-3 Breeze
+  requests a contract in its own 17-day windows (`_RANGE_CHUNK_DAYS`: ≤13 sessions = 975 bars, under the
+  1,000-row cap; the shared 10-day grid took 4-5), disk-cached whole once the expiry has passed. A range
+  Breeze answered **empty** (`{'Success': [], 'Status': 200, 'Error': None}` — logged as "error: 200") is
+  cached as `[]`; a range with a **failed** chunk is never cached, empty or not. The first version read 1-minute bars a
+  session at a time (~60 requests a month) and crawled: on 2026-11-03 in market hours a year sat at 2/12
+  months after 5 minutes. The window is canonical so the backtest and the sweep share one cache entry.
+* **The backtest and Find Best Params book a trade through the same `build_path` + `first_exit`**, and a
+  test holds a sweep row equal to the backtest of its params. The sweep (`SWEEP_GRID`, 34,560 combos: entry
+  day × min distance × sell gap × hedge gap × max credit × target × stop × exit-before × spot exit) walks
+  each expiry's strike structures, builds one path per distinct strike set and replays every exit combo on it
+  (~1 s CPU a month). Its cost is Breeze: ~22-30 contracts a month cold (≈800 requests a year out of the
+  shared 5,000/day) — run it after hours; a re-run is cache-only. Breeze is latency-bound (the first
+  year-long sweep, 2026-11-03 in market hours: 1,116 requests in 60 min on 3 threads), so `_cr_workers` runs
+  3 threads 09:00-15:45 IST (the live algos share the 1.5 req/s pacer) and 8 outside.
+* **A month still to expire is priced on the listed expiry** (`contract_expiry(..., listed)`, from the
+  ICICI master): 2026-11-24 is Guru Nanak Jayanti, the contract expires the 23rd, and asking Breeze for the
+  24th came back empty for every strike. Settled months keep the date their sessions give them.
+
+Tests: `tests/test_call_ratio_engine.py`.
 
 ## NIFTY Option Selling backtest — removed (ATM Straddle stays)
 

@@ -275,6 +275,9 @@ _BREEZE_BAR_SECONDS = {'1second': 1, '1minute': 60, '5minute': 300,
                        '30minute': 1800, '1day': 86400}
 # 1second is absent on purpose: it is windowed inside the day instead.
 _CHUNK_DAYS = {'1minute': 2, '5minute': 10, '30minute': 60, '1day': 500}
+# historical_option_range's own windows: 17 calendar days hold at most 13
+# sessions = 975 five-minute bars, inside _BREEZE_MAX_ROWS.
+_RANGE_CHUNK_DAYS = {'5minute': 17}
 
 # NSE/BSE cash and derivatives both open at 09:15; anchoring the aggregation
 # there is what makes a 15-minute bar here line up with Kite's and with the
@@ -928,6 +931,72 @@ class IciciDataServiceAdapter:
             _slice_cache_put(ckey, bars)
         return bars or []
 
+    def historical_option_range(self, root: str, expiry: dt_date, strike: float,
+                                option_type: str, from_day: dt_date, to_day: dt_date,
+                                interval: str = '5minute', exchange_code: str = 'NFO'
+                                ) -> List[Dict[str, Any]]:
+        """One option's bars over a whole range, disk-cached once the range has settled.
+
+        For a position held for weeks (the monthly call-ratio backtest). Fetched
+        in its own _RANGE_CHUNK_DAYS windows rather than historical_option's
+        10-day grid: 17 calendar days hold at most 13 sessions, 975 five-minute
+        bars, inside Breeze's 1,000-row cap — so a contract's month is 2-3
+        requests, not 4-5. Cached whole, keyed on the exact range, so callers
+        should ask for a canonical range.
+
+        A settled range Breeze answered EMPTY is cached too (as []): a far
+        strike that never traded is otherwise asked for again on every run. A
+        range with a chunk that failed (timeout, Breeze error) is never cached,
+        empty or not — caching it would freeze the hole in.
+        """
+        symbol = (f"{root}:{expiry.isoformat()}:{int(float(strike))}:"
+                  f"{'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'}")
+        ckey = f"{symbol}:{interval}:r:{from_day.isoformat()}:{to_day.isoformat()}"
+        cached = _slice_cache_get(ckey)
+        if cached is not None:
+            _HIST_ERROR.msg = None
+            return cached
+        step = _RANGE_CHUNK_DAYS.get(interval)
+        if step is None:
+            # Only the 5-minute window is sized here; anything else keeps the
+            # shared chunking (and its in-memory chunk cache).
+            bars = self.historical_option(root, expiry, strike, option_type,
+                                          from_day.isoformat(), to_day.isoformat(), interval,
+                                          exchange_code=exchange_code)
+            if bars and to_day < datetime.now(IST).date():
+                _slice_cache_put(ckey, bars)
+            return bars or []
+        code = master.stock_code(root, exchange_code)
+        if not code:
+            _HIST_ERROR.msg = f"No ICICI stock_code for {root} on {exchange_code}"
+            return []
+        right = 'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'
+        info = {
+            'root': (root or '').upper(), 'stock_code': code,
+            'exchange_code': exchange_code.upper(), 'product_type': 'options',
+            'expiry_date': _breeze_expiry(expiry), 'right': right,
+            'strike_price': str(int(float(strike))), 'symbol': symbol,
+        }
+        raw: List[Dict[str, Any]] = []
+        failed = False
+        cursor = from_day
+        while cursor <= to_day:
+            chunk_end = min(cursor + timedelta(days=step - 1), to_day)
+            _HIST_ERROR.empty_answer = False
+            part = self._history_chunk(info, interval, cursor, chunk_end)
+            if not part and not getattr(_HIST_ERROR, 'empty_answer', False):
+                failed = True
+            raw.extend(part)
+            cursor = chunk_end + timedelta(days=1)
+        deduped = {c['date']: c for c in raw}
+        bars = [deduped[k] for k in sorted(deduped)
+                if (d := _as_date(k)) is not None and from_day <= d <= to_day]
+        if not failed:
+            _HIST_ERROR.msg = None
+            if to_day < datetime.now(IST).date():
+                _slice_cache_put(ckey, bars)
+        return bars
+
     def historical_option_window(self, root: str, expiry: dt_date, strike: float,
                                  option_type: str, day: dt_date, index: int,
                                  bar_seconds: int = 30, exchange_code: str = 'NFO'
@@ -1297,6 +1366,12 @@ class IciciDataServiceAdapter:
         _HIST_ERROR.clean_empty = False
         if not rows:
             err = _error_of(resp)
+            # Breeze answered and said nothing went wrong ({'Success': [],
+            # 'Status': 200, 'Error': None}) — _error_of reads that as "200".
+            # historical_option_range caches a settled range on this.
+            _HIST_ERROR.empty_answer = (isinstance(resp, dict)
+                                        and not (resp.get('Error') or resp.get('error'))
+                                        and str(resp.get('Status')) == '200')
             if err:
                 logger.error("[IciciAdapter] history %s [%s-%s]: %s",
                              info['symbol'], start, end, err)

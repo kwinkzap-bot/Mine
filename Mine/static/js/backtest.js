@@ -539,6 +539,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (wcbParamsRow)  wcbParamsRow.style.display  = 'none';
         const osParamsRow   = document.getElementById('optionSellingParamsRow');
         if (osParamsRow)   osParamsRow.style.display   = 'none';
+        const crParamsRow   = document.getElementById('callRatioParamsRow');
+        if (crParamsRow)   crParamsRow.style.display   = 'none';
+        const crResultsEl   = document.getElementById('crResults');
+        if (crResultsEl)   crResultsEl.style.display   = 'none';
+        const crOptPanel    = document.getElementById('callRatioOptimisePanel');
+        if (crOptPanel)    crOptPanel.style.display    = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
         const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
         if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
@@ -571,7 +577,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -851,6 +857,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const osStart = new Date(); osStart.setFullYear(osStart.getFullYear() - 1);
             if (startDateInput) startDateInput.value = osStart.toISOString().slice(0, 10);
             if (osEnd) osEnd.value = localToday();
+        } else if (val === 'call_ratio') {
+            if (crParamsRow) crParamsRow.style.display = 'grid';
+            // NIFTY only, monthly options on 1-minute premiums: no Symbol / Timeframe.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            selectedSymbol = 'NIFTY';
+            symbolSearch.value = 'NIFTY';
+            const crEnd = document.getElementById('endDate');
+            const crStart = new Date(); crStart.setFullYear(crStart.getFullYear() - 1);
+            if (startDateInput) startDateInput.value = crStart.toISOString().slice(0, 10);
+            if (crEnd) crEnd.value = localToday();
         }
 
         // "All Stocks" only exists for EMA Confluence Breakout — every other
@@ -919,7 +936,7 @@ document.addEventListener('DOMContentLoaded', function() {
         mine:    ['st_all_indicators', 'st_touch_break', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
-        testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf'],
+        testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
         failure: [],
     };
     // Keep every <option> node around — filtering re-appends from this list, so
@@ -1142,6 +1159,12 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Stop', 'Max loss per strike (₹2,000 by default): a stop rests at each leg\'s entry + that loss and fills at that level, so a leg loses no more unless the premium gaps past it. The other leg keeps running.'],
             ['Target', 'None.'],
             ['Exit', 'Otherwise both legs are bought back at 15:14.']] },
+        call_ratio: { sub: 'NIFTY monthly 1:2 call ratio with a far hedge, zero adjustment', steps: [
+            ['Entry', 'Last Friday of the month at 15:16, on NEXT month\'s expiry: BUY 1 CE 300 pts above the ATM, SELL 2 CE 300 above that, BUY 1 CE 1,000 above the sold strike.'],
+            ['Strikes', 'If NIFTY falling to zero would leave more than 1% of capital as credit, the strikes are too close — move all three out 100 pts and check again. A downside debit above 1% is not traded.'],
+            ['Target / Stop', '+2.5% / −3% of the capital on the position\'s mark-to-market.'],
+            ['Spot exit', 'Out as soon as NIFTY closes at or above the bought strike — beyond it the extra sold call is naked.'],
+            ['Exit', 'Otherwise closed 5 sessions before expiry. Nothing is adjusted in between.']] },
     };
     // ── ST Touch Break: the Logic popup's chart (one session, SuperTrend line, entries / exits) ──
 
@@ -1268,6 +1291,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const BT_LOGIC_NO_CHART = {
         option_breakout: 'trades on the option’s own candles, not the index',
         atm_straddle: 'a two-leg weekly straddle, not a single chart',
+        call_ratio: 'a three-leg monthly option position, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
     };
     const BT_LOGIC_DAILY = ['ema_pullback', 'hilega_milega', 'weekly_cpr_breakout'];
@@ -1591,6 +1615,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (_strat === 'atm_straddle') {
             await runOptionSelling();
+            return;
+        }
+        if (_strat === 'call_ratio') {
+            await runCallRatio();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
@@ -2417,6 +2445,117 @@ document.addEventListener('DOMContentLoaded', function() {
             `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — those days are missing, not zero`, 'warning');
         if (s.skipped_days) window.showNotification(
             `${s.skipped_days} day${s.skipped_days === 1 ? '' : 's'} left out — no ICICI option candles`, 'info');
+    }
+
+    // ── NIFTY Monthly Call Ratio — start + poll ────────────────────────
+    // One position a month; three CE contracts priced session by session
+    // (one Breeze request each, disk-cached) only until the trade exits.
+    let _crRun = 0;
+    async function runCallRatio() {
+        const title = 'Running NIFTY Monthly Call Ratio';
+        const payload = _crPayload();
+        const myRun = ++_crRun;
+        resultsArea.style.display = 'none';
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/call-ratio', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _crRun) return;
+                data = await (await fetch(`/api/backtest/call-ratio/status/${taskId}`)).json();
+                if (myRun !== _crRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader(title, _crProgress(p, data, 'months'));
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            renderCallRatio(data);
+        } catch (err) {
+            if (myRun !== _crRun) return;
+            _hideOptLoader();
+            console.error('Call Ratio error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    // "3 / 12 months · 14 contracts (ICICI, 2.1 s each) · 41s" — the per-contract
+    // time is what says whether a slow run is Breeze being slow.
+    function _crProgress(p, data, unit) {
+        if (p.stage && p.stage !== 'pricing' && p.stage !== 'scoring') return `${p.stage} · ${data.elapsed || 0}s`;
+        const per = p.contracts ? ` (ICICI, ${(p.breeze_seconds / p.contracts).toFixed(1)} s each)` : '';
+        return `${p.done || 0} / ${p.total || 0} ${unit} · ${p.contracts || 0} contracts${per}`
+            + (p.stage === 'scoring' ? ' · scoring' : '') + ` · ${data.elapsed || 0}s`;
+    }
+
+    function renderCallRatio(data) {
+        const s = data.summary || {};
+        const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        const reasons = Object.entries(s.exit_reasons || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+        const stats = document.getElementById('crStats');
+        if (stats) stats.innerHTML = [
+            card('Months Traded', String(s.total_trades || 0), 'ac-blue',
+                 `${s.skipped_months || 0} skipped · ${s.open_trades || 0} open · of ${s.months_scanned || 0}`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green', `${s.wins || 0} W / ${s.losses || 0} L`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `${pct(s.total_pnl_pct)} of ₹${Math.round(s.capital || 0).toLocaleString('en-IN')} · avg ${pct(s.avg_pnl_pct)} / month`),
+            card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
+                 `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
+            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red',
+                 `avg ${s.avg_sessions_held || 0} sessions held`),
+            card('Exits', reasons || '—', 'ac-blue', `${s.sets}×(1:2:1) × ${s.lot_size}`),
+        ].join('');
+        const prem = v => (v == null ? '—' : Number(v).toFixed(2));
+        const leg = (k, label) => [
+            { key: `${k}_strike`, label: `${label}`, sortable: true, format: v => v ?? '—' },
+            { key: `${k}_entry`, label: `${label} In`, sortable: true, format: prem },
+            { key: `${k}_exit`, label: `${label} Out`, sortable: true, format: prem },
+        ];
+        DataGrid.mountSortable('crGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'date', label: 'Entry', sortable: true },
+                { key: 'expiry', label: 'Expiry', sortable: true },
+                { key: 'spot', label: 'Spot', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(2)) },
+                ...leg('buy', 'Buy'), ...leg('sell', 'Sell ×2'), ...leg('hedge', 'Hedge'),
+                { key: 'credit_pct', label: 'Downside %', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
+                { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
+                { key: 'exit_reason', label: 'Outcome', sortable: true },
+                { key: 'trough_pct', label: 'Worst', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_pct', label: 'P&L %', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign },
+            ],
+            empty: s.last_breeze_error
+                ? `No months could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
+                : 'No entry days in this range',
+            defaultSort: { key: 'date', dir: 'desc' },
+        });
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = '';
+        if (s.breeze_errors) window.showNotification(
+            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected months may be skipped or mis-priced`, 'warning');
     }
 
     // ── Weekly CPR Breakout — start + poll ─────────────────────────────
@@ -4749,6 +4888,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'ema_pullback') runEmaOptimise(false);
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
         else if (strat === 'atm_straddle') runOsOptimise(false);
+        else if (strat === 'call_ratio') runCrOptimise(false);
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (strat === 'hilega_milega' || strat === 'ma_htf') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
@@ -5822,6 +5962,123 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     const osRecalcBtn = document.getElementById('osRecalcOptBtn');
     if (osRecalcBtn) osRecalcBtn.addEventListener('click', () => runOsOptimise(true));
+
+    // ── NIFTY Monthly Call Ratio — Find Best Params ────────────────────
+    // call_ratio_engine.SWEEP_GRID (34,560 combos) on the page's times, sets,
+    // capital and max debit; polled on the backtest's own status route.
+    let _crOptRun = 0;
+    const _crPct = v => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + Number(v || 0).toFixed(2)}%</span>`;
+    const CR_OPT_COLS = [
+        { label: '#',            key: null,             fmt: (r, i) => i + 1 },
+        { label: 'Entry Day',    key: 'entry_day',      fmt: r => r.entry_day === 'after_expiry' ? 'After expiry' : 'Last Fri' },
+        { label: 'Min Dist',     key: 'min_distance',   fmt: r => r.min_distance },
+        { label: 'Sell Gap',     key: 'ratio_gap',      fmt: r => r.ratio_gap },
+        { label: 'Hedge Gap',    key: 'hedge_gap',      fmt: r => r.hedge_gap },
+        { label: 'Max Credit',   key: 'max_credit_pct', fmt: r => `${r.max_credit_pct}%` },
+        { label: 'Target',       key: 'target_pct',     fmt: r => `${r.target_pct}%` },
+        { label: 'Stop',         key: 'stop_pct',       fmt: r => `${r.stop_pct}%` },
+        { label: 'Exit Before',  key: 'exit_sessions_before_expiry', fmt: r => `${r.exit_sessions_before_expiry} d` },
+        { label: 'Spot Exit',    key: 'spot_exit',      fmt: r => r.spot_exit ? 'Yes' : 'No' },
+        { label: 'Months',       key: 'total_trades',   fmt: r => `${r.total_trades}${r.skipped ? ` <small>(${r.skipped} skip)</small>` : ''}` },
+        { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
+        { label: 'Total %',      key: 'total_pct',      fmt: r => _crPct(r.total_pct) },
+        { label: 'Avg / Month',  key: 'avg_pct',        fmt: r => _crPct(r.avg_pct) },
+        { label: 'Worst Month',  key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
+        { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
+        { label: '',             key: null,             fmt: () => '' },   // Use button
+    ];
+
+    function applyCallRatioOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('crEntryDay', r.entry_day);
+        set('crMinDistance', String(r.min_distance));
+        set('crRatioGap', String(r.ratio_gap));
+        set('crHedgeGap', String(r.hedge_gap));
+        set('crMaxCredit', String(r.max_credit_pct));
+        set('crTarget', String(r.target_pct));
+        set('crStop', String(r.stop_pct));
+        set('crExitBefore', String(r.exit_sessions_before_expiry));
+        set('crSpotExit', r.spot_exit ? 'true' : 'false');
+        if (window.showNotification) window.showNotification(
+            `Applied: ${r.entry_day === 'after_expiry' ? 'after expiry' : 'last Friday'} · ${r.min_distance}/${r.ratio_gap}/${r.hedge_gap} · `
+            + `credit ≤ ${r.max_credit_pct}% · target ${r.target_pct}% · stop ${r.stop_pct}% · exit ${r.exit_sessions_before_expiry} d before`, 'success');
+    }
+
+    function _crPayload() {
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        return {
+            start_date:  document.getElementById('startDate')?.value,
+            end_date:    document.getElementById('endDate')?.value,
+            entry_day:   document.getElementById('crEntryDay')?.value || 'last_friday',
+            entry_time:  document.getElementById('crEntryTime')?.value || '15:16',
+            exit_time:   document.getElementById('crExitTime')?.value || '15:15',
+            min_distance: num('crMinDistance', 300),
+            ratio_gap:   num('crRatioGap', 300),
+            hedge_gap:   num('crHedgeGap', 1000),
+            max_credit_pct: num('crMaxCredit', 1),
+            max_debit_pct:  num('crMaxDebit', 1),
+            target_pct:  num('crTarget', 2.5),
+            stop_pct:    num('crStop', 3),
+            exit_sessions_before_expiry: num('crExitBefore', 5),
+            spot_exit:   document.getElementById('crSpotExit')?.value !== 'false',
+            sets:        Math.max(1, parseInt(document.getElementById('crSets')?.value || 1)),
+            capital_per_set: num('crCapital', 130000),
+        };
+    }
+
+    async function runCrOptimise(recalculate) {
+        const panel     = document.getElementById('callRatioOptimisePanel');
+        const recalcBtn = document.getElementById('crRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_crOptRun;
+        const done = () => { if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/call-ratio/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_crPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2500));
+                if (myRun !== _crOptRun) return;
+                data = await (await fetch(`/api/backtest/call-ratio/status/${taskId}`)).json();
+                if (myRun !== _crOptRun) return;
+                if (data.status !== 'running') break;
+                _showOptLoader('Finding best params…', _crProgress(data.progress || {}, data, 'months'));
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            const metaEl = document.getElementById('crOptMeta');
+            const s = data.summary || {};
+            if (metaEl) metaEl.textContent =
+                `${(data.total_combos_tested || 0).toLocaleString('en-IN')} combos · ${data.total} scored (≥ ${data.min_trades} closed months)`
+                + ` · ${data.months} expiries · ${data.sets}×(1:2:1) × ${data.lot_size} on ₹${Math.round(data.capital || 0).toLocaleString('en-IN')}`
+                + ` · ${s.contracts_fetched || 0} contracts` + (s.breeze_errors ? ` · ${s.breeze_errors} ICICI requests failed` : '');
+            _mountSingleOptGrid('crOptGrid', data.results || [], CR_OPT_COLS, 'net_pnl_rupees', applyCallRatioOptResult);
+            if (panel)     panel.style.display     = '';
+            if (recalcBtn) recalcBtn.style.display = '';
+            if (data.best) applyCallRatioOptResult(data.best);
+        } catch (err) {
+            if (myRun !== _crOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('Call Ratio optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
+    const crRecalcBtn = document.getElementById('crRecalcOptBtn');
+    if (crRecalcBtn) crRecalcBtn.addEventListener('click', () => runCrOptimise(true));
 
     // ── Weekly CPR Breakout — Find Best Params ──────────────────────────
     // Sweeps Target × W CPR Width × Min 1H Range × Direction (192 combos)

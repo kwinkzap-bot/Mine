@@ -36,5 +36,43 @@
     "charges": 103.0,
     "net": 2087.5,
     "unconfirmed": null
+  },
+  {
+    "date": "2026-11-03",
+    "n": 1,
+    "mode": "live",
+    "side": "Long",
+    "signal_bar": "2026-11-03 09:15:00",
+    "signal": {
+      "rsi": 87.1,
+      "close": 23594.7,
+      "supertrend": 23498.52,
+      "bb_band": 23547.44,
+      "pivot": "R1",
+      "pivot_level": 23486.0,
+      "cci": 418.3
+    },
+    "index_entry": 23594.7,
+    "entry_time": "09:18",
+    "index_exit": 23661.9,
+    "exit_time": "11:15",
+    "result": "SuperTrend Down",
+    "strike": 23300,
+    "option_type": "CE",
+    "legs": {
+      "1": {
+        "name": "Saranya (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 252.6,
+        "exit": 326.35,
+        "pnl": 4793.75,
+        "exit_reason": null
+      }
+    },
+    "pnl": 4793.75,
+    "charges": 103.0,
+    "net": 4690.75,
+    "unconfirmed": null
   }
 ]

@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "HDFCBANK",
+    "direction": "SELL",
+    "qty": 696,
+    "entry_price": 718.1,
+    "exit_price": 721.3,
+    "sl_price": 721.3,
+    "target_price": 706.05,
+    "pnl": -2227.2,
+    "reason": "SL Hit",
+    "entry_time": "2026-11-03T10:46:12.965653",
+    "exit_time": "2026-11-03T11:56:30.539068",
+    "broker_idx": 0,
+    "entry_order_id": "PAPER",
+    "sl_order_id": null,
+    "target_order_id": null,
+    "mode": "paper",
+    "date": "2026-11-03"
+  },
+  {
     "symbol": "MPHASIS",
     "direction": "SELL",
     "qty": 195,

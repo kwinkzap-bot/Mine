@@ -803,3 +803,56 @@ def test_a_quota_refusal_does_not_retire_the_symbol(loaded_master, monkeypatch):
     assert ids._dead_symbol('NSE:CDSL26OCTFUT') is False
     with ids._QUOTA_LOCK:
         ids._QUOTA_EXHAUSTED_ON = None
+
+
+# ── historical_option_range (the monthly call-ratio backtest's fetch) ──────
+
+def _range_adapter(monkeypatch, answer):
+    """An adapter whose Breeze is `answer(start, end)` → (rows, empty_answer)."""
+    from datetime import date
+    store, calls = {}, []
+    monkeypatch.setattr(ids, '_slice_cache_get', lambda k: store.get(k))
+    monkeypatch.setattr(ids, '_slice_cache_put', lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr(master, 'stock_code', lambda root, exch='NFO': 'NIFTY')
+    adapter = ids.IciciDataServiceAdapter(api_key="test")
+
+    def chunk(info, interval, start, end):
+        calls.append((start, end))
+        rows, empty = answer(start, end)
+        ids._HIST_ERROR.empty_answer = empty
+        return rows
+    monkeypatch.setattr(adapter, '_history_chunk', chunk)
+    fetch = lambda: adapter.historical_option_range('NIFTY', date(2026, 2, 24), 25000, 'CE',
+                                                    date(2026, 1, 24), date(2026, 2, 24))
+    return fetch, store, calls
+
+
+def _bar(day):
+    return {'date': datetime(day.year, day.month, day.day, 9, 15), 'close': 10.0}
+
+
+def test_option_range_is_17_day_requests_and_cached_once_settled(monkeypatch):
+    fetch, store, calls = _range_adapter(monkeypatch, lambda s, e: ([_bar(s)], False))
+    bars = fetch()
+    # 32 days → 17 + 15: two requests where the 10-day grid took four.
+    assert [(s.isoformat(), e.isoformat()) for s, e in calls] == [
+        ('2026-01-24', '2026-02-09'), ('2026-02-10', '2026-02-24')]
+    assert len(bars) == 2 and len(store) == 1
+    fetch()
+    assert len(calls) == 2                       # served from disk
+
+
+def test_option_range_that_breeze_answered_empty_is_cached(monkeypatch):
+    """A far strike that never traded used to be asked for again every run."""
+    fetch, store, calls = _range_adapter(monkeypatch, lambda s, e: ([], True))
+    assert fetch() == [] and list(store.values()) == [[]]
+    fetch()
+    assert len(calls) == 2
+
+
+def test_option_range_with_a_failed_chunk_is_never_cached(monkeypatch):
+    """Caching it would freeze the hole in for good."""
+    from datetime import date
+    fetch, store, calls = _range_adapter(
+        monkeypatch, lambda s, e: ([], False) if s == date(2026, 2, 10) else ([_bar(s)], False))
+    assert len(fetch()) == 1 and store == {}

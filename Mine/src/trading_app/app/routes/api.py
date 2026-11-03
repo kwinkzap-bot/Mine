@@ -9665,6 +9665,305 @@ def option_selling_optimise_status(task_id):
     return option_selling_status(task_id)
 
 
+# ── NIFTY Monthly Call Ratio ("No-Brainer") backtest ─────────────────────────
+# Last Friday of the month, 15:16: buy 1 CE, sell 2 CE 300 further, buy 1 CE
+# 1000 beyond that, next month's expiry; out at +2.5 % / −3 % of the capital,
+# spot through the bought strike, or N sessions before expiry. The rule is
+# Backtest/call_ratio_engine.py. Spot is Fyers' 1-minute NIFTY folded to 5
+# minutes; the premiums are ICICI Breeze 5-minute candles, ONE fetch per
+# contract over its whole life (2-3 requests, 17-day chunks), disk-cached once
+# the expiry has passed. Until 2026-11-03 it was 1-minute bars a session at a
+# time — ~60 requests a month, minutes per month when Breeze was slow.
+_cr_tasks: dict = {}
+_cr_tasks_lock = threading.Lock()
+
+
+def _cr_parse(data: dict):
+    """The page's boxes → (start, end, params, sets, capital_per_set), or raises ValueError."""
+    start_dt = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
+    end_dt = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
+    if end_dt < start_dt:
+        raise ValueError('end_date is before start_date')
+    params = {
+        'entry_day': 'after_expiry' if data.get('entry_day') == 'after_expiry' else 'last_friday',
+        'entry_hm': _os_hm(data.get('entry_time', '15:16'), (15, 16)),
+        'exit_hm': _os_hm(data.get('exit_time', '15:15'), (15, 15)),
+        'min_distance': min(1500, max(100, int(data.get('min_distance', 300)))),
+        'ratio_gap': min(1000, max(100, int(data.get('ratio_gap', 300)))),
+        'hedge_gap': min(3000, max(100, int(data.get('hedge_gap', 1000)))),
+        'max_credit_pct': max(0.0, float(data.get('max_credit_pct', 1.0))),
+        'max_debit_pct': max(0.0, float(data.get('max_debit_pct', 1.0))),
+        'target_pct': max(0.1, float(data.get('target_pct', 2.5))),
+        'stop_pct': max(0.1, float(data.get('stop_pct', 3.0))),
+        'exit_sessions_before_expiry': min(15, max(0, int(data.get('exit_sessions_before_expiry', 5)))),
+        'spot_exit': str(data.get('spot_exit', True)).lower() not in ('false', '0', 'no', 'off'),
+    }
+    sets = max(1, int(data.get('sets', 1) or 1))
+    capital_per_set = max(10000.0, float(data.get('capital_per_set', 130000)))
+    return start_dt, end_dt, params, sets, capital_per_set
+
+
+def _cr_start(data: dict, worker, name: str):
+    """Validate, check the logins, and start `worker(ctx, task)` on a thread.
+    ctx carries the NIFTY 5-minute spot, the sessions and a cached frame_for."""
+    try:
+        start_dt, end_dt, params, sets, capital_per_set = _cr_parse(data)
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': f'Bad parameters: {e}'}), 400
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    icici = get_icici_adapter()
+    if icici is None:
+        return jsonify({'success': False,
+                        'error': 'Option premiums come from ICICI Direct, which is not logged in '
+                                 '— log in to ICICI first.'}), 503
+    try:
+        lot_size = int(_fno_lot_sizes().get('NIFTY') or 65)
+    except Exception:
+        lot_size = 65
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': 0, 'traded': 0, 'contracts': 0,
+                         'breeze_seconds': 0.0, 'stage': 'NIFTY minutes (Fyers)'}}
+    with _cr_tasks_lock:
+        _cr_tasks[task_id] = task
+
+    def _run():
+        from trading_app.Backtest import call_ratio_engine as cre
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+        try:
+            # A trade entered at the end of the range runs into the next month.
+            today = datetime.now().date()
+            spot_end = min(end_dt + timedelta(days=45), today)
+            minutes = get_minute_history(fyers, _WCB_INDEX_TOKENS['NIFTY'], 'NIFTY',
+                                         start_dt.isoformat(), spot_end.isoformat(),
+                                         provider_tag=_provider_tag(fyers), retain=False)
+            if minutes is None or minutes.empty:
+                raise RuntimeError('No NIFTY 1-minute data from Fyers for this range.')
+            if getattr(minutes.index, 'tz', None) is not None:
+                minutes = minutes.copy()
+                minutes.index = minutes.index.tz_localize(None)
+            closes = minutes['close'].astype(float)
+            spot5 = closes.resample('5min', label='left', closed='left').last().dropna()
+            sessions = sorted(set(closes.index.date))
+            # A month still to expire is priced on the exchange's listed date
+            # (a holiday moves it; the sessions cannot know yet).
+            try:
+                from trading_app.service import icici_symbol_master as _ism
+                params['listed_expiries'] = tuple(
+                    datetime.strptime(x, '%Y-%m-%d').date()
+                    for x in _ism.expiries(_ism.stock_code('NIFTY', 'NFO') or 'NIFTY', 'NFO'))
+            except Exception as exc:          # noqa: BLE001 — the calendar's date stands
+                logger.warning('[CallRatio] listed NIFTY expiries unavailable: %s', exc)
+            state = {'errors': 0, 'last_error': None}
+            lock = threading.Lock()
+            memo: dict = {}
+            inflight: dict = {}
+
+            def frame_for(expiry, strike):
+                key = (expiry, int(strike))
+                with lock:
+                    if key in memo:
+                        return memo[key]
+                    ev = inflight.get(key)
+                    owner = ev is None
+                    if owner:
+                        ev = inflight[key] = threading.Event()
+                if not owner:                   # another thread is fetching it
+                    ev.wait()
+                    return memo.get(key)
+                frm, to = cre.contract_window(expiry)
+                t0 = _time.time()
+                raw = icici.historical_option_range('NIFTY', expiry, int(strike), 'CE',
+                                                    frm, min(to, today))
+                # Set only when a chunk FAILED (or nothing came back): a range
+                # Breeze answered empty is not an error, and is cached.
+                err = icici.last_history_error()
+                frame = cre._frame(raw)
+                with lock:
+                    memo[key] = frame
+                    task['progress']['contracts'] += 1
+                    task['progress']['breeze_seconds'] = round(
+                        task['progress']['breeze_seconds'] + _time.time() - t0, 1)
+                    if err:
+                        state['errors'] += 1
+                        state['last_error'] = err
+                    inflight.pop(key, None)
+                ev.set()
+                return frame
+
+            ctx = {'cre': cre, 'start': start_dt, 'end': end_dt, 'params': params,
+                   'sets': sets, 'lot_size': lot_size, 'qty': sets * lot_size,
+                   'capital': sets * capital_per_set, 'capital_per_set': capital_per_set,
+                   'spot5': spot5, 'sessions': sessions, 'frame_for': frame_for,
+                   'state': state, 'lock': lock}
+            task['progress']['stage'] = 'pricing'
+            worker(ctx, task)
+            task['payload'].setdefault('summary', {}).update({
+                'breeze_errors': state['errors'], 'last_breeze_error': state['last_error'],
+                'contracts_fetched': task['progress']['contracts'],
+                'breeze_seconds': task['progress']['breeze_seconds']})
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[CallRatio] {name} failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'{name}-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
+                    'progress': task['progress']})
+
+
+def _cr_workers() -> int:
+    """Threads for a call-ratio run. Breeze is latency-bound — a request takes
+    seconds, so 3 threads used a fifth of the app-wide 1.5 req/s pacer (the
+    first year-long sweep: 1,116 requests in an hour). In market hours the live
+    algos share that pacer, so stay at 3; outside them take 8."""
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo('Asia/Kolkata'))
+    in_market = now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 45)
+    return 3 if in_market else 8
+
+
+def _cr_pool(items, fn, task):
+    """fn over items on _cr_workers() threads (Breeze's own pacer caps the rate), newest first."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    out = []
+    pool = ThreadPoolExecutor(max_workers=_cr_workers())
+    try:
+        futs = [pool.submit(fn, it) for it in reversed(items)]
+        for fut in as_completed(futs):
+            out.append(fut.result())
+            task['progress']['done'] = len(out)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
+@api_bp.route('/backtest/call-ratio', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_call_ratio_backtest_api():
+    """Start a NIFTY monthly call-ratio backtest; returns {'task_id'} to poll at
+    /backtest/call-ratio/status/<task_id>.
+
+    Body: start_date, end_date ('YYYY-MM-DD'); entry_day ('last_friday' |
+    'after_expiry'); entry_time (15:16); exit_time (15:15, on the time-exit day);
+    min_distance (300) / ratio_gap (300) / hedge_gap (1000) in points;
+    max_credit_pct / max_debit_pct (1 / 1); target_pct (2.5); stop_pct (3);
+    exit_sessions_before_expiry (5); spot_exit (true); sets (1 set = 1:2:1
+    lots); capital_per_set (₹, 130000)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    def worker(ctx, task):
+        cre, p = ctx['cre'], ctx['params']
+        entries = cre.entry_days(ctx['sessions'], ctx['start'], ctx['end'], p['entry_day'])
+        task['progress']['total'] = len(entries)
+
+        def one(entry):
+            res = cre.run_trade(entry, ctx['sessions'], ctx['spot5'], ctx['frame_for'],
+                                ctx['qty'], ctx['capital'], p)
+            row = cre.trade_row(res, ctx['qty'], ctx['sets'], ctx['lot_size'], ctx['capital'],
+                                _OS_BROKERAGE_PER_LEG)
+            if row['status'] != 'skipped':
+                task['progress']['traded'] += 1
+            return row
+
+        rows = sorted(_cr_pool(entries, one, task), key=lambda r: r['date'])
+        summary = cre.summarise(rows)
+        summary.update({'months_scanned': len(entries), 'sets': ctx['sets'],
+                        'lot_size': ctx['lot_size'], 'capital': ctx['capital'],
+                        'capital_per_set': ctx['capital_per_set'],
+                        'params': {k: (f'{v[0]:02d}:{v[1]:02d}' if isinstance(v, tuple) else v)
+                                   for k, v in p.items() if k != 'listed_expiries'}})
+        logger.info('[CallRatio] %s..%s: %d months, %d traded, %d skipped, %d contracts',
+                    ctx['start'], ctx['end'], len(entries), summary['total_trades'],
+                    summary['skipped_months'], task['progress']['contracts'])
+        task['payload'] = {'trades': rows, 'summary': summary}
+
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'cr')
+
+
+@api_bp.route('/backtest/call-ratio/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_call_ratio_optimise_api():
+    """Find Best Params for the NIFTY monthly call ratio; poll the same
+    /backtest/call-ratio/status/<task_id>.
+
+    Sweeps call_ratio_engine.SWEEP_GRID — entry day × min distance × sell gap ×
+    hedge gap × max credit × target × stop × exit-before-expiry × spot exit
+    (34,560 combos) — on the page's times, sets, capital and max debit. Every
+    contract is one cached 5-minute fetch, so the cost is the distinct strikes
+    the structures pick (~20-30 a month cold), and a re-run is instant."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    def worker(ctx, task):
+        cre = ctx['cre']
+        grid = cre.SWEEP_GRID
+        by_expiry: dict = {}
+        for rule in grid['entry_day']:
+            for d in cre.entry_days(ctx['sessions'], ctx['start'], ctx['end'], rule):
+                exp = cre.contract_expiry(d, ctx['sessions'], cre.DEFAULTS['min_days_to_expiry'],
+                                          ctx['params'].get('listed_expiries', ()))
+                if exp is not None:
+                    by_expiry.setdefault(exp, {})[rule] = d
+        expiries = sorted(by_expiry)
+        task['progress']['total'] = len(expiries)
+
+        def one(exp):
+            res = cre.score_expiry(by_expiry[exp], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
+                                   ctx['qty'], ctx['capital'], ctx['params'],
+                                   _OS_BROKERAGE_PER_LEG, grid)
+            task['progress']['traded'] += 1
+            return exp, res
+
+        done = sorted(_cr_pool(expiries, one, task), key=lambda t: t[0])
+        task['progress']['stage'] = 'scoring'
+        min_trades = max(1, len(expiries) // 2)
+        rows = cre.rank([r for _, r in done], min_trades=min_trades, grid=grid)
+        task['payload'] = {
+            'results': rows[:50], 'best': rows[0] if rows else None, 'total': len(rows),
+            'total_combos_tested': cre.sweep_size(grid), 'months': len(expiries),
+            'min_trades': min_trades, 'sets': ctx['sets'], 'lot_size': ctx['lot_size'],
+            'capital': ctx['capital'], 'summary': {},
+        }
+        logger.info('[CallRatioOptimise] %s..%s: %d expiries, %d combos scored, %d contracts',
+                    ctx['start'], ctx['end'], len(expiries), len(rows), task['progress']['contracts'])
+
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'cr-opt')
+
+
+@api_bp.route('/backtest/call-ratio/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def call_ratio_status(task_id):
+    """Poll a NIFTY monthly call-ratio backtest started by the POST above."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _cr_tasks_lock:
+        task = _cr_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running',
+                        'progress': task['progress'], 'elapsed': elapsed})
+    with _cr_tasks_lock:
+        _cr_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 # Find Best Params grid for Weekly CPR Breakout. Only the target changes how a
 # trade plays out, so each stock is replayed once per target with the quality
 # filters off and direction 'both'; the CPR-width, first-hour-range and
