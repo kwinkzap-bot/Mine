@@ -9316,7 +9316,13 @@ def _os_parse(data: dict):
         'adjust': adjust,
         'adjust_pts': min(3000.0, max(25.0, float(data.get('adjust_pts', 200) or 200))),
         'max_adjust': min(10, max(1, int(data.get('max_adjust', 2) or 2))),
+        # Wings on a 50-strike, 0 = none; the lock only means something below the target.
+        'wings': int(round(min(3000.0, max(0.0, float(data.get('wings', 0) or 0))) / 50) * 50),
+        'lock_at': min(500.0, max(0.0, float(data.get('lock_at', 0) or 0))),
+        'lock_to': min(500.0, max(0.0, float(data.get('lock_to', 0) or 0))),
     }
+    if params['lock_at'] and params['lock_to'] >= params['lock_at']:
+        raise ValueError('lock_to must be below lock_at')
     lots = max(1, int(data.get('lots', 1) or 1))
     return start_dt, end_dt, params, lots, 0.0
 
@@ -9331,8 +9337,10 @@ def run_option_selling_backtest_api():
     Body: start_date, end_date ('YYYY-MM-DD'); entry_day ('last_friday' default,
     last_monday … last_thursday, after_expiry); entry_time (15:15); target_pct / stop_pct (5 / 5, of the premium collected — the only
     exits short of the expiry itself); adjust (none | roll_untested | recenter |
-    hedge), adjust_pts (NIFTY points from the centre, 200), max_adjust (2);
-    lots (× NIFTY's lot size, per leg)."""
+    hedge | hedge_roll), adjust_pts (NIFTY points from the centre, 200), max_adjust (2);
+    wings (points; 0 = none — buy the CE/PE this far out at entry, and every %
+    is then of the net credit); lock_at / lock_to (% of premium; 0 = off — once
+    the P&L reaches lock_at a stop rests at lock_to); lots (× NIFTY's lot size, per leg)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -9379,11 +9387,14 @@ def run_option_selling_optimise_api():
     """Find Best Params for the NIFTY monthly ATM straddle; returns {'task_id'}
     to poll at /backtest/option-selling/optimise/status/<task_id>.
 
-    Entry day × adjustment (type × trigger points, option_selling_engine.
-    ADJUST_VARIANTS) × target % × stop % (29,700 combos) on the page's entry
-    time, max adjustments and lots. Every target/stop is a replay of one
-    (entry day, adjustment) path; the cost is Breeze — each entry day's two
-    legs plus every new ATM an adjustment reaches (cached per contract)."""
+    Entry day × wings × adjustment (type × trigger points) × target % × stop %
+    × profit lock (option_selling_engine.sweep_size()) on the page's entry
+    time, max adjustments and lots. Every target/stop/lock is a replay of one
+    (entry day, wings, adjustment) path; the cost is Breeze — each entry day's
+    two legs, its wings, and every new ATM an adjustment reaches (cached per
+    contract). Months are folded oldest first as they finish (ose.Fold), so a
+    long range never holds every month's combos at once; the board is the top
+    100 by net plus the top 100 by net ÷ drawdown (ose.board)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -9398,14 +9409,19 @@ def run_option_selling_optimise_api():
             res = ose.score_month(by_month[month], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
                                   ctx['qty'], ctx['params'], _OS_BROKERAGE_PER_LEG)
             task['progress']['traded'] += 1
-            return month, res
+            return res
 
-        done = sorted(_cr_pool(months, one, task), key=lambda t: t[0])
+        from concurrent.futures import ThreadPoolExecutor
+        fold = ose.Fold()
+        with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
+            for n, res in enumerate(pool.map(one, months), 1):       # oldest first, in order
+                fold.add(res)
+                task['progress']['done'] = n
         task['progress']['stage'] = 'scoring'
         min_trades = max(1, len(months) // 2)
-        rows = ose.rank([r for _, r in done], min_trades=min_trades)
+        rows = fold.rows(min_trades)
         task['payload'] = {
-            'results': rows[:50], 'best': rows[0] if rows else None, 'total': len(rows),
+            'results': ose.board(rows), 'best': rows[0] if rows else None, 'total': len(rows),
             'total_combos_tested': ose.sweep_size(), 'months': len(months),
             'min_trades': min_trades, 'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
             'summary': {},

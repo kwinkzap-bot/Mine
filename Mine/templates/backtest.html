@@ -1908,6 +1908,7 @@
                         <option value="roll_untested">Roll profit leg to new ATM</option>
                         <option value="recenter">Re-centre both legs at new ATM</option>
                         <option value="hedge">Buy losing side at new ATM (hedge)</option>
+                        <option value="hedge_roll">Hedge losing side + roll profit leg</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -1917,6 +1918,18 @@
                 <div class="form-group">
                     <label for="osMaxAdjust" title="Most adjustments in one month's trade.">Max Adjustments</label>
                     <input type="number" id="osMaxAdjust" value="2" min="1" max="10" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="osWings" title="0 = none. Buy the CE this many points above the sold strike and the PE this many below at the entry (an iron fly): the worst loss is capped at the wing width less the credit. Target / Stop / Lock are then % of the NET credit.">Wings (pts, 0 = none)</label>
+                    <input type="number" id="osWings" value="0" min="0" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="osLockAt" title="0 = off. Once the straddle's P&L has closed a 5-minute bar at this % of the premium, a stop rests at Lock To % — a winner is not allowed to turn into a loser.">Profit Lock At %</label>
+                    <input type="number" id="osLockAt" value="0" min="0" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="osLockTo" title="Where the profit-lock stop rests once armed, % of the premium (0 = break-even). Must be below Lock At.">Lock To %</label>
+                    <input type="number" id="osLockTo" value="0" min="0" step="5">
                 </div>
                 <div class="form-group">
                     <label for="osLots" title="Lots per leg, × NIFTY's lot size.">Lots</label>
@@ -1930,7 +1943,9 @@
                         or down Stop&nbsp;% of the premium collected, filled at that level (a session that opens past it fills at the open) ·
                         a position trade with no exit time: if neither is hit, it ends with the contract, at the expiry day's close ·
                         Adjustment (optional): when NIFTY's 5-minute close is Adjust At points from the centre, roll the profit leg / re-centre both /
-                        buy the losing side at the new ATM, and watch from that ATM (Target and Stop stay % of the first premium).
+                        buy the losing side at the new ATM / both hedge and roll, and watch from that ATM (Target and Stop stay % of the first premium) ·
+                        Wings (optional): buy far CE/PE at entry, capping the loss (the % are then of the net credit) ·
+                        Profit Lock (optional): once up Lock At&nbsp;%, a stop rests at Lock To&nbsp;%.
                         Premiums are ICICI's recorded 5-minute candles (needs an ICICI login; two contracts a month, cached).
                     </small>
                 </div>

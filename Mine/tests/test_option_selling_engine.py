@@ -176,7 +176,7 @@ def test_sweep_row_matches_the_backtest_of_its_params():
             bt = ose.trade_row(ose.run_trade(entry, SESSIONS, SPOT, frames,
                                              {'entry_day': rule, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[(rule, 'none', 0, tp, sp)]
+            status, net, pct, reason = res[(rule, 0, 'none', 0, tp, sp, 0, 0)]
             assert (status, reason) == (bt['status'], bt['exit_reason']), (rule, tp, sp)
             assert round(net, 2) == bt['pnl_rupees'], (rule, tp, sp)
     rows = ose.rank([res])
@@ -246,6 +246,17 @@ def test_hedge_buys_the_tested_side_once():
     assert res['pnl_points'] == 0.0
 
 
+def test_hedge_roll_buys_the_tested_side_and_rolls_the_profit_leg():
+    res = ose.run_trade(ENTRY, SESSIONS, SPOT_UP, _strike_frames(_rally_prices),
+                        {**WIDE, 'adjust': 'hedge_roll'})
+    (a,) = res['adjustments']
+    assert a['closed'] == [('PE', 23000)]
+    assert a['opened'] == [('PE', 23250, -1, 320.0), ('CE', 23250, 1, 310.0)]
+    # CE −100, PE 23000 +80 booked, PE 23250 320 → 260 (+60), bought CE 23250 310 → 330 (+20).
+    assert res['pnl_points'] == 60.0 and res['legs_traded'] == 4
+    assert res['exit_strikes'] == {'CE': 23000, 'PE': 23250}
+
+
 def test_target_and_stop_stay_on_the_first_premium_through_an_adjustment():
     # 600 collected, 10 % = 60: the rolled position reaches +40 by expiry — short of it.
     res = ose.run_trade(ENTRY, SESSIONS, SPOT_UP, _strike_frames(_rally_prices),
@@ -269,12 +280,104 @@ def test_sweep_rows_with_adjustments_match_the_backtest():
     frames = _strike_frames(_rally_prices)
     entries = {'last_friday': ENTRY}
     res = ose.score_month(entries, SESSIONS, SPOT_UP, frames, QTY, {}, 100)
-    assert len(res) == len(ose.ADJUST_VARIANTS) * 225
+    assert len(res) == len(ose.WINGS) * len(ose.ADJUST_VARIANTS) * len(ose.exit_combos())
     for kind, pt in ose.ADJUST_VARIANTS:
         for tp, sp in [(5, 5), (10, 50), (50, 50), (3, 3)]:
             bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT_UP, frames,
                                              {'adjust': kind, 'adjust_pts': pt, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[('last_friday', kind, pt, tp, sp)]
+            status, net, pct, reason = res[('last_friday', 0, kind, pt, tp, sp, 0, 0)]
             assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), \
                 (kind, pt, tp, sp)
+
+
+# ── Wings and profit lock ─────────────────────────────────────────────────────
+def _by_strike(fn):
+    """frame_for whose close is fn(right, strike, bar start)."""
+    def f(expiry, strike, right):
+        px = [fn(right, strike, ts) for ts in ALL5]
+        return pd.DataFrame({'open': px, 'high': px, 'low': px, 'close': px}, index=ALL5)
+    return f
+
+
+def test_wings_are_bought_at_entry_and_the_percents_are_of_the_net_credit():
+    # ATM 23000 sold at 300 + 300, wings 23500 CE / 22500 PE bought at 50 + 50 → 500 net.
+    # Feb 5 11:00: the shorts lose 20 each (+40), the wings 10 each (−20) → +20 = 4 % of 500.
+    def px(right, strike, ts):
+        later = _after(ts, date(2025, 2, 5), (11, 0))
+        if strike == 23000:
+            return 280.0 if later else 300.0
+        return 40.0 if later else 50.0
+    res = ose.run_trade(ENTRY, SESSIONS, SPOT, _by_strike(px),
+                        {'wings': 500, 'target_pct': 4, 'stop_pct': 50})
+    assert res['reason'] == 'Target' and res['pnl_points'] == 20.0
+    assert res['premium'] == 500.0 and res['sold_premium'] == 600.0
+    assert [(lg['right'], lg['strike'], lg['side']) for lg in res['legs']] == [
+        ('CE', 23000, 'SELL'), ('PE', 23000, 'SELL'), ('CE', 23500, 'BUY'), ('PE', 22500, 'BUY')]
+    row = ose.trade_row(res, QTY, 1, QTY, 100)
+    assert row['brokerage'] == 400 and row['premium'] == 500.0
+    assert row['wings'] == 'CE 23500 @50.0 / PE 22500 @50.0'
+
+
+def test_a_missing_wing_skips_the_month():
+    def px(right, strike, ts):
+        return 300.0 if strike == 23000 else None
+    def frames(expiry, strike, right):
+        return None if strike != 23000 else _by_strike(lambda r, k, ts: 300.0)(expiry, strike, right)
+    res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, {'wings': 500})
+    assert res['status'] == 'skipped' and 'wing' in res['reason']
+
+
+def test_profit_lock_stops_at_break_even_after_it_has_been_reached():
+    # +80 on 600 (13 %) on Feb 5 arms a 10 % → 0 lock; Feb 7 10:00 the legs are back
+    # at 310 (−20): the lock fills AT 0 instead of riding to the expiry's −20.
+    def price(right, ts):
+        if _after(ts, date(2025, 2, 7), (10, 0)):
+            return 310.0
+        return 260.0 if _after(ts, date(2025, 2, 5), (11, 0)) else 300.0
+    p = {'target_pct': 50, 'stop_pct': 50}
+    assert ose.run_trade(ENTRY, SESSIONS, SPOT, _frames(price), p)['reason'] == 'Expiry'
+    res = ose.run_trade(ENTRY, SESSIONS, SPOT, _frames(price), {**p, 'lock_at': 10, 'lock_to': 0})
+    assert res['reason'] == 'Profit lock' and abs(res['pnl_points']) < 1e-9
+    assert res['exit_ts'] == pd.Timestamp('2025-02-07 10:05')
+    # Not armed (the peak never reached 15 %): no lock.
+    res = ose.run_trade(ENTRY, SESSIONS, SPOT, _frames(price), {**p, 'lock_at': 15, 'lock_to': 0})
+    assert res['reason'] == 'Expiry'
+
+
+def test_the_streaming_fold_scores_like_the_shared_rank_and_the_board_keeps_steady_rows():
+    from trading_app.Backtest import call_ratio_engine as cre
+    months = [
+        {('a',): ('traded', 100.0, 10.0, 'Target'), ('b',): ('traded', 40.0, 4.0, 'Target')},
+        {('a',): ('traded', -80.0, -8.0, 'Stop loss'), ('b',): ('skipped', 0.0, 0.0, 'x')},
+        {('a',): ('traded', 90.0, 9.0, 'Target'), ('b',): ('traded', 30.0, 3.0, 'Expiry')},
+        {('a',): ('open', 5.0, 0.5, 'Open (data ends)'), ('b',): ('traded', -5.0, -0.5, 'Stop loss')},
+    ]
+    f = ose.Fold()
+    for m in months:
+        f.add(m)
+    mine = {r['entry_day']: r for r in f.rows()}
+    theirs = {r['k']: r for r in cre.rank(months, keys=('k',))}
+    for k in ('a', 'b'):
+        for field in ('total_trades', 'skipped', 'open', 'win_rate', 'net_pnl_rupees', 'total_pct',
+                      'avg_pct', 'worst_pct', 'profit_factor', 'max_drawdown_rupees', 'exits'):
+            assert mine[k][field] == theirs[k][field], (k, field)
+    assert mine['a']['net_dd'] == round(110 / 80, 2) and mine['b']['net_dd'] == round(65 / 5, 2)
+    # 'b' earns well under 'a' but 13× its drawdown — with n=1 the board still keeps it.
+    assert [r['entry_day'] for r in ose.board(f.rows(), n=1)] == ['a', 'b']
+
+
+def test_sweep_rows_with_wings_and_a_profit_lock_match_the_backtest():
+    frames = _strike_frames(_rally_prices)
+    sweep = {'variants': (('none', 0), ('hedge_roll', 200), ('roll_untested', 200)),
+             'wings': (0, 500), 'locks': ((0, 0), (3, 0), (10, 5))}
+    res = ose.score_month({'last_friday': ENTRY}, SESSIONS, SPOT_UP, frames, QTY, {}, 100, **sweep)
+    assert len(res) == ose.sweep_size(**sweep) // len(ose.ENTRY_DAYS)
+    for w in (0, 500):
+        for kind, pt in sweep['variants']:
+            for tp, sp, la, lt in [(5, 5, 0, 0), (10, 50, 3, 0), (50, 50, 10, 5), (3, 3, 0, 0)]:
+                p = {'wings': w, 'adjust': kind, 'adjust_pts': pt, 'target_pct': tp, 'stop_pct': sp,
+                     'lock_at': la, 'lock_to': lt}
+                bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT_UP, frames, p), QTY, 1, QTY, 100)
+                status, net, pct, reason = res[('last_friday', w, kind, pt, tp, sp, la, lt)]
+                assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), p

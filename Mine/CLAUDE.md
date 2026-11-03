@@ -478,12 +478,29 @@ stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11
   `_assemble`; closed legs freeze at their closing mark), target/stop stay % of the FIRST premium, brokerage is
   ₹100 per leg traded (`legs_traded`), and a stop/target on the adjustment's own bar wins (it is a level fill
   inside the bar; the adjustment is at the close).
-* **Find Best Params** sweeps entry day × `ADJUST_VARIANTS` (none + 3 types × 7 trigger points) × target ×
-  stop = 29,700 combos, one path per (month, entry day, adjustment) (`score_month` → `score_expiry`); ranked by
-  `call_ratio_engine.rank(keys=SWEEP_KEYS)`; a test holds sweep rows equal to the backtest of their params.
+* **`hedge_roll`** (added the evening of 2026-11-03) does `hedge` and `roll_untested` at the same trigger —
+  the same strikes, so it costs no extra contracts.
+* **Profit lock** (`lock_at` / `lock_to`, % of premium, 0 = off): from the bar after a 5-minute CLOSE at/above
+  `lock_at`, a stop rests at `lock_to` (filled at the level, at the open on a gap), reason `Profit lock`;
+  it counts only while above the ordinary stop. Pure exit logic — no contracts.
+* **Wings** (`wings`, points, 0 = none): BUY the CE `wings` above / the PE `wings` below at entry (iron fly);
+  the % are then of the NET credit (`premium` = sold − wings, `sold_premium` kept beside it); a missing wing
+  skips the month. **A backtest box only, not in the sweep**: over Dec 2019 – Nov 2026 ±300 / ±500 never beat
+  the same setups without them on net or net ÷ DD, and they cost ~2 contracts per entry day.
+* **Find Best Params** sweeps entry day × `WINGS` (0) × `ADJUST_VARIANTS` (none + 4 types × 7 trigger points) ×
+  target × stop × `LOCKS` (off + 7; a lock at/above the target is not a combo) = 96,570 combos, one path per
+  (month, entry day, wings, adjustment) (`score_month` → `score_expiry`). Months are folded oldest first as
+  they finish (`Fold`, the shared rank's scoring plus `net_dd` = net ÷ max DD) so a long range never holds
+  every month's combos; the board (`board`) is the top 100 by net plus the top 100 by net ÷ DD among combos
+  earning ≥ ¼ of the best net. A test holds sweep rows equal to the backtest of their params.
   **Its cost is the adjustment strikes**: ~36 contracts a month cold (every 50-strike NIFTY crossed, both
   sides), ~7 s each at Breeze's pace — a year is ~430 contracts / ~1 h; 2020-26 (~3,000) is over a day's
-  5,000-request quota, so warm it a year at a time after hours.
+  5,000-request quota, so warm it a year at a time after hours. Dec 2019 – Nov 2026 is warm (2,694
+  contracts, plus the ±300/±500 wings); cached, the 83-month sweep is ~4 min of CPU.
+* **What the 2019-26 sweep said** (lot 65): best net Last Wed · roll 100 · T50/S20 ₹4.71 L (DD ₹54.5 k), and
+  with a 30→10 lock ₹4.50 L (DD ₹50.8 k); steadiest Last Tue · hedge 100 · T20/S8 · lock 15→0 ₹2.66 L with
+  DD ₹12.5 k — ₹1.26 L / ₹1.40 L in each half (Dec 2019 – May 2023 / Jun 2023 – Nov 2026) at the same DD.
+  A lock cut DD 30-40 % on most roll / re-centre rows for a few % of net.
 
 Tests: `tests/test_option_selling_engine.py`.
 

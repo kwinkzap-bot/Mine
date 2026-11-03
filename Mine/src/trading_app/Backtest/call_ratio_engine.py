@@ -194,6 +194,15 @@ def downside_points(prices: Dict[str, float]) -> float:
     return 2 * prices['sell'] - prices['buy'] - prices['hedge']
 
 
+def is_weekly_expiry(expiry: date) -> bool:
+    """True for a weekly-only expiry, False for its month's last (the monthly).
+    Judged on the expiry WEEKDAY of its week, so a monthly pulled a day early by
+    a holiday (Wed 23rd for Thu 24th) is still the monthly."""
+    from trading_app.service.expiry_calendar import expiry_weekday_for
+    nominal = expiry + timedelta(days=(expiry_weekday_for(expiry) - expiry.weekday()) % 7)
+    return (nominal + timedelta(days=7)).month == nominal.month
+
+
 def contract_window(expiry: date) -> tuple:
     """The range every contract of `expiry` is fetched over — from 10 days
     before the PREVIOUS monthly expiry (the earliest any entry rule can open
@@ -204,8 +213,16 @@ def contract_window(expiry: date) -> tuple:
     vs Tue 09-29, or up to 6 days before a Thursday-31st expiry — and then
     opens the month after next. Until 2026-11-03 the window started 3 days
     before the previous expiry, so those entries (5 of 12 months in
-    2025-26) fell outside it and read as "No ICICI premium at entry"."""
+    2025-26) fell outside it and read as "No ICICI premium at entry".
+
+    A WEEKLY expiry (one with another expiry week after it in the same month —
+    the monthly straddle's weekly cadence) is a week's contract: fetched from 12
+    days before it, which covers an entry up to the session after the previous
+    weekly expiry. A monthly expiry keeps the window above even when a weekly
+    trade asks for it, so both cadences share its cache entry."""
     from trading_app.service.expiry_calendar import _month_expiry, expiry_weekday_for
+    if is_weekly_expiry(expiry):
+        return expiry - timedelta(days=12), expiry
     prev = _month_expiry(expiry.replace(day=1) - timedelta(days=1), expiry_weekday_for)
     return prev - timedelta(days=10), expiry
 

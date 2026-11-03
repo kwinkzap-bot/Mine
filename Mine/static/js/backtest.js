@@ -1156,7 +1156,9 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Target', 'Both legs bought back together once the straddle is up 5% of the premium collected (CE + PE sold).'],
             ['Stop', 'Both legs bought back together once it is down 5% of the premium collected.'],
             ['Fill', 'At the level itself; if a session opens already past it (an overnight gap), at that open.'],
-            ['Adjustment', 'Optional. When NIFTY\'s 5-minute close is the chosen points away from the centre (the sold strike, then the last adjustment\'s ATM): roll the profit leg to the new ATM, re-centre both legs there, or buy the losing side there as a hedge (once a side) — up to Max Adjustments a month, never on expiry day. Target / Stop stay on the first premium collected.'],
+            ['Adjustment', 'Optional. When NIFTY\'s 5-minute close is the chosen points away from the centre (the sold strike, then the last adjustment\'s ATM): roll the profit leg to the new ATM, re-centre both legs there, or buy the losing side there as a hedge (once a side), or hedge and roll together — up to Max Adjustments a month, never on expiry day. Target / Stop stay on the first premium collected.'],
+            ['Wings', 'Optional. Buy the CE Wings points above and the PE Wings points below the sold strike at the entry (an iron fly). The loss is capped at the wing width less the credit; Target / Stop / Lock are % of the net credit.'],
+            ['Profit lock', 'Optional. Once a 5-minute close has the trade up Lock At % of the premium, a stop rests at Lock To % (0 = break-even), filled at that level — a winner cannot become a loss.'],
             ['Exit', 'A position trade — no exit time. Only if neither level is hit by expiry does it close at the expiry day\'s last close.']] },
         call_ratio: { sub: 'NIFTY monthly 1:2 call ratio with a far hedge, zero adjustment', steps: [
             ['Entry', 'Last Friday of the month at 15:16, on NEXT month\'s expiry: BUY 1 CE 300 pts above the ATM, SELL 2 CE 300 above that, BUY 1 CE 1,000 above the sold strike.'],
@@ -2343,6 +2345,9 @@ document.addEventListener('DOMContentLoaded', function() {
             adjust:      document.getElementById('osAdjust')?.value || 'none',
             adjust_pts:  num('osAdjustPts', 200),
             max_adjust:  Math.max(1, parseInt(document.getElementById('osMaxAdjust')?.value || 2)),
+            wings:       Math.max(0, num('osWings', 0)),
+            lock_at:     Math.max(0, num('osLockAt', 0)),
+            lock_to:     Math.max(0, num('osLockTo', 0)),
             lots:        Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
         };
     }
@@ -2401,6 +2406,7 @@ document.addEventListener('DOMContentLoaded', function() {
             { key: 'pe_entry', label: 'PE Sold', sortable: true, format: prem },
             { key: 'pe_exit', label: 'PE Out', sortable: true, format: prem },
             { key: 'premium', label: 'Premium', sortable: true, format: prem },
+            { key: 'wings', label: 'Wings', sortable: false, format: v => v || '—' },
             { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
             { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
             { key: 'exit_reason', label: 'Outcome', sortable: true },
@@ -5866,21 +5872,24 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // ── NIFTY Monthly ATM Straddle — Find Best Params ──────────────────
-    // Entry day × target % × stop % (option_selling_engine.SWEEP_GRID, 1,350 combos) on /option-selling/optimise; the same two contracts a month
-    // as the backtest, so a cached run is instant.
+    // Entry day × wings × adjustment × target % × stop % × profit lock (option_selling_engine.sweep_size()) on
+    // /option-selling/optimise; the board is the top 100 by net plus the top 100 by net ÷ drawdown (ose.board).
     let _osOptRun = 0;
     const _OS_ENTRY_DAYS = {
         last_monday: 'Last Mon', last_tuesday: 'Last Tue', last_wednesday: 'Last Wed',
         last_thursday: 'Last Thu', last_friday: 'Last Fri', after_expiry: 'After expiry',
     };
-    const _OS_ADJUST = { none: 'None', roll_untested: 'Roll profit leg', recenter: 'Re-centre', hedge: 'Hedge' };
+    const _OS_ADJUST = { none: 'None', roll_untested: 'Roll profit leg', recenter: 'Re-centre', hedge: 'Hedge',
+                         hedge_roll: 'Hedge + roll' };
     const STRADDLE_OPT_COLS = [
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
         { label: 'Entry Day',    key: 'entry_day',      fmt: r => _OS_ENTRY_DAYS[r.entry_day] || r.entry_day },
+        { label: 'Wings',        key: 'wings',          fmt: r => (r.wings ? `±${r.wings}` : '—') },
         { label: 'Adjustment',   key: 'adjust',         fmt: r => _OS_ADJUST[r.adjust] || r.adjust },
         { label: 'Adjust At',    key: 'adjust_pts',     fmt: r => (r.adjust === 'none' ? '—' : `${r.adjust_pts} pts`) },
         { label: 'Target',       key: 'target_pct',     fmt: r => `${r.target_pct}%` },
         { label: 'Stop',         key: 'stop_pct',       fmt: r => `${r.stop_pct}%` },
+        { label: 'Lock',         key: 'lock_at',        fmt: r => (r.lock_at ? `${r.lock_at}% → ${r.lock_to}%` : '—') },
         { label: 'Months',       key: 'total_trades',   fmt: r => `${r.total_trades}${r.skipped ? ` <small>(${r.skipped} skip)</small>` : ''}` },
         { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
         { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
@@ -5889,6 +5898,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Worst Month',  key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
         { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
         { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
+        { label: 'Net / DD',     key: 'net_dd',         fmt: r => (r.net_dd == null ? '—' : r.net_dd >= 999 ? '∞' : Number(r.net_dd).toFixed(2)) },
         { label: '',             key: null,             fmt: () => '' },   // Use button
     ];
 
@@ -5899,9 +5909,13 @@ document.addEventListener('DOMContentLoaded', function() {
         set('osStop', String(r.stop_pct));
         set('osAdjust', r.adjust || 'none');
         if (r.adjust && r.adjust !== 'none') set('osAdjustPts', String(r.adjust_pts));
+        set('osWings', String(r.wings || 0));
+        set('osLockAt', String(r.lock_at || 0));
+        set('osLockTo', String(r.lock_to || 0));
         if (window.showNotification) window.showNotification(
-            `Applied: ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day} · ${_OS_ADJUST[r.adjust] || 'None'}`
+            `Applied: ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
             + `${r.adjust && r.adjust !== 'none' ? ` @ ${r.adjust_pts} pts` : ''} · target ${r.target_pct}% · stop ${r.stop_pct}% · `
+            + `${r.lock_at ? `lock ${r.lock_at}% → ${r.lock_to}% · ` : ''}`
             + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
     }
 
@@ -5912,7 +5926,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const apply = applyStraddleOptResult;
         if (metaEl) metaEl.textContent =
             `${data.total_combos_tested} combos · ${data.total} scored · ${data.months} months (≥ ${data.min_trades} closed to score)`
-            + ` · every Entry Day × adjustment · ${data.lots}×${data.lot_size} · % of premium collected`
+            + ` · every Entry Day × wings × adjustment × profit lock · top by Net and by Net ÷ DD`
+            + ` · ${data.lots}×${data.lot_size} · % of premium collected`
             + (data.summary?.breeze_errors ? ` · ${data.summary.breeze_errors} ICICI requests failed` : '');
         _mountSingleOptGrid('osOptGrid', data.results || [], STRADDLE_OPT_COLS, 'net_pnl_rupees', apply);
         if (panel)     panel.style.display     = '';
