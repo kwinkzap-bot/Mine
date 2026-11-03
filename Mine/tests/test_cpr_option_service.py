@@ -176,6 +176,22 @@ def test_pick_strike_goes_up_the_ladder_for_a_put():
     assert c['strike'] == 23300
 
 
+def test_an_intrabar_entry_picks_its_strike_on_the_minutes_mid_it_is_priced_at():
+    """3 Nov 2026, Mine #15 (≈250 PE, break inside 12:19, Kite minutes): on the closes 23850 (226.55)
+    edges 23900 (274.8); on the open/close mids the entry is booked at, 23900 (269.5) is nearer than
+    23850 (221.2) — and 23900 PE is what live bought at the break."""
+    oc = {23650: (40.0, 44.0), 23700: (70.0, 76.0), 23750: (110.0, 118.0), 23800: (169.0, 179.6),
+          23850: (215.9, 226.55), 23900: (264.25, 274.8), 23950: (313.65, 322.65), 24000: (362.0, 371.0)}
+
+    def fetch(con, day):
+        o, c = oc[con['strike']]
+        return [{'time': '12:19', 'open': o, 'high': max(o, c), 'low': min(o, c), 'close': c}]
+    con = {'strike': 23650, 'option_type': 'PE', 'expiry': '2026-11-03'}
+    on_close, _, _ = svc.pick_strike('NIFTY', con, date(2026, 11, 3), '12:19', 250, fetch)
+    on_mid, _, _ = svc.pick_strike('NIFTY', con, date(2026, 11, 3), '12:19', 250, fetch, mid=True)
+    assert on_close['strike'] == 23850 and on_mid['strike'] == 23900
+
+
 def test_pick_strike_keeps_the_atm_when_nothing_priced():
     fetch, _ = _ladder({})
     con = {'strike': 23200, 'option_type': 'CE', 'expiry': '2026-09-22'}

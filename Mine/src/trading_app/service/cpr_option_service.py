@@ -253,10 +253,14 @@ def replay(tm: Dict[str, Any], spot: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def pick_strike(symbol: str, con: Dict[str, Any], day: date, entry_time: str, premium: float,
-                fetch_option: Callable[[Dict[str, Any], date], List[Dict[str, Any]]]
-                ) -> tuple:
+                fetch_option: Callable[[Dict[str, Any], date], List[Dict[str, Any]]],
+                mid: bool = False) -> tuple:
     """The strike of `con`'s side whose premium at `entry_time` was nearest
-    `premium`, and its bars. Walks the ladder from the ATM contract: a first
+    `premium`, and its bars. `mid`: the premium is the minute's open/close
+    average — what an intrabar entry is priced at (legs_at), so the strike is
+    chosen on the same number it is bought at. On 3 Nov 2026 (Mine #15, ≈250
+    PE, 12:19 break) the closes picked 23850 (226.55) over 23900 (274.8) while
+    the mids, 221.2 and 269.5, are 23900's — the strike live bought. Walks the ladder from the ATM contract: a first
     jump sized by PICK_DELTA_GUESS, then one strike at a time towards the
     target until two neighbours bracket it. Strikes already read are kept,
     so the walk costs one fetch per strike it looks at.
@@ -280,7 +284,10 @@ def pick_strike(symbol: str, con: Dict[str, Any], day: date, entry_time: str, pr
                 logger.warning(f"[CPR options] {day} {strike}{con['option_type']}: {e}")
                 bars = []
             b = bar_at(bars, entry_time)
-            seen[strike] = (c, bars, b['close'] if b else None)
+            px = None
+            if b:
+                px = (b['open'] + b['close']) / 2 if mid and b.get('open') is not None else b['close']
+            seen[strike] = (c, bars, px)
         return seen[strike][2]
 
     atm = con['strike']
@@ -929,7 +936,8 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
                                     t.get('exit_price')) if mins else t.get('exit_time')
             leg.update(entry_time=t_in, exit_time=t_out)
             if premium:
-                con, bars, _ = pick_strike(symbol, con, day, t_in, premium, fetch_option)
+                con, bars, _ = pick_strike(symbol, con, day, t_in, premium, fetch_option,
+                                          mid=bool(t.get('entry_mid')))
             else:
                 bars = fetch_option(con, day)
             leg.update(strike=con['strike'], option_type=con['option_type'], expiry=con['expiry'])
