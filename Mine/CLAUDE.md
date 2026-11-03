@@ -447,7 +447,7 @@ sessions before expiry. **Capital is the page's ₹ per set** (no historical SPA
 
 Tests: `tests/test_call_ratio_engine.py`.
 
-## NIFTY Monthly ATM Straddle backtest (was the weekly ATM Straddle / Option Selling)
+## NIFTY ATM Straddle backtest — monthly or weekly (was the weekly ATM Straddle / Option Selling)
 
 The ⚖️ straddle in the Mine group on /backtest. **Monthly since 2026-11-03**: once a month on the Entry Day box
 (`entry_day`: last Friday by default, last Mon–Thu, or `after_expiry` — `call_ratio_engine.entry_days`) at
@@ -478,6 +478,13 @@ stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11
   `_assemble`; closed legs freeze at their closing mark), target/stop stay % of the FIRST premium, brokerage is
   ₹100 per leg traded (`legs_traded`), and a stop/target on the adjustment's own bar wins (it is a level fill
   inside the bar; the adjustment is at the close).
+* **Weekly cadence** (`cadence='weekly'`, the page's **Expiry** box, added the evening of 2026-11-03): one trade a
+  WEEK on `entry_day` Monday … Friday (the session before it in the same week on a holiday) or the session after
+  each weekly expiry, selling the ATM CE + PE of the first weekly expiry AFTER the entry (`weekly_expiry`); NIFTY
+  weeklies exist from 2019-02-11 (`WEEKLY_SINCE`, earlier weeks skip). The sweep's period is the ISO week
+  (`entries_by_month(..., cadence='weekly')`). A weekly-only expiry is fetched over its own fortnight
+  (`call_ratio_engine.contract_window` → `is_weekly_expiry`, judged on the expiry WEEKDAY of its week so a
+  holiday-moved monthly stays monthly); a monthly expiry keeps its window, so both cadences share that cache.
 * **`hedge_roll`** (added the evening of 2026-11-03) does `hedge` and `roll_untested` at the same trigger —
   the same strikes, so it costs no extra contracts.
 * **Profit lock** (`lock_at` / `lock_to`, % of premium, 0 = off): from the bar after a 5-minute CLOSE at/above
@@ -487,9 +494,17 @@ stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11
   the % are then of the NET credit (`premium` = sold − wings, `sold_premium` kept beside it); a missing wing
   skips the month. **A backtest box only, not in the sweep**: over Dec 2019 – Nov 2026 ±300 / ±500 never beat
   the same setups without them on net or net ÷ DD, and they cost ~2 contracts per entry day.
-* **Find Best Params** sweeps entry day × `WINGS` (0) × `ADJUST_VARIANTS` (none + 4 types × 7 trigger points) ×
-  target × stop × `LOCKS` (off + 7; a lock at/above the target is not a combo) = 96,570 combos, one path per
-  (month, entry day, wings, adjustment) (`score_month` → `score_expiry`). Months are folded oldest first as
+* **Find Best Params** sweeps **both Expiry choices** (`CADENCES`, the first `SWEEP_KEYS` field; the page's own
+  Expiry box is not read) × entry day × `WINGS` (0) × `ADJUST_VARIANTS` (none + 4 types × 7 trigger points) ×
+  target × stop × `LOCKS` (off + 7; a lock at/above the target is not a combo) = 193,140 combos, one path per
+  (period, entry day, wings, adjustment) (`score_month` → `score_expiry`). Each cadence is folded oldest first
+  on its own and needs half of ITS periods closed (`Fold.rows({cadence: n})`; weeks before 2019-02-11 are
+  not periods). A weekly year is ~950 contracts cold (~10 min); Nov 2025 – Nov 2026 is warm.
+  **Cached, its CPU is ~0.3 s a month / 0.2 s a week** (was ~2 s / 1.2 s until the night of 2026-11-03):
+  `score_expiry` keeps one `cache` per entry (the bar grid, each contract on the grid, each leg's arrays)
+  across the 29 adjustment variants, `first_exits` decides every target/stop/lock combo of a path at once
+  (running max/min + searchsorted; a test holds it equal to `first_exit` combo for combo), and each distinct
+  (bar, reason, level) is booked once. 1.5 M real combos and the whole 83-month board came out identical. Months are folded oldest first as
   they finish (`Fold`, the shared rank's scoring plus `net_dd` = net ÷ max DD) so a long range never holds
   every month's combos; the board (`board`) is the top 100 by net plus the top 100 by net ÷ DD among combos
   earning ≥ ¼ of the best net. A test holds sweep rows equal to the backtest of their params.

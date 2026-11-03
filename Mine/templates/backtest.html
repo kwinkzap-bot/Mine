@@ -46,7 +46,7 @@
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
                 <option value="st_touch_break" selected>🧲 ST Touch Break (SuperTrend wick + break)</option>
                 <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
-                <option value="atm_straddle">⚖️ NIFTY Monthly ATM Straddle Sell (±5%)</option>
+                <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (Monthly / Weekly)</option>
                 <option value="call_ratio">🧠 NIFTY Monthly Call Ratio 1:2 (No-Brainer)</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
@@ -1879,7 +1879,14 @@
                  intraday until 2026-11-03). -->
             <div id="optionSellingParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
-                    <label for="osEntryDay" title="The day of each month the straddle is sold (the session before it when that day is a holiday). It always sells the NEXT monthly expiry at least 14 days out.">Entry Day</label>
+                    <label for="osCadence" title="Monthly: one trade a month on next month's monthly expiry. Weekly: one trade a week on the next weekly expiry (NIFTY weeklies exist from 2019-02-11).">Expiry</label>
+                    <select id="osCadence">
+                        <option value="monthly" selected>Monthly</option>
+                        <option value="weekly">Weekly</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="osEntryDay" title="Monthly: the day of each month the straddle is sold, on the NEXT monthly expiry at least 14 days out. Weekly: the day of each week, on the first weekly expiry after it. The session before it when that day is a holiday.">Entry Day</label>
                     <select id="osEntryDay">
                         <option value="last_monday">Last Monday of month</option>
                         <option value="last_tuesday">Last Tuesday of month</option>
@@ -1939,7 +1946,7 @@
                     <label>Rule</label>
                     <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
                         Once a month on Entry Day (last Friday by default) at Entry Time (15:15), sell the ATM CE and the ATM PE (strike nearest the spot)
-                        of NEXT month's monthly expiry · both legs are bought back together when the straddle is up Target&nbsp;%
+                        of NEXT month's monthly expiry — or, with Expiry Weekly, once a week on that weekday, on the next weekly expiry · both legs are bought back together when the straddle is up Target&nbsp;%
                         or down Stop&nbsp;% of the premium collected, filled at that level (a session that opens past it fills at the open) ·
                         a position trade with no exit time: if neither is hit, it ends with the contract, at the expiry day's close ·
                         Adjustment (optional): when NIFTY's 5-minute close is Adjust At points from the centre, roll the profit leg / re-centre both /

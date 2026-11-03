@@ -9301,14 +9301,19 @@ def _os_parse(data: dict):
     end_dt = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
     if end_dt < start_dt:
         raise ValueError('end_date is before start_date')
-    from trading_app.Backtest.option_selling_engine import ADJUST_TYPES, ENTRY_DAYS
-    entry_day = str(data.get('entry_day') or 'last_friday')
-    if entry_day not in ENTRY_DAYS:
-        raise ValueError(f'entry_day must be one of {", ".join(ENTRY_DAYS)}')
+    from trading_app.Backtest.option_selling_engine import ADJUST_TYPES, CADENCES, entry_rules
+    cadence = str(data.get('cadence') or 'monthly')
+    if cadence not in CADENCES:
+        raise ValueError(f'cadence must be one of {", ".join(CADENCES)}')
+    rules = entry_rules(cadence)
+    entry_day = str(data.get('entry_day') or ('friday' if cadence == 'weekly' else 'last_friday'))
+    if entry_day not in rules:
+        raise ValueError(f'entry_day must be one of {", ".join(rules)} for a {cadence} straddle')
     adjust = str(data.get('adjust') or 'none')
     if adjust not in ADJUST_TYPES:
         raise ValueError(f'adjust must be one of {", ".join(ADJUST_TYPES)}')
     params = {
+        'cadence': cadence,
         'entry_day': entry_day,
         'entry_hm': _os_hm(data.get('entry_time', '15:15'), (15, 15)),
         'target_pct': min(500.0, max(0.1, float(data.get('target_pct', 5)))),
@@ -9334,8 +9339,10 @@ def run_option_selling_backtest_api():
     """Start a NIFTY monthly ATM straddle backtest; returns {'task_id'} to poll
     at /backtest/option-selling/status/<task_id>.
 
-    Body: start_date, end_date ('YYYY-MM-DD'); entry_day ('last_friday' default,
-    last_monday … last_thursday, after_expiry); entry_time (15:15); target_pct / stop_pct (5 / 5, of the premium collected — the only
+    Body: start_date, end_date ('YYYY-MM-DD'); cadence ('monthly' default |
+    'weekly' — one trade a week on the next weekly expiry); entry_day (monthly:
+    'last_friday' default, last_monday … last_thursday, after_expiry; weekly:
+    monday … friday ('friday' default), after_expiry); entry_time (15:15); target_pct / stop_pct (5 / 5, of the premium collected — the only
     exits short of the expiry itself); adjust (none | roll_untested | recenter |
     hedge | hedge_roll), adjust_pts (NIFTY points from the centre, 200), max_adjust (2);
     wings (points; 0 = none — buy the CE/PE this far out at entry, and every %
@@ -9348,7 +9355,7 @@ def run_option_selling_backtest_api():
     def worker(ctx, task):
         from trading_app.Backtest import option_selling_engine as ose
         p = ctx['params']
-        entries = ose.entry_days(ctx['sessions'], ctx['start'], ctx['end'], p['entry_day'])
+        entries = ose.entry_days(ctx['sessions'], ctx['start'], ctx['end'], p['entry_day'], p['cadence'])
         task['progress']['total'] = len(entries)
 
         def one(entry):
@@ -9388,8 +9395,9 @@ def run_option_selling_optimise_api():
     to poll at /backtest/option-selling/optimise/status/<task_id>.
 
     Entry day × wings × adjustment (type × trigger points) × target % × stop %
-    × profit lock (option_selling_engine.sweep_size()) on the page's entry
-    time, max adjustments and lots. Every target/stop/lock is a replay of one
+    × profit lock for BOTH Expiry choices — monthly and weekly — on one board
+    (option_selling_engine.sweep_size()), on the page's entry time, max
+    adjustments and lots; the page's own Expiry box is not read here. Every target/stop/lock is a replay of one
     (entry day, wings, adjustment) path; the cost is Breeze — each entry day's
     two legs, its wings, and every new ATM an adjustment reaches (cached per
     contract). Months are folded oldest first as they finish (ose.Fold), so a
@@ -9401,33 +9409,43 @@ def run_option_selling_optimise_api():
 
     def worker(ctx, task):
         from trading_app.Backtest import option_selling_engine as ose
-        by_month = ose.entries_by_month(ctx['sessions'], ctx['start'], ctx['end'])
-        months = sorted(by_month)
-        task['progress']['total'] = len(months)
-
-        def one(month):
-            res = ose.score_month(by_month[month], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
-                                  ctx['qty'], ctx['params'], _OS_BROKERAGE_PER_LEG)
-            task['progress']['traded'] += 1
-            return res
+        # Both Expiry choices: each cadence's periods (months, weeks) are folded
+        # oldest first into one board, and each needs half of its own periods.
+        plans = [(cad, ose.entries_by_month(ctx['sessions'], ctx['start'], ctx['end'], cadence=cad))
+                 for cad in ose.CADENCES]
+        task['progress']['total'] = sum(len(by) for _, by in plans)
 
         from concurrent.futures import ThreadPoolExecutor
         fold = ose.Fold()
-        with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
-            for n, res in enumerate(pool.map(one, months), 1):       # oldest first, in order
-                fold.add(res)
-                task['progress']['done'] = n
+        n = 0
+        for cad, by in plans:
+            base = {**ctx['params'], 'cadence': cad}
+
+            def one(period, by=by, base=base):
+                res = ose.score_month(by[period], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
+                                      ctx['qty'], base, _OS_BROKERAGE_PER_LEG)
+                task['progress']['traded'] += 1
+                return res
+
+            with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
+                for res in pool.map(one, sorted(by)):            # oldest first, in order
+                    fold.add(res)
+                    n += 1
+                    task['progress']['done'] = n
         task['progress']['stage'] = 'scoring'
-        min_trades = max(1, len(months) // 2)
+        periods = {cad: len(by) for cad, by in plans}
+        min_trades = {cad: max(1, k // 2) for cad, k in periods.items()}
         rows = fold.rows(min_trades)
         task['payload'] = {
             'results': ose.board(rows), 'best': rows[0] if rows else None, 'total': len(rows),
-            'total_combos_tested': ose.sweep_size(), 'months': len(months),
-            'min_trades': min_trades, 'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
+            'total_combos_tested': ose.sweep_size(), 'months': periods['monthly'],
+            'weeks': periods['weekly'], 'min_trades': min_trades,
+            'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
             'summary': {},
         }
-        logger.info('[MonthlyStraddleOptimise] %s..%s: %d months, %d combos scored, %d contracts',
-                    ctx['start'], ctx['end'], len(months), len(rows), task['progress']['contracts'])
+        logger.info('[MonthlyStraddleOptimise] %s..%s: %d months + %d weeks, %d combos scored, %d contracts',
+                    ctx['start'], ctx['end'], periods['monthly'], periods['weekly'], len(rows),
+                    task['progress']['contracts'])
 
     return _cr_start(request.get_json(silent=True) or {}, worker, 'os-opt', parse=_os_parse)
 

@@ -170,18 +170,19 @@ def test_sweep_row_matches_the_backtest_of_its_params():
     assert set(entries) == set(ose.ENTRY_DAYS)            # every Entry Day choice is scored
     assert entries['last_friday'] == ENTRY and entries['last_monday'] == date(2025, 1, 27)
     res = ose.score_month(entries, SESSIONS, SPOT, frames, QTY, {}, 100)
-    assert len(res) == ose.sweep_size()
+    assert len(res) == ose.sweep_size(cadences=('monthly',))
     for rule, entry in entries.items():
         for tp, sp in [(5, 5), (10, 5), (10, 10), (30, 30), (50, 50), (2, 30)]:
             bt = ose.trade_row(ose.run_trade(entry, SESSIONS, SPOT, frames,
                                              {'entry_day': rule, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[(rule, 0, 'none', 0, tp, sp, 0, 0)]
+            status, net, pct, reason = res[('monthly', rule, 0, 'none', 0, tp, sp, 0, 0)]
             assert (status, reason) == (bt['status'], bt['exit_reason']), (rule, tp, sp)
             assert round(net, 2) == bt['pnl_rupees'], (rule, tp, sp)
     rows = ose.rank([res])
     assert rows[0]['net_pnl_rupees'] == round(max(r[1] for r in res.values() if r[0] == 'traded'), 2)
     assert rows[0]['entry_day'] in ose.ENTRY_DAYS and set(ose.SWEEP_KEYS) <= set(rows[0])
+    assert rows[0]['cadence'] == 'monthly'
 
 
 # ── Adjustments: NIFTY 23010 rallies to 23260 on Feb 10 at 10:00 ─────────────
@@ -286,7 +287,7 @@ def test_sweep_rows_with_adjustments_match_the_backtest():
             bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT_UP, frames,
                                              {'adjust': kind, 'adjust_pts': pt, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[('last_friday', 0, kind, pt, tp, sp, 0, 0)]
+            status, net, pct, reason = res[('monthly', 'last_friday', 0, kind, pt, tp, sp, 0, 0)]
             assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), \
                 (kind, pt, tp, sp)
 
@@ -356,7 +357,7 @@ def test_the_streaming_fold_scores_like_the_shared_rank_and_the_board_keeps_stea
     f = ose.Fold()
     for m in months:
         f.add(m)
-    mine = {r['entry_day']: r for r in f.rows()}
+    mine = {r['cadence']: r for r in f.rows()}
     theirs = {r['k']: r for r in cre.rank(months, keys=('k',))}
     for k in ('a', 'b'):
         for field in ('total_trades', 'skipped', 'open', 'win_rate', 'net_pnl_rupees', 'total_pct',
@@ -364,7 +365,7 @@ def test_the_streaming_fold_scores_like_the_shared_rank_and_the_board_keeps_stea
             assert mine[k][field] == theirs[k][field], (k, field)
     assert mine['a']['net_dd'] == round(110 / 80, 2) and mine['b']['net_dd'] == round(65 / 5, 2)
     # 'b' earns well under 'a' but 13× its drawdown — with n=1 the board still keeps it.
-    assert [r['entry_day'] for r in ose.board(f.rows(), n=1)] == ['a', 'b']
+    assert [r['cadence'] for r in ose.board(f.rows(), n=1)] == ['a', 'b']
 
 
 def test_sweep_rows_with_wings_and_a_profit_lock_match_the_backtest():
@@ -372,12 +373,115 @@ def test_sweep_rows_with_wings_and_a_profit_lock_match_the_backtest():
     sweep = {'variants': (('none', 0), ('hedge_roll', 200), ('roll_untested', 200)),
              'wings': (0, 500), 'locks': ((0, 0), (3, 0), (10, 5))}
     res = ose.score_month({'last_friday': ENTRY}, SESSIONS, SPOT_UP, frames, QTY, {}, 100, **sweep)
-    assert len(res) == ose.sweep_size(**sweep) // len(ose.ENTRY_DAYS)
+    assert len(res) == ose.sweep_size(**sweep, cadences=('monthly',)) // len(ose.ENTRY_DAYS)
     for w in (0, 500):
         for kind, pt in sweep['variants']:
             for tp, sp, la, lt in [(5, 5, 0, 0), (10, 50, 3, 0), (50, 50, 10, 5), (3, 3, 0, 0)]:
                 p = {'wings': w, 'adjust': kind, 'adjust_pts': pt, 'target_pct': tp, 'stop_pct': sp,
                      'lock_at': la, 'lock_to': lt}
                 bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT_UP, frames, p), QTY, 1, QTY, 100)
-                status, net, pct, reason = res[('last_friday', w, kind, pt, tp, sp, la, lt)]
+                status, net, pct, reason = res[('monthly', 'last_friday', w, kind, pt, tp, sp, la, lt)]
                 assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), p
+
+
+# ── Weekly cadence ────────────────────────────────────────────────────────────
+def test_weekly_entry_days_and_expiries():
+    from trading_app.Backtest import call_ratio_engine as cre
+    span = (date(2025, 2, 1), date(2025, 2, 28))
+    assert ose.entry_days(SESSIONS, *span, 'friday', 'weekly') == [
+        date(2025, 2, 7), date(2025, 2, 14), date(2025, 2, 21), date(2025, 2, 28)]
+    # A holiday on the Monday moves nothing into the week before: that week has no Monday entry.
+    no_feb10 = [d for d in SESSIONS if d != date(2025, 2, 10)]
+    assert date(2025, 2, 7) not in ose.entry_days(no_feb10, *span, 'monday', 'weekly')
+    # A holiday Wednesday falls back to the Tuesday of the same week.
+    no_feb12 = [d for d in SESSIONS if d != date(2025, 2, 12)]
+    assert date(2025, 2, 11) in ose.entry_days(no_feb12, *span, 'wednesday', 'weekly')
+    # The session after each Thursday expiry (2025 was the Thursday regime).
+    assert ose.entry_days(SESSIONS, *span, 'after_expiry', 'weekly')[:2] == [date(2025, 2, 7), date(2025, 2, 14)]
+    # Friday sells the NEXT Thursday; Thursday (expiry day) sells the one a week on.
+    assert ose.weekly_expiry(date(2025, 2, 7), SESSIONS) == date(2025, 2, 13)
+    assert ose.weekly_expiry(date(2025, 2, 13), SESSIONS) == date(2025, 2, 20)
+    # A weekly contract is fetched over its own fortnight; the monthly keeps its window.
+    assert cre.is_weekly_expiry(date(2025, 2, 13)) and not cre.is_weekly_expiry(date(2025, 2, 27))
+    assert cre.contract_window(date(2025, 2, 13)) == (date(2025, 2, 1), date(2025, 2, 13))
+    assert cre.contract_window(date(2025, 2, 27))[0] < date(2025, 1, 25)
+
+
+def test_a_weekly_trade_sells_the_next_weekly_expiry_and_ends_on_it():
+    seen = []
+
+    def frames(expiry, strike, right):
+        seen.append((expiry, strike, right))
+        return _frames(lambda r, ts: 290.0 if ts.date() > date(2025, 2, 7) else 300.0)(expiry, strike, right)
+    p = {'cadence': 'weekly', 'entry_day': 'friday', 'target_pct': 50, 'stop_pct': 50}
+    res = ose.run_trade(date(2025, 2, 7), SESSIONS, SPOT, frames, p)
+    assert res['expiry'] == date(2025, 2, 13) and res['reason'] == 'Expiry'
+    assert res['exit_ts'] == pd.Timestamp('2025-02-13 15:30') and res['pnl_points'] == 20.0
+    assert {e for e, _, _ in seen} == {date(2025, 2, 13)}
+    # Before NIFTY had weeklies there is nothing to sell.
+    old = ose.open_month(date(2018, 6, 1), SESSIONS, SPOT, frames, {**ose.DEFAULTS, **p})
+    assert not old['ok'] and 'weekly' in old['reason']
+
+
+def test_the_weekly_sweep_scores_one_week_per_period_and_matches_the_backtest():
+    frames = _frames(lambda r, ts: 285.0 if _after(ts, date(2025, 2, 11), (11, 0)) else 300.0)
+    by_week = ose.entries_by_month(SESSIONS, date(2025, 2, 3), date(2025, 2, 9), cadence='weekly')
+    assert list(by_week) == [(2025, 6)] and set(by_week[(2025, 6)]) == set(ose.WEEKLY_ENTRY_DAYS)
+    base = {'cadence': 'weekly'}
+    sweep = {'variants': (('none', 0),), 'locks': ((0, 0),)}
+    res = ose.score_month(by_week[(2025, 6)], SESSIONS, SPOT, frames, QTY, base, 100, **sweep)
+    for rule, entry in by_week[(2025, 6)].items():
+        for tp, sp in [(5, 5), (2, 50)]:
+            bt = ose.trade_row(ose.run_trade(entry, SESSIONS, SPOT, frames,
+                                             {**base, 'entry_day': rule, 'target_pct': tp, 'stop_pct': sp}),
+                               QTY, 1, QTY, 100)
+            status, net, pct, reason = res[('weekly', rule, 0, 'none', 0, tp, sp, 0, 0)]
+            assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), (rule, tp, sp)
+
+
+def test_find_best_params_sweeps_both_expiries_with_a_half_of_each_to_score():
+    assert ose.sweep_size() == 2 * ose.sweep_size(cadences=('monthly',))
+    f = ose.Fold()
+    for _ in range(3):                        # 3 months, each combo traded
+        f.add({('monthly', 'x'): ('traded', 10.0, 1.0, 'Target')})
+    for _ in range(5):                        # 12 weeks, the weekly combo trading only 5
+        f.add({('weekly', 'y'): ('traded', 10.0, 1.0, 'Target')})
+    assert {r['cadence'] for r in f.rows({'monthly': 1, 'weekly': 6})} == {'monthly'}
+    assert {r['cadence'] for r in f.rows({'monthly': 1, 'weekly': 5})} == {'monthly', 'weekly'}
+    # Weeks before NIFTY had weeklies are not periods of the weekly sweep.
+    sessions = [date(2019, 1, 28) + timedelta(i) for i in range(21)]
+    sessions = [d for d in sessions if d.weekday() < 5]
+    by = ose.entries_by_month(sessions, sessions[0], sessions[-1], cadence='weekly')
+    assert min(by) == date(2019, 2, 11).isocalendar()[:2]
+
+
+def test_the_vectorised_exit_search_agrees_with_first_exit_combo_for_combo():
+    import numpy as np
+    rng = np.random.default_rng(7)
+    idx = pd.DatetimeIndex([ts for ts in ALL5 if date(2025, 2, 3) <= ts.date() <= date(2025, 2, 27)])
+    exits = ose.exit_combos(locks=ose.LOCKS + ((10, 0), (5, 2)))
+    ex = {k: np.array([e[i] for e in exits], dtype=float) for i, k in enumerate(('tp', 'sp', 'la', 'lt'))}
+    for trial in range(30):
+        mtm = np.cumsum(rng.normal(0, 4, len(idx)))
+        if trial % 5 == 0:
+            mtm[:3] = [0.0, 40.0, -40.0]         # ties and early hits
+        path = {'idx': idx, 'mtm': mtm}
+        cut = pd.Timestamp('2025-02-27 15:30') if trial % 3 else pd.Timestamp('2025-02-20 12:00')
+        pos, why = ose.first_exits(path, 300.0, ex, cut)
+        hits = {}
+        for i, (tp, sp, la, lt) in enumerate(exits):
+            assert (pos[i], ose._REASONS[why[i]]) == ose.first_exit(path, 300.0, tp, sp, cut, hits, la, lt), \
+                (trial, tp, sp, la, lt)
+
+
+def test_weekly_expiry_follows_the_thursday_to_tuesday_cutover():
+    sessions = [date(2025, 8, 18) + timedelta(i) for i in range(28)]
+    sessions = [d for d in sessions if d.weekday() < 5]
+    # Thursday regime until 2025-09-01, Tuesday after: Thu 08-28's next weekly is Tue 09-02, not Thu 09-04.
+    assert ose.weekly_expiry(date(2025, 8, 21), sessions) == date(2025, 8, 28)
+    assert ose.weekly_expiry(date(2025, 8, 28), sessions) == date(2025, 9, 2)
+    assert ose.weekly_expiry(date(2025, 8, 29), sessions) == date(2025, 9, 2)
+    assert ose.weekly_expiry(date(2025, 9, 2), sessions) == date(2025, 9, 9)
+    assert date(2025, 9, 4) not in ose._weekly_expiries(sessions)
+    assert ose.weekly_entry_days(sessions, sessions[0], sessions[-1], 'after_expiry')[:3] == [
+        date(2025, 8, 22), date(2025, 8, 29), date(2025, 9, 3)]

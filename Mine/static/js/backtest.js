@@ -1151,8 +1151,9 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Entry', 'After 10:15, when price breaks the first-hour candle\'s High (BUY) or Low (SELL).'],
             ['Stop / Target', 'Stop = candle\'s other end. Target = ratio × the candle\'s range.'],
             ['Exit', 'Stop (wins if both touched in one bar), target, or 15:20. One trade per stock per day.']] },
-        atm_straddle: { sub: 'NIFTY monthly ATM short straddle', steps: [
+        atm_straddle: { sub: 'NIFTY ATM short straddle — monthly or weekly', steps: [
             ['Entry', 'Once a month on the Entry Day (last Friday by default; last Mon–Thu or the day after the monthly expiry can be picked) at 15:15 (the session before it if that day is a holiday): SELL the ATM CE and the ATM PE (strike nearest the spot) of NEXT month\'s expiry.'],
+            ['Weekly', 'With Expiry = Weekly: once a WEEK on the Entry Day (Mon–Fri, or the session after each weekly expiry), SELL the ATM CE + PE of the first weekly expiry after that day. NIFTY weeklies exist from 11-Feb-2019.'],
             ['Target', 'Both legs bought back together once the straddle is up 5% of the premium collected (CE + PE sold).'],
             ['Stop', 'Both legs bought back together once it is down 5% of the premium collected.'],
             ['Fill', 'At the level itself; if a session opens already past it (an overnight gap), at that open.'],
@@ -2338,6 +2339,7 @@ document.addEventListener('DOMContentLoaded', function() {
         return {
             start_date:  document.getElementById('startDate')?.value,
             end_date:    document.getElementById('endDate')?.value,
+            cadence:     document.getElementById('osCadence')?.value || 'monthly',
             entry_day:   document.getElementById('osEntryDay')?.value || 'last_friday',
             entry_time:  document.getElementById('osEntryTime')?.value || '15:15',
             target_pct:  num('osTarget', 5),
@@ -5878,11 +5880,33 @@ document.addEventListener('DOMContentLoaded', function() {
     const _OS_ENTRY_DAYS = {
         last_monday: 'Last Mon', last_tuesday: 'Last Tue', last_wednesday: 'Last Wed',
         last_thursday: 'Last Thu', last_friday: 'Last Fri', after_expiry: 'After expiry',
+        monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri',
     };
+    // The Entry Day box's choices follow the Expiry box (option_selling_engine.entry_rules).
+    const _OS_ENTRY_CHOICES = {
+        monthly: [['last_monday', 'Last Monday of month'], ['last_tuesday', 'Last Tuesday of month'],
+                  ['last_wednesday', 'Last Wednesday of month'], ['last_thursday', 'Last Thursday of month'],
+                  ['last_friday', 'Last Friday of month'], ['after_expiry', 'Day after monthly expiry']],
+        weekly:  [['monday', 'Monday'], ['tuesday', 'Tuesday'], ['wednesday', 'Wednesday'],
+                  ['thursday', 'Thursday'], ['friday', 'Friday'], ['after_expiry', 'Day after weekly expiry']],
+    };
+    function _osSetCadence(cadence, entryDay) {
+        const cad = document.getElementById('osCadence');
+        const sel = document.getElementById('osEntryDay');
+        if (!sel) return;
+        if (cad) cad.value = cadence;
+        const choices = _OS_ENTRY_CHOICES[cadence] || _OS_ENTRY_CHOICES.monthly;
+        const keep = entryDay || sel.value;
+        sel.innerHTML = choices.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+        sel.value = choices.some(([v]) => v === keep) ? keep : (cadence === 'weekly' ? 'friday' : 'last_friday');
+    }
+    document.getElementById('osCadence')?.addEventListener('change', e => _osSetCadence(e.target.value));
+
     const _OS_ADJUST = { none: 'None', roll_untested: 'Roll profit leg', recenter: 'Re-centre', hedge: 'Hedge',
                          hedge_roll: 'Hedge + roll' };
     const STRADDLE_OPT_COLS = [
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
+        { label: 'Expiry',       key: 'cadence',        fmt: r => (r.cadence === 'weekly' ? 'Weekly' : 'Monthly') },
         { label: 'Entry Day',    key: 'entry_day',      fmt: r => _OS_ENTRY_DAYS[r.entry_day] || r.entry_day },
         { label: 'Wings',        key: 'wings',          fmt: r => (r.wings ? `±${r.wings}` : '—') },
         { label: 'Adjustment',   key: 'adjust',         fmt: r => _OS_ADJUST[r.adjust] || r.adjust },
@@ -5890,12 +5914,12 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Target',       key: 'target_pct',     fmt: r => `${r.target_pct}%` },
         { label: 'Stop',         key: 'stop_pct',       fmt: r => `${r.stop_pct}%` },
         { label: 'Lock',         key: 'lock_at',        fmt: r => (r.lock_at ? `${r.lock_at}% → ${r.lock_to}%` : '—') },
-        { label: 'Months',       key: 'total_trades',   fmt: r => `${r.total_trades}${r.skipped ? ` <small>(${r.skipped} skip)</small>` : ''}` },
+        { label: 'Trades',       key: 'total_trades',   fmt: r => `${r.total_trades}${r.skipped ? ` <small>(${r.skipped} skip)</small>` : ''}` },
         { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
         { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
         { label: 'Total % Prem', key: 'total_pct',      fmt: r => _crPct(r.total_pct) },
-        { label: 'Avg / Month',  key: 'avg_pct',        fmt: r => _crPct(r.avg_pct) },
-        { label: 'Worst Month',  key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
+        { label: 'Avg / Trade',  key: 'avg_pct',        fmt: r => _crPct(r.avg_pct) },
+        { label: 'Worst Trade',  key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
         { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
         { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
         { label: 'Net / DD',     key: 'net_dd',         fmt: r => (r.net_dd == null ? '—' : r.net_dd >= 999 ? '∞' : Number(r.net_dd).toFixed(2)) },
@@ -5904,7 +5928,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function applyStraddleOptResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-        set('osEntryDay', r.entry_day);
+        _osSetCadence(r.cadence || 'monthly', r.entry_day);
         set('osTarget', String(r.target_pct));
         set('osStop', String(r.stop_pct));
         set('osAdjust', r.adjust || 'none');
@@ -5913,7 +5937,7 @@ document.addEventListener('DOMContentLoaded', function() {
         set('osLockAt', String(r.lock_at || 0));
         set('osLockTo', String(r.lock_to || 0));
         if (window.showNotification) window.showNotification(
-            `Applied: ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
+            `Applied: ${r.cadence === 'weekly' ? 'Weekly' : 'Monthly'} · ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
             + `${r.adjust && r.adjust !== 'none' ? ` @ ${r.adjust_pts} pts` : ''} · target ${r.target_pct}% · stop ${r.stop_pct}% · `
             + `${r.lock_at ? `lock ${r.lock_at}% → ${r.lock_to}% · ` : ''}`
             + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
@@ -5925,8 +5949,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const recalcBtn = document.getElementById('osRecalcOptBtn');
         const apply = applyStraddleOptResult;
         if (metaEl) metaEl.textContent =
-            `${data.total_combos_tested} combos · ${data.total} scored · ${data.months} months (≥ ${data.min_trades} closed to score)`
-            + ` · every Entry Day × wings × adjustment × profit lock · top by Net and by Net ÷ DD`
+            `${data.total_combos_tested} combos · ${data.total} scored · Monthly ${data.months} months`
+            + ` (≥ ${data.min_trades?.monthly ?? data.min_trades} closed) + Weekly ${data.weeks ?? 0} weeks`
+            + ` (≥ ${data.min_trades?.weekly ?? '—'} closed)`
+            + ` · every Expiry × Entry Day × wings × adjustment × profit lock · top by Net and by Net ÷ DD`
             + ` · ${data.lots}×${data.lot_size} · % of premium collected`
             + (data.summary?.breeze_errors ? ` · ${data.summary.breeze_errors} ICICI requests failed` : '');
         _mountSingleOptGrid('osOptGrid', data.results || [], STRADDLE_OPT_COLS, 'net_pnl_rupees', apply);

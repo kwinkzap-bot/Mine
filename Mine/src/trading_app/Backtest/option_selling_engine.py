@@ -92,13 +92,31 @@ def entry_rules(cadence: str = 'monthly') -> tuple:
     return WEEKLY_ENTRY_DAYS if cadence == 'weekly' else ENTRY_DAYS
 
 
+def _weekly_on_or_after(day: date, sessions: Sequence[date]) -> Optional[date]:
+    """The first weekly expiry on/after `day`, across a change of expiry weekday.
+
+    expiry_on_or_after picks the weekday from the day it starts at, so from Fri
+    2025-08-29 (Thursday regime) it answered Thu 09-04 — but Tuesday expiries
+    began 09-01 and the contract was Tue 09-02; Breeze has nothing for the 4th.
+    Starting again from each cutover inside the gap and taking the earliest fixes it."""
+    from trading_app.service.expiry_calendar import _EXPIRY_WEEKDAY_REGIMES, expiry_on_or_after
+    exp = expiry_on_or_after(day, sessions, cadence='weekly')
+    if exp is None:
+        return None
+    for cutover, _ in _EXPIRY_WEEKDAY_REGIMES:
+        if day < cutover <= exp:
+            alt = expiry_on_or_after(cutover, sessions, cadence='weekly')
+            if alt is not None and day <= alt < exp:
+                exp = alt
+    return exp
+
+
 def _weekly_expiries(sessions: Sequence[date]) -> List[date]:
-    from trading_app.service.expiry_calendar import expiry_on_or_after
     out, seen = [], set()
     for d in sorted(set(sessions)):
         if d in seen:
             continue
-        e = expiry_on_or_after(d, sessions, cadence='weekly')
+        e = _weekly_on_or_after(d, sessions)
         if e is None:
             continue
         out.append(e)
@@ -139,9 +157,8 @@ def entry_days(sessions: Sequence[date], start: date, end: date,
 def weekly_expiry(entry: date, sessions: Sequence[date], listed: Sequence[date] = ()) -> Optional[date]:
     """The first weekly expiry after the entry session. One still to come is
     snapped to the exchange's listed date in its week, as contract_expiry does."""
-    from trading_app.service.expiry_calendar import expiry_on_or_after
     sessions = list(sessions)
-    exp = expiry_on_or_after(entry + timedelta(days=1), sessions, cadence='weekly')
+    exp = _weekly_on_or_after(entry + timedelta(days=1), sessions)
     if exp is not None and sessions and exp > max(sessions):
         week = [d for d in listed if exp - timedelta(days=6) <= d <= exp]
         if week:
@@ -236,21 +253,28 @@ def _leg(right: str, strike: int, side: int, entry: float, opened: int) -> Dict:
             'opened': opened, 'closed': None}
 
 
-def _leg_arrays(frame, idx: pd.DatetimeIndex, start_ts: pd.Timestamp, leg: Dict) -> tuple:
+def _on_grid(frame, idx: pd.DatetimeIndex, start_ts: pd.Timestamp) -> tuple:
+    """A contract's (closes forward-filled, opens) on the bar grid from `start_ts`."""
+    n = len(idx)
+    if frame is None or frame.empty:
+        return np.full(n, np.nan), np.full(n, np.nan)
+    f = frame[frame.index >= start_ts]
+    col = f['close']
+    close = col.reindex(col.index.union(idx)).ffill().reindex(idx).to_numpy(dtype=float)
+    return close, f['open'].reindex(idx).to_numpy(dtype=float)
+
+
+def _leg_arrays(frame, idx: pd.DatetimeIndex, start_ts: pd.Timestamp, leg: Dict,
+                grid: Optional[tuple] = None) -> tuple:
     """(marks, opens) of one leg on the grid: its entry price up to the bar it
     was traded at, then its closes (forward-filled) / opens (a bar without a
-    print: the last mark) while held, then frozen at its closing mark."""
+    print: the last mark) while held, then frozen at its closing mark.
+    `grid` = _on_grid of its contract, when the caller already has it."""
     n = len(idx)
     entry = leg['entry']
     a = leg['opened']
     b = n - 1 if leg['closed'] is None else leg['closed']
-    close = np.full(n, np.nan)
-    op = np.full(n, np.nan)
-    if frame is not None and not frame.empty:
-        f = frame[frame.index >= start_ts]
-        col = f['close']
-        close = col.reindex(col.index.union(idx)).ffill().reindex(idx).to_numpy(dtype=float)
-        op = f['open'].reindex(idx).to_numpy(dtype=float)
+    close, op = grid if grid is not None else _on_grid(frame, idx, start_ts)
     marks = np.full(n, entry)
     if b > a:
         seg = pd.Series(close[a + 1:b + 1]).ffill().fillna(entry).to_numpy()
@@ -265,10 +289,20 @@ def _leg_arrays(frame, idx: pd.DatetimeIndex, start_ts: pd.Timestamp, leg: Dict)
 
 
 def _assemble(idx, grid_spot, legs: List[Dict], frames: Dict[tuple, Optional[pd.DataFrame]],
-              start_ts: pd.Timestamp, adjusts: List[Dict]) -> Dict:
+              start_ts: pd.Timestamp, adjusts: List[Dict], cache: Optional[Dict] = None,
+              days: Optional[np.ndarray] = None) -> Dict:
     marks, opens = [], []
+    memo = cache.setdefault('legs', {}) if cache is not None else {}
+    on_grid = cache.setdefault('contracts', {}) if cache is not None else {}
     for leg in legs:
-        mk, op = _leg_arrays(frames.get((leg['right'], leg['strike'])), idx, start_ts, leg)
+        key = (leg['right'], leg['strike'], leg['entry'], leg['opened'], leg['closed'])
+        if key in memo:
+            mk, op = memo[key]
+        else:
+            ck = (leg['right'], leg['strike'])
+            if ck not in on_grid:
+                on_grid[ck] = _on_grid(frames.get(ck), idx, start_ts)
+            mk, op = memo[key] = _leg_arrays(frames.get(ck), idx, start_ts, leg, on_grid[ck])
         marks.append(mk)
         opens.append(op)
     n = len(idx)
@@ -277,7 +311,8 @@ def _assemble(idx, grid_spot, legs: List[Dict], frames: Dict[tuple, Optional[pd.
     for leg, mk, op in zip(legs, marks, opens):
         mtm += leg['side'] * (mk - leg['entry'])
         open_mtm += leg['side'] * (op - leg['entry'])
-    days = np.array([ts.date() for ts in idx])
+    if days is None:
+        days = _days(idx)
     return {'idx': idx, 'legs': legs, 'marks': marks, 'opens': opens, 'adjusts': adjusts,
             'mtm': mtm, 'open_mtm': open_mtm,
             'new_session': np.r_[False, days[1:] != days[:-1]] if len(days) else np.zeros(0, bool),
@@ -288,16 +323,27 @@ def build_path(entry_ts: pd.Timestamp, end_ts: pd.Timestamp, entry_px: Dict[str,
                frames: Dict[str, Optional[pd.DataFrame]], spot5: pd.Series,
                strike: int = 0, expiry: Optional[date] = None,
                frame_for: Optional[Callable] = None, adjust: str = 'none',
-               adjust_pts: float = 0, max_adjust: int = 0, wings: Sequence[tuple] = ()) -> Dict:
+               adjust_pts: float = 0, max_adjust: int = 0, wings: Sequence[tuple] = (),
+               cache: Optional[Dict] = None) -> Dict:
     """Every 5-minute bar starting at/after the entry and finished by `end_ts`:
     each leg's marks (closes, forward-filled; its entry price before its first
     print) and opens, the position's per-unit MTM in points on both (closed
     legs at their closing mark), and which bars open a session. With an
     `adjust` rule the legs change at the bars it fires on (`adjusts`); `wings`
-    — (right, strike, price, frame) — are bought at the entry and held."""
-    grid = spot5[(spot5.index >= entry_ts) & (spot5.index <= end_ts - BAR)]
-    idx = grid.index
-    spot = grid.to_numpy()
+    — (right, strike, price, frame) — are bought at the entry and held.
+
+    `cache` (a dict per entry, from the sweep) keeps the bar grid and each
+    leg's arrays across the adjustment variants of one entry — they share the
+    entry legs and most of the strikes — so a variant costs only what differs."""
+    if cache is not None and 'grid' in cache:
+        idx, spot, days = cache['grid']
+    else:
+        lo, hi = spot5.index.searchsorted(entry_ts), spot5.index.searchsorted(end_ts - BAR, side='right')
+        grid = spot5.iloc[lo:hi]
+        idx, spot = grid.index, grid.to_numpy()
+        days = _days(idx)
+        if cache is not None:
+            cache['grid'] = (idx, spot, days)
     legs = [_leg(r, strike, -1, entry_px[r], -1) for r in RIGHTS]
     fr: Dict[tuple, Optional[pd.DataFrame]] = {(r, strike): frames.get(r) for r in RIGHTS}
     for r, k, px, f in wings:
@@ -305,13 +351,20 @@ def build_path(entry_ts: pd.Timestamp, end_ts: pd.Timestamp, entry_px: Dict[str,
         fr[(r, k)] = f
     adjusts: List[Dict] = []
     if adjust != 'none' and adjust_pts > 0 and max_adjust > 0 and frame_for is not None and len(idx):
-        _adjust(idx, spot, legs, fr, expiry, strike, frame_for, adjust, adjust_pts, max_adjust, adjusts)
-    return _assemble(idx, spot, legs, fr, entry_ts, adjusts)
+        _adjust(idx, spot, legs, fr, expiry, strike, frame_for, adjust, adjust_pts, max_adjust, adjusts, days)
+    return _assemble(idx, spot, legs, fr, entry_ts, adjusts, cache, days)
 
 
-def _adjust(idx, spot, legs, fr, expiry, centre, frame_for, kind, pts, max_adjust, adjusts) -> None:
+def _days(idx: pd.DatetimeIndex) -> np.ndarray:
+    """Each bar's session date (datetime.date objects)."""
+    return np.array(idx.normalize().date) if len(idx) else np.array([], dtype=object)
+
+
+def _adjust(idx, spot, legs, fr, expiry, centre, frame_for, kind, pts, max_adjust, adjusts,
+            days: Optional[np.ndarray] = None) -> None:
     """Walk the triggers in order, editing `legs` / `fr` / `adjusts` in place."""
-    days = np.array([ts.date() for ts in idx])
+    if days is None:
+        days = _days(idx)
     hedged: set = set()
     k = 0
     n = len(idx)
@@ -426,8 +479,10 @@ def first_exit(path: Dict, premium: float, target_pct: float, stop_pct: float,
     of the premium, a stop rests at `lock_to` % — it moves up, never down, so it
     only counts while above the ordinary stop."""
     idx = path['idx']
-    n_cut = int(idx.searchsorted(cut_ts - BAR, side='right'))     # bars allowed: [0, n_cut)
     memo = {} if hits is None else hits
+    if ('cut', cut_ts) not in memo:
+        memo[('cut', cut_ts)] = int(idx.searchsorted(cut_ts - BAR, side='right'))   # bars allowed: [0, n_cut)
+    n_cut = memo[('cut', cut_ts)]
     if ('t', target_pct) not in memo:
         memo[('t', target_pct)] = _first(path['mtm'] >= premium * target_pct / 100.0)
     if ('s', stop_pct) not in memo:
@@ -453,11 +508,69 @@ def first_exit(path: Dict, premium: float, target_pct: float, stop_pct: float,
     return last, 'Open (data ends)'
 
 
-def month_path(m: Dict, spot5: pd.Series, frame_for: Callable, p: Dict) -> Dict:
+_REASONS = ('Target', 'Profit lock', 'Stop loss', 'Expiry', 'Open (data ends)')
+
+
+def first_exits(path: Dict, premium: float, ex: Dict[str, np.ndarray],
+                cut_ts: pd.Timestamp) -> tuple:
+    """first_exit for MANY (target, stop, lock at, lock to) at once — `ex`
+    holds them as equal-length arrays. Returns (positions, reason indices into
+    _REASONS). The same decision as first_exit, combo for combo: the earliest
+    bar inside the cut, a target before a lock before a stop on one bar (a test
+    holds the two equal). A target's first hit is where the running MAX of the
+    MTM first reaches it, a stop's where the running MIN does — one
+    searchsorted per level instead of a scan per combo."""
+    mtm = path['mtm']
+    n = len(mtm)
+    n_cut = int(path['idx'].searchsorted(cut_ts - BAR, side='right'))
+    m = len(ex['tp'])
+    if n == 0:
+        return np.full(m, -1), np.full(m, 4)
+    up = np.maximum.accumulate(mtm)
+    down = -np.minimum.accumulate(mtm)
+
+    def first(run, levels):
+        """First bar whose running value reaches each level; n_cut+ = never (inside the cut)."""
+        u, inv = np.unique(levels, return_inverse=True)
+        pos = np.searchsorted(run, u, side='left')
+        return np.minimum(pos, n_cut)[inv]
+
+    t = first(up, premium * ex['tp'] / 100.0)
+    st = first(down, premium * ex['sp'] / 100.0)
+    lk = np.full(m, n_cut)
+    on = (ex['la'] > 0) & (ex['lt'] < ex['la']) & (ex['lt'] > -ex['sp'])
+    if on.any():
+        pairs = {}
+        for la, lt in set(zip(ex['la'][on].tolist(), ex['lt'][on].tolist())):
+            armed = _first(mtm >= premium * la / 100.0)
+            hit = n_cut
+            if armed >= 0:
+                after = _first(mtm[armed + 1:] <= premium * lt / 100.0)
+                if after >= 0:
+                    hit = min(armed + 1 + after, n_cut)
+            pairs[(la, lt)] = hit
+        lk[on] = [pairs[k] for k in zip(ex['la'][on].tolist(), ex['lt'][on].tolist())]
+    # earliest bar, ties by rank: target 0, lock 1, stop 2
+    best = np.minimum(np.minimum(t * 3, lk * 3 + 1), st * 3 + 2)
+    pos, why = best // 3, best % 3
+    none = pos >= n_cut
+    if none.any():
+        if n_cut == 0:
+            pos[none], why[none] = -1, 4
+        else:
+            last = n_cut - 1
+            pos[none] = last
+            why[none] = 3 if path['idx'][last].date() == cut_ts.date() else 4
+    return pos, why
+
+
+def month_path(m: Dict, spot5: pd.Series, frame_for: Callable, p: Dict,
+               cache: Optional[Dict] = None) -> Dict:
     """The path of an opened month (open_month) under `p`'s adjustment rule."""
     return build_path(m['entry_ts'], cut_time(m['expiry']), m['entry_px'], m['frames'], spot5,
                       m['strike'], m['expiry'], frame_for, p.get('adjust', 'none'),
-                      float(p.get('adjust_pts') or 0), int(p.get('max_adjust') or 0), m.get('wings', ()))
+                      float(p.get('adjust_pts') or 0), int(p.get('max_adjust') or 0), m.get('wings', ()),
+                      cache)
 
 
 def run_trade(entry: date, sessions: Sequence[date], spot5: pd.Series,
@@ -586,7 +699,7 @@ def summarise(rows: List[Dict]) -> Dict:
 
 
 # ── Find Best Params ─────────────────────────────────────────────────────────
-# Entry day × wings × adjustment (type, trigger points) × target × stop ×
+# Expiry (monthly | weekly) × entry day × wings × adjustment × target × stop ×
 # profit lock. The path depends on the entry, the wings and the adjustment
 # only, so each (month, entry day, wings, adjustment) is ONE path and every
 # target/stop/lock is a replay of it. The adjustments' strikes and the wings
@@ -607,7 +720,7 @@ WINGS = (0,)
 # (lock at %, lock to %) — off, plus the levels that cut drawdown most in the
 # 2019-26 sweep without costing much net.
 LOCKS = ((0, 0), (15, 0), (15, 5), (20, 10), (25, 10), (30, 10), (30, 20), (40, 30))
-SWEEP_KEYS = ('entry_day', 'wings', 'adjust', 'adjust_pts') + EXIT_KEYS + ('lock_at', 'lock_to')
+SWEEP_KEYS = ('cadence', 'entry_day', 'wings', 'adjust', 'adjust_pts') + EXIT_KEYS + ('lock_at', 'lock_to')
 
 
 def entries_by_month(sessions: Sequence[date], start: date, end: date,
@@ -619,6 +732,8 @@ def entries_by_month(sessions: Sequence[date], start: date, end: date,
     out: Dict[tuple, Dict[str, date]] = {}
     for rule in (rules or entry_rules(cadence)):
         for d in entry_days(sessions, start, end, rule, cadence):
+            if cadence == 'weekly' and d < WEEKLY_SINCE:
+                continue                       # no weekly contract yet — not a week to score
             key = tuple(d.isocalendar()[:2]) if cadence == 'weekly' else (d.year, d.month)
             out.setdefault(key, {})[rule] = d
     return out
@@ -632,8 +747,10 @@ def exit_combos(grid: Dict = EXIT_GRID, locks: Sequence[tuple] = LOCKS) -> List[
 
 
 def sweep_size(grid: Dict = EXIT_GRID, variants: Sequence[tuple] = ADJUST_VARIANTS,
-               wings: Sequence[int] = WINGS, locks: Sequence[tuple] = LOCKS) -> int:
-    return len(ENTRY_DAYS) * len(wings) * len(variants) * len(exit_combos(grid, locks))
+               wings: Sequence[int] = WINGS, locks: Sequence[tuple] = LOCKS,
+               cadences: Sequence[str] = CADENCES) -> int:
+    per = len(wings) * len(variants) * len(exit_combos(grid, locks))
+    return sum(len(entry_rules(c)) for c in cadences) * per
 
 
 def score_expiry(entry: date, sessions: Sequence[date], spot5: pd.Series,
@@ -645,6 +762,7 @@ def score_expiry(entry: date, sessions: Sequence[date], spot5: pd.Series,
     """Every (wings, adjust, adjust pts, target, stop, lock at, lock to) on ONE
     entry: {combo: (status, net ₹, % of premium, reason)}."""
     exits = exit_combos(grid, locks)
+    ex = {k: np.array([e[i] for e in exits], dtype=float) for i, k in enumerate(('tp', 'sp', 'la', 'lt'))}
     out: Dict[tuple, tuple] = {}
     for w in wings:
         p0 = {**DEFAULTS, **base, 'wings': w}
@@ -654,30 +772,39 @@ def score_expiry(entry: date, sessions: Sequence[date], spot5: pd.Series,
             continue
         cut = cut_time(m['expiry'])
         collected = m['premium'] * qty
+        cache: Dict = {}                       # the grid and leg arrays, shared by every variant
         for kind, pts_trigger in variants:
-            path = month_path(m, spot5, frame_for, {**p0, 'adjust': kind, 'adjust_pts': pts_trigger})
-            hits: Dict = {}
-            for tp, sp, la, lt in exits:
-                pos, reason = first_exit(path, m['premium'], tp, sp, cut, hits, la, lt)
-                pts, _, reason = exit_points(path, pos, reason, m['premium'], tp, sp, lt)
-                n_legs = legs_traded(path, pos) if pos >= 0 else len(path['legs'])
+            path = month_path(m, spot5, frame_for, {**p0, 'adjust': kind, 'adjust_pts': pts_trigger}, cache)
+            pos, why = first_exits(path, m['premium'], ex, cut)
+            # Most combos share a (bar, reason, level) — each distinct one is booked once.
+            level = np.select([why == 0, why == 1, why == 2], [ex['tp'], ex['lt'], ex['sp']], -1.0)
+            keys, inv = np.unique(np.stack([pos, why, level], axis=1), axis=0, return_inverse=True)
+            rows = []
+            for kpos, kwhy, klevel in keys:
+                kpos, reason = int(kpos), _REASONS[int(kwhy)]
+                tp = sp = lt = klevel
+                pts, _, why_s = exit_points(path, kpos, reason, m['premium'], tp, sp, lt)
+                n_legs = legs_traded(path, kpos) if kpos >= 0 else len(path['legs'])
                 net = pts * qty - brokerage_per_leg * n_legs
-                status = 'open' if reason.startswith('Open') else 'traded'
-                out[(w, kind, pts_trigger, tp, sp, la, lt)] = (
-                    status, net, 100.0 * net / collected if collected else 0.0, reason)
+                rows.append(('open' if why_s.startswith('Open') else 'traded', net,
+                             100.0 * net / collected if collected else 0.0, why_s))
+            head = (w, kind, pts_trigger)
+            out.update(zip([head + e for e in exits], [rows[i] for i in inv.ravel()]))
     return out
 
 
 def score_month(entries: Dict[str, date], sessions: Sequence[date], spot5: pd.Series,
                 frame_for: Callable[[date, int, str], Optional[pd.DataFrame]],
                 qty: int, base: Dict, brokerage_per_leg: float, **sweep) -> Dict[tuple, tuple]:
-    """Every SWEEP_KEYS combo on ONE month; `entries` from entries_by_month,
+    """Every SWEEP_KEYS combo on ONE period (month, or week under base's
+    cadence) — the key starts with the cadence; `entries` from entries_by_month,
     `sweep` score_expiry's grid / variants / wings / locks."""
     out: Dict[tuple, tuple] = {}
     for rule, entry in entries.items():
         res = score_expiry(entry, sessions, spot5, frame_for, qty, {**base, 'entry_day': rule},
                            brokerage_per_leg, **sweep)
-        out.update({(rule,) + combo: r for combo, r in res.items()})
+        cadence = base.get('cadence', 'monthly')
+        out.update({(cadence, rule) + combo: r for combo, r in res.items()})
     return out
 
 
@@ -717,12 +844,15 @@ class Fold:
             a[10] = max(a[10], a[9] - a[8])
             a[13][reason] = a[13].get(reason, 0) + 1
 
-    def rows(self, min_trades: int = 1) -> List[Dict]:
-        """One row per combo, best net ₹ first; `net_dd` = net ₹ ÷ max drawdown ₹."""
+    def rows(self, min_trades=1) -> List[Dict]:
+        """One row per combo, best net ₹ first; `net_dd` = net ₹ ÷ max drawdown ₹.
+        `min_trades` an int, or {cadence: int} — a month and a week are
+        different periods, so each cadence needs its own half."""
         out = []
         for combo, a in self.acc.items():
             n = a[0]
-            if n < max(1, min_trades):
+            need = min_trades.get(combo[0], 1) if isinstance(min_trades, dict) else min_trades
+            if n < max(1, need):
                 continue
             out.append({
                 **dict(zip(SWEEP_KEYS, combo)),
