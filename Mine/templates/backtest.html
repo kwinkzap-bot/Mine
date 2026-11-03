@@ -46,7 +46,7 @@
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
                 <option value="st_touch_break" selected>🧲 ST Touch Break (SuperTrend wick + break)</option>
                 <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
-                <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (square off 15:14)</option>
+                <option value="atm_straddle">⚖️ NIFTY Monthly ATM Straddle Sell (±5%)</option>
                 <option value="call_ratio">🧠 NIFTY Monthly Call Ratio 1:2 (No-Brainer)</option>
             </select>
             <button id="btLogicBtn" type="button" title="Explain this strategy's backtest logic in simple words" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">💡 Logic</button>
@@ -1873,32 +1873,50 @@
                 </div>
             </div>
 
-            <!-- NIFTY ATM Straddle (Mine) — sell the ATM CE + PE of the current weekly,
-                 each leg capped at a max ₹ loss, bought back at 15:14. See
-                 Backtest/option_selling_engine.py (the strangle that shared this
-                 row was removed 2026-11-01). -->
+            <!-- NIFTY Monthly ATM Straddle (Mine) — last Friday of the month at 15:15,
+                 sell the ATM CE + PE of next month's expiry, held (no exit time) until
+                 +5 % / −5 % of the premium collected, or the expiry. See Backtest/option_selling_engine.py (weekly
+                 intraday until 2026-11-03). -->
             <div id="optionSellingParamsRow" class="form-row" style="display:none">
-                <div class="form-group" style="grid-column: 1 / -1;">
-                    <label>Trading Days</label>
-                    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;">
-                        <label><input type="checkbox" class="osDay" value="0" checked> Mon</label>
-                        <label><input type="checkbox" class="osDay" value="1" checked> Tue</label>
-                        <label><input type="checkbox" class="osDay" value="2" checked> Wed</label>
-                        <label><input type="checkbox" class="osDay" value="3" checked> Thu</label>
-                        <label><input type="checkbox" class="osDay" value="4" checked> Fri</label>
-                    </div>
+                <div class="form-group">
+                    <label for="osEntryDay" title="The day of each month the straddle is sold (the session before it when that day is a holiday). It always sells the NEXT monthly expiry at least 14 days out.">Entry Day</label>
+                    <select id="osEntryDay">
+                        <option value="last_monday">Last Monday of month</option>
+                        <option value="last_tuesday">Last Tuesday of month</option>
+                        <option value="last_wednesday">Last Wednesday of month</option>
+                        <option value="last_thursday">Last Thursday of month</option>
+                        <option value="last_friday" selected>Last Friday of month</option>
+                        <option value="after_expiry">Day after monthly expiry</option>
+                    </select>
                 </div>
                 <div class="form-group">
-                    <label for="osEntryTime">Entry Time</label>
-                    <input type="time" id="osEntryTime" value="09:20">
+                    <label for="osEntryTime" title="Time of the entry, on the Entry Day.">Entry Time</label>
+                    <input type="time" id="osEntryTime" value="15:15">
                 </div>
                 <div class="form-group">
-                    <label for="osExitTime" title="No target: whatever is still open is bought back at this time.">Exit Time</label>
-                    <input type="time" id="osExitTime" value="15:14">
+                    <label for="osTarget" title="The whole straddle is bought back once its mark-to-market profit reaches this % of the premium collected (CE + PE sold).">Target % of Premium</label>
+                    <input type="number" id="osTarget" value="5" min="0.5" step="0.5">
                 </div>
                 <div class="form-group">
-                    <label for="osMaxLoss" title="Per strike: a stop rests on the CE and on the PE at their own entry + this many ₹ (at Lots × lot size). The first minute whose high reaches it buys that leg back at the level — so a leg loses this much and no more, unless a minute opens beyond it. The other leg keeps running. Brokerage is on top. 0 = no stop.">Max Loss ₹ / Leg</label>
-                    <input type="number" id="osMaxLoss" value="2000" min="0" step="500">
+                    <label for="osStop" title="The whole straddle is bought back once its mark-to-market loss reaches this % of the premium collected.">Stop % of Premium</label>
+                    <input type="number" id="osStop" value="5" min="0.5" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="osAdjust" title="What is done when NIFTY has moved Adjust At points from the centre (the sold strike, then each adjustment's new ATM). Checked on 5-minute closes, never on the expiry day.">Adjustment</label>
+                    <select id="osAdjust">
+                        <option value="none" selected>None</option>
+                        <option value="roll_untested">Roll profit leg to new ATM</option>
+                        <option value="recenter">Re-centre both legs at new ATM</option>
+                        <option value="hedge">Buy losing side at new ATM (hedge)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="osAdjustPts" title="NIFTY points away from the current centre that fire an adjustment.">Adjust At (NIFTY pts)</label>
+                    <input type="number" id="osAdjustPts" value="200" min="25" step="25">
+                </div>
+                <div class="form-group">
+                    <label for="osMaxAdjust" title="Most adjustments in one month's trade.">Max Adjustments</label>
+                    <input type="number" id="osMaxAdjust" value="2" min="1" max="10" step="1">
                 </div>
                 <div class="form-group">
                     <label for="osLots" title="Lots per leg, × NIFTY's lot size.">Lots</label>
@@ -1907,10 +1925,13 @@
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Rule</label>
                     <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
-                        Every trading day, sell the ATM CE and the ATM PE (strike nearest the spot at Entry Time) of the
-                        current weekly expiry · no target · each leg has its own stop at Max&nbsp;Loss&nbsp;₹&nbsp;/&nbsp;Leg above its entry,
-                        filled at that level when a minute's high reaches it (that leg alone); whatever is still open is bought back at Exit Time (15:14).
-                        Premiums are ICICI's recorded 1-minute candles (needs an ICICI login; run long ranges after market hours).
+                        Once a month on Entry Day (last Friday by default) at Entry Time (15:15), sell the ATM CE and the ATM PE (strike nearest the spot)
+                        of NEXT month's monthly expiry · both legs are bought back together when the straddle is up Target&nbsp;%
+                        or down Stop&nbsp;% of the premium collected, filled at that level (a session that opens past it fills at the open) ·
+                        a position trade with no exit time: if neither is hit, it ends with the contract, at the expiry day's close ·
+                        Adjustment (optional): when NIFTY's 5-minute close is Adjust At points from the centre, roll the profit leg / re-centre both /
+                        buy the losing side at the new ATM, and watch from that ATM (Target and Stop stay % of the first premium).
+                        Premiums are ICICI's recorded 5-minute candles (needs an ICICI login; two contracts a month, cached).
                     </small>
                 </div>
             </div>
@@ -2209,7 +2230,7 @@
             <div id="optionSellingOptimisePanel" style="display:none;">
                 <div class="opt-header">
                     <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 id="osOptTitle" style="margin:0;">⚖️ NIFTY ATM Straddle Best Params</h4>
+                        <h4 id="osOptTitle" style="margin:0;">⚖️ NIFTY Monthly ATM Straddle Best Params</h4>
                         <button id="osRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
                     </div>
                     <small id="osOptMeta"></small>

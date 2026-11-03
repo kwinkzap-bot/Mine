@@ -103,9 +103,16 @@ def _at(day: date, hm) -> pd.Timestamp:
 
 # ── calendar ─────────────────────────────────────────────────────────────────
 
+LAST_WEEKDAY_RULES = {'last_monday': 0, 'last_tuesday': 1, 'last_wednesday': 2,
+                      'last_thursday': 3, 'last_friday': 4}
+
+
 def entry_days(sessions: Sequence[date], start: date, end: date,
                rule: str = 'last_friday') -> List[date]:
-    """One entry session per calendar month inside [start, end]."""
+    """One entry session per calendar month inside [start, end].
+
+    `rule`: 'after_expiry', or 'last_<weekday>' (LAST_WEEKDAY_RULES — the
+    monthly straddle offers all five; the call ratio only Friday)."""
     from trading_app.service.expiry_calendar import _month_expiry, expiry_weekday_for
     trading = sorted(set(sessions))
     out: List[date] = []
@@ -121,12 +128,13 @@ def entry_days(sessions: Sequence[date], start: date, end: date,
                 after = [d for d in trading if d > (settled[-1] if settled else exp)]
                 pick = after[0] if after and after[0] < nxt else None
             else:
-                last_friday = nxt - timedelta(days=1)
-                while last_friday.weekday() != 4:
-                    last_friday -= timedelta(days=1)
-                on_or_before = [d for d in in_month if d <= last_friday]
-                # A holiday Friday moves to the session before it — not weeks back.
-                if on_or_before and (last_friday - on_or_before[-1]).days <= 4:
+                weekday = LAST_WEEKDAY_RULES.get(rule, 4)
+                last_day = nxt - timedelta(days=1)
+                while last_day.weekday() != weekday:
+                    last_day -= timedelta(days=1)
+                on_or_before = [d for d in in_month if d <= last_day]
+                # A holiday moves to the session before it — not weeks back.
+                if on_or_before and (last_day - on_or_before[-1]).days <= 4:
                     pick = on_or_before[-1]
         if pick is not None and start <= pick <= end:
             out.append(pick)
@@ -187,13 +195,19 @@ def downside_points(prices: Dict[str, float]) -> float:
 
 
 def contract_window(expiry: date) -> tuple:
-    """The range every contract of `expiry` is fetched over — from a few days
+    """The range every contract of `expiry` is fetched over — from 10 days
     before the PREVIOUS monthly expiry (the earliest any entry rule can open
     it) to the expiry itself. Canonical, so the backtest and the sweep share
-    one disk-cache entry per contract."""
+    one disk-cache entry per contract.
+
+    The last Friday can come BEFORE its own month's expiry — Fri 2026-09-25
+    vs Tue 09-29, or up to 6 days before a Thursday-31st expiry — and then
+    opens the month after next. Until 2026-11-03 the window started 3 days
+    before the previous expiry, so those entries (5 of 12 months in
+    2025-26) fell outside it and read as "No ICICI premium at entry"."""
     from trading_app.service.expiry_calendar import _month_expiry, expiry_weekday_for
     prev = _month_expiry(expiry.replace(day=1) - timedelta(days=1), expiry_weekday_for)
-    return prev - timedelta(days=3), expiry
+    return prev - timedelta(days=10), expiry
 
 
 def bar_at(frame: Optional[pd.DataFrame], ts: pd.Timestamp) -> Optional[int]:
@@ -464,10 +478,10 @@ def score_expiry(entries: Dict[str, date], sessions: Sequence[date], spot5: pd.S
 
 
 def rank(per_expiry: List[Dict[tuple, tuple]], min_trades: int = 1,
-         grid: Dict = SWEEP_GRID) -> List[Dict]:
+         grid: Dict = SWEEP_GRID, keys: Sequence[str] = STRUCTURE_KEYS + EXIT_KEYS) -> List[Dict]:
     """Fold every expiry's results into one row per combo, best net ₹ first.
-    Only closed trades are scored; open and skipped months are counted."""
-    keys = STRUCTURE_KEYS + EXIT_KEYS
+    Only closed trades are scored; open and skipped months are counted.
+    `keys` name the combo's fields (the monthly straddle passes its own)."""
     combos: Dict[tuple, List[tuple]] = {}
     for res in per_expiry:                     # oldest expiry first, for the drawdown
         for combo, r in res.items():

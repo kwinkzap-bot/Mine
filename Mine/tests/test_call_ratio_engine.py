@@ -159,7 +159,7 @@ def test_summarise_scores_closed_trades_only():
 
 
 def test_contract_window_starts_before_the_previous_expiry():
-    assert cre.contract_window(date(2025, 2, 27)) == (date(2025, 1, 27), date(2025, 2, 27))
+    assert cre.contract_window(date(2025, 2, 27)) == (date(2025, 1, 20), date(2025, 2, 27))
 
 
 def test_sweep_row_agrees_with_the_backtest_of_its_params():

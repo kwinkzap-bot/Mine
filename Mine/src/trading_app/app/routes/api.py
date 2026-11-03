@@ -9275,16 +9275,14 @@ def weekly_cpr_breakout_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
-# ── NIFTY option selling backtest (the page's ATM Straddle) ──────────────────
-# Sell a CE + PE of the current weekly, buy back at the exit time. The page's
-# strangle (OTM, +sl% stop, re-entry) was removed 2026-11-01; only the ATM
-# Straddle (ATM, no % stop, max ₹ loss per leg) posts here now. The rule and its
-# fill conventions are Backtest/option_selling_engine.py. Spot (for the strike)
-# is Fyers' 1-minute NIFTY; the premiums are ICICI Breeze's recorded 1-minute
-# candles, one request per contract-day, disk-cached once the day has settled.
+# ── NIFTY monthly ATM Straddle backtest (the page's ⚖️ ATM Straddle) ────────
+# Last Friday of the month at 15:15, sell the ATM CE + PE of NEXT month's
+# expiry; a position trade, out together only at +5 % / −5 % of the premium
+# collected (or the expiry, if it gets there). Rule: Backtest/option_selling_engine.py (it kept the name; the
+# weekly 09:20 → 15:14 straddle it was until 2026-11-03 is gone). Runs on the
+# call ratio's machinery below (_cr_start: Fyers NIFTY folded to 5 minutes,
+# one cached Breeze 5-minute fetch per contract) — two contracts a month.
 _OS_BROKERAGE_PER_LEG = 100        # ₹ per sold-and-bought-back leg, as _WCB_OPTION_BROKERAGE
-_os_tasks: dict = {}
-_os_tasks_lock = threading.Lock()
 
 
 def _os_hm(value, default: Tuple[int, int]) -> Tuple[int, int]:
@@ -9297,364 +9295,125 @@ def _os_hm(value, default: Tuple[int, int]) -> Tuple[int, int]:
     return default
 
 
+def _os_parse(data: dict):
+    """The straddle's boxes → (start, end, params, lots, 0), or raises ValueError."""
+    start_dt = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
+    end_dt = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
+    if end_dt < start_dt:
+        raise ValueError('end_date is before start_date')
+    from trading_app.Backtest.option_selling_engine import ADJUST_TYPES, ENTRY_DAYS
+    entry_day = str(data.get('entry_day') or 'last_friday')
+    if entry_day not in ENTRY_DAYS:
+        raise ValueError(f'entry_day must be one of {", ".join(ENTRY_DAYS)}')
+    adjust = str(data.get('adjust') or 'none')
+    if adjust not in ADJUST_TYPES:
+        raise ValueError(f'adjust must be one of {", ".join(ADJUST_TYPES)}')
+    params = {
+        'entry_day': entry_day,
+        'entry_hm': _os_hm(data.get('entry_time', '15:15'), (15, 15)),
+        'target_pct': min(500.0, max(0.1, float(data.get('target_pct', 5)))),
+        'stop_pct': min(500.0, max(0.1, float(data.get('stop_pct', 5)))),
+        'adjust': adjust,
+        'adjust_pts': min(3000.0, max(25.0, float(data.get('adjust_pts', 200) or 200))),
+        'max_adjust': min(10, max(1, int(data.get('max_adjust', 2) or 2))),
+    }
+    lots = max(1, int(data.get('lots', 1) or 1))
+    return start_dt, end_dt, params, lots, 0.0
+
+
 @api_bp.route('/backtest/option-selling', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
 def run_option_selling_backtest_api():
-    """Start a NIFTY short-strangle backtest; returns {'task_id'} to poll at
-    /backtest/option-selling/status/<task_id>.
+    """Start a NIFTY monthly ATM straddle backtest; returns {'task_id'} to poll
+    at /backtest/option-selling/status/<task_id>.
 
-    Body: start_date, end_date ('YYYY-MM-DD'); days (list of weekday numbers,
-    Mon=0, default [0, 1, 4]); entry_time (default 09:30) / exit_time (10:30);
-    otm_strikes (strikes away from ATM, default 2); sl_pct (stop above each
-    leg's own entry, default 60; 0 = no stop); reentry (once, at cost, default true); lots
-    (default 1, × NIFTY's lot size); max_loss_rupees (each leg bought back on its
-    own once ITS open loss reaches it, in ₹ at lots × lot size — the ATM
-    Straddle's stop; 0 = off, and above 0 it replaces sl_pct / reentry)."""
+    Body: start_date, end_date ('YYYY-MM-DD'); entry_day ('last_friday' default,
+    last_monday … last_thursday, after_expiry); entry_time (15:15); target_pct / stop_pct (5 / 5, of the premium collected — the only
+    exits short of the expiry itself); adjust (none | roll_untested | recenter |
+    hedge), adjust_pts (NIFTY points from the centre, 200), max_adjust (2);
+    lots (× NIFTY's lot size, per leg)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
-    data = request.get_json(silent=True) or {}
-    start_date_str = str(data.get('start_date') or '')
-    end_date_str = str(data.get('end_date') or '')
-    try:
-        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
-    except (TypeError, ValueError):
-        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
-    if end_dt < start_dt:
-        return jsonify({'success': False, 'error': 'end_date is before start_date'}), 400
 
-    from trading_app.Backtest import option_selling_engine as ose
-    days = sorted({int(d) for d in (data.get('days') or ose.DEFAULT_DAYS) if str(d).isdigit() and 0 <= int(d) <= 4})
-    if not days:
-        return jsonify({'success': False, 'error': 'Pick at least one weekday.'}), 400
-    entry_hm = _os_hm(data.get('entry_time', '09:30'), (9, 30))
-    exit_hm = _os_hm(data.get('exit_time', '10:30'), (10, 30))
-    if exit_hm <= entry_hm:
-        return jsonify({'success': False, 'error': 'Exit time must be after entry time.'}), 400
-    try:
-        otm_strikes = min(20, max(0, int(data.get('otm_strikes', 2))))
-        sl_pct = float(data.get('sl_pct', 60))
-        sl_pct = 0.0 if sl_pct <= 0 else min(500.0, max(1.0, sl_pct))   # 0 = no stop (ATM Straddle)
-    except (TypeError, ValueError):
-        return jsonify({'success': False, 'error': 'otm_strikes and sl_pct must be numbers'}), 400
-    reentry = str(data.get('reentry', True)).lower() not in ('false', '0', 'no', 'off')
-    lots = max(1, int(data.get('lots', 1) or 1))
-    try:
-        max_loss_rupees = max(0.0, float(data.get('max_loss_rupees', 0) or 0))
-    except (TypeError, ValueError):
-        return jsonify({'success': False, 'error': 'max_loss_rupees must be a number'}), 400
+    def worker(ctx, task):
+        from trading_app.Backtest import option_selling_engine as ose
+        p = ctx['params']
+        entries = ose.entry_days(ctx['sessions'], ctx['start'], ctx['end'], p['entry_day'])
+        task['progress']['total'] = len(entries)
 
-    fyers = get_fyers_adapter()
-    if fyers is None:
-        return jsonify({'success': False,
-                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
-    icici = get_icici_adapter()
-    if icici is None:
-        return jsonify({'success': False,
-                        'error': 'Option premiums come from ICICI Direct, which is not logged in '
-                                 '— log in to ICICI first.'}), 503
-    try:
-        lot_size = int(_fno_lot_sizes().get('NIFTY') or 65)
-    except Exception:
-        lot_size = 65
+        def one(entry):
+            res = ose.run_trade(entry, ctx['sessions'], ctx['spot5'], ctx['frame_for'], p)
+            row = ose.trade_row(res, ctx['qty'], ctx['sets'], ctx['lot_size'], _OS_BROKERAGE_PER_LEG)
+            if row['status'] != 'skipped':
+                task['progress']['traded'] += 1
+            return row
 
-    task_id = uuid.uuid4().hex[:12]
-    task = {'status': 'running', 'started': _time.time(),
-            'progress': {'done': 0, 'total': 0, 'traded': 0}}
-    with _os_tasks_lock:
-        _os_tasks[task_id] = task
+        rows = sorted(_cr_pool(entries, one, task), key=lambda r: r['date'])
+        summary = ose.summarise(rows)
+        summary.update({'months_scanned': len(entries), 'lots': ctx['sets'],
+                        'lot_size': ctx['lot_size'],
+                        'params': {k: (f'{v[0]:02d}:{v[1]:02d}' if isinstance(v, tuple) else v)
+                                   for k, v in p.items() if k != 'listed_expiries'}})
+        logger.info('[MonthlyStraddle] %s..%s: %d months, %d traded, %d skipped, %d contracts',
+                    ctx['start'], ctx['end'], len(entries), summary['total_trades'],
+                    summary['skipped_months'], task['progress']['contracts'])
+        task['payload'] = {'trades': rows, 'summary': summary}
 
-    def _run():
-        import pandas as pd
-        from trading_app.Backtest.minute_candle_store import get_minute_history
-        try:
-            minutes = get_minute_history(fyers, _WCB_INDEX_TOKENS['NIFTY'], 'NIFTY',
-                                         start_date_str, end_date_str,
-                                         provider_tag=_provider_tag(fyers), retain=False)
-            if minutes is None or minutes.empty:
-                raise RuntimeError('No NIFTY 1-minute data from Fyers for this range.')
-            idx = pd.DatetimeIndex(minutes.index)
-            if idx.tz is not None:
-                minutes = minutes.copy()
-                minutes.index = idx.tz_localize(None)
-                idx = pd.DatetimeIndex(minutes.index)
-            sessions = sorted({ts.date() for ts in idx.normalize().unique()})  # pyright: ignore[reportAttributeAccessIssue]
-            wanted = [d for d in sessions
-                      if start_dt.date() <= d <= end_dt.date() and d.weekday() in days]
-            task['progress']['total'] = len(wanted)
-
-            # A contract-day is one Breeze request, but a failing one takes
-            # ~45 s to come back as "Something went wrong" — so days run on a
-            # small pool. The app-wide pacer still caps the request RATE; this
-            # only overlaps the waiting. Newest first: recent contracts are the
-            # ones Breeze still serves.
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            state = {'done': 0, 'skipped': 0, 'stop': False, 'errors': 0, 'last_error': None}
-            lock = threading.Lock()
-
-            def _one(day):
-                if state['stop']:
-                    return day, None
-                entry_ts = pd.Timestamp(datetime(day.year, day.month, day.day, *entry_hm))
-                spot_bars = minutes[(idx >= entry_ts) & (idx.date == day)]  # pyright: ignore[reportAttributeAccessIssue]
-                expiry = ose.weekly_expiry(day, sessions)
-                if spot_bars.empty or expiry is None:
-                    return day, None
-                spot = float(spot_bars['open'].iloc[0])  # pyright: ignore[reportAttributeAccessIssue]
-
-                def _bars(exp, strike, right):
-                    raw = icici.historical_option_minutes('NIFTY', exp, strike, right, day)
-                    if not raw:
-                        # Why Breeze came back empty — an outage reads very
-                        # differently from a contract that never traded.
-                        err = icici.last_history_error()
-                        if err:
-                            with lock:
-                                state['errors'] += 1
-                                state['last_error'] = err
-                    return ose._frame(raw)
-
-                res = ose.run_day(day, spot, expiry, _bars, entry_hm=entry_hm, exit_hm=exit_hm,
-                                  otm_strikes=otm_strikes, sl_pct=sl_pct, reentry=reentry,
-                                  max_loss_points=max_loss_rupees / (lots * lot_size))
-                if res is None:
-                    return day, None
-                return day, ose.trade_row(res, lots * lot_size, lots, lot_size,
-                                          _OS_BROKERAGE_PER_LEG, entry_hm, exit_hm)
-
-            rows, streak = [], 0
-            # 3, not more: the Breeze v2 history endpoint is reported to error
-            # under heavier concurrency (breeze-historical-options advises 1-3).
-            pool = ThreadPoolExecutor(max_workers=3)
-            try:
-                futs = [pool.submit(_one, d) for d in reversed(wanted)]
-                for fut in as_completed(futs):
-                    day, row = fut.result()
-                    with lock:
-                        state['done'] += 1
-                        task['progress']['done'] = state['done']
-                        if row is None:
-                            state['skipped'] += 1
-                            streak += 1
-                        else:
-                            rows.append(row)
-                            streak = 0
-                            task['progress']['traded'] = len(rows)
-                        # Nothing priced after a dozen days in a row: Breeze is
-                        # not serving these contracts (too old, or its history
-                        # endpoint is down). Stop spending requests on it.
-                        if not rows and streak >= 12:
-                            state['stop'] = True
-                            break
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
-            if not rows and state['stop']:
-                raise RuntimeError(
-                    'ICICI returned no option candles for the first 12 days tried (newest first)'
-                    + (f" — Breeze said: {state['last_error']}. " if state['last_error'] else '. ')
-                    + 'Its history service may be down or not serving contracts that old; retry later '
-                      'or try a shorter, more recent range.')
-            rows.sort(key=lambda r: r['date'])
-            skipped = state['skipped']
-            task['progress']['done'] = len(wanted)
-
-            summary = ose.summarise(rows)
-            summary.update({'skipped_days': skipped, 'days_scanned': len(wanted),
-                            'breeze_errors': state['errors'], 'last_breeze_error': state['last_error'],
-                            'lots': lots, 'lot_size': lot_size, 'otm_strikes': otm_strikes,
-                            'sl_pct': sl_pct, 'reentry': reentry,
-                            'max_loss_rupees': max_loss_rupees})
-            logger.info('[OptionSelling] %s..%s: %d days, %d traded, %d skipped',
-                        start_date_str, end_date_str, len(wanted), len(rows), skipped)
-            task['payload'] = {'trades': rows, 'summary': summary}
-            task['status'] = 'complete'
-        except Exception as e:
-            logger.error(f"[OptionSelling] run failed: {e}", exc_info=True)
-            task['error'] = str(e)
-            task['status'] = 'error'
-
-    threading.Thread(target=_run, name=f'os-{task_id}', daemon=True).start()
-    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
-                    'progress': task['progress']})
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'os', parse=_os_parse)
 
 
 @api_bp.route('/backtest/option-selling/status/<task_id>', methods=['GET'])
 @csrf.exempt
 @require_user_auth
 def option_selling_status(task_id):
-    """Poll a NIFTY option-selling backtest started by the POST above."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    with _os_tasks_lock:
-        task = _os_tasks.get(task_id)
-    if not task:
-        return jsonify({'success': False, 'error': 'Task not found'}), 404
-    elapsed = int(_time.time() - task['started'])
-    if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running',
-                        'progress': task['progress'], 'elapsed': elapsed})
-    with _os_tasks_lock:
-        _os_tasks.pop(task_id, None)
-    if task['status'] == 'error':
-        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
-    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+    """Poll a monthly straddle backtest or Find Best Params (both run on _cr_start)."""
+    return call_ratio_status(task_id)
 
 
 @api_bp.route('/backtest/option-selling/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
 def run_option_selling_optimise_api():
-    """Find Best Params for the NIFTY ATM Straddle; returns {'task_id'} to
-    poll at /backtest/option-selling/optimise/status/<task_id>.
+    """Find Best Params for the NIFTY monthly ATM straddle; returns {'task_id'}
+    to poll at /backtest/option-selling/optimise/status/<task_id>.
 
-    Entry time × exit time × max ₹ loss (option_selling_engine.sweep_straddle)
-    on the days and lots the page has set. The ATM moves with the entry time,
-    so the CE and PE of every strike the five entry spots round to are fetched
-    once per day (cached on disk once settled) — usually 2-4 Breeze requests a
-    day — and every combo is a replay of them. The strangle sweep that shared
-    this route was removed 2026-11-01."""
+    Entry day × adjustment (type × trigger points, option_selling_engine.
+    ADJUST_VARIANTS) × target % × stop % (29,700 combos) on the page's entry
+    time, max adjustments and lots. Every target/stop is a replay of one
+    (entry day, adjustment) path; the cost is Breeze — each entry day's two
+    legs plus every new ATM an adjustment reaches (cached per contract)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
-    data = request.get_json(silent=True) or {}
-    try:
-        start_dt = datetime.strptime(data.get('start_date'), '%Y-%m-%d')
-        end_dt = datetime.strptime(data.get('end_date'), '%Y-%m-%d')
-    except (TypeError, ValueError):
-        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
-    if end_dt < start_dt:
-        return jsonify({'success': False, 'error': 'end_date is before start_date'}), 400
-    from trading_app.Backtest import option_selling_engine as ose
-    days = sorted({int(d) for d in (data.get('days') or ose.DEFAULT_DAYS) if str(d).isdigit() and 0 <= int(d) <= 4})
-    if not days:
-        return jsonify({'success': False, 'error': 'Pick at least one weekday.'}), 400
-    lots = max(1, int(data.get('lots', 1) or 1))
-    fyers = get_fyers_adapter()
-    if fyers is None:
-        return jsonify({'success': False,
-                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
-    icici = get_icici_adapter()
-    if icici is None:
-        return jsonify({'success': False,
-                        'error': 'Option premiums come from ICICI Direct, which is not logged in '
-                                 '— log in to ICICI first.'}), 503
-    try:
-        lot_size = int(_fno_lot_sizes().get('NIFTY') or 65)
-    except Exception:
-        lot_size = 65
 
-    task_id = uuid.uuid4().hex[:12]
-    task = {'status': 'running', 'started': _time.time(),
-            'progress': {'done': 0, 'total': 0, 'traded': 0}}
-    with _os_tasks_lock:
-        _os_tasks[task_id] = task
+    def worker(ctx, task):
+        from trading_app.Backtest import option_selling_engine as ose
+        by_month = ose.entries_by_month(ctx['sessions'], ctx['start'], ctx['end'])
+        months = sorted(by_month)
+        task['progress']['total'] = len(months)
 
-    def _run():
-        import pandas as pd
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        from trading_app.Backtest.minute_candle_store import get_minute_history
-        try:
-            minutes = get_minute_history(fyers, _WCB_INDEX_TOKENS['NIFTY'], 'NIFTY',
-                                         data['start_date'], data['end_date'],
-                                         provider_tag=_provider_tag(fyers), retain=False)
-            if minutes is None or minutes.empty:
-                raise RuntimeError('No NIFTY 1-minute data from Fyers for this range.')
-            if getattr(minutes.index, 'tz', None) is not None:
-                minutes = minutes.copy()
-                minutes.index = minutes.index.tz_localize(None)
-            all_days = sorted({ts.date() for ts in minutes.index.normalize().unique()})
-            wanted = [d for d in all_days
-                      if start_dt.date() <= d <= end_dt.date() and d.weekday() in days]
-            task['progress']['total'] = len(wanted)
-            state = {'done': 0, 'stop': False, 'errors': 0, 'last_error': None}
-            lock = threading.Lock()
+        def one(month):
+            res = ose.score_month(by_month[month], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
+                                  ctx['qty'], ctx['params'], _OS_BROKERAGE_PER_LEG)
+            task['progress']['traded'] += 1
+            return month, res
 
-            def _one(day):
-                if state['stop']:
-                    return None
-                expiry = ose.weekly_expiry(day, all_days)
-                if expiry is None:
-                    return None
-                bars = {}
+        done = sorted(_cr_pool(months, one, task), key=lambda t: t[0])
+        task['progress']['stage'] = 'scoring'
+        min_trades = max(1, len(months) // 2)
+        rows = ose.rank([r for _, r in done], min_trades=min_trades)
+        task['payload'] = {
+            'results': rows[:50], 'best': rows[0] if rows else None, 'total': len(rows),
+            'total_combos_tested': ose.sweep_size(), 'months': len(months),
+            'min_trades': min_trades, 'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
+            'summary': {},
+        }
+        logger.info('[MonthlyStraddleOptimise] %s..%s: %d months, %d combos scored, %d contracts',
+                    ctx['start'], ctx['end'], len(months), len(rows), task['progress']['contracts'])
 
-                def _fetch(strike, right):
-                    raw = icici.historical_option_minutes('NIFTY', expiry, strike, right, day)
-                    if not raw:
-                        err = icici.last_history_error()
-                        if err:
-                            with lock:
-                                state['errors'] += 1
-                                state['last_error'] = err
-                        return
-                    frame = ose._frame(raw)
-                    if frame is not None and not frame.empty:
-                        bars[(strike, right)] = frame
-
-                day_spot = minutes[minutes.index.date == day]
-                spots = {}
-                for hm in ose.STRADDLE_ENTRIES:
-                    at = day_spot[day_spot.index >= pd.Timestamp(datetime(day.year, day.month, day.day, *hm))]
-                    if not at.empty:
-                        spots[hm] = float(at['open'].iloc[0])
-                for strike in sorted({ose.atm_strike(v) for v in spots.values()}):
-                    for right in ('CE', 'PE'):
-                        _fetch(strike, right)
-                if not bars:
-                    return None
-                return {'day': day, 'expiry': expiry, 'spots': spots, 'bars': bars}
-
-            sessions, streak = [], 0
-            pool = ThreadPoolExecutor(max_workers=3)
-            try:
-                futs = [pool.submit(_one, d) for d in reversed(wanted)]
-                for fut in as_completed(futs):
-                    sess = fut.result()
-                    with lock:
-                        state['done'] += 1
-                        task['progress']['done'] = state['done']
-                        if sess is None:
-                            streak += 1
-                        else:
-                            sessions.append(sess)
-                            streak = 0
-                            task['progress']['traded'] = len(sessions)
-                        if not sessions and streak >= 8:
-                            state['stop'] = True
-                            break
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
-            if not sessions:
-                raise RuntimeError(
-                    'ICICI returned no option candles'
-                    + (f" — Breeze said: {state['last_error']}. " if state['last_error'] else '. ')
-                    + 'Its history service may be down; retry on a weekday after market hours.')
-            sessions.sort(key=lambda r: r['day'])
-            task['progress']['stage'] = 'scoring'
-            min_trades = min(10, max(1, len(sessions) // 2))
-            results = ose.sweep_straddle(sessions, lots, lot_size,
-                                         brokerage_per_leg=_OS_BROKERAGE_PER_LEG,
-                                         min_trades=min_trades)
-            n_combos = (len(ose.STRADDLE_ENTRIES) * len(ose.STRADDLE_EXITS)
-                        * len(ose.STRADDLE_MAX_LOSS))
-            task['payload'] = {
-                'results': results[:50], 'best': results[0] if results else None,
-                'total': len(results), 'days_priced': len(sessions),
-                'days_scanned': len(wanted), 'breeze_errors': state['errors'],
-                'last_breeze_error': state['last_error'],
-                'total_combos_tested': n_combos, 'lots': lots, 'lot_size': lot_size,
-            }
-            task['status'] = 'complete'
-        except Exception as e:
-            logger.error(f"[OptionSellingOptimise] failed: {e}", exc_info=True)
-            task['error'] = str(e)
-            task['status'] = 'error'
-
-    threading.Thread(target=_run, name=f'os-opt-{task_id}', daemon=True).start()
-    return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
-                    'progress': task['progress']})
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'os-opt', parse=_os_parse)
 
 
 @api_bp.route('/backtest/option-selling/optimise/status/<task_id>', methods=['GET'])
@@ -9703,11 +9462,13 @@ def _cr_parse(data: dict):
     return start_dt, end_dt, params, sets, capital_per_set
 
 
-def _cr_start(data: dict, worker, name: str):
+def _cr_start(data: dict, worker, name: str, parse=None):
     """Validate, check the logins, and start `worker(ctx, task)` on a thread.
-    ctx carries the NIFTY 5-minute spot, the sessions and a cached frame_for."""
+    ctx carries the NIFTY 5-minute spot, the sessions and a cached
+    frame_for(expiry, strike, right='CE'). `parse` reads the page's boxes
+    (_cr_parse; the monthly straddle passes _os_parse, its lots as 'sets')."""
     try:
-        start_dt, end_dt, params, sets, capital_per_set = _cr_parse(data)
+        start_dt, end_dt, params, sets, capital_per_set = (parse or _cr_parse)(data)
     except (TypeError, ValueError) as e:
         return jsonify({'success': False, 'error': f'Bad parameters: {e}'}), 400
     fyers = get_fyers_adapter()
@@ -9763,8 +9524,8 @@ def _cr_start(data: dict, worker, name: str):
             memo: dict = {}
             inflight: dict = {}
 
-            def frame_for(expiry, strike):
-                key = (expiry, int(strike))
+            def frame_for(expiry, strike, right='CE'):
+                key = (expiry, int(strike), right)
                 with lock:
                     if key in memo:
                         return memo[key]
@@ -9777,7 +9538,7 @@ def _cr_start(data: dict, worker, name: str):
                     return memo.get(key)
                 frm, to = cre.contract_window(expiry)
                 t0 = _time.time()
-                raw = icici.historical_option_range('NIFTY', expiry, int(strike), 'CE',
+                raw = icici.historical_option_range('NIFTY', expiry, int(strike), right,
                                                     frm, min(to, today))
                 # Set only when a chunk FAILED (or nothing came back): a range
                 # Breeze answered empty is not an error, and is cached.

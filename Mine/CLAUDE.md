@@ -447,13 +447,45 @@ sessions before expiry. **Capital is the page's ₹ per set** (no historical SPA
 
 Tests: `tests/test_call_ratio_engine.py`.
 
-## NIFTY Option Selling backtest — removed (ATM Straddle stays)
+## NIFTY Monthly ATM Straddle backtest (was the weekly ATM Straddle / Option Selling)
 
-Removed 2026-11-01 (it sat under 🧪 Testing on /backtest): the 💰 option, its strangle-only boxes (OTM / SL % /
-re-entry), logic card and JS, and its sweep (`option_selling_engine.sweep`, `OPT_*`). **Kept on purpose:** the
-⚖️ NIFTY ATM Straddle (Mine group) is the same engine (`run_day` with `otm_strikes=0`, `sl_pct=0`, no re-entry,
-plus `max_loss_rupees`), the same `#optionSellingParamsRow` / `os*` ids and both `/api/backtest/option-selling*`
-routes, so those keep the old name; the optimise route now runs only `sweep_straddle`.
+The ⚖️ straddle in the Mine group on /backtest. **Monthly since 2026-11-03**: once a month on the Entry Day box
+(`entry_day`: last Friday by default, last Mon–Thu, or `after_expiry` — `call_ratio_engine.entry_days`) at
+15:15, SELL the ATM CE + PE (50-step) of NEXT month's expiry; both legs out together at +`target_pct` /
+−`stop_pct` (5 / 5) **% of the premium collected**, marked on 5-minute closes. **A position trade: no exit time**
+(dropped the evening of 2026-11-03, with the exit-before-expiry box) — only a contract that reaches its expiry
+untouched is closed, at that day's last 5-minute close, reason `Expiry`. Until then it was a weekly 09:20 → 15:14 intraday straddle with a ₹
+stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11-01. Both left their names:
+`Backtest/option_selling_engine.py`, the `/api/backtest/option-selling*` routes and the `#optionSellingParamsRow`
+/ `os*` ids.
+
+* **It runs on the Monthly Call Ratio's machinery** (below): `call_ratio_engine`'s calendar (`entry_days`,
+  `contract_expiry`, `contract_window`, `exit_day`), and the routes go through `_cr_start` (`parse=_os_parse`,
+  `frame_for(expiry, strike, right)`), so tasks live in `_cr_tasks` and the option-selling status routes
+  delegate to `call_ratio_status`. Two contracts a month, cached like the call ratio's.
+* **A price "at" a time is the close of the 5-minute bar that has finished by then** (15:10 bar for 15:15),
+  for the entry and the ATM spot. **Target/stop fill AT the level** (`exit_fill`, legs
+  interpolated between marks) — until the evening of 2026-11-03 they booked the crossing bar's close, −6 to −9 % on
+  a −5 % stop; a session that OPENS past the level fills at that open, `Stop loss (gap)`.
+* **`contract_window` starts 10 days before the previous expiry** (was 3) — a last Friday that falls before
+  its own month's expiry (Fri 09-25 vs Tue 09-29) opens the month after, and 5 of 12 entries in 2025-26 sat
+  outside the old window as "No ICICI premium at entry". The Call Ratio had the same hole; its cache keys moved.
+* **Adjustments** (added 2026-11-03, `adjust` / `adjust_pts` / `max_adjust`, default none / 200 / 2): when a
+  NIFTY 5-minute close is `adjust_pts` from the centre (the sold strike, then the last adjustment's ATM), at that
+  close `roll_untested` buys back the profit leg and sells that side at the new ATM, `recenter` re-sells both
+  there, `hedge` BUYS the losing side there (once a side); never on the expiry day, and a new strike with no
+  premium at that bar waits for the next one. The path is a list of legs (`build_path` → `_adjust` →
+  `_assemble`; closed legs freeze at their closing mark), target/stop stay % of the FIRST premium, brokerage is
+  ₹100 per leg traded (`legs_traded`), and a stop/target on the adjustment's own bar wins (it is a level fill
+  inside the bar; the adjustment is at the close).
+* **Find Best Params** sweeps entry day × `ADJUST_VARIANTS` (none + 3 types × 7 trigger points) × target ×
+  stop = 29,700 combos, one path per (month, entry day, adjustment) (`score_month` → `score_expiry`); ranked by
+  `call_ratio_engine.rank(keys=SWEEP_KEYS)`; a test holds sweep rows equal to the backtest of their params.
+  **Its cost is the adjustment strikes**: ~36 contracts a month cold (every 50-strike NIFTY crossed, both
+  sides), ~7 s each at Breeze's pace — a year is ~430 contracts / ~1 h; 2020-26 (~3,000) is over a day's
+  5,000-request quota, so warm it a year at a time after hours.
+
+Tests: `tests/test_option_selling_engine.py`.
 
 ## Heikin-Ashi + SuperTrend backtest — removed
 

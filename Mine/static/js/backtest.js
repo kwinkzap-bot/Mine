@@ -1153,12 +1153,13 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Entry', 'After 10:15, when price breaks the first-hour candle\'s High (BUY) or Low (SELL).'],
             ['Stop / Target', 'Stop = candle\'s other end. Target = ratio × the candle\'s range.'],
             ['Exit', 'Stop (wins if both touched in one bar), target, or 15:20. One trade per stock per day.']] },
-        atm_straddle: { sub: 'NIFTY weekly ATM short straddle', steps: [
-            ['Days', 'Every trading day, Monday to Friday.'],
-            ['Entry', 'At 09:20, SELL the ATM CE and the ATM PE (strike nearest the spot) of the current weekly expiry.'],
-            ['Stop', 'Max loss per strike (₹2,000 by default): a stop rests at each leg\'s entry + that loss and fills at that level, so a leg loses no more unless the premium gaps past it. The other leg keeps running.'],
-            ['Target', 'None.'],
-            ['Exit', 'Otherwise both legs are bought back at 15:14.']] },
+        atm_straddle: { sub: 'NIFTY monthly ATM short straddle', steps: [
+            ['Entry', 'Once a month on the Entry Day (last Friday by default; last Mon–Thu or the day after the monthly expiry can be picked) at 15:15 (the session before it if that day is a holiday): SELL the ATM CE and the ATM PE (strike nearest the spot) of NEXT month\'s expiry.'],
+            ['Target', 'Both legs bought back together once the straddle is up 5% of the premium collected (CE + PE sold).'],
+            ['Stop', 'Both legs bought back together once it is down 5% of the premium collected.'],
+            ['Fill', 'At the level itself; if a session opens already past it (an overnight gap), at that open.'],
+            ['Adjustment', 'Optional. When NIFTY\'s 5-minute close is the chosen points away from the centre (the sold strike, then the last adjustment\'s ATM): roll the profit leg to the new ATM, re-centre both legs there, or buy the losing side there as a hedge (once a side) — up to Max Adjustments a month, never on expiry day. Target / Stop stay on the first premium collected.'],
+            ['Exit', 'A position trade — no exit time. Only if neither level is hit by expiry does it close at the expiry day\'s last close.']] },
         call_ratio: { sub: 'NIFTY monthly 1:2 call ratio with a far hedge, zero adjustment', steps: [
             ['Entry', 'Last Friday of the month at 15:16, on NEXT month\'s expiry: BUY 1 CE 300 pts above the ATM, SELL 2 CE 300 above that, BUY 1 CE 1,000 above the sold strike.'],
             ['Strikes', 'If NIFTY falling to zero would leave more than 1% of capital as credit, the strikes are too close — move all three out 100 pts and check again. A downside debit above 1% is not traded.'],
@@ -1290,7 +1291,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // or run as a portfolio have no index chart to draw on.
     const BT_LOGIC_NO_CHART = {
         option_breakout: 'trades on the option’s own candles, not the index',
-        atm_straddle: 'a two-leg weekly straddle, not a single chart',
+        atm_straddle: 'a two-leg monthly straddle, not a single chart',
         call_ratio: 'a three-leg monthly option position, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
     };
@@ -2327,29 +2328,30 @@ document.addEventListener('DOMContentLoaded', function() {
         return line;
     }
 
-    // ── NIFTY ATM Straddle — start + poll ──────────────────────────────
-    // Two Breeze requests per trading day (one per leg), disk-cached once the
-    // day has settled: a year is a few minutes cold, instant warm. Own result
-    // panel — a row is one day's straddle, not a trade the shared cards fit.
+    // ── NIFTY Monthly ATM Straddle — start + poll ──────────────────────
+    // Two contracts a month (CE + PE at the ATM), each one cached Breeze
+    // 5-minute fetch over its life; polled like the call ratio. Own result
+    // panel — a row is one month's straddle.
     let _osRun = 0;
-    // The option-selling engine's rule with ATM strikes, no % stop and no
-    // re-entry (sl_pct 0 = no stop), plus a max ₹ loss per leg.
-    async function runOptionSelling() {
-        const title = 'Running NIFTY ATM Straddle';
-        const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
-        const payload = {
+    function _osPayload() {
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        return {
             start_date:  document.getElementById('startDate')?.value,
             end_date:    document.getElementById('endDate')?.value,
-            days,
-            entry_time:  document.getElementById('osEntryTime')?.value || '09:20',
-            exit_time:   document.getElementById('osExitTime')?.value || '15:14',
-            otm_strikes: 0,
-            sl_pct:      0,
-            reentry:     false,
+            entry_day:   document.getElementById('osEntryDay')?.value || 'last_friday',
+            entry_time:  document.getElementById('osEntryTime')?.value || '15:15',
+            target_pct:  num('osTarget', 5),
+            stop_pct:    num('osStop', 5),
+            adjust:      document.getElementById('osAdjust')?.value || 'none',
+            adjust_pts:  num('osAdjustPts', 200),
+            max_adjust:  Math.max(1, parseInt(document.getElementById('osMaxAdjust')?.value || 2)),
             lots:        Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
-            max_loss_rupees: Math.max(0, parseFloat(document.getElementById('osMaxLoss')?.value ?? 2000) || 0),
         };
-        if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
+    }
+
+    async function runOptionSelling() {
+        const title = 'Running NIFTY Monthly ATM Straddle';
+        const payload = _osPayload();
         const myRun = ++_osRun;
         resultsArea.style.display = 'none';
         const osRes = document.getElementById('osResults');
@@ -2374,9 +2376,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 data = await (await fetch(`/api/backtest/option-selling/status/${taskId}`)).json();
                 if (myRun !== _osRun) return;
                 if (data.status !== 'running') break;
-                const p = data.progress || {};
-                _showOptLoader(title,
-                    `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
+                _showOptLoader(title, _crProgress(data.progress || {}, data, 'months'));
             }
             _hideOptLoader();
             if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
@@ -2384,7 +2384,7 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (err) {
             if (myRun !== _osRun) return;
             _hideOptLoader();
-            console.error('Option Selling error:', err);
+            console.error('Monthly Straddle error:', err);
             window.showNotification(err.message || 'Backtest failed', 'error');
             const ph = document.getElementById('btRightPlaceholder');
             if (ph) ph.style.display = '';
@@ -2393,58 +2393,62 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderOptionSelling(data) {
         const s = data.summary || {};
+        const p = s.params || {};
         const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
         const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
             <span class="stat-card__lbl">${lbl}</span>
             <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
             ${sub ? `<small>${sub}</small>` : ''}</div>`;
         const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        const reasons = Object.entries(s.exit_reasons || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
         const stats = document.getElementById('osStats');
         if (stats) stats.innerHTML = [
-            card('Days Traded', String(s.total_trades || 0), 'ac-blue',
-                 `${s.skipped_days || 0} skipped (no premiums) of ${s.days_scanned || 0}`),
+            card('Months Traded', String(s.total_trades || 0), 'ac-blue',
+                 `${s.skipped_months || 0} skipped · ${s.open_trades || 0} open · of ${s.months_scanned || 0}`),
             card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green', `${s.wins || 0} W / ${s.losses || 0} L`),
             card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
                  `gross ${inr(s.total_gross_pnl_rupees || 0)} · brok ₹${Math.round(s.total_brokerage || 0).toLocaleString('en-IN')}`),
             card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
                  `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
-            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red'),
-            s.max_loss_rupees
-                ? card('Max-Loss Legs', String(s.max_loss_legs || 0), 'ac-blue',
-                       `on ${s.max_loss_days || 0} days · ATM · −₹${Math.round(s.max_loss_rupees).toLocaleString('en-IN')} per leg · ${s.lots}×${s.lot_size}`)
-                : card('Stops / Re-entries', `${s.sl_hits || 0} / ${s.reentries || 0}`, 'ac-blue',
-                       `${s.otm_strikes ? s.otm_strikes + '-OTM' : 'ATM'} · ${s.sl_pct ? 'SL ' + s.sl_pct + '%' : 'no SL'} · ${s.lots}×${s.lot_size}`),
+            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red',
+                 `avg ${s.avg_sessions_held || 0} sessions held`),
+            card('Exits', reasons || '—', 'ac-blue',
+                 `+${p.target_pct}% / −${p.stop_pct}% of premium · ${p.adjust && p.adjust !== 'none' ? `${_OS_ADJUST[p.adjust] || p.adjust} @ ${p.adjust_pts} pts ×${p.max_adjust} · ` : ''}${s.lots}×${s.lot_size}`),
         ].join('');
         const prem = v => (v == null ? '—' : Number(v).toFixed(2));
-        const leg = (k, label) => [
-            { key: `${k}_strike`, label: `${label} Strike`, sortable: true, format: v => v ?? '—' },
-            { key: `${k}_entry`, label: `${label} Sold`, sortable: true, format: prem },
-            { key: `${k}_exit`, label: `${label} Exit`, sortable: true, format: prem },
-            { key: `${k}_reentry`, label: `${label} Re-sold`, sortable: true, format: prem },
-            { key: `${k}_pnl`, label: `${label} Pts`, sortable: true, format: prem, tone: DataGrid.sign },
-        ];
         DataGrid.mountSortable('osGrid', {
             rows: data.trades || [],
             columns: [
-                { key: 'date', label: 'Date', sortable: true },
-                { key: 'weekday', label: 'Day', sortable: true },
-                { key: 'spot', label: 'Spot', sortable: true, format: v => (v || 0).toFixed(2) },
-                ...leg('ce', 'CE'), ...leg('pe', 'PE'),
+                { key: 'date', label: 'Entry', sortable: true },
+                { key: 'expiry', label: 'Expiry', sortable: true },
+                { key: 'spot', label: 'Spot', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(2)) },
+                { key: 'strike', label: 'Strike', sortable: true, format: v => v ?? '—' },
+                { key: 'ce_entry', label: 'CE Sold', sortable: true, format: prem },
+                { key: 'ce_exit', label: 'CE Out', sortable: true, format: prem },
+                { key: 'pe_entry', label: 'PE Sold', sortable: true, format: prem },
+                { key: 'pe_exit', label: 'PE Out', sortable: true, format: prem },
+                { key: 'premium', label: 'Premium', sortable: true, format: prem },
+                { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
+                { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
                 { key: 'exit_reason', label: 'Outcome', sortable: true },
-                { key: 'pnl', label: 'Points', sortable: true, format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
-                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: DataGrid.inr, tone: DataGrid.sign },
+                { key: 'adjust_count', label: 'Adj', sortable: true,
+                  format: (v, r) => (!v ? '—' : `${v} → CE ${r.ce_exit_strike ?? '—'} / PE ${r.pe_exit_strike ?? '—'}`),
+                  title: (v, r) => (r.adjustments || []).join('\n') },
+                { key: 'trough_pct', label: 'Worst', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl', label: 'Points', sortable: true, format: prem, tone: DataGrid.sign },
+                { key: 'pnl_pct', label: 'P&L %', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign },
             ],
             empty: s.last_breeze_error
-                ? `No days could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
-                : 'No days could be priced — no option candles for the strikes in this range',
+                ? `No months could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
+                : 'No entry days in this range',
             defaultSort: { key: 'date', dir: 'desc' },
         });
         const osRes = document.getElementById('osResults');
         if (osRes) osRes.style.display = '';
         if (s.breeze_errors) window.showNotification(
-            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — those days are missing, not zero`, 'warning');
-        if (s.skipped_days) window.showNotification(
-            `${s.skipped_days} day${s.skipped_days === 1 ? '' : 's'} left out — no ICICI option candles`, 'info');
+            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected months may be skipped or mis-priced`, 'warning');
     }
 
     // ── NIFTY Monthly Call Ratio — start + poll ────────────────────────
@@ -5858,34 +5862,43 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // ── NIFTY ATM Straddle — Find Best Params ──────────────────────────
-    // Entry × exit × max ₹ loss per leg (200 combos), on /option-selling/optimise
-    // (option_selling_engine.sweep_straddle).
+    // ── NIFTY Monthly ATM Straddle — Find Best Params ──────────────────
+    // Entry day × target % × stop % (option_selling_engine.SWEEP_GRID, 1,350 combos) on /option-selling/optimise; the same two contracts a month
+    // as the backtest, so a cached run is instant.
     let _osOptRun = 0;
-    const _inrLoss = v => v ? '−₹' + Math.round(v).toLocaleString('en-IN') : 'Off';
+    const _OS_ENTRY_DAYS = {
+        last_monday: 'Last Mon', last_tuesday: 'Last Tue', last_wednesday: 'Last Wed',
+        last_thursday: 'Last Thu', last_friday: 'Last Fri', after_expiry: 'After expiry',
+    };
+    const _OS_ADJUST = { none: 'None', roll_untested: 'Roll profit leg', recenter: 'Re-centre', hedge: 'Hedge' };
     const STRADDLE_OPT_COLS = [
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
-        { label: 'Entry',        key: 'entry_time',     fmt: r => r.entry_time },
-        { label: 'Exit',         key: 'exit_time',      fmt: r => r.exit_time },
-        { label: 'Max Loss / Leg', key: 'max_loss_rupees', fmt: r => _inrLoss(r.max_loss_rupees) },
-        { label: 'Days',         key: 'total_trades',   fmt: r => r.total_trades },
+        { label: 'Entry Day',    key: 'entry_day',      fmt: r => _OS_ENTRY_DAYS[r.entry_day] || r.entry_day },
+        { label: 'Adjustment',   key: 'adjust',         fmt: r => _OS_ADJUST[r.adjust] || r.adjust },
+        { label: 'Adjust At',    key: 'adjust_pts',     fmt: r => (r.adjust === 'none' ? '—' : `${r.adjust_pts} pts`) },
+        { label: 'Target',       key: 'target_pct',     fmt: r => `${r.target_pct}%` },
+        { label: 'Stop',         key: 'stop_pct',       fmt: r => `${r.stop_pct}%` },
+        { label: 'Months',       key: 'total_trades',   fmt: r => `${r.total_trades}${r.skipped ? ` <small>(${r.skipped} skip)</small>` : ''}` },
         { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
-        { label: 'Total P&L (gross)', key: 'gross_pnl_rupees', fmt: r => _rs(r.gross_pnl_rupees || 0) },
         { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
-        { label: 'Avg / Day',    key: 'avg_pnl_rupees', fmt: r => _rs(r.avg_pnl_rupees) },
+        { label: 'Total % Prem', key: 'total_pct',      fmt: r => _crPct(r.total_pct) },
+        { label: 'Avg / Month',  key: 'avg_pct',        fmt: r => _crPct(r.avg_pct) },
+        { label: 'Worst Month',  key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
         { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
         { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
-        { label: 'Max-Loss Legs', key: 'max_loss_legs', fmt: r => `${r.max_loss_legs} <small>(${r.max_loss_days} days)</small>` },
         { label: '',             key: null,             fmt: () => '' },   // Use button
     ];
 
     function applyStraddleOptResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-        set('osEntryTime', r.entry_time);
-        set('osExitTime', r.exit_time);
-        set('osMaxLoss', String(r.max_loss_rupees));
+        set('osEntryDay', r.entry_day);
+        set('osTarget', String(r.target_pct));
+        set('osStop', String(r.stop_pct));
+        set('osAdjust', r.adjust || 'none');
+        if (r.adjust && r.adjust !== 'none') set('osAdjustPts', String(r.adjust_pts));
         if (window.showNotification) window.showNotification(
-            `Applied: entry ${r.entry_time} · exit ${r.exit_time} · max loss ${_inrLoss(r.max_loss_rupees)} per leg · `
+            `Applied: ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day} · ${_OS_ADJUST[r.adjust] || 'None'}`
+            + `${r.adjust && r.adjust !== 'none' ? ` @ ${r.adjust_pts} pts` : ''} · target ${r.target_pct}% · stop ${r.stop_pct}% · `
             + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
     }
 
@@ -5894,12 +5907,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const metaEl    = document.getElementById('osOptMeta');
         const recalcBtn = document.getElementById('osRecalcOptBtn');
         const apply = applyStraddleOptResult;
-        const title = document.getElementById('osOptTitle');
-        if (title) title.textContent = '⚖️ NIFTY ATM Straddle Best Params';
         if (metaEl) metaEl.textContent =
-            `${data.total_combos_tested} combos · ${data.total} scored · ${data.days_priced}/${data.days_scanned} days priced (ICICI)`
-            + ` · max loss per leg at ${data.lots}×${data.lot_size}`
-            + (data.breeze_errors ? ` · ${data.breeze_errors} ICICI requests failed` : '');
+            `${data.total_combos_tested} combos · ${data.total} scored · ${data.months} months (≥ ${data.min_trades} closed to score)`
+            + ` · every Entry Day × adjustment · ${data.lots}×${data.lot_size} · % of premium collected`
+            + (data.summary?.breeze_errors ? ` · ${data.summary.breeze_errors} ICICI requests failed` : '');
         _mountSingleOptGrid('osOptGrid', data.results || [], STRADDLE_OPT_COLS, 'net_pnl_rupees', apply);
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
@@ -5912,8 +5923,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const optimBtn  = document.getElementById('runOptimiseBtn');
         const activeBtn = recalculate ? recalcBtn : optimBtn;
         const origText  = activeBtn ? activeBtn.textContent : '';
-        const days = Array.from(document.querySelectorAll('.osDay:checked')).map(c => parseInt(c.value));
-        if (!days.length) { window.showNotification('Pick at least one trading day', 'warning'); return; }
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
         const osRes = document.getElementById('osResults');
@@ -5925,14 +5934,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const resp = await fetch('/api/backtest/option-selling/optimise', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    start_date: document.getElementById('startDate')?.value,
-                    end_date:   document.getElementById('endDate')?.value,
-                    days,
-                    entry_time: document.getElementById('osEntryTime')?.value || '09:20',
-                    lots:       Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
-                    strategy:   'atm_straddle',
-                }),
+                body: JSON.stringify({ ..._osPayload(), strategy: 'atm_straddle' }),
             });
             let data = await resp.json();
             if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
@@ -5943,10 +5945,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 data = await (await fetch(`/api/backtest/option-selling/optimise/status/${taskId}`)).json();
                 if (myRun !== _osOptRun) return;
                 if (data.status !== 'running') break;
-                const p = data.progress || {};
-                _showOptLoader('Finding best params…', p.stage === 'scoring'
-                    ? `Scoring 200 combos · ${data.elapsed || 0}s`
-                    : `${p.done || 0} / ${p.total || 0} days · ${p.traded || 0} priced (ICICI) · ${data.elapsed || 0}s`);
+                _showOptLoader('Finding best params…', _crProgress(data.progress || {}, data, 'months'));
             }
             _hideOptLoader();
             done();
@@ -5956,7 +5955,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (myRun !== _osOptRun) return;
             _hideOptLoader();
             done();
-            console.error('Option Selling optimise error:', err);
+            console.error('Monthly Straddle optimise error:', err);
             window.showNotification(err.message || 'Optimisation failed', 'error');
         }
     }
