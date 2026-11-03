@@ -549,8 +549,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
         if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
         if (osOptPanel)    osOptPanel.style.display    = 'none';
-        const osResultsEl   = document.getElementById('osResults');
-        if (osResultsEl)   osResultsEl.style.display   = 'none';
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
@@ -2354,8 +2352,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const payload = _osPayload();
         const myRun = ++_osRun;
         resultsArea.style.display = 'none';
-        const osRes = document.getElementById('osResults');
-        if (osRes) osRes.style.display = 'none';
         const btTradesSec = document.getElementById('btTradesSection');
         const periodSec   = document.getElementById('periodBreakdownSection');
         if (btTradesSec) btTradesSec.style.display = 'none';
@@ -2391,62 +2387,62 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // The straddle's trade grid — one row per month, skipped and open months included.
+    function _osTradeCols() {
+        const prem = v => (v == null ? '—' : Number(v).toFixed(2));
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        return [
+            { key: 'date', label: 'Entry', sortable: true },
+            { key: 'expiry', label: 'Expiry', sortable: true },
+            { key: 'spot', label: 'Spot', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(2)) },
+            { key: 'strike', label: 'Strike', sortable: true, format: v => v ?? '—' },
+            { key: 'ce_entry', label: 'CE Sold', sortable: true, format: prem },
+            { key: 'ce_exit', label: 'CE Out', sortable: true, format: prem },
+            { key: 'pe_entry', label: 'PE Sold', sortable: true, format: prem },
+            { key: 'pe_exit', label: 'PE Out', sortable: true, format: prem },
+            { key: 'premium', label: 'Premium', sortable: true, format: prem },
+            { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
+            { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
+            { key: 'exit_reason', label: 'Outcome', sortable: true },
+            { key: 'adjust_count', label: 'Adj', sortable: true,
+              format: (v, r) => (!v ? '—' : `${v} → CE ${r.ce_exit_strike ?? '—'} / PE ${r.pe_exit_strike ?? '—'}`),
+              title: (v, r) => (r.adjustments || []).join('\n') },
+            { key: 'trough_pct', label: 'Worst', sortable: true, format: pct, tone: DataGrid.sign },
+            { key: 'pnl', label: 'Points', sortable: true, format: prem, tone: DataGrid.sign },
+            { key: 'pnl_pct', label: 'P&L %', sortable: true, format: pct, tone: DataGrid.sign },
+            { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign },
+        ];
+    }
+
+    // Rendered through the shared results area (the Simple Trader card layout, equity curve,
+    // P&L breakdown, Trade History): the server's ₹ are per trade already (server_rupees), the
+    // curves read the CLOSED months, and the grid lists every month.
     function renderOptionSelling(data) {
         const s = data.summary || {};
-        const p = s.params || {};
-        const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
-        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
-            <span class="stat-card__lbl">${lbl}</span>
-            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
-            ${sub ? `<small>${sub}</small>` : ''}</div>`;
-        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
-        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
-        const reasons = Object.entries(s.exit_reasons || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
-        const stats = document.getElementById('osStats');
-        if (stats) stats.innerHTML = [
-            card('Months Traded', String(s.total_trades || 0), 'ac-blue',
-                 `${s.skipped_months || 0} skipped · ${s.open_trades || 0} open · of ${s.months_scanned || 0}`),
-            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green', `${s.wins || 0} W / ${s.losses || 0} L`),
-            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
-                 `gross ${inr(s.total_gross_pnl_rupees || 0)} · brok ₹${Math.round(s.total_brokerage || 0).toLocaleString('en-IN')}`),
-            card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
-                 `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
-            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red',
-                 `avg ${s.avg_sessions_held || 0} sessions held`),
-            card('Exits', reasons || '—', 'ac-blue',
-                 `+${p.target_pct}% / −${p.stop_pct}% of premium · ${p.adjust && p.adjust !== 'none' ? `${_OS_ADJUST[p.adjust] || p.adjust} @ ${p.adjust_pts} pts ×${p.max_adjust} · ` : ''}${s.lots}×${s.lot_size}`),
-        ].join('');
-        const prem = v => (v == null ? '—' : Number(v).toFixed(2));
-        DataGrid.mountSortable('osGrid', {
-            rows: data.trades || [],
-            columns: [
-                { key: 'date', label: 'Entry', sortable: true },
-                { key: 'expiry', label: 'Expiry', sortable: true },
-                { key: 'spot', label: 'Spot', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(2)) },
-                { key: 'strike', label: 'Strike', sortable: true, format: v => v ?? '—' },
-                { key: 'ce_entry', label: 'CE Sold', sortable: true, format: prem },
-                { key: 'ce_exit', label: 'CE Out', sortable: true, format: prem },
-                { key: 'pe_entry', label: 'PE Sold', sortable: true, format: prem },
-                { key: 'pe_exit', label: 'PE Out', sortable: true, format: prem },
-                { key: 'premium', label: 'Premium', sortable: true, format: prem },
-                { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
-                { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
-                { key: 'exit_reason', label: 'Outcome', sortable: true },
-                { key: 'adjust_count', label: 'Adj', sortable: true,
-                  format: (v, r) => (!v ? '—' : `${v} → CE ${r.ce_exit_strike ?? '—'} / PE ${r.pe_exit_strike ?? '—'}`),
-                  title: (v, r) => (r.adjustments || []).join('\n') },
-                { key: 'trough_pct', label: 'Worst', sortable: true, format: pct, tone: DataGrid.sign },
-                { key: 'pnl', label: 'Points', sortable: true, format: prem, tone: DataGrid.sign },
-                { key: 'pnl_pct', label: 'P&L %', sortable: true, format: pct, tone: DataGrid.sign },
-                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign },
-            ],
-            empty: s.last_breeze_error
-                ? `No months could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
-                : 'No entry days in this range',
-            defaultSort: { key: 'date', dir: 'desc' },
+        const rows = data.trades || [];
+        const closed = rows.filter(r => r.status === 'traded' && r.pnl != null);
+        let cum = 0, peak = 0, ddPts = 0;
+        [...closed].sort((a, b) => String(a.entry_time).localeCompare(String(b.entry_time))).forEach(r => {
+            cum += Number(r.pnl); peak = Math.max(peak, cum); ddPts = Math.max(ddPts, peak - cum);
         });
-        const osRes = document.getElementById('osResults');
-        if (osRes) osRes.style.display = '';
+        const lots = s.lots || 1;
+        displayResults({
+            ...data,
+            trades: closed,
+            os_rows: rows,
+            is_straddle: true,
+            summary: {
+                ...s,
+                server_rupees: true,
+                total_pnl: closed.reduce((a, r) => a + Number(r.pnl), 0),
+                max_drawdown: ddPts,
+                max_lots_used: lots,
+                start_capital: lots * 50000,
+            },
+        });
+        if (!rows.length) window.showNotification(s.last_breeze_error
+            ? `No months could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
+            : 'No entry days in this range', 'warning');
         if (s.breeze_errors) window.showNotification(
             `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected months may be skipped or mis-priced`, 'warning');
     }
@@ -3104,7 +3100,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // and Drawdown Days counts the trading days from the equity peak to the trough of the deepest drawdown.
     function applySimplerTraderStats(data) {
         const row  = document.getElementById('simplerStatsRow');
-        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_touch_break' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators');
+        const isSt = strategySelect && (strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_touch_break' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'atm_straddle');
         const setSub = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
         if (row) row.style.display = 'none';
         // Simple Trader's first row: Wins + Losses merge into one card and Net Outcome goes.
@@ -3200,7 +3196,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const isWcb  = strategySelect && strategySelect.value === 'weekly_cpr_breakout';
         const isMultiSymbol = isTmf || isEmaAll || isWcb;
         // The strategies on the shared pcLots row are single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'st_touch_break' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf');
+        const isPc   = strategySelect && (strategySelect.value === 'st_touch_break' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf' || strategySelect.value === 'atm_straddle');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
@@ -4112,6 +4108,13 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderTable() {
         if (!lastData || !lastData.trades) return;
         if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
+        if (lastData.is_straddle) {
+            DataGrid.mountSortable('tradesGrid', {
+                rows: lastData.os_rows || [], columns: _osTradeCols(),
+                empty: 'No entry days in this range', defaultSort: { key: 'date', dir: 'desc' },
+            });
+            return;
+        }
 
         const multi = !!lastData.is_multi_symbol;
         const futures = !!(lastData.summary && lastData.summary.futures_priced);
@@ -5925,8 +5928,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const origText  = activeBtn ? activeBtn.textContent : '';
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
-        const osRes = document.getElementById('osResults');
-        if (osRes) osRes.style.display = 'none';
+        resultsArea.style.display = 'none';
         const myRun = ++_osOptRun;
         const done = () => { if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; } };
         _showOptLoader('Finding best params…', 'Starting…');
