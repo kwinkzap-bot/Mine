@@ -135,7 +135,25 @@ def dashboard():
 @login_required
 def backtest():
     """Backtest Strategy page."""
-    return render_template('backtest.html')
+    return render_template('backtest.html', mine_live=_mine_live_tabs())
+
+
+def _mine_live_tabs():
+    """The Mine sub-tabs (ST Touch Break 8-15) as the numbers a Backtest row carries, so 🔖 Saved
+    can name the live tab a saved row runs as. These are the specs' numbers, not ST<n>_* overrides."""
+    from trading_app.service.simple_trader_live_engine import MINE_TABS, SPECS
+    out = []
+    for n, key, _p in MINE_TABS:
+        sp = SPECS[n]
+        pr, fx = sp.params, sp.fixed
+        out.append({'n': n, 'key': key, 'tab': sp.tab, 'direction': fx.get('direction', 'both'),
+                    'timeframe': f'{sp.bar}minute', 'st_period': pr['st_period'], 'st_mult': pr['st_mult'],
+                    'modes': fx.get('modes', 'bounce'), 'stop_mode': 'touch' if pr.get('stop_touch') else 'close',
+                    'min_wick_pct': pr['min_wick_pct'], 'touch_tol_pct': pr['touch_tol_pct'],
+                    'min_body_pct': pr['min_body_pct'], 'outside_bar': fx.get('outside_bar', 'close'),
+                    'entry_start': sp.entry_start, 'entry_end': fx.get('entry_end', '15:14'),
+                    'exit_cutoff': fx.get('exit_cutoff', '15:14'), 'max_trades_per_day': sp.max_trades})
+    return out
 
 @pages_bp.route('/contracts')
 @require_user_auth

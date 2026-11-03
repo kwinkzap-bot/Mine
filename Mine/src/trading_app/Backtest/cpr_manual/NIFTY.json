@@ -39476,8 +39476,26 @@
       "reason": "09:20 candle rejected from PDH (high 22,967, closed 22,936) -> SELL under it; SL over PDH 22,962; target CPR 22,894 \u2014 yesterday moved 1.04% against this SELL and the 09:15 candle is only 0.23% of price: a quiet open has not turned yesterday's move \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 84.9 pts (0.37%), 09:15 candle O 22964.5 H 22976.6 L 22923.8 C 22938.85 | Trade by rule: 09:20 candle rejected from PDH (high 22,967, closed 22,936) -> SELL under it; SL over PDH 22,962; target CPR 22,894 \u2014 yesterday moved 1.04% against this SELL and the 09:15 candle is only 0.23% of price: a quiet open has not turned yesterday's move \u2014 no trade"
+    },
+    {
+      "date": "2026-11-02",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "Candle green near R2",
+      "boxes": "Small",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Gap-up open 23,222; R1/PDH 23,118-23,146 never reached by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 27.7 pts (0.12%), 09:15 candle O 23222.3 H 23292.55 L 23211.8 C 23266.95 | Trade by rule: gap-up open 23,222; R1/PDH 23,118-23,146 never reached by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-11-02 10:15",
+  "extended_at": "2026-11-02 15:43",
   "backfilled_from": "2018-01-01"
 }

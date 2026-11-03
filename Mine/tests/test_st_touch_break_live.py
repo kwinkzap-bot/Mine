@@ -503,3 +503,19 @@ def test_a_through_setup_arms_the_side_that_breaks_through_the_line():
             assert t['risk'] == round(rows[-1][1] - rows[-1][2], 2)            # the touch candle's range
         else:
             assert not [e for e in ev if e['event'] == 'armed']
+
+
+def test_the_touch_stop_is_polled_every_second_near_its_line():
+    """2 Nov 2026 #4 Short: the index crossed 23,247.81 by 2 pts late in the 13:57 minute."""
+    from datetime import datetime
+    from trading_app.algo.simple_trader import simple_trader_algo as st
+    a = st.SimpleTraderAlgo('u', st.PROFILES[8])
+    now = datetime(2026, 11, 2, 13, 57, 30)
+    t = {'n': 4, 'status': 'open', 'stop_line': 23247.81}
+    a.state = {'day': {'last_bar': '2026-11-02 13:51:00', 'trades': [t]}, 'spot': 23240.0}
+    assert a._poll_wait(now) == 1.0                                  # 7.8 pts away: inside 0.1 %
+    a.state['spot'] = 23200.0
+    assert a._poll_wait(now) > 1.0                                   # 48 pts away: the ordinary poll
+    t['status'] = 'closed'
+    a.state['spot'] = 23247.0
+    assert a._poll_wait(now) > 1.0

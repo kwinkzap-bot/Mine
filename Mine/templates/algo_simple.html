@@ -9,6 +9,7 @@
     <div class="ag-subtabs">
         {% if group == 'mine' %}{% for m in mine_tabs %}<button class="ag-subtab{% if key == m.key %} active{% endif %}" onclick="algoSwitch('{{ m.key }}')" title="ST Touch Break · {{ m.tab }} (strategy {{ m.n }}, flags ST{{ m.n }}_*)">{{ m.tab }}</button>
         {% endfor %}
+        <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick='mineCombinedOpen({{ mine_tabs|tojson }})' title="All the live Mine (ST Touch Break) algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>
         {% else %}{% for n in range(1, 8) %}<button class="ag-subtab{% if key == 'simple-' ~ n %} active{% endif %}" onclick="algoSwitch('simple-{{ n }}')" title="{{ names[n] }}">{{ n }}</button>
         {% endfor %}
         <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick="simpleCombinedOpen()" title="All seven live Simple Trader algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>{% endif %}

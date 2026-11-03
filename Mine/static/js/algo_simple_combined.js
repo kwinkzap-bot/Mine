@@ -1,23 +1,25 @@
-/* Algo page — "Combined" popup for the Simple Trader tabs.
+/* Algo page — "Combined" popups for the Simple Trader tabs (1-7) and the Mine tabs (ST Touch
+ * Break, 8-15).
  *
  * The same board as the Backtest page's Combined popup (cards, equity curve, P&L breakdowns,
- * month heat-map, trade history), but over what the seven LIVE algos actually booked: every row
+ * month heat-map, trade history), but over what the LIVE algos actually booked: every row
  * of /api/algo/simple-trader-<n>/history, paper and live, merged into one book. ₹ are the algos'
  * own (premium points × qty, with the round-trip charges), so Gross / Net are real booked figures.
- * Styled by backtest_combined.css (the bc-* classes).
+ * One popup per group (makeCombined); its ids are looked up inside its own modal, so both can be
+ * built on the page at once. Styled by backtest_combined.css (the bc-* classes).
  */
 (function () {
     'use strict';
 
-    const $ = (id) => document.getElementById(id);
-    const NAMES = {
-        1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut',
-        5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2',
-    };
-    const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777'];
-    const DEFS = [1, 2, 3, 4, 5, 6, 7].map((n, i) => ({
-        id: 's' + n, n, name: n + '. ' + NAMES[n], color: COLORS[i], symbol: n > 5 ? 'SENSEX' : 'NIFTY',
-        side: n === 2 ? 'PE' : 'CE', api: '/api/algo/simple-trader-' + n + '/history',
+    const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d'];
+
+    // cfg: {title, subtitle, csvName, defs:[{n, name, symbol, side}]}
+    function makeCombined(cfg) {
+    let modal = null;
+    const $ = (id) => modal && modal.querySelector('#' + id);
+    const DEFS = cfg.defs.map((d, i) => ({
+        id: 's' + d.n, n: d.n, name: d.name, color: COLORS[i % COLORS.length], symbol: d.symbol,
+        side: d.side, api: '/api/algo/simple-trader-' + d.n + '/history',
     }));
 
     // id → {status:'idle'|'loading'|'done'|'error', raw:[history rows], trades:[book rows], msg}
@@ -25,7 +27,7 @@
     DEFS.forEach(d => { state[d.id] = { status: 'idle', raw: [], trades: [] }; });
     const selected = new Set(DEFS.map(d => d.id));
     let basis = 'net', bookFilter = 'all';
-    let modal = null, equityChart = null, page = 0;
+    let equityChart = null, page = 0;
     const PAGE = 25;
 
     const inr = (v, sign) => (v < 0 ? '-' : (sign && v > 0 ? '+' : '')) + '₹' + Math.round(Math.abs(v)).toLocaleString('en-IN');
@@ -128,8 +130,8 @@
           <div class="bt-modal-box bc-box">
             <div class="bt-modal-hdr">
               <div class="bt-modal-hdr-text">
-                <div class="bt-modal-title">Combined — Simple Trader (Live Algos)</div>
-                <div class="bt-modal-subtitle">Every booked trade of the seven live algos merged into one book. ₹ = the algos' own booked P&amp;L (premium × qty), with the round-trip charges.</div>
+                <div class="bt-modal-title">${esc(cfg.title)}</div>
+                <div class="bt-modal-subtitle">${esc(cfg.subtitle)} ₹ = the algos' own booked P&amp;L (premium × qty), with the round-trip charges.</div>
               </div>
               <div class="bc-dates">
                 <label>From <input type="date" id="bcFrom"></label>
@@ -343,7 +345,7 @@
             ${card('Return / drawdown', s.dd > 0 ? (s.net / s.dd).toFixed(2) : '—', 'P&amp;L ÷ max drawdown')}
           </div>
 
-          <div class="bc-sec">Equity curve <small>combined net ₹ by trade date; thin lines are each strategy alone</small></div>
+          <div class="bc-sec">Equity curve <small>combined net ₹ by trade date; click a strategy in the legend to show its own line</small></div>
           <div class="bc-chart"><canvas id="bcEquity"></canvas></div>
 
           <div class="bc-sec">P&amp;L breakdown</div>
@@ -394,14 +396,28 @@
         };
         const css = getComputedStyle(document.documentElement);
         const grid = css.getPropertyValue('--oip-border').trim() || '#e5e7eb';
+        // Green above ₹0, red below: the fill splits at the zero line, and the line itself changes
+        // colour exactly where it crosses it (a vertical gradient with a hard stop at y = 0).
+        const UP = '#16a34a', DOWN = '#dc2626';
+        const zeroSplit = (ctx) => {
+            const { chart } = ctx, area = chart.chartArea, y = chart.scales.y;
+            if (!area || !y) return UP;
+            const span = area.bottom - area.top;
+            const at = span > 0 ? Math.min(1, Math.max(0, (y.getPixelForValue(0) - area.top) / span)) : 1;
+            const g = chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+            g.addColorStop(0, UP); g.addColorStop(at, UP);
+            g.addColorStop(at, DOWN); g.addColorStop(1, DOWN);
+            return g;
+        };
         const datasets = [{
-            label: 'Combined', data: series(rows), borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.14)',
-            fill: true, borderWidth: 2, pointRadius: 0, tension: 0.15, order: 0,
+            label: 'Combined', data: series(rows), borderColor: zeroSplit, backgroundColor: UP,
+            fill: { target: { value: 0 }, above: 'rgba(22,163,74,.14)', below: 'rgba(220,38,38,.14)' },
+            borderWidth: 2, pointRadius: 0, tension: 0.15, order: 0,
         }];
         DEFS.forEach(d => {
             if (!selected.has(d.id) || !state[d.id].trades.length) return;
             datasets.push({ label: d.name, data: series(rows.filter(r => r.sid === d.id)), borderColor: d.color,
-                borderWidth: 1, pointRadius: 0, fill: false, tension: 0.15, order: 1, hidden: false });
+                borderWidth: 1, pointRadius: 0, fill: false, tension: 0.15, order: 1, hidden: true });   // click its legend entry to show it
         });
         equityChart = new Chart(cv, {
             type: 'line', data: { labels: days, datasets },
@@ -426,10 +442,41 @@
             r.reason, r.gross.toFixed(2), r.brok.toFixed(2), r.nb.toFixed(2)].map(q).join(','))).join('\n');
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-        a.download = 'combined_simple_trader_live.csv';
+        a.download = cfg.csvName;
         a.click();
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
-    window.simpleCombinedOpen = open;
+    return open;
+    }
+
+    const NAMES = {
+        1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut',
+        5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2',
+    };
+    window.simpleCombinedOpen = makeCombined({
+        title: 'Combined — Simple Trader (Live Algos)',
+        subtitle: 'Every booked trade of the seven live algos merged into one book.',
+        csvName: 'combined_simple_trader_live.csv',
+        defs: [1, 2, 3, 4, 5, 6, 7].map(n => ({
+            n, name: n + '. ' + NAMES[n], symbol: n > 5 ? 'SENSEX' : 'NIFTY', side: n === 2 ? 'PE' : 'CE',
+        })),
+    });
+
+    // Mine: tabs = the page's mine_tabs ({n, tab}), passed by the button so the list is the server's.
+    let mineOpen = null;
+    window.mineCombinedOpen = function (tabs) {
+        if (!mineOpen) {
+            mineOpen = makeCombined({
+                title: 'Combined — Mine · ST Touch Break (Live Algos)',
+                subtitle: `Every booked trade of the ${tabs.length} Mine sub-tabs merged into one book.`,
+                csvName: 'combined_mine_live.csv',
+                defs: tabs.map(t => ({
+                    n: t.n, name: t.n + '. ' + t.tab, symbol: 'NIFTY',
+                    side: / - Sell - /.test(t.tab) ? 'PE' : 'CE',      // a Both tab's rows carry their own option_type
+                })),
+            });
+        }
+        mineOpen();
+    };
 })();

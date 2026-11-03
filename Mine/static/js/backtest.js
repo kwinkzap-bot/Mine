@@ -5512,6 +5512,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const o = [...(document.getElementById('strategySelect')?.options || [])].find(x => x.value === v);
             return o ? o.textContent.trim() : v;
         };
+        // The /algo Mine sub-tab running a saved row's numbers (pages._mine_live_tabs), else ''.
+        const MINE_KEYS = ['timeframe', 'st_period', 'st_mult', 'modes', 'stop_mode', 'min_wick_pct', 'touch_tol_pct',
+                           'min_body_pct', 'outside_bar', 'entry_start', 'entry_end', 'exit_cutoff', 'max_trades_per_day'];
+        const same = (a, b) => (typeof b === 'number' ? Math.abs(Number(a) - b) < 1e-9 : String(a) === String(b));
+        const liveTab = (x) => {
+            if (x.strategy !== 'st_touch_break') return null;
+            const p = x.params || {};
+            return (window.MINE_LIVE_TABS || []).find(t => (x.direction || 'both') === t.direction
+                && MINE_KEYS.every(k => p[k] != null && same(p[k], t[k]))) || null;
+        };
         function paint() {
             const all = load();
             if (!all.length) {
@@ -5519,15 +5529,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
             list.innerHTML = `<div class="bc-scroll"><table class="bc-tbl bt-saved-tbl">
-                <thead><tr><th></th><th>Strategy</th><th>Row</th><th>Params</th><th>Trades</th><th>Win%</th><th>PF</th>
+                <thead><tr><th></th><th>Strategy</th><th>Row</th><th>Live algo</th><th>Params</th><th>Trades</th><th>Win%</th><th>PF</th>
                     <th>Net P&amp;L</th><th>Max DD</th><th>Range</th><th>Saved</th></tr></thead>
                 <tbody>${all.map(x => {
-                    const p = x.params || {};
+                    const p = x.params || {}, lt = liveTab(x);
                     return `<tr>
                         <td class="bt-saved-act"><button type="button" class="bt-saved-use" data-use="${esc(x.id)}">USE</button>
                             <button type="button" class="bt-saved-del" data-del="${esc(x.id)}" title="Remove from Saved">✕</button></td>
                         <td><small>${esc(stratName(x.strategy))}</small></td>
                         <td><b>${esc(x.board)} ${esc(x.tag)}</b></td>
+                        <td>${lt ? `<a href="/algo#${esc(lt.key)}" title="Mine tab on /algo, sub-tab ${lt.n}">${esc(lt.tab)}</a>` : '<small>—</small>'}</td>
                         <td title="${esc(x.title)}">${esc(x.label)}</td>
                         <td>${p.total_trades ?? ''}</td>
                         <td>${p.win_rate != null ? Number(p.win_rate).toFixed(0) + '%' : ''}</td>

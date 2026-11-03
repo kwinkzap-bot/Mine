@@ -161,7 +161,13 @@ def test_the_peak_only_ever_lifts_the_stop():
 class _FakeAlgo(algo.SimpleTraderAlgo):
     def __init__(self, username, profile, frame):
         super().__init__(username, profile)
-        self.frame, self.px, self.alerts = frame, 250.0, []
+        self.frame, self.px, self.alerts, self.minutes = frame, 250.0, [], []
+
+    def _option_minutes(self, t):
+        return self.minutes
+
+    def _future_px(self):
+        return 23050.0
 
     def _bars(self, today, now):
         cut = pd.Timestamp(now.replace(tzinfo=None)) - pd.Timedelta(minutes=self.spec.bar, seconds=5)
@@ -291,3 +297,77 @@ def test_settings_default_to_the_backtest_form_and_env_overrides(monkeypatch):
     assert s['mode'] == 'paper' and s['sl_pct'] == 9 and s['tsl_x'] == 13 and s['tsl_y'] == 10
     assert s['rsi_level'] == 66 and s['rsi_period'] == 20 and isinstance(s['rsi_period'], int)
     assert s['backstop_pct'] == 9 and s['direction'] == 'long' and s['premium'] == 250
+
+
+def _m(hhmm, o, h, l, c):
+    return {'time': hhmm, 'open': o, 'high': h, 'low': l, 'close': c}
+
+
+def _plus(hhmm, k):
+    return (pd.Timestamp('2000-01-01 ' + hhmm) + pd.Timedelta(minutes=k)).strftime('%H:%M')
+
+
+def test_the_stop_is_walked_on_the_options_minutes_from_the_minute_before_the_entry(paper):
+    """2 Nov 2026, ST4 23050 CE: the backtest's trail is measured from the close of the minute before
+    the entry and lifted by 1-minute HIGHS — a 312 high between two polls, from 247.25, is two 13 %
+    steps (stop 264.60) where the fill (249.6) and the polled peak (310.45) gave one."""
+    bars, i = _first_entry(3)
+    a = _FakeAlgo('u', algo.PROFILES[3], bars)
+    a.tick(_now_for(bars, i, 3))
+    t = a.state['day']['trades'][0]
+    e = t['entry_time']
+    a.minutes = [_m(_plus(e, -1), 238, 241, 237, 240.0), _m(e, 240, 251, 239, 250),
+                 _m(_plus(e, 1), 250, 290, 249, 270)]
+    a.tick(_now_for(bars, i, 3))
+    # from 240 (not the 250 fill): base 204, the 290 high is +20.8 % → one 15 % step → 204 + 24
+    assert t['ref_entry'] == 240.0 and t['peak'] == 290 and t['stop'] == 228.0
+    assert t['status'] == 'open'                       # the polled 250 is above it
+    a.minutes.append(_m(_plus(e, 2), 270, 271, 227, 240))
+    a.tick(_now_for(bars, i, 3))                       # a closed minute's low went through 228
+    assert t['status'] == 'closed' and t['result'] == 'Trailing SL'
+
+
+def test_without_option_minutes_the_poll_only_trail_still_runs_from_the_fill(paper):
+    bars, i = _first_entry(3)
+    a = _FakeAlgo('u', algo.PROFILES[3], bars)
+    a.tick(_now_for(bars, i, 3))
+    t = a.state['day']['trades'][0]
+    a.tick(_now_for(bars, i, 3))
+    assert 'ref_entry' not in t and t['stop'] == 212.5
+
+
+def test_premium_stop_reproduces_2_nov_2026_on_kite_minutes():
+    from trading_app.service.cpr_option_service import _premium_stop
+    mins = [_m('09:19', 245.8, 248, 238, 247.25), _m('09:20', 246.9, 252.7, 244.45, 247.25),
+            _m('10:54', 306.75, 312, 306.15, 309.3), _m('11:42', 271.05, 271.05, 265.4, 270.2),
+            _m('11:43', 270.2, 270.25, 263.2, 264)]
+    hit = _premium_stop(mins, 247.25, '09:19', '23:59', 13, 13, 10)
+    assert hit == {'price': 264.6, 'time': '11:43', 'kind': 'Trailing SL'}
+    assert _premium_stop(mins, 249.6, '09:19', '23:59', 13, 13, 10) is None    # from the fill: one step, 242.2
+
+
+def _at(hms):
+    return pd.Timestamp('2026-11-02 ' + hms).to_pydatetime().replace(tzinfo=IST)
+
+
+def test_a_candle_is_read_a_second_after_it_closes_and_retried_every_second():
+    """2 Nov 2026, ST6: a 5 s read lag on a 5 s poll put the orders 7-12 s after the close —
+    14.65 premium points against the backtest's close-of-the-minute-before."""
+    a = algo.SimpleTraderAlgo('u', algo.PROFILES[6])                    # 5-minute candles
+    a.state = {'day': {'last_bar': None}}
+    assert a._poll_wait(_at('09:19:58')) == pytest.approx(3.05)       # woken at 09:20:01, not on the 5 s grid
+    assert a._poll_wait(_at('09:20:02')) == 1                          # 09:15 not read yet: every second
+    assert a._poll_wait(_at('09:20:30')) == 5                          # a feed that never delivers is not hammered
+    a.state = {'day': {'last_bar': '2026-11-02 09:15:00'}}
+    assert a._poll_wait(_at('09:20:02')) == 5                          # read: back to the ordinary poll
+
+
+def test_a_candle_without_its_last_minute_is_not_closed(monkeypatch):
+    a = algo.SimpleTraderAlgo('u', algo.PROFILES[6])
+    mins = pd.date_range('2026-11-02 09:15', '2026-11-02 09:18', freq='1min')
+    rows = [{'date': t, 'open': 1.0, 'high': 2.0, 'low': 0.5, 'close': 1.5, 'volume': 1} for t in mins]
+    monkeypatch.setattr(a, '_history_rows', lambda adapter, today: rows)
+    now = _at('09:20:01')
+    assert a._bars(now.date(), now).empty                              # the 09:19 minute is not in yet
+    rows.append(dict(rows[-1], date=pd.Timestamp('2026-11-02 09:19')))
+    assert list(a._bars(now.date(), now).index.strftime('%H:%M')) == ['09:15']

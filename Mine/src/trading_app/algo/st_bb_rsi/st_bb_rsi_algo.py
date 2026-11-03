@@ -79,7 +79,14 @@ class Profile:
 
 NIFTY = Profile('NIFTY', 'stbb', 'STBB', 250, 'NFO', 'STBB', 'ST+BB+RSI NIFTY')
 _POLL_SECS = 5
-_BAR_LAG = timedelta(minutes=eng.BAR_MINUTES, seconds=5)     # a candle is read 5 s after it closes
+# A candle is read 1 s after it closes, and re-tried every second until the feed has its last minute.
+# It was 5 s on a 5 s poll: orders went out 7-12 s after the close, and on 2 Nov 2026 (ST6, SENSEX
+# 75300 CE) the premium had run 474.05 → 481.9 by the 09:20:07 entry and 525.40 → 518.6 by the
+# 11:35:11 exit — 14.65 pts against the backtest, which fills at the close of the minute before.
+_FEED_SECS = 1
+_FAST_POLL_SECS = 1
+_FAST_WINDOW_SECS = 20
+_BAR_LAG = timedelta(minutes=eng.BAR_MINUTES, seconds=_FEED_SECS)
 _OPEN_MIN = 9 * 60 + 15
 _HARD_STOP_MIN = 15 * 60 + 30
 _PRIOR_DAYS = 14                      # calendar days of 1-minute history: indicators' run-in + yesterday's pivots
@@ -290,9 +297,16 @@ class StBbRsiAlgo:
         bars = m.groupby(key).agg(open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
                                   close=('close', 'last'), volume=('volume', 'sum')).dropna(subset=['open', 'close'])
         bars.index.name = 'date'
-        # A candle stamped s closes at s + 3 min; _BAR_LAG is that plus 5 s for the feed to have it.
-        cutoff = pd.Timestamp(now.replace(tzinfo=None) - timedelta(minutes=self._bar_minutes(), seconds=5))
-        return bars[bars.index <= cutoff]
+        # A candle stamped s closes at s + bar; it is read _FEED_SECS after that.
+        cutoff = pd.Timestamp(now.replace(tzinfo=None) - timedelta(minutes=self._bar_minutes(), seconds=_FEED_SECS))
+        bars = bars[bars.index <= cutoff]
+        # ...and only once the feed has its LAST minute (or a later one): read a second after the close,
+        # a candle built without it would be decided on a close it never had. The tick tries again.
+        if len(bars) and len(m):
+            last_min = bars.index[-1] + pd.Timedelta(minutes=self._bar_minutes() - 1)
+            if m.index[-1] < last_min:
+                bars = bars.iloc[:-1]
+        return bars
 
     # ── hooks the Simple Trader algos override (defaults: this algo's own) ──
 
@@ -413,7 +427,7 @@ class StBbRsiAlgo:
                     self.tick(now)
                 except Exception as e:
                     logger.error(f'[{self.p.tag}] tick failed: {e}', exc_info=True)
-                self._stop_event.wait(_POLL_SECS)
+                self._stop_event.wait(self._poll_wait(_now()))
         finally:
             _instances.pop(f'{self.p.key}:{self.username}', None)
 
@@ -536,8 +550,25 @@ class StBbRsiAlgo:
 
     def _next_bar_ready(self, last_ts: str) -> str:
         """Wall-clock time at which the candle after `last_ts` has closed and the feed has it."""
-        t = datetime.strptime(last_ts[:19], '%Y-%m-%d %H:%M:%S') + timedelta(minutes=2 * self._bar_minutes(), seconds=5)
+        t = datetime.strptime(last_ts[:19], '%Y-%m-%d %H:%M:%S') + timedelta(minutes=2 * self._bar_minutes(), seconds=_FEED_SECS)
         return t.strftime('%Y-%m-%d %H:%M:%S')
+
+    def _poll_wait(self, now: datetime) -> float:
+        """Seconds to the next tick: the ordinary poll, but woken AT each candle's read time (close +
+        _FEED_SECS, on the 09:15-anchored grid) and every second after it until that candle has been
+        read — for _FAST_WINDOW_SECS at most, so a feed that never delivers is not hammered."""
+        n = now.replace(tzinfo=None)
+        bar_s = self._bar_minutes() * 60
+        open_ = n.replace(hour=_OPEN_MIN // 60, minute=_OPEN_MIN % 60, second=0, microsecond=0)
+        since = (n - open_).total_seconds() - _FEED_SECS
+        k = int(since // bar_s) if since >= 0 else 0          # candles closed (and readable) so far
+        if k >= 1 and since - k * bar_s < _FAST_WINDOW_SECS:
+            start = (open_ + timedelta(seconds=(k - 1) * bar_s)).strftime('%Y-%m-%d %H:%M:%S')
+            last = ((self.state or {}).get('day') or {}).get('last_bar')
+            if not last or last < start:
+                return _FAST_POLL_SECS
+        to_next = (k + 1) * bar_s - since if since >= 0 else -since
+        return max(0.05, min(_POLL_SECS, to_next + 0.05))
 
     # ── the broker's side of a live leg ─────────────────────────────────
 
