@@ -701,12 +701,7 @@ class StBbRsiAlgo:
         t['attempts'] = int(t.get('attempts') or 0) + 1
         t['last_try'] = _time.time()
         last_try = t['attempts'] >= _ENTRY_TRIES
-        from trading_app.service import cpr_live_engine as cpr_eng
-        step = self._chain_step()
-        atm = int(round(t['index_entry'] / step) * step)
-        ladder = self._kite_premiums([atm + i * step for i in range(-13, 14)], opt_type)
-        pick = cpr_eng.pick_strike(lambda k: ladder.get(k) if ladder else self._premium(k, opt_type),
-                                   t['index_entry'], step, opt_type, s['premium'])
+        pick = self._pick_strike(t, opt_type, s)
         if not pick:
             t.update(legs={}, error='no option quote — the leg could not be priced')
             if last_try:
@@ -737,6 +732,16 @@ class StBbRsiAlgo:
         self._alert('stbb_fill' if filled else 'stbb_order_failed',
                     f"{self.p.label} {'entry' if filled else 'entry FAILED'} — {self.p.symbol} {pick['strike']} {opt_type}",
                     f"{t['type']} · {t['mode']} · {self.p.symbol} {t['index_entry']:,.0f}", t)
+
+    def _pick_strike(self, t: Dict[str, Any], opt_type: str, s: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """{'strike', 'premium'}: the strike whose live premium is nearest the setting, or None."""
+        from trading_app.service import cpr_live_engine as cpr_eng
+        step = self._chain_step()
+        atm = int(round(t['index_entry'] / step) * step)
+        ladder = self._kite_premiums([atm + i * step for i in range(-13, 14)], opt_type)
+        self._last_ladder = ladder              # the Simple Trader override settles a near-tie off it
+        return cpr_eng.pick_strike(lambda k: ladder.get(k) if ladder else self._premium(k, opt_type),
+                                   t['index_entry'], step, opt_type, s['premium'])
 
     def _enter_paper(self, t, s) -> Dict[str, Any]:
         lots = paper_lots(self.username, self.p)

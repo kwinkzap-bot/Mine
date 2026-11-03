@@ -318,6 +318,72 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         cache[key] = (_time.time(), bars)
         return bars
 
+    def _pick_strike(self, t, opt_type, s):
+        """The backtest picks the strike nearest the premium on each strike's close of the minute
+        BEFORE the entry minute (attach_option_legs → legs_at → pick_strike); the live ladder is a
+        second later. On a near-tie that second flips it: 3 Nov 2026 (ST6, ≈500) the 09:19 closes
+        had 76000 CE at 526.60 nearer than 76100 CE at 470.15, but at 09:20:01 76100 quoted 473.65
+        and live bought it while the backtest bought 76000. So the live pick and its neighbour across
+        the target are settled on those same minute closes. An intrabar entry (ST Touch Break with
+        no close confirmation) is priced on the forming minute and keeps the live pick."""
+        pick = super()._pick_strike(t, opt_type, s)
+        if not pick or (self.spec.kind == 'tb' and not t.get('confirm')):
+            return pick
+        step = self._chain_step()
+        cheaper = step if opt_type == 'CE' else -step
+        other = pick['strike'] + (cheaper if pick['premium'] > s['premium'] else -cheaper)
+        before = _minute_before(t.get('entry_time'))
+        closes = self._minute_closes([pick['strike'], other], opt_type, before) if before else {}
+        if len(closes) < 2:
+            return pick
+        best = min(closes, key=lambda k: abs(closes[k] - s['premium']))
+        if best != pick['strike']:
+            ladder = getattr(self, '_last_ladder', None) or {}
+            quoted = ladder.get(best) or self._premium(best, opt_type)
+            if quoted:
+                self._note(f"#{t['n']}: {before} closes {pick['strike']} {closes[pick['strike']]} / "
+                           f"{best} {closes[best]} — {best} {opt_type} is the ≈{s['premium']:g} the backtest takes")
+                return {'strike': best, 'premium': quoted}
+        return pick
+
+    def _minute_closes(self, strikes, opt_type, hhmm, timeout: float = 1.5) -> Dict[int, float]:
+        """{strike: close of today's ``hhmm`` 1-minute candle} from Kite, the strikes read in
+        parallel and given up after ``timeout`` s (the order is waiting). Missing ones are left out."""
+        kite = self._kite()
+        if not kite:
+            return {}
+        try:
+            from concurrent.futures import ThreadPoolExecutor, wait
+            from trading_app.service.kite_order_services import KiteService
+            svc = KiteService(kite_instance=kite)
+            ex = 'BFO' if self.p.symbol == 'SENSEX' else 'NFO'
+            keys = {}
+            for k in strikes:
+                sym = svc.get_option_symbol(self.p.symbol, int(k), opt_type)
+                if sym:
+                    keys[f'{ex}:{sym}'] = int(k)
+            got = (kite.ltp(list(keys)) or {}) if keys else {}
+            tokens = {k: (got.get(key) or {}).get('instrument_token') for key, k in keys.items()}
+            day = _now().strftime('%Y-%m-%d')
+
+            def close(token):
+                raw = kite.historical_data(int(token), f'{day} {hhmm}:00', f'{day} {hhmm}:59', 'minute') or []
+                hit = [b for b in raw if b['date'].strftime('%H:%M') == hhmm]
+                return float(hit[0]['close']) if hit else None
+
+            pool = ThreadPoolExecutor(max_workers=len(tokens) or 1)
+            futs = {k: pool.submit(close, tok) for k, tok in tokens.items() if tok}
+            wait(list(futs.values()), timeout=timeout)
+            pool.shutdown(wait=False)
+            out = {}
+            for k, f in futs.items():
+                if f.done() and not f.exception() and f.result():
+                    out[k] = f.result()
+            return out
+        except Exception as e:
+            logger.debug(f'[{self.p.tag}] option minute closes unavailable: {e}')
+            return {}
+
     def _enter(self, t, now, s) -> None:
         super()._enter(t, now, s)
         # 4-5 decide on the NIFTY FUTURE, and the backtest's "Entry Price" is the future's (the signal

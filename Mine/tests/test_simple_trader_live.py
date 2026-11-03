@@ -371,3 +371,33 @@ def test_a_candle_without_its_last_minute_is_not_closed(monkeypatch):
     assert a._bars(now.date(), now).empty                              # the 09:19 minute is not in yet
     rows.append(dict(rows[-1], date=pd.Timestamp('2026-11-02 09:19')))
     assert list(a._bars(now.date(), now).index.strftime('%H:%M')) == ['09:15']
+
+
+def _picker(monkeypatch, ladder, closes):
+    a = algo.SimpleTraderAlgo('u', algo.PROFILES[6])
+    a.state = {'day': {'trades': []}, 'log': []}
+    monkeypatch.setattr(a, '_kite_premiums', lambda strikes, ot: {k: v for k, v in ladder.items() if k in strikes})
+    monkeypatch.setattr(a, '_chain_step', lambda: 100)
+    monkeypatch.setattr(a, '_premium', lambda k, ot: ladder.get(k))
+    asked = []
+    monkeypatch.setattr(a, '_minute_closes', lambda ks, ot, hhmm: asked.append((sorted(ks), hhmm))
+                        or {k: closes[k] for k in ks if k in closes})
+    return a, asked
+
+
+def test_a_near_tie_is_settled_on_the_minute_before_closes_as_the_backtest_picks(monkeypatch):
+    """3 Nov 2026, ST6 ≈500: at 09:20:01 76100 CE quoted 473.65 (26.35 off) and live bought it; on the
+    09:19 closes the backtest prices on, 76000 CE at 526.60 (26.6 off) beat 76100 at 470.15 (29.85)."""
+    ladder = {75900: 585.0, 76000: 529.0, 76100: 473.65, 76200: 420.0}
+    a, asked = _picker(monkeypatch, ladder, {76000: 526.60, 76100: 470.15})
+    t = {'n': 1, 'type': 'Long', 'index_entry': 76240.16, 'entry_time': '09:20'}
+    pick = a._pick_strike(t, 'CE', {'premium': 500.0})
+    assert asked == [([76000, 76100], '09:19')]
+    assert pick == {'strike': 76000, 'premium': 529.0}
+
+
+def test_without_the_minute_closes_the_live_pick_stands(monkeypatch):
+    ladder = {76000: 529.0, 76100: 473.65, 76200: 420.0}
+    a, _ = _picker(monkeypatch, ladder, {76100: 470.15})              # 76000's 09:19 candle not in yet
+    t = {'n': 1, 'type': 'Long', 'index_entry': 76240.16, 'entry_time': '09:20'}
+    assert a._pick_strike(t, 'CE', {'premium': 500.0})['strike'] == 76100
