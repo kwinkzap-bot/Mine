@@ -60,7 +60,7 @@
             <button type="button" id="sbrOptColsBtn" class="btn-optimise" style="display:none;"
                     title="Show or hide columns on the Best Params boards">☰ Columns</button>
             <!-- 🔖 Saved: rows bookmarked from the 🧩 Combined popup's 🔖 icon (this browser's localStorage) -->
-            <button id="btSavedBtn" type="button" title="Strategies saved with 🔖 in the Combined popup — use or remove them" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🔖 Saved <span id="btSavedCount" class="bt-saved-count"></span></button>
+            <button id="btSavedBtn" type="button" title="Strategies saved with 🔖 in the Combined popup or the Straddle Best Params — use or remove them" style="height:32px;padding:0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;">🔖 Saved <span id="btSavedCount" class="bt-saved-count"></span></button>
             <button id="smGoLiveBtn" class="btn-sm-golive-main" style="display:none;">🚀 Go Live</button>
         </div>
     </div>
@@ -1897,6 +1897,13 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label for="osSkipOneNight" title="Weekly only. Do not trade a week whose expiry is the very next session — a straddle held for one night carries the whole overnight gap on a small premium (Mon → Tue expiry since Sep 2025). 3-Feb-2026 opened 713 points up and lost 4½× the premium.">Skip one-night trades</label>
+                    <select id="osSkipOneNight" disabled>
+                        <option value="false" selected>No</option>
+                        <option value="true">Yes (weekly)</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="osEntryTime" title="Time of the entry, on the Entry Day.">Entry Time</label>
                     <input type="time" id="osEntryTime" value="15:15">
                 </div>
@@ -1941,6 +1948,18 @@
                 <div class="form-group">
                     <label for="osLots" title="Lots per leg, × NIFTY's lot size.">Lots</label>
                     <input type="number" id="osLots" value="1" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="osCompound">Compounding</label>
+                    <input type="checkbox" id="osCompound" title="Off: every trade is the Lots box's size. On: size comes from the running balance — 1 lot per 'Capital per Lot' (₹2,50,000 = 1 lot, ₹5,00,000 = 2 lots, …), counted from the trades already closed at each entry, at most 27 lots. Find Best Params still ranks at 1 lot.">
+                </div>
+                <div class="form-group">
+                    <label for="osCapital">Start Capital (₹)</label>
+                    <input type="number" id="osCapital" value="250000" min="1000" step="10000">
+                </div>
+                <div class="form-group">
+                    <label for="osPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="osPerLot" value="250000" min="1000" step="10000">
                 </div>
                 <div class="form-group" style="grid-column: 1 / -1;">
                     <label>Rule</label>
@@ -2347,7 +2366,7 @@
                     <div class="bt-modal-hdr">
                         <div class="bt-modal-hdr-text">
                             <div class="bt-modal-title">🔖 Saved strategies</div>
-                            <div class="bt-modal-subtitle">Rows saved with 🔖 in 🧩 Combined — Best Params. USE puts the row's numbers in the form; ✕ removes it.</div>
+                            <div class="bt-modal-subtitle">Rows saved with 🔖 in 🧩 Combined — Best Params or the ⚖️ Straddle Best Params. USE puts the row's numbers in the form; ✕ removes it.</div>
                         </div>
                         <button type="button" id="btSavedClose" class="bt-modal-close" title="Close (Esc)">✕</button>
                     </div>

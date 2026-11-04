@@ -1153,7 +1153,7 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Exit', 'Stop (wins if both touched in one bar), target, or 15:20. One trade per stock per day.']] },
         atm_straddle: { sub: 'NIFTY ATM short straddle — monthly or weekly', steps: [
             ['Entry', 'Once a month on the Entry Day (last Friday by default; last Mon–Thu or the day after the monthly expiry can be picked) at 15:15 (the session before it if that day is a holiday): SELL the ATM CE and the ATM PE (strike nearest the spot) of NEXT month\'s expiry.'],
-            ['Weekly', 'With Expiry = Weekly: once a WEEK on the Entry Day (Mon–Fri, or the session after each weekly expiry), SELL the ATM CE + PE of the first weekly expiry after that day. NIFTY weeklies exist from 11-Feb-2019.'],
+            ['Weekly', 'With Expiry = Weekly: once a WEEK on the Entry Day (Mon–Fri, or the session after each weekly expiry), SELL the ATM CE + PE of the first weekly expiry after that day. NIFTY weeklies exist from 11-Feb-2019. Skip one-night trades: no trade in a week whose expiry is the very next session.'],
             ['Target', 'Both legs bought back together once the straddle is up 5% of the premium collected (CE + PE sold).'],
             ['Stop', 'Both legs bought back together once it is down 5% of the premium collected.'],
             ['Fill', 'At the level itself; if a session opens already past it (an overnight gap), at that open.'],
@@ -2340,6 +2340,7 @@ document.addEventListener('DOMContentLoaded', function() {
             start_date:  document.getElementById('startDate')?.value,
             end_date:    document.getElementById('endDate')?.value,
             cadence:     document.getElementById('osCadence')?.value || 'monthly',
+            skip_one_night: document.getElementById('osSkipOneNight')?.value === 'true',
             entry_day:   document.getElementById('osEntryDay')?.value || 'last_friday',
             entry_time:  document.getElementById('osEntryTime')?.value || '15:15',
             target_pct:  num('osTarget', 5),
@@ -2351,6 +2352,9 @@ document.addEventListener('DOMContentLoaded', function() {
             lock_at:     Math.max(0, num('osLockAt', 0)),
             lock_to:     Math.max(0, num('osLockTo', 0)),
             lots:        Math.max(1, parseInt(document.getElementById('osLots')?.value || 1)),
+            compounding: !!document.getElementById('osCompound')?.checked,
+            start_capital:   num('osCapital', 250000),
+            capital_per_lot: num('osPerLot', 250000),
         };
     }
 
@@ -2418,6 +2422,8 @@ document.addEventListener('DOMContentLoaded', function() {
             { key: 'trough_pct', label: 'Worst', sortable: true, format: pct, tone: DataGrid.sign },
             { key: 'pnl', label: 'Points', sortable: true, format: prem, tone: DataGrid.sign },
             { key: 'pnl_pct', label: 'P&L %', sortable: true, format: pct, tone: DataGrid.sign },
+            { key: 'lots', label: 'Lots', sortable: true, format: v => v ?? '—' },
+            { key: 'capital', label: 'Capital', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)) },
             { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign },
         ];
     }
@@ -2444,8 +2450,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 server_rupees: true,
                 total_pnl: closed.reduce((a, r) => a + Number(r.pnl), 0),
                 max_drawdown: ddPts,
-                max_lots_used: lots,
-                start_capital: lots * 50000,
+                max_lots_used: s.max_lots_used ?? lots,
+                start_capital: s.start_capital ?? lots * 50000,
             },
         });
         if (!rows.length) window.showNotification(s.last_breeze_error
@@ -5680,7 +5686,7 @@ document.addEventListener('DOMContentLoaded', function() {
         function paint() {
             const all = load();
             if (!all.length) {
-                list.innerHTML = '<div class="bc-empty">Nothing saved yet — click ☆ on a row in 🧩 Combined — Best Params.</div>';
+                list.innerHTML = '<div class="bc-empty">Nothing saved yet — click ☆ on a row in 🧩 Combined — Best Params or the ⚖️ Straddle Best Params.</div>';
                 return;
             }
             list.innerHTML = `<div class="bc-scroll"><table class="bc-tbl bt-saved-tbl">
@@ -5715,7 +5721,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 sel.value = x.strategy;
                 sel.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            withDirection(applySbrStrategyResult(x.strategy, x.swept || []), x.direction)(x.params || {});
+            if (x.strategy === 'atm_straddle') applyStraddleOptResult(x.params || {});
+            else withDirection(applySbrStrategyResult(x.strategy, x.swept || []), x.direction)(x.params || {});
             close();
         }
         const close = () => {
@@ -5895,6 +5902,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const sel = document.getElementById('osEntryDay');
         if (!sel) return;
         if (cad) cad.value = cadence;
+        const skip = document.getElementById('osSkipOneNight');
+        if (skip) { skip.disabled = cadence !== 'weekly'; if (cadence !== 'weekly') skip.value = 'false'; }
         const choices = _OS_ENTRY_CHOICES[cadence] || _OS_ENTRY_CHOICES.monthly;
         const keep = entryDay || sel.value;
         sel.innerHTML = choices.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
@@ -5908,6 +5917,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
         { label: 'Expiry',       key: 'cadence',        fmt: r => (r.cadence === 'weekly' ? 'Weekly' : 'Monthly') },
         { label: 'Entry Day',    key: 'entry_day',      fmt: r => _OS_ENTRY_DAYS[r.entry_day] || r.entry_day },
+        { label: '1-Night',      key: 'skip_one_night', fmt: r => (r.cadence !== 'weekly' ? '—' : r.skip_one_night ? 'Skip' : 'Trade') },
         { label: 'Wings',        key: 'wings',          fmt: r => (r.wings ? `±${r.wings}` : '—') },
         { label: 'Adjustment',   key: 'adjust',         fmt: r => _OS_ADJUST[r.adjust] || r.adjust },
         { label: 'Adjust At',    key: 'adjust_pts',     fmt: r => (r.adjust === 'none' ? '—' : `${r.adjust_pts} pts`) },
@@ -5923,12 +5933,53 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
         { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
         { label: 'Net / DD',     key: 'net_dd',         fmt: r => (r.net_dd == null ? '—' : r.net_dd >= 999 ? '∞' : Number(r.net_dd).toFixed(2)) },
+        { label: '🔖',           key: null,             fmt: r => {
+            const on = !!(window.BtSaved && window.BtSaved.has(_osSavedEntry(r).key));
+            return `<button type="button" class="os-save-btn" data-skey="${_osSavedEntry(r).key}"`
+                + ` title="${on ? 'Saved — click to remove from 🔖 Saved' : 'Save this row to 🔖 Saved'}">${on ? '★' : '☆'}</button>`;
+        } },
         { label: '',             key: null,             fmt: () => '' },   // Use button
     ];
+
+    // 🔖 A straddle board row as the Saved list keeps it (window.BtSaved, localStorage): the swept
+    // settings plus the board's figures, keyed on every setting and the range the board was run on.
+    let _osOptRange = { start: '', end: '' };
+    const _OS_SAVE_KEYS = ['cadence', 'entry_day', 'skip_one_night', 'wings', 'adjust', 'adjust_pts',
+                           'target_pct', 'stop_pct', 'lock_at', 'lock_to'];
+    function _osSavedEntry(r) {
+        const day = _OS_ENTRY_DAYS[r.entry_day] || r.entry_day;
+        const adj = r.adjust && r.adjust !== 'none' ? `${_OS_ADJUST[r.adjust] || r.adjust} ${r.adjust_pts}` : 'No adj';
+        const label = `${day}${r.skip_one_night ? ' (skip 1-night)' : ''} · ${r.wings ? `wings ±${r.wings} · ` : ''}${adj}`
+            + ` · T${r.target_pct}/S${r.stop_pct}${r.lock_at ? ` · lock ${r.lock_at}→${r.lock_to}` : ''}`;
+        const params = {};
+        Object.entries(r).forEach(([k, v]) => { if (v === null || typeof v !== 'object') params[k] = v; });
+        Object.assign(params, { net_rs: r.net_pnl_rupees, max_dd_rs: r.max_drawdown_rupees });
+        return {
+            key: ['atm_straddle', ..._OS_SAVE_KEYS.map(k => r[k] ?? ''), _osOptRange.start, _osOptRange.end].join('|'),
+            strategy: 'atm_straddle', direction: null, swept: [],
+            board: '⚖️ Straddle', tag: r.cadence === 'weekly' ? 'Weekly' : 'Monthly', label,
+            title: `${label} · net ₹${Math.round(r.net_pnl_rupees || 0).toLocaleString('en-IN')}`
+                + ` · max DD ₹${Math.round(r.max_drawdown_rupees || 0).toLocaleString('en-IN')} · ${r.total_trades} trades`,
+            symbol: 'NIFTY', start_date: _osOptRange.start, end_date: _osOptRange.end, params,
+        };
+    }
+    document.getElementById('osOptGrid')?.addEventListener('click', (e) => {
+        const b = e.target.closest('.os-save-btn');
+        if (!b || !window.BtSaved) return;
+        const grid = document.getElementById('osOptGrid');
+        const row = (grid._displayed || []).find(r => _osSavedEntry(r).key === b.dataset.skey);
+        if (!row) return;
+        const on = window.BtSaved.toggle(_osSavedEntry(row));
+        b.textContent = on ? '★' : '☆';
+        b.title = on ? 'Saved — click to remove from 🔖 Saved' : 'Save this row to 🔖 Saved';
+        if (window.showNotification) window.showNotification(
+            `${on ? 'Saved to' : 'Removed from'} 🔖 Saved: ${_osSavedEntry(row).tag} · ${_osSavedEntry(row).label}`, on ? 'success' : 'info');
+    });
 
     function applyStraddleOptResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         _osSetCadence(r.cadence || 'monthly', r.entry_day);
+        set('osSkipOneNight', r.skip_one_night ? 'true' : 'false');
         set('osTarget', String(r.target_pct));
         set('osStop', String(r.stop_pct));
         set('osAdjust', r.adjust || 'none');
@@ -5937,7 +5988,7 @@ document.addEventListener('DOMContentLoaded', function() {
         set('osLockAt', String(r.lock_at || 0));
         set('osLockTo', String(r.lock_to || 0));
         if (window.showNotification) window.showNotification(
-            `Applied: ${r.cadence === 'weekly' ? 'Weekly' : 'Monthly'} · ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
+            `Applied: ${r.cadence === 'weekly' ? 'Weekly' : 'Monthly'} · ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.skip_one_night ? ' (skip one-night)' : ''}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
             + `${r.adjust && r.adjust !== 'none' ? ` @ ${r.adjust_pts} pts` : ''} · target ${r.target_pct}% · stop ${r.stop_pct}% · `
             + `${r.lock_at ? `lock ${r.lock_at}% → ${r.lock_to}% · ` : ''}`
             + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
@@ -5971,6 +6022,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (panel) panel.style.display = 'none';
         resultsArea.style.display = 'none';
         const myRun = ++_osOptRun;
+        const pl = _osPayload();
+        _osOptRange = { start: pl.start_date || '', end: pl.end_date || '' };
         const done = () => { if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; } };
         _showOptLoader('Finding best params…', 'Starting…');
         try {

@@ -485,6 +485,24 @@ stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11
   (`entries_by_month(..., cadence='weekly')`). A weekly-only expiry is fetched over its own fortnight
   (`call_ratio_engine.contract_window` → `is_weekly_expiry`, judged on the expiry WEEKDAY of its week so a
   holiday-moved monthly stays monthly); a monthly expiry keeps its window, so both cadences share that cache.
+* **🔖 Save** (2026-11-04): the Best Params board's 🔖 column saves a row to the page's 🔖 Saved list
+  (`window.BtSaved`, localStorage `bt_saved_strategies_v1` — this browser only), keyed on every swept setting
+  plus the range the board ran on; the Saved list's USE fills the straddle form (`applyStraddleOptResult`).
+* **Compounding** (backtest only, added 2026-11-04; `compounding` / `start_capital` / `capital_per_lot`, ₹2.5 L / ₹2.5 L since 2026-11-04 — ₹2 L before):
+  `compound()` re-sizes each trade to ⌊balance ÷ per lot⌋ lots (min 1, max `MAX_LOTS` 27 = the freeze size),
+  the balance being the start plus the net ₹ of trades already CLOSED at that entry (a monthly trade still open
+  when the next is sold has not paid yet); ≤ 0 stops with 'Capital exhausted'. Brokerage is per leg, so it does
+  not scale. Find Best Params still ranks at a fixed lot.
+* **Skip one-night trades** (`skip_one_night`, weekly only, added 2026-11-04; a sweep key, On rows reuse the Off
+  rows and blank the weeks whose expiry is the next session — no extra paths or contracts). Why: Mon 2026-02-02
+  sold the 25100 straddle for 188.95 expiring Tue 02-03; NIFTY opened +713 (25,097 → 25,810) and it lost
+  −₹56.8 k (−462 %), all of that month's −₹57 k. Since the 2025-09-01 Tuesday expiry, EVERY Monday weekly entry
+  is a one-night straddle, so a 7-year board topped by Monday rows is mostly Thursday-expiry history — "Monday +
+  skip" has not traded since then. Selling the week after instead (tried) was worse: the 8-day straddle took
+  the same gap (−213 %). Under Tuesday expiries (Sep 2025 – Nov 2026) the best weekly was Thursday · hedge_roll 100
+  · T40/S12 · lock 15→0: ₹1.50 L, DD ₹6.7 k, worst month −₹2.9 k. The gap fill books the first bar's OPEN, and
+  that 09:15 CE print was 1,050 against ~710 intrinsic (bar close 699) — about ₹23 k of the −₹56.8 k is the
+  auction print; left as is (filling at the bar close helped Monday rows and hurt Wed/Fri ones).
 * **`hedge_roll`** (added the evening of 2026-11-03) does `hedge` and `roll_untested` at the same trigger —
   the same strikes, so it costs no extra contracts.
 * **Profit lock** (`lock_at` / `lock_to`, % of premium, 0 = off): from the bar after a 5-minute CLOSE at/above
@@ -495,8 +513,8 @@ stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11
   skips the month. **A backtest box only, not in the sweep**: over Dec 2019 – Nov 2026 ±300 / ±500 never beat
   the same setups without them on net or net ÷ DD, and they cost ~2 contracts per entry day.
 * **Find Best Params** sweeps **both Expiry choices** (`CADENCES`, the first `SWEEP_KEYS` field; the page's own
-  Expiry box is not read) × entry day × `WINGS` (0) × `ADJUST_VARIANTS` (none + 4 types × 7 trigger points) ×
-  target × stop × `LOCKS` (off + 7; a lock at/above the target is not a combo) = 193,140 combos, one path per
+  Expiry box is not read) × entry day × skip one-night (weekly) × `WINGS` (0) × `ADJUST_VARIANTS` (none + 4 types × 7 trigger points) ×
+  target × stop × `LOCKS` (off + 7; a lock at/above the target is not a combo) = 289,710 combos, one path per
   (period, entry day, wings, adjustment) (`score_month` → `score_expiry`). Each cadence is folded oldest first
   on its own and needs half of ITS periods closed (`Fold.rows({cadence: n})`; weeks before 2019-02-11 are
   not periods). A weekly year is ~950 contracts cold (~10 min); Nov 2025 – Nov 2026 is warm.

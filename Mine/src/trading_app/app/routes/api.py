@@ -9315,6 +9315,8 @@ def _os_parse(data: dict):
     params = {
         'cadence': cadence,
         'entry_day': entry_day,
+        # weekly only: no trade in a week whose expiry is the very next session
+        'skip_one_night': cadence == 'weekly' and str(data.get('skip_one_night', '')).lower() in ('1', 'true', 'yes', 'on'),
         'entry_hm': _os_hm(data.get('entry_time', '15:15'), (15, 15)),
         'target_pct': min(500.0, max(0.1, float(data.get('target_pct', 5)))),
         'stop_pct': min(500.0, max(0.1, float(data.get('stop_pct', 5)))),
@@ -9328,6 +9330,10 @@ def _os_parse(data: dict):
     }
     if params['lock_at'] and params['lock_to'] >= params['lock_at']:
         raise ValueError('lock_to must be below lock_at')
+    # Compounding (backtest only): 1 lot per capital_per_lot of the running balance.
+    params['compounding'] = str(data.get('compounding', '')).lower() in ('1', 'true', 'yes', 'on')
+    params['start_capital'] = min(1e9, max(1000.0, float(data.get('start_capital', 250000) or 250000)))
+    params['capital_per_lot'] = min(1e9, max(1000.0, float(data.get('capital_per_lot', 250000) or 250000)))
     lots = max(1, int(data.get('lots', 1) or 1))
     return start_dt, end_dt, params, lots, 0.0
 
@@ -9342,12 +9348,16 @@ def run_option_selling_backtest_api():
     Body: start_date, end_date ('YYYY-MM-DD'); cadence ('monthly' default |
     'weekly' — one trade a week on the next weekly expiry); entry_day (monthly:
     'last_friday' default, last_monday … last_thursday, after_expiry; weekly:
-    monday … friday ('friday' default), after_expiry); entry_time (15:15); target_pct / stop_pct (5 / 5, of the premium collected — the only
+    monday … friday ('friday' default), after_expiry); skip_one_night (weekly:
+    no trade in a week whose expiry is the next session — a one-night straddle); entry_time (15:15); target_pct / stop_pct (5 / 5, of the premium collected — the only
     exits short of the expiry itself); adjust (none | roll_untested | recenter |
     hedge | hedge_roll), adjust_pts (NIFTY points from the centre, 200), max_adjust (2);
     wings (points; 0 = none — buy the CE/PE this far out at entry, and every %
     is then of the net credit); lock_at / lock_to (% of premium; 0 = off — once
-    the P&L reaches lock_at a stop rests at lock_to); lots (× NIFTY's lot size, per leg)."""
+    the P&L reaches lock_at a stop rests at lock_to); lots (× NIFTY's lot size, per leg);
+    compounding (off) with start_capital / capital_per_lot (₹2.5 L / ₹2.5 L — 1 lot per
+    capital_per_lot of the running balance, option_selling_engine.compound; the
+    Lots box is then ignored)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -9366,7 +9376,14 @@ def run_option_selling_backtest_api():
             return row
 
         rows = sorted(_cr_pool(entries, one, task), key=lambda r: r['date'])
+        if p['compounding']:
+            rows = ose.compound(rows, p['start_capital'], p['capital_per_lot'])
         summary = ose.summarise(rows)
+        if p['compounding']:
+            sized = [r['lots'] for r in rows if r['status'] != 'skipped']
+            summary.update({'compounding': True, 'start_capital': p['start_capital'],
+                            'final_balance': round(p['start_capital'] + summary['total_pnl_rupees'], 2),
+                            'max_lots_used': max(sized, default=0)})
         summary.update({'months_scanned': len(entries), 'lots': ctx['sets'],
                         'lot_size': ctx['lot_size'],
                         'params': {k: (f'{v[0]:02d}:{v[1]:02d}' if isinstance(v, tuple) else v)

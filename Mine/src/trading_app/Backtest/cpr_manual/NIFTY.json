@@ -39494,8 +39494,26 @@
       "reason": "Gap-up open 23,222; R1/PDH 23,118-23,146 never reached by 11:00 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 27.7 pts (0.12%), 09:15 candle O 23222.3 H 23292.55 L 23211.8 C 23266.95 | Trade by rule: gap-up open 23,222; R1/PDH 23,118-23,146 never reached by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-11-03",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Wide",
+      "cpr_direction": "Asc",
+      "first_candle": "In decision candle(doji) near R2",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Gap-up open 23,582; R1/PDH 23,441-23,519 never reached by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 77.9 pts (0.332%), 09:15 candle O 23582.25 H 23610.7 L 23482.8 C 23575.2 | Trade by rule: gap-up open 23,582; R1/PDH 23,441-23,519 never reached by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-11-02 15:43",
+  "extended_at": "2026-11-04 07:55",
   "backfilled_from": "2018-01-01"
 }

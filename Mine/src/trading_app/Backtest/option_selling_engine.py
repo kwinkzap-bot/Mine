@@ -71,6 +71,7 @@ WEEKLY_SINCE = date(2019, 2, 11)       # NIFTY weekly options were listed from h
 
 DEFAULTS = {
     'cadence': 'monthly',      # CADENCES
+    'skip_one_night': False,   # weekly: no trade in a week whose expiry is the very next session
     'entry_day': 'last_friday',
     'entry_hm': (15, 15),
     'min_days_to_expiry': 14,
@@ -154,6 +155,19 @@ def entry_days(sessions: Sequence[date], start: date, end: date,
     return cre.entry_days(sessions, start, end, rule)
 
 
+def _sessions_to(entry: date, expiry: date, sessions: Sequence[date]) -> int:
+    """Sessions after `entry` up to and including `expiry` — weekdays standing
+    in past the last session we hold."""
+    held = [d for d in sessions if entry < d <= expiry]
+    last = max(sessions) if sessions else entry
+    probe = max(last, entry) + timedelta(days=1)
+    while probe <= expiry:
+        if probe.weekday() < 5:
+            held.append(probe)
+        probe += timedelta(days=1)
+    return len(held)
+
+
 def weekly_expiry(entry: date, sessions: Sequence[date], listed: Sequence[date] = ()) -> Optional[date]:
     """The first weekly expiry after the entry session. One still to come is
     snapped to the exchange's listed date in its week, as contract_expiry does."""
@@ -202,6 +216,8 @@ def open_month(entry: date, sessions: Sequence[date], spot5: pd.Series,
     out: Dict = {'entry_date': entry, 'expiry': expiry}
     if expiry is None:
         return {**out, 'ok': False, 'reason': f"No {'weekly' if weekly else 'monthly'} expiry resolved"}
+    if weekly and p.get('skip_one_night') and _sessions_to(entry, expiry, sessions) <= 1:
+        return {**out, 'ok': False, 'reason': 'Skipped: expiry is the next session (one-night straddle)'}
     entry_ts = _at(entry, p['entry_hm'])
     spot = price_at(spot5, entry_ts)
     if spot is None:
@@ -693,6 +709,50 @@ def trade_row(res: Dict, qty: int, lots: int, lot_size: int, brokerage_per_leg: 
     return row
 
 
+MAX_LOTS = 27          # NIFTY's freeze quantity in lots — one order's worth
+
+
+def compound(rows: List[Dict], start_capital: float, per_lot: float,
+             max_lots: int = MAX_LOTS) -> List[Dict]:
+    """Re-size every trade from the running balance: 1 lot per `per_lot` ₹
+    (₹2.5 L start, ₹2.5 L a lot → 1 lot; at ₹5 L → 2 lots), at least 1 and at most
+    `max_lots`. The balance at an entry is the start plus the net ₹ of every
+    trade already CLOSED by then — a monthly trade still open when the next one
+    is sold has not paid yet. A balance at/below zero stops trading
+    ('Capital exhausted'). Brokerage is per leg traded, so it does not scale;
+    the points do. Rows in, rows out, oldest first; skipped rows untouched."""
+    out: List[Dict] = []
+    closed: List[tuple] = []                  # (exit time, net ₹) of trades sized so far
+    for row in sorted(rows, key=lambda r: r.get('entry_time') or r['date']):
+        r = dict(row)
+        if r['status'] == 'skipped':
+            out.append(r)
+            continue
+        at = r['entry_time']
+        capital = start_capital + sum(net for t, net in closed if t is not None and t <= at)
+        r['capital'] = round(capital, 2)
+        if capital <= 0:
+            r.update({'status': 'skipped', 'result': 'SKIP', 'exit_reason': 'Capital exhausted',
+                      'pnl': None, 'pnl_rupees': None, 'pnl_pct': None})
+            out.append(r)
+            continue
+        lots = int(max(1, min(max_lots, capital // per_lot)))
+        per_unit = r['gross_pnl_rupees'] / r['qty'] if r['qty'] else 0.0
+        qty = lots * r['lot_size']
+        gross = per_unit * qty
+        net = gross - r['brokerage']
+        collected = r['premium'] * qty
+        r.update({'lots': lots, 'qty': qty,
+                  'premium_rupees': round(collected, 2),
+                  'gross_pnl_rupees': round(gross, 2), 'pnl_rupees': round(net, 2),
+                  'pnl_pct': round(100.0 * net / collected, 2) if collected else 0.0})
+        if r['status'] == 'traded':
+            r['result'] = 'WIN' if net > 0 else ('LOSS' if net < 0 else 'SCRATCH')
+            closed.append((r['exit_time'], net))
+        out.append(r)
+    return out
+
+
 def summarise(rows: List[Dict]) -> Dict:
     """Stats on the CLOSED months (open and skipped ones are counted, not scored)."""
     return cre.summarise(rows)
@@ -720,7 +780,7 @@ WINGS = (0,)
 # (lock at %, lock to %) — off, plus the levels that cut drawdown most in the
 # 2019-26 sweep without costing much net.
 LOCKS = ((0, 0), (15, 0), (15, 5), (20, 10), (25, 10), (30, 10), (30, 20), (40, 30))
-SWEEP_KEYS = ('cadence', 'entry_day', 'wings', 'adjust', 'adjust_pts') + EXIT_KEYS + ('lock_at', 'lock_to')
+SWEEP_KEYS = ('cadence', 'entry_day', 'skip_one_night', 'wings', 'adjust', 'adjust_pts') + EXIT_KEYS + ('lock_at', 'lock_to')
 
 
 def entries_by_month(sessions: Sequence[date], start: date, end: date,
@@ -750,7 +810,8 @@ def sweep_size(grid: Dict = EXIT_GRID, variants: Sequence[tuple] = ADJUST_VARIAN
                wings: Sequence[int] = WINGS, locks: Sequence[tuple] = LOCKS,
                cadences: Sequence[str] = CADENCES) -> int:
     per = len(wings) * len(variants) * len(exit_combos(grid, locks))
-    return sum(len(entry_rules(c)) for c in cadences) * per
+    # weekly is scored with and without skipping one-night weeks
+    return sum(len(entry_rules(c)) * (2 if c == 'weekly' else 1) for c in cadences) * per
 
 
 def score_expiry(entry: date, sessions: Sequence[date], spot5: pd.Series,
@@ -800,11 +861,21 @@ def score_month(entries: Dict[str, date], sessions: Sequence[date], spot5: pd.Se
     cadence) — the key starts with the cadence; `entries` from entries_by_month,
     `sweep` score_expiry's grid / variants / wings / locks."""
     out: Dict[tuple, tuple] = {}
+    cadence = base.get('cadence', 'monthly')
     for rule, entry in entries.items():
-        res = score_expiry(entry, sessions, spot5, frame_for, qty, {**base, 'entry_day': rule},
-                           brokerage_per_leg, **sweep)
-        cadence = base.get('cadence', 'monthly')
-        out.update({(cadence, rule) + combo: r for combo, r in res.items()})
+        p = {**base, 'entry_day': rule, 'skip_one_night': False}
+        res = score_expiry(entry, sessions, spot5, frame_for, qty, p, brokerage_per_leg, **sweep)
+        out.update({(cadence, rule, False) + combo: r for combo, r in res.items()})
+        if cadence != 'weekly':
+            continue
+        # Skip one-night: the same rows, except a week whose expiry is the next
+        # session is not traded at all — no second path, no extra contract.
+        exp = weekly_expiry(entry, sessions, base.get('listed_expiries', ()))
+        if exp is not None and _sessions_to(entry, exp, sessions) <= 1 and entry >= WEEKLY_SINCE:
+            gone = ('skipped', 0.0, 0.0, 'Skipped: expiry is the next session (one-night straddle)')
+            out.update({(cadence, rule, True) + combo: gone for combo in res})
+        else:
+            out.update({(cadence, rule, True) + combo: r for combo, r in res.items()})
     return out
 
 

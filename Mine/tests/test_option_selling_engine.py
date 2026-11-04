@@ -176,7 +176,7 @@ def test_sweep_row_matches_the_backtest_of_its_params():
             bt = ose.trade_row(ose.run_trade(entry, SESSIONS, SPOT, frames,
                                              {'entry_day': rule, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[('monthly', rule, 0, 'none', 0, tp, sp, 0, 0)]
+            status, net, pct, reason = res[('monthly', rule, False, 0, 'none', 0, tp, sp, 0, 0)]
             assert (status, reason) == (bt['status'], bt['exit_reason']), (rule, tp, sp)
             assert round(net, 2) == bt['pnl_rupees'], (rule, tp, sp)
     rows = ose.rank([res])
@@ -287,7 +287,7 @@ def test_sweep_rows_with_adjustments_match_the_backtest():
             bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT_UP, frames,
                                              {'adjust': kind, 'adjust_pts': pt, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[('monthly', 'last_friday', 0, kind, pt, tp, sp, 0, 0)]
+            status, net, pct, reason = res[('monthly', 'last_friday', False, 0, kind, pt, tp, sp, 0, 0)]
             assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), \
                 (kind, pt, tp, sp)
 
@@ -380,7 +380,7 @@ def test_sweep_rows_with_wings_and_a_profit_lock_match_the_backtest():
                 p = {'wings': w, 'adjust': kind, 'adjust_pts': pt, 'target_pct': tp, 'stop_pct': sp,
                      'lock_at': la, 'lock_to': lt}
                 bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT_UP, frames, p), QTY, 1, QTY, 100)
-                status, net, pct, reason = res[('monthly', 'last_friday', w, kind, pt, tp, sp, la, lt)]
+                status, net, pct, reason = res[('monthly', 'last_friday', False, w, kind, pt, tp, sp, la, lt)]
                 assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), p
 
 
@@ -435,12 +435,12 @@ def test_the_weekly_sweep_scores_one_week_per_period_and_matches_the_backtest():
             bt = ose.trade_row(ose.run_trade(entry, SESSIONS, SPOT, frames,
                                              {**base, 'entry_day': rule, 'target_pct': tp, 'stop_pct': sp}),
                                QTY, 1, QTY, 100)
-            status, net, pct, reason = res[('weekly', rule, 0, 'none', 0, tp, sp, 0, 0)]
+            status, net, pct, reason = res[('weekly', rule, False, 0, 'none', 0, tp, sp, 0, 0)]
             assert (status, reason, round(net, 2)) == (bt['status'], bt['exit_reason'], bt['pnl_rupees']), (rule, tp, sp)
 
 
 def test_find_best_params_sweeps_both_expiries_with_a_half_of_each_to_score():
-    assert ose.sweep_size() == 2 * ose.sweep_size(cadences=('monthly',))
+    assert ose.sweep_size() == 3 * ose.sweep_size(cadences=('monthly',))
     f = ose.Fold()
     for _ in range(3):                        # 3 months, each combo traded
         f.add({('monthly', 'x'): ('traded', 10.0, 1.0, 'Target')})
@@ -485,3 +485,47 @@ def test_weekly_expiry_follows_the_thursday_to_tuesday_cutover():
     assert date(2025, 9, 4) not in ose._weekly_expiries(sessions)
     assert ose.weekly_entry_days(sessions, sessions[0], sessions[-1], 'after_expiry')[:3] == [
         date(2025, 8, 22), date(2025, 8, 29), date(2025, 9, 3)]
+
+
+def test_skip_one_night_drops_only_the_weeks_whose_expiry_is_the_next_session():
+    # Thursday regime: a Wednesday entry is one night from Thursday's expiry; a Friday entry is not.
+    frames = _frames(lambda r, ts: 300.0)
+    p = {'cadence': 'weekly', 'skip_one_night': True}
+    wed = ose.run_trade(date(2025, 2, 12), SESSIONS, SPOT, frames, {**p, 'entry_day': 'wednesday'})
+    fri = ose.run_trade(date(2025, 2, 7), SESSIONS, SPOT, frames, {**p, 'entry_day': 'friday'})
+    assert wed['status'] == 'skipped' and 'one-night' in wed['reason']
+    assert fri['status'] != 'skipped'
+    sweep = {'variants': (('none', 0),), 'locks': ((0, 0),), 'grid': {'target_pct': (5,), 'stop_pct': (5,)}}
+    by = ose.entries_by_month(SESSIONS, date(2025, 2, 10), date(2025, 2, 16), cadence='weekly')
+    res = ose.score_month(by[(2025, 7)], SESSIONS, SPOT, frames, QTY, {'cadence': 'weekly'}, 100, **sweep)
+    key = lambda rule, skip: ('weekly', rule, skip, 0, 'none', 0, 5, 5, 0, 0)
+    assert res[key('wednesday', True)][0] == 'skipped' and res[key('wednesday', False)][0] != 'skipped'
+    assert res[key('friday', True)] == res[key('friday', False)]
+    for rule, entry in by[(2025, 7)].items():               # the sweep agrees with the backtest
+        bt = ose.run_trade(entry, SESSIONS, SPOT, frames, {**p, 'entry_day': rule, 'target_pct': 5, 'stop_pct': 5})
+        assert (res[key(rule, True)][0] == 'skipped') == (bt['status'] == 'skipped'), rule
+
+
+def test_compounding_sizes_one_lot_per_two_lakh_of_closed_balance():
+    def row(day, exit_day, pts, status='traded'):
+        return {'date': day, 'status': status, 'lots': 1, 'lot_size': 65, 'qty': 65,
+                'premium': 300.0, 'entry_time': f'{day}T15:15:00', 'exit_time': f'{exit_day}T15:30:00',
+                'gross_pnl_rupees': pts * 65, 'brokerage': 200.0, 'pnl_rupees': pts * 65 - 200,
+                'pnl': pts, 'pnl_pct': 0.0, 'result': ''}
+    rows = [
+        row('2025-01-03', '2025-01-20', 3080.0),     # +₹2,00,000 net at 1 lot → ₹4 L
+        row('2025-01-10', '2025-02-20', 100.0),      # entered while the first is still open: 1 lot
+        row('2025-01-24', '2025-01-30', 100.0),      # the first has closed: ₹4 L → 2 lots
+        {'date': '2025-01-31', 'status': 'skipped', 'exit_reason': 'x', 'lot_size': 65},
+    ]
+    out = ose.compound(rows, 200000, 200000)
+    assert [r.get('lots') for r in out] == [1, 1, 2, None]
+    assert out[0]['capital'] == 200000 and out[2]['capital'] == 200000 + 3080 * 65 - 200
+    assert out[2]['qty'] == 130 and out[2]['pnl_rupees'] == 100 * 130 - 200        # brokerage per leg, not per lot
+    assert out[2]['pnl_pct'] == round(100 * (100 * 130 - 200) / (300 * 130), 2)
+    assert out[3]['status'] == 'skipped'
+    # Below a lot's capital it still trades 1; at/below zero it stops; never past the freeze size.
+    lose = [row('2025-01-03', '2025-01-10', -3100.0), row('2025-01-17', '2025-01-20', 10.0)]
+    assert ose.compound(lose, 200000, 200000)[1]['exit_reason'] == 'Capital exhausted'
+    rich = [row('2025-01-03', '2025-01-10', 1.0)]
+    assert ose.compound(rich, 200000 * 40, 200000)[0]['lots'] == ose.MAX_LOTS
