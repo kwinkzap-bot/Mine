@@ -34,10 +34,12 @@
     <div class="ag-card">
         <div class="ag-card-hdr">
             <span class="ag-card-title">Settings</span>
+            <button type="button" class="ag-btn ag-btn-strikes" id="strEditBtn" style="margin-left:12px" onclick="_strToggleEdit()"
+                    title="The boxes are locked until you enable them, and lock again whenever the page loads.">🔒 Disabled — click to Enable</button>
             <span style="margin-left:12px;font-size:11px;color:var(--ag-text-3)">The Backtest form's boxes. Read at the next entry; an open position keeps what it was entered with.</span>
         </div>
         <div class="ag-card-body">
-            <div class="str-form">
+            <fieldset class="str-form" id="strFields" disabled>
                 <label>Expiry <select id="strCadence" onchange="_strCadenceChanged()">
                     <option value="monthly">Monthly</option><option value="weekly">Weekly</option></select></label>
                 <label>Entry Day <select id="strEntryDay" onchange="_strSave({entry_day:this.value})"></select></label>
@@ -62,7 +64,7 @@
                     <option value="true">On</option><option value="false">Off</option></select></label>
                 <label>Start Capital (₹) <input type="number" id="strCapital" min="1000" step="10000" onchange="_strSave({start_capital:+this.value})"></label>
                 <label>Capital per Lot (₹) <input type="number" id="strPerLot" min="1000" step="10000" onchange="_strSave({per_lot:+this.value})"></label>
-            </div>
+            </fieldset>
             <div class="ag-grid" id="strAccounts" style="margin-top:10px"><div class="ag-empty">…</div></div>
         </div>
     </div>

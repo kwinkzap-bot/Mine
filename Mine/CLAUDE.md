@@ -338,7 +338,8 @@ The Backtest page's ⚖️ straddle run live — the **ATM Straddle** tab on /al
 `service/straddle_live_engine.py`, routes `/api/algo/straddle/{status,settings,history,start,stop,square-off}`, jobs
 `straddle_start` 09:05 + `straddle_watchdog` (and startup recovery). Added 2026-11-04, **paper by default; the live
 order path has never been exercised**. The tab's boxes are the Backtest form's, defaulting to the row it was chosen on
-(weekly · Monday · 15:15 · T50/S25 · re-centre 200 ×2 · lock 40→30 · compounding ₹2.5 L / ₹2.5 L).
+(weekly · Monday · 15:15 · T50/S25 · re-centre 200 ×2 · lock 40→30 · compounding ₹2.5 L / ₹2.5 L). The boxes are locked
+until the Settings card's Enable button is clicked, and lock again on every page load (page-side only; the route does not check it).
 
 ```
 STR_MODE=paper              # live = real orders; the tab's toggle, read at each ENTRY

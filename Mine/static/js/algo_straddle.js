@@ -141,6 +141,17 @@ function _strRenderPosition(st) {
        + `</div>`;
 }
 
+// ── The settings lock ────────────────────────────────────────────────────────
+// Page-side only, and deliberately not remembered: every page load starts locked.
+
+function _strToggleEdit() {
+    const fields = document.getElementById('strFields');
+    fields.disabled = !fields.disabled;
+    const btn = document.getElementById('strEditBtn');
+    btn.textContent = fields.disabled ? '🔒 Disabled — click to Enable' : '🔓 Enabled — click to Disable';
+    btn.classList.toggle('active', !fields.disabled);
+}
+
 // ── History ──────────────────────────────────────────────────────────────────
 
 function _strFetchHistory() {

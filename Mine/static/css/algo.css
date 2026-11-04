@@ -2249,6 +2249,7 @@ body.ocean-theme .sm-gl-overlay {
 .rtp-logic-body { padding: 14px 18px 18px; }
 
 /* ATM Straddle tab: the Backtest form's boxes */
-.str-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; }
+.str-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.str-form:disabled label { opacity: .6; }
 .str-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--ag-text-2); }
 .str-form input, .str-form select { padding: 4px 6px; font-size: 12px; width: 100%; box-sizing: border-box; }
