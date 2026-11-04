@@ -1,0 +1,99 @@
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- ATM Straddle panel — the Backtest page's straddle, live.  -->
+    <!-- Own files: algo_straddle.html + static/js/algo_straddle.js -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-straddle-panel">
+
+    <div class="ag-header">
+        <span class="ag-title">NIFTY ATM Straddle</span>
+        <span id="strModeBadge" class="dg-badge dg-badge--info">PAPER</span>
+        <!-- STR_MODE, read at every entry: Paper records every decision at real
+             quotes and sends nothing; Live SELLS at every account with
+             BROKER_N_STR_ACTIVE=true (zerodha). -->
+        <div class="rtp-period-tabs" id="strModeToggle" style="margin-left:0"
+             title="Paper: every decision is recorded at Kite's real quotes — nothing is sent. Live: the straddle is SOLD, NRML, at every zerodha account with BROKER_N_STR_ACTIVE=true. Applies from the next entry; an open position keeps its mode.">
+            <button class="rtp-period-tab" data-mode="paper" onclick="_strSetMode('paper')">Paper</button>
+            <button class="rtp-period-tab" data-mode="live"  onclick="_strSetMode('live')">Live</button>
+        </div>
+        <span id="strRunBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="strRunBadgeText">Stopped</span>
+        </span>
+        <button class="ag-btn ag-btn-strikes" onclick="_strStart()" title="Allow new entries">▶ Start</button>
+        <button class="ag-btn ag-btn-strikes" onclick="_strStop()" title="No new entries. An open position keeps being managed until it is flat.">■ Stop</button>
+        <button class="ag-btn ag-btn-strikes" id="strSquareOff" onclick="_strSquareOff()" title="Close the open position now, at market">⛔ Square off</button>
+        <a class="ag-btn ag-btn-strikes" href="/backtest" title="The strategy's backtest">Backtest ↗</a>
+        <span class="ag-last-upd" id="strLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <div class="ag-card" id="strWarnCard" style="display:none">
+        <div class="ag-card-body" id="strWarn" style="font-size:12px;line-height:1.55"></div>
+    </div>
+
+    <!-- ── The Backtest form's boxes ───────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Settings</span>
+            <span style="margin-left:12px;font-size:11px;color:var(--ag-text-3)">The Backtest form's boxes. Read at the next entry; an open position keeps what it was entered with.</span>
+        </div>
+        <div class="ag-card-body">
+            <div class="str-form">
+                <label>Expiry <select id="strCadence" onchange="_strCadenceChanged()">
+                    <option value="monthly">Monthly</option><option value="weekly">Weekly</option></select></label>
+                <label>Entry Day <select id="strEntryDay" onchange="_strSave({entry_day:this.value})"></select></label>
+                <label title="Weekly only. No trade in a week whose expiry is the very next session.">Skip one-night trades <select id="strSkip" onchange="_strSave({skip_one_night:this.value==='true'})">
+                    <option value="false">No</option><option value="true">Yes</option></select></label>
+                <label>Entry Time <input type="time" id="strEntryTime" onchange="_strSave({entry_time:this.value})"></label>
+                <label>Target % of Premium <input type="number" id="strTarget" min="0.1" step="1" onchange="_strSave({target_pct:+this.value})"></label>
+                <label>Stop % of Premium <input type="number" id="strStop" min="0.1" step="1" onchange="_strSave({stop_pct:+this.value})"></label>
+                <label>Adjustment <select id="strAdjust" onchange="_strSave({adjust:this.value})">
+                    <option value="none">None</option>
+                    <option value="roll_untested">Roll profit leg to new ATM</option>
+                    <option value="recenter">Re-centre both legs at new ATM</option>
+                    <option value="hedge">Buy losing side at new ATM (hedge)</option>
+                    <option value="hedge_roll">Hedge losing side + roll profit leg</option></select></label>
+                <label>Adjust At (NIFTY pts) <input type="number" id="strAdjustPts" min="25" step="25" onchange="_strSave({adjust_pts:+this.value})"></label>
+                <label>Max Adjustments <input type="number" id="strMaxAdjust" min="1" max="10" step="1" onchange="_strSave({max_adjust:+this.value})"></label>
+                <label>Wings (pts, 0 = none) <input type="number" id="strWings" min="0" step="50" onchange="_strSave({wings:+this.value})"></label>
+                <label>Profit Lock At % <input type="number" id="strLockAt" min="0" step="5" onchange="_strSave({lock_at:+this.value})"></label>
+                <label>Lock To % <input type="number" id="strLockTo" min="0" step="5" onchange="_strSave({lock_to:+this.value})"></label>
+                <label title="Paper's size when Compounding is off. Live accounts use BROKER_N_STR_LOTS.">Lots <input type="number" id="strLots" min="1" max="27" step="1" onchange="_strSave({lots:+this.value})"></label>
+                <label title="On: 1 lot per Capital per Lot of each book's own balance (start + its booked P&amp;L), at most 27. Off: fixed lots.">Compounding <select id="strCompound" onchange="_strSave({compounding:this.value==='true'})">
+                    <option value="true">On</option><option value="false">Off</option></select></label>
+                <label>Start Capital (₹) <input type="number" id="strCapital" min="1000" step="10000" onchange="_strSave({start_capital:+this.value})"></label>
+                <label>Capital per Lot (₹) <input type="number" id="strPerLot" min="1000" step="10000" onchange="_strSave({per_lot:+this.value})"></label>
+            </div>
+            <div class="ag-grid" id="strAccounts" style="margin-top:10px"><div class="ag-empty">…</div></div>
+        </div>
+    </div>
+
+    <!-- ── The open position ───────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Position</span>
+            <span id="strPosSummary" style="margin-left:12px;font-size:11px;color:var(--ag-text-3)"></span>
+            <span class="ag-card-hdr-actions" style="margin-left:auto">
+                <button class="ag-btn ag-btn-strikes" onclick="_strFetchStatus()">↻ Refresh</button>
+            </span>
+        </div>
+        <div class="ag-card-body">
+            <div id="strLegs"><div class="ag-empty">No open position</div></div>
+            <div class="cpr-log" id="strLog"></div>
+        </div>
+    </div>
+
+    <!-- ── History ─────────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Trade History</span>
+            <div class="rtp-period-tabs" id="strBookTabs" style="margin-left:12px">
+                <button class="rtp-period-tab active" data-book="all"   onclick="_strSetBook('all')">All</button>
+                <button class="rtp-period-tab"        data-book="paper" onclick="_strSetBook('paper')">Paper</button>
+                <button class="rtp-period-tab"        data-book="live"  onclick="_strSetBook('live')">Live</button>
+            </div>
+            <span id="strHistSummary" style="margin-left:auto;font-size:11px;font-weight:700"></span>
+        </div>
+        <div id="strHistBody"><div class="ag-empty">No completed trades</div></div>
+    </div>
+
+    </div><!-- #algo-straddle-panel -->

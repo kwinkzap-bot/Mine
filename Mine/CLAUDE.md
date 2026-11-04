@@ -331,6 +331,49 @@ Load-bearing:
 
 Tests: `tests/test_cpr_live.py`.
 
+## ATM Straddle live algo
+
+The Backtest page's ⚖️ straddle run live — the **ATM Straddle** tab on /algo (`templates/algo_straddle.html`,
+`static/js/algo_straddle.js`), the thread `algo/straddle/straddle_algo.py`, the brain
+`service/straddle_live_engine.py`, routes `/api/algo/straddle/{status,settings,history,start,stop,square-off}`, jobs
+`straddle_start` 09:05 + `straddle_watchdog` (and startup recovery). Added 2026-11-04, **paper by default; the live
+order path has never been exercised**. The tab's boxes are the Backtest form's, defaulting to the row it was chosen on
+(weekly · Monday · 15:15 · T50/S25 · re-centre 200 ×2 · lock 40→30 · compounding ₹2.5 L / ₹2.5 L).
+
+```
+STR_MODE=paper              # live = real orders; the tab's toggle, read at each ENTRY
+STR_ENABLED=true            # the tab's Start/Stop — new entries only, never an open position
+STR_CADENCE STR_ENTRY_DAY STR_SKIP_ONE_NIGHT STR_ENTRY_TIME STR_TARGET_PCT STR_STOP_PCT STR_ADJUST STR_ADJUST_PTS
+STR_MAX_ADJUST STR_WINGS STR_LOCK_AT STR_LOCK_TO STR_LOTS STR_COMPOUNDING STR_START_CAPITAL STR_PER_LOT
+BROKER_N_STR_ACTIVE=true    # per account, with BROKER_N_ACTIVE; zerodha ONLY
+BROKER_N_STR_LOTS=1         # per account, when compounding is off; an account without it is refused, never guessed
+```
+
+Load-bearing:
+
+* **One rule, two drivers.** `adjust_action`, `lots_for_capital`, `entry_days`, `weekly_expiry` and `contract_expiry` are
+  the backtest's own; a test holds every adjustment type booking the backtest's points and every entry rule picking its
+  dates. An expiry the exchange does not list moves to the listed one in its week or is refused (Tue 2026-11-10 is a
+  holiday: Mon the 9th sells the 17th).
+* **Where live must differ** (the engine's docstring): target/stop/lock read on every 5 s poll and exit at market, so a
+  spike between two closes can trip it where the backtest's closes would not; the 5-minute "close" is the first poll after
+  the boundary; the expiry exit is 15:25, not settlement; one position at a time (a monthly still open is not doubled).
+* **It does not go through `_dispatch_order_to_brokers` or `MineOrderStore`.** The dispatcher picks the nearest expiry; every
+  order here is NRML on a named tradingsymbol, and the Order Placement strip's Exit (written for bought options) must not
+  reach a short. So it is not on that strip: the tab's **Square off** is the way out, or the broker.
+* **Nothing rests at the broker.** A position is only managed while the app runs and Kite is logged in (the token dies every
+  morning); no quotes on an open position raises `straddle_order_failed`. An overnight gap cannot be stopped: 2026-02-03.
+* **The leg decides, not the flag.** `held` per account is what is managed; Stop, a Paper toggle or a cleared flag never orphan
+  it, and `ensure_running` starts the thread for an open position whatever `STR_ENABLED` says.
+* **Buys first**, then sells. A short refused at entry (Kite accepts, then rejects on margin — fills are read back) unwinds
+  that account; a failed buy-back stops that account's new short. **An exit is retried every poll until flat**, capped at the
+  broker's NRML net (unreadable positions hold the exit rather than send blind); `_reconcile` compares each minute.
+* **Compounding is per book:** each account (and paper) on its own start + booked P&L. The history row carries each account's
+  gross and net; net uses the backtest's ₹100 per leg so the two compare, not Zerodha's real charges.
+
+Tests: `tests/test_straddle_live.py` (a fake broker; nothing there can reach a real one). Contract lookup was checked read-only
+against real Kite on 2026-11-04; live quotes and positions were not (no login yet that morning).
+
 ## ST Touch Break live algo (Mine → NIFTY)
 
 The Backtest page's **ST Touch Break** (Mine group) run live on NIFTY options — the **Mine** tab on
@@ -408,7 +451,7 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
   overstate them.
-The api blueprint is at 249 rules (`tests/route_inventory.txt`) since the Monthly Call Ratio backtest added three (below).
+The api blueprint is at 255 rules (`tests/route_inventory.txt`) since the ATM Straddle live algo added six (above).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).

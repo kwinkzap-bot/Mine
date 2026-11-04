@@ -376,6 +376,25 @@ def _days(idx: pd.DatetimeIndex) -> np.ndarray:
     return np.array(idx.normalize().date) if len(idx) else np.array([], dtype=object)
 
 
+def adjust_action(kind: str, up: bool, atm: int, held: List[Dict], hedged) -> tuple:
+    """What one adjustment does — (short legs to close, [(right, side)] to open) —
+    the rule the backtest and the live algo share. `up`: NIFTY rose from the
+    centre; `held`: the short legs still open; `hedged`: rights already bought."""
+    if kind == 'roll_untested':
+        side_r = 'PE' if up else 'CE'
+        close = [lg for lg in held if lg['right'] == side_r and lg['strike'] != atm]
+        return close, ([(side_r, -1)] if close else [])
+    if kind == 'recenter':
+        close = [lg for lg in held if lg['strike'] != atm]
+        return close, [(lg['right'], -1) for lg in close]
+    if kind == 'hedge':                           # buy the tested side, once a side
+        side_r = 'CE' if up else 'PE'
+        return [], ([] if side_r in hedged else [(side_r, +1)])
+    tested, profit = ('CE', 'PE') if up else ('PE', 'CE')   # hedge_roll: both of the above
+    close = [lg for lg in held if lg['right'] == profit and lg['strike'] != atm]
+    return close, ([(profit, -1)] if close else []) + ([] if tested in hedged else [(tested, +1)])
+
+
 def _adjust(idx, spot, legs, fr, expiry, centre, frame_for, kind, pts, max_adjust, adjusts,
             days: Optional[np.ndarray] = None) -> None:
     """Walk the triggers in order, editing `legs` / `fr` / `adjusts` in place."""
@@ -394,20 +413,7 @@ def _adjust(idx, spot, legs, fr, expiry, centre, frame_for, kind, pts, max_adjus
         up = spot[t] > centre
         atm = atm_strike(spot[t])
         held = [lg for lg in legs if lg['closed'] is None and lg['side'] < 0]
-        if kind == 'roll_untested':
-            side_r = 'PE' if up else 'CE'
-            close = [lg for lg in held if lg['right'] == side_r and lg['strike'] != atm]
-            opens = [(side_r, -1)] if close else []
-        elif kind == 'recenter':
-            close = [lg for lg in held if lg['strike'] != atm]
-            opens = [(lg['right'], -1) for lg in close]
-        elif kind == 'hedge':                     # buy the tested side, once a side
-            side_r = 'CE' if up else 'PE'
-            close, opens = [], ([] if side_r in hedged else [(side_r, +1)])
-        else:                                     # hedge_roll: both of the above
-            tested, profit = ('CE', 'PE') if up else ('PE', 'CE')
-            close = [lg for lg in held if lg['right'] == profit and lg['strike'] != atm]
-            opens = ([(profit, -1)] if close else []) + ([] if tested in hedged else [(tested, +1)])
+        close, opens = adjust_action(kind, up, atm, held, hedged)
         if not opens:
             centre = atm                          # nothing to do at this ATM; watch from it
             continue
@@ -712,6 +718,14 @@ def trade_row(res: Dict, qty: int, lots: int, lot_size: int, brokerage_per_leg: 
 MAX_LOTS = 27          # NIFTY's freeze quantity in lots — one order's worth
 
 
+def lots_for_capital(capital: float, per_lot: float, max_lots: int = MAX_LOTS) -> int:
+    """1 lot per `per_lot` ₹ of the balance, at least 1 and at most `max_lots`;
+    0 when the balance is at/below zero. The backtest and the live algo share it."""
+    if capital <= 0:
+        return 0
+    return int(max(1, min(max_lots, capital // per_lot)))
+
+
 def compound(rows: List[Dict], start_capital: float, per_lot: float,
              max_lots: int = MAX_LOTS) -> List[Dict]:
     """Re-size every trade from the running balance: 1 lot per `per_lot` ₹
@@ -731,12 +745,12 @@ def compound(rows: List[Dict], start_capital: float, per_lot: float,
         at = r['entry_time']
         capital = start_capital + sum(net for t, net in closed if t is not None and t <= at)
         r['capital'] = round(capital, 2)
-        if capital <= 0:
+        lots = lots_for_capital(capital, per_lot, max_lots)
+        if not lots:
             r.update({'status': 'skipped', 'result': 'SKIP', 'exit_reason': 'Capital exhausted',
                       'pnl': None, 'pnl_rupees': None, 'pnl_pct': None})
             out.append(r)
             continue
-        lots = int(max(1, min(max_lots, capital // per_lot)))
         per_unit = r['gross_pnl_rupees'] / r['qty'] if r['qty'] else 0.0
         qty = lots * r['lot_size']
         gross = per_unit * qty

@@ -13020,6 +13020,151 @@ def algo_cpr_stop() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/algo/straddle/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_straddle_status() -> EndpointResponse:
+    """The ATM Straddle algo: its settings, the open position with its marks, the
+    log, the accounts, and whether the next entry would send real orders."""
+    try:
+        from trading_app.algo.straddle import straddle_algo as sa
+        from trading_app.service import straddle_live_engine as eng
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        inst = sa.get_instance(username)
+        st = sa.settings(username)
+        accounts = sa.accounts(username)
+        state = inst.state if inst and inst.state else sa.load_state()
+        today = datetime.now().date()
+        next_lots = {'paper': eng.lots_for(st['compounding'], st['lots'], st['start_capital'],
+                                           sa.booked('paper'), st['per_lot'])}
+        for a in accounts:
+            key = str(a['instance'])
+            next_lots[key] = eng.lots_for(st['compounding'], a['lots'], st['start_capital'], sa.booked(key), st['per_lot'])
+        return jsonify({
+            'success': True,
+            'running': bool(inst and inst.is_running()),
+            'settings': st,
+            'accounts': accounts,
+            'live_armed': st['mode'] == 'live' and any(a['tradable'] for a in accounts),
+            'state': state,
+            'next_lots': next_lots,
+            'entry_day_today': eng.is_entry_day(today, st['entry_day'], st['cadence']),
+            'booked': {'paper': round(sa.booked('paper'), 2),
+                       **{str(a['instance']): round(sa.booked(str(a['instance'])), 2) for a in accounts}},
+        })
+    except Exception as e:
+        logger.error(f'[straddle/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/straddle/settings', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_straddle_settings() -> EndpointResponse:
+    """Save the tab's boxes (the Backtest form's). Read at the next entry, so
+    nothing needs a restart; an open position keeps what it was entered with."""
+    try:
+        from trading_app.algo.straddle import straddle_algo as sa
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        try:
+            saves = sa.clean_settings(request.get_json(silent=True) or {}, sa.settings(username))
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
+        for var, val in saves.items():
+            if not UserEnvManager.save_user_var(username, var, val):
+                return jsonify({'success': False, 'error': f'Failed to save {var}'}), 500
+        if 'STR_MODE' in saves:
+            logger.warning(f"[straddle/settings] {username} switched the ATM Straddle to {saves['STR_MODE'].upper()}")
+        return jsonify({'success': True, 'saved': saves})
+    except Exception as e:
+        logger.error(f'[straddle/settings] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/straddle/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_straddle_history() -> EndpointResponse:
+    """Every closed ATM Straddle trade, paper and live, newest first."""
+    try:
+        from trading_app.algo.straddle import straddle_algo as sa
+        rows = list(reversed(sa.load_history()))
+        return jsonify({'success': True, 'trades': rows, 'count': len(rows)})
+    except Exception as e:
+        logger.error(f'[straddle/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/straddle/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_straddle_start() -> EndpointResponse:
+    """Allow new entries and start the thread (STR_ENABLED)."""
+    try:
+        from trading_app.algo.straddle import straddle_algo as sa
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        UserEnvManager.save_user_var(username, 'STR_ENABLED', 'true')
+        started = sa.ensure_running(username, source='start-button')
+        inst = sa.get_instance(username)
+        return jsonify({'success': True, 'running': bool(inst and inst.is_running()),
+                        'message': 'ATM Straddle started' if started else
+                                   'ATM Straddle enabled — it runs 09:00-15:30 on trading days'})
+    except Exception as e:
+        logger.error(f'[straddle/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/straddle/stop', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_straddle_stop() -> EndpointResponse:
+    """No new entries until Start. An open position is NOT left unwatched: the
+    thread keeps managing it until it is flat (Square off closes it now)."""
+    try:
+        from trading_app.algo.straddle import straddle_algo as sa
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        UserEnvManager.save_user_var(username, 'STR_ENABLED', 'false')
+        inst = sa.get_instance(username)
+        holding = bool((inst.state if inst else sa.load_state()).get('position'))
+        if inst and inst.is_running() and not holding:
+            inst.stop()
+        return jsonify({'success': True, 'message': 'No new entries — the open position is still managed' if holding
+                                                    else 'ATM Straddle stopped'})
+    except Exception as e:
+        logger.error(f'[straddle/stop] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/straddle/square-off', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_straddle_square_off() -> EndpointResponse:
+    """Close the open position on the next poll, as a stop would (reason Manual).
+    Only the running thread can: outside market hours nothing would fill."""
+    try:
+        from trading_app.algo.straddle import straddle_algo as sa
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        inst = sa.get_instance(username)
+        if not inst or not inst.is_running():
+            return jsonify({'success': False, 'error': 'The algo is not running (it runs 09:00-15:30 on trading days)'}), 409
+        if not inst.request_square_off():
+            return jsonify({'success': False, 'error': 'No open position'}), 409
+        logger.warning(f'[straddle/square-off] {username} asked to square off the open position')
+        return jsonify({'success': True, 'message': 'Squaring off on the next poll'})
+    except Exception as e:
+        logger.error(f'[straddle/square-off] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 def _register_stbb_routes(path: str, symbol: str, endpoint_suffix: str, simple: int = 0) -> None:
     """The five /algo/<path>/* routes of one ST + BB + RSI algo. NIFTY keeps its
     original paths and endpoint names; BANKNIFTY and SENSEX are the same handlers over

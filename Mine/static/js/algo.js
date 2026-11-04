@@ -6,7 +6,7 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;  // tracks last seen entry_time to detect trade changes
 let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr',
+const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'straddle',
     'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7',
     ...(window.MINE_TABS || [{ key: 'mine-nifty' }]).map(m => m.key), 'ema-confluence', 'swing-momentum'];
 
@@ -449,6 +449,7 @@ function algoSwitch(tab) {
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
     if (typeof _cprClearTimers === 'function') _cprClearTimers();
+    if (typeof _strClearTimers === 'function') _strClearTimers();
     if (typeof _stbbClearTimers === 'function') _stbbClearTimers();
     if (typeof _emacClearTimers === 'function') _emacClearTimers();
     if (tab === 'active') {
@@ -463,6 +464,9 @@ function algoSwitch(tab) {
     } else if (tab === 'cpr') {
         _cprFetchStatus();
         _cprFetchHistory();
+    } else if (tab === 'straddle') {
+        _strFetchStatus();
+        _strFetchHistory();
     } else if (tab.startsWith('simple-') || tab.startsWith('mine-')) {
         _stbbActivate(tab);
     } else if (tab === 'ema-confluence') {

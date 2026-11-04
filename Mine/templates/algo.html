@@ -24,6 +24,7 @@
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle (Paper)</button>
         <button class="ag-tab"        id="algo-tab-tmf"             onclick="algoSwitch('tmf')">30-Min Fakeout</button>
         <button class="ag-tab"        id="algo-tab-cpr"             onclick="algoSwitch('cpr')">CPR Logic</button>
+        <button class="ag-tab"        id="algo-tab-straddle"        onclick="algoSwitch('straddle')">ATM Straddle</button>
         <button class="ag-tab"        id="algo-tab-simple"          onclick="algoSwitch('simple-1')">Simple Trader</button>
         <button class="ag-tab"        id="algo-tab-mine"            onclick="algoSwitch('mine-nifty')">Mine</button>
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
@@ -223,6 +224,7 @@
     {% include 'algo_tmf.html' %}
 
     {% include 'algo_cpr.html' %}
+    {% include 'algo_straddle.html' %}
     {% with key='simple-1', p='sim1', n=1, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST1' %}{% include 'algo_simple.html' %}{% endwith %}
     {% with key='simple-2', p='sim2', n=2, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST2' %}{% include 'algo_simple.html' %}{% endwith %}
     {% with key='simple-3', p='sim3', n=3, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='NIFTY', pfx='ST3' %}{% include 'algo_simple.html' %}{% endwith %}
@@ -276,6 +278,7 @@
 <script src="{{ url_for('static', filename='js/algo_charges.js') }}?v={{ sv('js/algo_charges.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_cpr.js') }}?v={{ sv('js/algo_cpr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/algo_straddle.js') }}?v={{ sv('js/algo_straddle.js') }}"></script>
 <script>window.MINE_TABS = {{ mine_tabs|tojson }};</script>
 <script src="{{ url_for('static', filename='js/algo_stbb.js') }}?v={{ sv('js/algo_stbb.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_simple_combined.js') }}?v={{ sv('js/algo_simple_combined.js') }}"></script>

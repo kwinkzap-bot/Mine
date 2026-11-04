@@ -301,6 +301,25 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # ATM Straddle (the Backtest page's straddle run live, paper by default):
+        # up at 09:05 so a position carried overnight is watched from the open.
+        self.scheduler.add_job(
+            self._start_straddle,
+            CronTrigger(day_of_week='mon-fri', hour=9, minute=5, second=0, timezone='Asia/Kolkata'),
+            id='straddle_start',
+            name='ATM Straddle Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+        self.scheduler.add_job(
+            self._watchdog_straddle,
+            CronTrigger(day_of_week='mon-fri', hour='9-15', minute='*/5', second=50, timezone='Asia/Kolkata'),
+            id='straddle_watchdog',
+            name='ATM Straddle Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         # ST + BB + RSI (the Backtest page's strategy run live on NIFTY options,
         # paper by default): up at 09:05 so it is watching before the first
         # 3-minute candle closes at 09:18, with the same watchdog shape.
@@ -838,6 +857,26 @@ class MarketScheduler:
     def _watchdog_cpr_logic(self) -> None:
         self._ensure_cpr_running(source='Watchdog')
 
+    # ── ATM Straddle ─────────────────────────────────────────────────────────
+
+    def _ensure_straddle_running(self, source: str = '') -> None:
+        """Start the ATM Straddle thread on a trading day if the tab allows entries
+        or a position is open. The rest is straddle_algo.ensure_running's; paper vs
+        live is decided per entry inside the thread, never here."""
+        try:
+            if not self.is_trading_day():
+                return
+            from trading_app.algo.straddle import straddle_algo
+            straddle_algo.ensure_running(self._algo_username(), source=source)
+        except Exception as e:
+            logger.error(f"[Straddle {source}] _ensure_straddle_running failed: {e}", exc_info=True)
+
+    def _start_straddle(self) -> None:
+        self._ensure_straddle_running(source='Scheduler')
+
+    def _watchdog_straddle(self) -> None:
+        self._ensure_straddle_running(source='Watchdog')
+
     # ── ST + BB + RSI ────────────────────────────────────────────────────────
 
     def _ensure_stbb_running(self, source: str = '') -> None:
@@ -1199,6 +1238,7 @@ def init_scheduler(app):
         market_scheduler._ensure_tmf_running(source='Startup')
         market_scheduler._ensure_ema_confluence_running(source='Startup')
         market_scheduler._ensure_cpr_running(source='Startup')
+        market_scheduler._ensure_straddle_running(source='Startup')
         market_scheduler._ensure_stbb_running(source='Startup')
         # And the Telegram-call engine, for the case this restart is exactly
         # what it has to survive: a live position with a stop resting at the
