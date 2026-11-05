@@ -39521,17 +39521,17 @@
       "cpr_direction": "Asc",
       "first_candle": "Strong big candle green near Prev High",
       "boxes": "Big",
-      "trade": null,
-      "entry": null,
-      "target": null,
-      "sl": null,
-      "result": null,
-      "pnl": null,
-      "reason": "09:15 candle opened at 23,742 and closed at PDH/R1 23,811-23,920 (23,870) \u2014 a 186-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade",
-      "setup_time": null,
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 109.4 pts (0.459%), 09:15 candle O 23742.25 H 23882.35 L 23696.15 C 23870.15 | Trade by rule: 09:15 candle opened at 23,742 and closed at PDH/R1 23,811-23,920 (23,870) \u2014 a 186-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade"
+      "trade": "SELL",
+      "entry": 23781.0,
+      "target": 23689.0,
+      "sl": 23827.0,
+      "result": "SL",
+      "pnl": -46.0,
+      "reason": "09:15 candle opened at 23,742 and closed at PDH/R1 23,811-23,920 (23,870) \u2014 a 186-pt candle, too big to enter over, and 09:20 red \u2014 no buy; price cleared the box first, then 11:00 closed back under it; 11:30 small red candle retested it (high 23,825, closed 23,795 on its low) -> SELL under it; SL over its high; target 1:2 (the CPR TC 23,756 is only 25 pts away, inside the 46-pt risk)",
+      "setup_time": "11:30",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 109.4 pts (0.459%), 09:15 candle O 23742.25 H 23882.35 L 23696.15 C 23870.15 | Trade by rule: 09:15 candle opened at 23,742 and closed at PDH/R1 23,811-23,920 (23,870) \u2014 a 186-pt candle, too big to enter over, and 09:20 red \u2014 no buy; price cleared the box first, then 11:00 closed back under it; 11:30 small red candle retested it (high 23,825, closed 23,795 on its low) -> SELL under it; SL over its high; target 1:2 (the CPR TC 23,756 is only 25 pts away, inside the 46-pt risk); chart replay SL 11:35 -> 12:40"
     }
   ],
-  "extended_at": "2026-11-04 15:43",
+  "extended_at": "2026-11-04 15:55",
   "backfilled_from": "2018-01-01"
 }

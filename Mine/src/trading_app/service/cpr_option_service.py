@@ -429,7 +429,7 @@ def _spot_minutes(symbol: str, first: date, last: date) -> Dict[str, List[Dict[s
     day, is gone by the afternoon and took every leg of an unread session with it)."""
     from trading_app.service import multichart_service as mc
     out: Dict[str, List[Dict[str, Any]]] = {}
-    stored_last = None
+    stored_last, stored_whole = None, False
     try:
         import pandas as pd
         from trading_app.Backtest import minute_candle_store as store
@@ -437,7 +437,7 @@ def _spot_minutes(symbol: str, first: date, last: date) -> Dict[str, List[Dict[s
         entry = store._mem.get(key) or store._load_disk(key)
         if entry and not entry['df'].empty:
             m = entry['df']
-            stored_last = m.index[-1].date()
+            stored_last, stored_whole = m.index[-1].date(), cpr_bt.store_reaches_close(m.index[-1])
             m = m[(m.index >= pd.Timestamp(first)) & (m.index < pd.Timestamp(last) + pd.Timedelta(days=1))]
             mins = m.index.hour * 60 + m.index.minute
             m = m[(mins >= 9 * 60 + 15) & (mins < 15 * 60 + 30)]
@@ -448,7 +448,9 @@ def _spot_minutes(symbol: str, first: date, last: date) -> Dict[str, List[Dict[s
     except Exception as e:      # noqa: BLE001 — the provider below is the fallback
         logger.warning(f'[CPR options] index minutes from the store failed: {e}')
         out, stored_last = {}, None
-    if stored_last is not None and stored_last >= last:
+    # A store stopping mid-session on `last` falls through to the re-read below: on its part
+    # bars a trade set up later is 'No fill', and that leg would be saved for good.
+    if stored_last is not None and (stored_last > last or (stored_last == last and stored_whole)):
         return out
     if stored_last is not None:
         first = max(first, stored_last)

@@ -600,3 +600,50 @@ def test_a_target_closed_through_is_locked_and_ridden():
     sim = svc.simulate_trade(wick, 'BUY', 102.0, 110.0, 95.0)                            # (no order rests at a target that is ridden)
     assert sim['exit_time'] == '09:25' and sim['pnl'] == 7.0 and 'target_time' not in sim
     assert svc.simulate_trade(ride, 'BUY', 102.0, 110.0, 95.0, lock=False)['pnl'] == 8.0
+
+
+# ── the store's last session may be a part session ─────────────────────────
+
+def _store_frame(last_bar: str):
+    """A store reaching back months, ending on 2026-11-04 at ``last_bar``."""
+    import pandas as pd
+    old = pd.date_range('2026-07-01 09:15', '2026-11-03 09:15', freq='D')
+    today = pd.date_range('2026-11-04 09:15', f'2026-11-04 {last_bar}', freq='min')
+    idx = old.append(today)
+    return pd.DataFrame({'open': 100.0, 'high': 100.1, 'low': 99.9, 'close': 100.0, 'volume': 0.0}, index=idx)
+
+
+def _tail(day: str):
+    import pandas as pd
+    return [{'date': t.strftime('%Y-%m-%d %H:%M:%S'), 'open': 100.0, 'high': 100.1, 'low': 99.9,
+             'close': 100.0, 'volume': 0.0}
+            for t in pd.date_range(f'{day} 09:15', f'{day} 15:29', freq='min')]
+
+
+def _read_store(monkeypatch, frame):
+    from trading_app.Backtest import minute_candle_store as store
+    from trading_app.service import multichart_service as mc
+    calls = []
+
+    class Chain:
+        def historical_data(self, symbol, from_date, to_date, interval, **kw):
+            calls.append((from_date, to_date, interval))
+            return _tail('2026-11-04')
+
+    monkeypatch.setattr(store, '_load_disk', lambda key: {'df': frame})
+    monkeypatch.setattr(mc, 'algo_provider', lambda *a, **k: Chain())
+    monkeypatch.setattr(mc, 'resolve_symbol', lambda s: s)
+    monkeypatch.setattr(svc, '_with_official_daily', lambda symbol, daily, first, last: daily)
+    _daily, intraday = svc._bars_from_store('TESTSYM', date(2026, 11, 4), date(2026, 11, 4))
+    return calls, intraday['2026-11-04']
+
+
+def test_a_store_that_stops_mid_session_is_read_through_to_the_close(monkeypatch):
+    calls, bars = _read_store(monkeypatch, _store_frame('10:46'))
+    assert calls == [('2026-11-03', '2026-11-04', 'minute')]
+    assert bars[-1]['time'] == '15:25' and len(bars) == 75
+
+
+def test_a_store_holding_the_whole_session_costs_no_request(monkeypatch):
+    calls, bars = _read_store(monkeypatch, _store_frame('15:29'))
+    assert calls == [] and len(bars) == 75

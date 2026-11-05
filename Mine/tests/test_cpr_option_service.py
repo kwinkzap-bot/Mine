@@ -344,3 +344,38 @@ def test_banknifty_monthly_ran_on_wednesday_through_2024():
     assert exp('2024-12-10') == '2024-12-24'          # 25 Dec a holiday: snapped to the Tuesday
     assert exp('2024-12-27') == '2025-01-30'          # held into January's Thursday regime
     assert cos.contract('NIFTY', date(2024, 5, 10), 'BUY', 22000, days)['expiry'] == '2024-05-16'
+
+
+# ── the store's last session may be a part session ─────────────────────────
+
+def _spot_from_store(monkeypatch, last_bar):
+    """_spot_minutes for 2026-11-04 on a store ending that day at ``last_bar``."""
+    import pandas as pd
+    from trading_app.Backtest import minute_candle_store as store
+    from trading_app.service import multichart_service as mc
+    idx = pd.date_range('2026-11-04 09:15', f'2026-11-04 {last_bar}', freq='min')
+    frame = pd.DataFrame({'open': 100.0, 'high': 100.1, 'low': 99.9, 'close': 100.0, 'volume': 0.0}, index=idx)
+    whole = pd.date_range('2026-11-04 09:15', '2026-11-04 15:29', freq='min')
+    calls = []
+
+    class Chain:
+        def historical_data(self, symbol, from_date, to_date, interval, **kw):
+            calls.append((from_date, to_date, interval))
+            return [{'date': t.to_pydatetime(), 'open': 100.0, 'high': 100.1, 'low': 99.9,
+                     'close': 100.0, 'volume': 0.0} for t in whole]
+
+    monkeypatch.setattr(store, '_load_disk', lambda key: {'df': frame})
+    monkeypatch.setattr(mc, 'algo_provider', lambda *a, **k: Chain())
+    monkeypatch.setattr(mc, 'resolve_symbol', lambda s: s)
+    return calls, svc._spot_minutes('TESTSYM', date(2026, 11, 4), date(2026, 11, 4))['2026-11-04']
+
+
+def test_index_minutes_are_read_through_a_store_that_stops_mid_session(monkeypatch):
+    calls, bars = _spot_from_store(monkeypatch, '10:46')
+    assert len(calls) == 1 and calls[0][2] == 'minute'
+    assert bars[-1]['time'] == '15:29'
+
+
+def test_index_minutes_cost_no_request_when_the_store_holds_the_close(monkeypatch):
+    calls, bars = _spot_from_store(monkeypatch, '15:29')
+    assert calls == [] and bars[-1]['time'] == '15:29'

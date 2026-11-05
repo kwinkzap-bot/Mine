@@ -1183,13 +1183,23 @@ def _intraday_by_session(raw: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
     return by
 
 
+def store_reaches_close(last_ts) -> bool:
+    """Whether a store whose last 1-minute bar is `last_ts` holds that session to
+    its close. Any backtest run in market hours saves a part session."""
+    return (last_ts.hour, last_ts.minute) >= (SESSION_CLOSE[0], SESSION_CLOSE[1] - 1)
+
+
 def _bars_from_store(symbol: str, first: date, last: date) -> Optional[tuple]:
     """(daily, intraday-by-session) built from the local 1-minute store instead of
     ~100 sequential Fyers requests (years of 5-minute chunks, each paced and rate
     limited: minutes cold, and nothing at all once the day's quota is gone). Closed
     sessions never change, so the store is the same data kept. Only the sessions
     after the store's last day are fetched — Zerodha, then Fyers, then ICICI, the
-    chain the live algos read. None when the store has no file for the symbol."""
+    chain the live algos read — and the last day itself when the store stops before
+    its close: any backtest run in market hours saves a part session (2026-11-04: a
+    10:46 run left the sheet judging that day on 19 candles, "no trade", where the
+    whole session held the 11:30 retest the live algo took). None when the store has
+    no file for the symbol."""
     import pandas as pd
     from trading_app.Backtest import minute_candle_store as store
     key = store._cache_key('fyers', symbol.upper())
@@ -1199,10 +1209,11 @@ def _bars_from_store(symbol: str, first: date, last: date) -> Optional[tuple]:
     m = entry['df']
     start = pd.Timestamp(first - timedelta(days=CANDLE_HISTORY_SESSIONS * 2))
     stored_last = m.index[-1].date()
+    stored_whole = store_reaches_close(m.index[-1])
     if m.index[0] > start + pd.Timedelta(days=7):
         return None                                  # the store does not reach back far enough
     m = m[m.index >= start]
-    if stored_last < last:
+    if stored_last < last or (stored_last == last and not stored_whole):
         from trading_app.service import multichart_service as mc
         try:
             raw = mc.algo_provider().historical_data(
