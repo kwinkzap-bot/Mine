@@ -283,6 +283,13 @@
 .opt-header h4 { margin: 0; font-size: 11px; font-weight: 700; color: var(--oip-text); }
 .opt-header small { font-size: 10px; color: var(--oip-metric-lbl); }
 .opt-table-wrap { overflow-x: auto; }
+/* Every Find Best Params list on /backtest: 700px tall with its own scroll. On
+   DataGrid's .dg-scroll, not the wrapper: .dg-th is sticky inside it, so the
+   header stays in view. All nine boards live in a #…OptimisePanel; Expiry Scan's
+   .opt-table-wrap does not, and keeps its own height. */
+[id$="OptimisePanel"] .dg-scroll { height: 700px; overflow: auto; }
+/* A sortable .dg-th is position:relative, which would scroll the header away. */
+[id$="OptimisePanel"] .dg-table .dg-th { position: sticky; top: 0; z-index: 2; }
 /* Per-timeframe optimisation grids */
 .opt-tf-block { border-top: 3px solid var(--oip-border); }
 .opt-tf-block:first-child { border-top: none; }

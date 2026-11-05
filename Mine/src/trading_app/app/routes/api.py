@@ -9295,6 +9295,14 @@ def _os_hm(value, default: Tuple[int, int]) -> Tuple[int, int]:
     return default
 
 
+def _os_exit_check(value) -> str:
+    from trading_app.Backtest.option_selling_engine import CHECK_SECS, OLD_CHECKS
+    check = OLD_CHECKS.get(value, value) if value else '1s'
+    if check != '5m' and check not in CHECK_SECS:
+        raise ValueError(f'exit_check must be one of {", ".join(CHECK_SECS)}, 5m')
+    return check
+
+
 def _os_parse(data: dict):
     """The straddle's boxes → (start, end, params, lots, 0), or raises ValueError."""
     start_dt = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
@@ -9327,6 +9335,10 @@ def _os_parse(data: dict):
         'wings': int(round(min(3000.0, max(0.0, float(data.get('wings', 0) or 0))) / 50) * 50),
         'lock_at': min(500.0, max(0.0, float(data.get('lock_at', 0) or 0))),
         'lock_to': min(500.0, max(0.0, float(data.get('lock_to', 0) or 0))),
+        # How often target/stop/lock are read, and so what is fetched (the sweep's 5-minute columns never change)
+        'exit_check': _os_exit_check(data.get('exit_check')),
+        # ... and how long a session's first prints are ignored there (0-300 s, the opening bar)
+        'open_settle_secs': min(300.0, max(0.0, float(data.get('open_settle_secs', 60) or 0))),
     }
     if params['lock_at'] and params['lock_to'] >= params['lock_at']:
         raise ValueError('lock_to must be below lock_at')
@@ -9368,8 +9380,10 @@ def run_option_selling_backtest_api():
         entries = ose.entry_days(ctx['sessions'], ctx['start'], ctx['end'], p['entry_day'], p['cadence'])
         task['progress']['total'] = len(entries)
 
+        fine_for = ctx['closes_at'](p['exit_check']) if p['exit_check'] != '5m' else None
+
         def one(entry):
-            res = ose.run_trade(entry, ctx['sessions'], ctx['spot5'], ctx['frame_for'], p)
+            res = ose.run_trade(entry, ctx['sessions'], ctx['spot5'], ctx['frame_for'], p, fine_for)
             row = ose.trade_row(res, ctx['qty'], ctx['sets'], ctx['lot_size'], _OS_BROKERAGE_PER_LEG)
             if row['status'] != 'skipped':
                 task['progress']['traded'] += 1
@@ -9384,7 +9398,13 @@ def run_option_selling_backtest_api():
             summary.update({'compounding': True, 'start_capital': p['start_capital'],
                             'final_balance': round(p['start_capital'] + summary['total_pnl_rupees'], 2),
                             'max_lots_used': max(sized, default=0)})
-        summary.update({'months_scanned': len(entries), 'lots': ctx['sets'],
+        summary.update({'exit_check': p['exit_check'],
+                        'bars_checked': sum(r.get('bars_checked', 0) for r in rows),
+                        'bars_unchecked': sum(r.get('bars_unchecked', 0) for r in rows),
+                        'trades_unchecked': sum(1 for r in rows if r.get('bars_unchecked')),
+                        'second_requests': ctx['state']['second_requests'],
+                        'second_budget': ctx['state']['second_budget'],
+                        'months_scanned': len(entries), 'lots': ctx['sets'],
                         'lot_size': ctx['lot_size'],
                         'params': {k: (f'{v[0]:02d}:{v[1]:02d}' if isinstance(v, tuple) else v)
                                    for k, v in p.items() if k != 'listed_expiries'}})
@@ -9439,6 +9459,7 @@ def run_option_selling_optimise_api():
             base = {**ctx['params'], 'cadence': cad}
 
             def one(period, by=by, base=base):
+                ctx['check_stopped']()
                 res = ose.score_month(by[period], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
                                       ctx['qty'], base, _OS_BROKERAGE_PER_LEG)
                 task['progress']['traded'] += 1
@@ -9453,18 +9474,64 @@ def run_option_selling_optimise_api():
         periods = {cad: len(by) for cad, by in plans}
         min_trades = {cad: max(1, k // 2) for cad, k in periods.items()}
         rows = fold.rows(min_trades)
-        task['payload'] = {
-            'results': ose.board(rows), 'best': rows[0] if rows else None, 'total': len(rows),
-            'total_combos_tested': ose.sweep_size(), 'months': periods['monthly'],
-            'weeks': periods['weekly'], 'min_trades': min_trades,
-            'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
-            'summary': {},
-        }
+        shown = ose.board(rows)
+        best = rows[0] if rows else None
+        rechecked = 0
+
+        def board_payload(results, best_row, n_rechecked):
+            return {
+                'results': results, 'best': best_row, 'total': len(rows),
+                'rechecked': n_rechecked, 'exit_check': ctx['params']['exit_check'],
+                'rechecked_complete': sum(1 for r in results if r.get('sec_complete') and r.get('exit_check') != '5m'),
+                'second_requests': ctx['state']['second_requests'],
+                'second_budget': ctx['state']['second_budget'],
+                'total_combos_tested': ose.sweep_size(), 'months': periods['monthly'],
+                'weeks': periods['weekly'], 'min_trades': min_trades,
+                'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
+                'summary': {},
+            }
+
+        def show_so_far(done_passes, n_rechecked, results):
+            """The page's board before the re-check ends: the slow part is Breeze's
+            pace, and the sweep's answer is already there to read."""
+            task['partial'] = {**board_payload(results, results[0] if results else None, n_rechecked),
+                               'partial': True, 'passes_done': done_passes}
+            task['progress']['partial_seq'] = len(done_passes) + 1
+
+        if ctx['params']['exit_check'] != '5m':
+            # Exit Check is swept too: every board row at every interval, one row each. The closes
+            # of the sweep are its 5-minute rows; the finer ones are fetched, cheapest data first.
+            # Rows past the budget still get figures from what is cached, marked part-checked.
+            picks = ose.recheck_picks(rows, len(shown))
+            five = [ose.five_minute_row(r) for r in picks]
+            show_so_far([], 0, ose.rank_rechecked([dict(r) for r in five]))
+            passes = {check: [] for check in ose.RECHECK_PASSES}
+            memo = ose.RecheckMemo()
+            with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
+                for done_n, check in enumerate(ose.RECHECK_PASSES):
+                    memo.new_pass()
+                    fine_for = ctx['closes_at'](check)
+                    for i, row in enumerate(picks):
+                        ctx['check_stopped']()
+                        task['progress']['stage'] = (f'Re-checking the board at {check}: {i + 1} / {len(picks)}'
+                                                     f" · {ctx['state']['second_requests']} ICICI requests")
+                        passes[check].append({**row, 'exit_check': check, **ose.recheck_row(
+                            row, ctx['sessions'], ctx['spot5'], ctx['frame_for'], fine_for, ctx['qty'],
+                            ctx['params'], ctx['start'], ctx['end'], _OS_BROKERAGE_PER_LEG, pool.map, memo)})
+                    if done_n < len(ose.RECHECK_PASSES) - 1:
+                        so_far = [r for c in ose.RECHECK_PASSES[:done_n + 1] for r in passes[c]]
+                        show_so_far(list(ose.RECHECK_PASSES[:done_n + 1]), len(so_far),
+                                    ose.rank_rechecked([dict(r) for r in so_far + five]))
+            fine_rows = [r for check in ose.RECHECK_PASSES for r in passes[check]]
+            rechecked = len(fine_rows)
+            shown = ose.rank_rechecked(fine_rows + five)
+            best = shown[0] if shown else best
+        task['payload'] = board_payload(shown, best, rechecked)
         logger.info('[MonthlyStraddleOptimise] %s..%s: %d months + %d weeks, %d combos scored, %d contracts',
                     ctx['start'], ctx['end'], periods['monthly'], periods['weekly'], len(rows),
                     task['progress']['contracts'])
 
-    return _cr_start(request.get_json(silent=True) or {}, worker, 'os-opt', parse=_os_parse)
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'os-opt', parse=_os_parse, background=True, one_at_a_time=True)
 
 
 @api_bp.route('/backtest/option-selling/optimise/status/<task_id>', methods=['GET'])
@@ -9486,6 +9553,31 @@ def option_selling_optimise_status(task_id):
 # time — ~60 requests a month, minutes per month when Breeze was slow.
 _cr_tasks: dict = {}
 _cr_tasks_lock = threading.Lock()
+_CR_ABANDONED_SECS = 180      # a page polls every 2.5 s, a background tab at worst once a minute
+
+
+class _CrStopped(Exception):
+    """A one-at-a-time run nobody is waiting for any more."""
+
+# A sweep can run for an hour after its page has moved on, and takes most of
+# Breeze's 1.5 req/s: on 2026-11-05 a backtest needing 18 slices got one every
+# 3 s behind an abandoned Find Best Params. A sweep holds off its next request
+# while a backtest someone is waiting for runs.
+_CR_YIELD_MAX_SECS = 600            # a stuck backtest must not hold a sweep for ever
+_cr_foreground_cond = threading.Condition()
+_cr_foreground_runs = 0
+
+
+def _cr_foreground_change(delta: int) -> None:
+    global _cr_foreground_runs
+    with _cr_foreground_cond:
+        _cr_foreground_runs += delta
+        _cr_foreground_cond.notify_all()
+
+
+def _cr_yield_to_foreground() -> None:
+    with _cr_foreground_cond:
+        _cr_foreground_cond.wait_for(lambda: _cr_foreground_runs == 0, timeout=_CR_YIELD_MAX_SECS)
 
 
 def _cr_parse(data: dict):
@@ -9513,11 +9605,19 @@ def _cr_parse(data: dict):
     return start_dt, end_dt, params, sets, capital_per_set
 
 
-def _cr_start(data: dict, worker, name: str, parse=None):
+def _cr_start(data: dict, worker, name: str, parse=None, background: bool = False,
+              one_at_a_time: bool = False):
     """Validate, check the logins, and start `worker(ctx, task)` on a thread.
     ctx carries the NIFTY 5-minute spot, the sessions and a cached
     frame_for(expiry, strike, right='CE'). `parse` reads the page's boxes
-    (_cr_parse; the monthly straddle passes _os_parse, its lots as 'sets')."""
+    (_cr_parse; the monthly straddle passes _os_parse, its lots as 'sets').
+    A `background` run (a sweep) lets every other run's Breeze requests go first.
+
+    `one_at_a_time` is for a sweep that holds gigabytes and the GIL in the live
+    process: the same request re-attaches to the run in progress (a reloaded
+    page), another one stops it, and so does nobody polling for
+    _CR_ABANDONED_SECS. Until 2026-11-05 a reload left the old run going to its
+    end, each with its own request budget, all on one pacer."""
     try:
         start_dt, end_dt, params, sets, capital_per_set = (parse or _cr_parse)(data)
     except (TypeError, ValueError) as e:
@@ -9536,12 +9636,33 @@ def _cr_start(data: dict, worker, name: str, parse=None):
     except Exception:
         lot_size = 65
 
+    request_key = json.dumps(data, sort_keys=True, default=str) if one_at_a_time else None
     task_id = uuid.uuid4().hex[:12]
-    task = {'status': 'running', 'started': _time.time(),
+    task = {'status': 'running', 'started': _time.time(), 'name': name, 'request_key': request_key,
+            'last_poll': _time.time(), 'stop': False,
             'progress': {'done': 0, 'total': 0, 'traded': 0, 'contracts': 0,
                          'breeze_seconds': 0.0, 'stage': 'NIFTY minutes (Fyers)'}}
     with _cr_tasks_lock:
+        if one_at_a_time:
+            for old_id, old in list(_cr_tasks.items()):
+                if old.get('name') != name:
+                    continue
+                if old['status'] != 'running':              # finished, and nobody came for it
+                    if _time.time() - old['last_poll'] > _CR_ABANDONED_SECS:
+                        _cr_tasks.pop(old_id, None)
+                elif old['request_key'] == request_key and not old['stop']:
+                    old['last_poll'] = _time.time()
+                    return jsonify({'success': True, 'status': 'running', 'task_id': old_id,
+                                    'progress': old['progress']})
+                else:
+                    old['stop'] = True
         _cr_tasks[task_id] = task
+    if not background:
+        _cr_foreground_change(1)
+
+    def check_stopped():
+        if one_at_a_time and (task['stop'] or _time.time() - task['last_poll'] > _CR_ABANDONED_SECS):
+            raise _CrStopped()
 
     def _run():
         from trading_app.Backtest import call_ratio_engine as cre
@@ -9570,10 +9691,54 @@ def _cr_start(data: dict, worker, name: str, parse=None):
                     for x in _ism.expiries(_ism.stock_code('NIFTY', 'NFO') or 'NIFTY', 'NFO'))
             except Exception as exc:          # noqa: BLE001 — the calendar's date stands
                 logger.warning('[CallRatio] listed NIFTY expiries unavailable: %s', exc)
-            state = {'errors': 0, 'last_error': None}
+            state = {'errors': 0, 'last_error': None, 'second_requests': 0,
+                     'second_budget': _cr_second_budget()}
             lock = threading.Lock()
             memo: dict = {}
             inflight: dict = {}
+
+            def may_fetch_seconds():
+                if background:
+                    _cr_yield_to_foreground()
+                with lock:
+                    if task['stop'] or state['second_requests'] >= state['second_budget']:
+                        return False
+                    state['second_requests'] += 1
+                    task['progress']['second_requests'] = state['second_requests']
+                    return True
+
+            def closes_at(check):
+                """fine_for at an Exit Check: a contract's closes around a bar on that grid, or None.
+                1-second data for 1s / 30s (a 15-minute slice), 1-minute for 1m / 3m (the session)."""
+                from trading_app.Backtest import option_selling_engine as ose
+                import numpy as np
+                secs = ose.CHECK_SECS[check]
+                read: dict = {}         # a contract's slice (1 s) or session (1 m) serves many bars: decoded once
+
+                def fine_for(expiry, strike, right, bar_start):
+                    day = bar_start.date()
+                    session_open = pd.Timestamp(datetime(day.year, day.month, day.day, 9, 15))
+                    index = int((bar_start - session_open).total_seconds() // 900) if secs < 60 else -1
+                    key = (expiry, int(strike), right, day, index)
+                    if key in read:
+                        return read[key]
+                    if secs < 60:
+                        got = icici.historical_option_seconds('NIFTY', expiry, int(strike), right, day, index,
+                                                              may_fetch=may_fetch_seconds)
+                    else:
+                        got = icici.historical_option_minute_closes('NIFTY', expiry, int(strike), right, day,
+                                                                    may_fetch=may_fetch_seconds)
+                    if got is None:
+                        s = None
+                    else:
+                        stamps = pd.DatetimeIndex(np.datetime64(pd.Timestamp(got['start']), 'ns')
+                                                  + np.asarray(got['t'], dtype='int64').astype('timedelta64[s]'))
+                        s = ose.check_steps(pd.Series(got['c'], index=stamps, dtype=float), secs, session_open)
+                    if len(read) >= 4000:
+                        read.clear()
+                    read[key] = s       # None too: a slice that failed is not asked for again by the next row
+                    return s
+                return fine_for
 
             def frame_for(expiry, strike, right='CE'):
                 key = (expiry, int(strike), right)
@@ -9590,7 +9755,8 @@ def _cr_start(data: dict, worker, name: str, parse=None):
                 frm, to = cre.contract_window(expiry)
                 t0 = _time.time()
                 raw = icici.historical_option_range('NIFTY', expiry, int(strike), right,
-                                                    frm, min(to, today))
+                                                    frm, min(to, today),
+                                                    before_request=_cr_yield_to_foreground if background else None)
                 # Set only when a chunk FAILED (or nothing came back): a range
                 # Breeze answered empty is not an error, and is cached.
                 err = icici.last_history_error()
@@ -9611,7 +9777,7 @@ def _cr_start(data: dict, worker, name: str, parse=None):
                    'sets': sets, 'lot_size': lot_size, 'qty': sets * lot_size,
                    'capital': sets * capital_per_set, 'capital_per_set': capital_per_set,
                    'spot5': spot5, 'sessions': sessions, 'frame_for': frame_for,
-                   'state': state, 'lock': lock}
+                   'closes_at': closes_at, 'state': state, 'lock': lock, 'check_stopped': check_stopped}
             task['progress']['stage'] = 'pricing'
             worker(ctx, task)
             task['payload'].setdefault('summary', {}).update({
@@ -9619,10 +9785,19 @@ def _cr_start(data: dict, worker, name: str, parse=None):
                 'contracts_fetched': task['progress']['contracts'],
                 'breeze_seconds': task['progress']['breeze_seconds']})
             task['status'] = 'complete'
+        except _CrStopped:
+            logger.info('[CallRatio] %s %s stopped: nobody is waiting for it', name, task_id)
+            task['status'] = 'stopped'
+            with _cr_tasks_lock:
+                if _time.time() - task['last_poll'] > _CR_ABANDONED_SECS:
+                    _cr_tasks.pop(task_id, None)
         except Exception as e:
             logger.error(f"[CallRatio] {name} failed: {e}", exc_info=True)
             task['error'] = str(e)
             task['status'] = 'error'
+        finally:
+            if not background:
+                _cr_foreground_change(-1)
 
     threading.Thread(target=_run, name=f'{name}-{task_id}', daemon=True).start()
     return jsonify({'success': True, 'status': 'running', 'task_id': task_id,
@@ -9638,6 +9813,17 @@ def _cr_workers() -> int:
     now = datetime.now(ZoneInfo('Asia/Kolkata'))
     in_market = now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 45)
     return 3 if in_market else 8
+
+
+def _cr_second_budget() -> int:
+    """Breeze requests one backtest may spend on 1-second slices. The ~5,000/day
+    is shared with the live algos, so a long range stops here and its older
+    trades read their 5-minute closes; every slice bought is on disk, so running
+    it again carries on from there."""
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo('Asia/Kolkata'))
+    in_market = now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 45)
+    return 400 if in_market else 1500
 
 
 def _cr_pool(items, fn, task):
@@ -9750,7 +9936,7 @@ def run_call_ratio_optimise_api():
         logger.info('[CallRatioOptimise] %s..%s: %d expiries, %d combos scored, %d contracts',
                     ctx['start'], ctx['end'], len(expiries), len(rows), task['progress']['contracts'])
 
-    return _cr_start(request.get_json(silent=True) or {}, worker, 'cr-opt')
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'cr-opt', background=True)
 
 
 @api_bp.route('/backtest/call-ratio/status/<task_id>', methods=['GET'])
@@ -9765,10 +9951,19 @@ def call_ratio_status(task_id):
         task = _cr_tasks.get(task_id)
     if not task:
         return jsonify({'success': False, 'error': 'Task not found'}), 404
+    task['last_poll'] = _time.time()
     elapsed = int(_time.time() - task['started'])
     if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running',
-                        'progress': task['progress'], 'elapsed': elapsed})
+        out = {'success': True, 'status': 'running', 'progress': task['progress'], 'elapsed': elapsed}
+        partial = task.get('partial')
+        # The board so far, only when it has moved on from the one this page holds (it is large).
+        if partial and request.args.get('seen', type=int, default=0) < task['progress'].get('partial_seq', 0):
+            out['partial'] = partial
+        return jsonify(out)
+    if task['status'] == 'stopped':
+        with _cr_tasks_lock:
+            _cr_tasks.pop(task_id, None)
+        return jsonify({'success': False, 'status': 'error', 'error': 'Stopped: a newer run took over'}), 409
     with _cr_tasks_lock:
         _cr_tasks.pop(task_id, None)
     if task['status'] == 'error':

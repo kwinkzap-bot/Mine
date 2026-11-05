@@ -1904,6 +1904,20 @@
                     </select>
                 </div>
                 <div class="form-group">
+                    <label for="osExitCheck" title="How often Target, Stop and Profit Lock are read, and so what is fetched from ICICI, wherever a 5-minute bar's high/low could have reached a level. 1 second and 30 seconds fetch 1-second data (the same requests; up to 25 per contract per day). 1 minute and 3 minutes fetch 1-minute data (one request per contract per day). 5 minutes needs nothing more. Find Best Params tries all of these on its board (one row each) whatever this says; only 5 minutes here skips that and fetches nothing. A first run costs requests, later ones are cached.">Exit Check</label>
+                    <select id="osExitCheck">
+                        <option value="1s" selected>1 second</option>
+                        <option value="30s">30 seconds</option>
+                        <option value="1m">1 minute</option>
+                        <option value="3m">3 minutes</option>
+                        <option value="5m">5 minutes</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="osOpenSettle" title="Not used on 5 minutes. A session's first prints are wild, so nothing is read until this many seconds after 09:15 (0-300); a gap past a level books at the prices then. 3 Feb 2026: the CE printed 1049 at 09:15:00 and 608 at 09:16:00.">Open Settle (sec)</label>
+                    <input type="number" id="osOpenSettle" value="60" min="0" max="300" step="5">
+                </div>
+                <div class="form-group">
                     <label for="osEntryTime" title="Time of the entry, on the Entry Day.">Entry Time</label>
                     <input type="time" id="osEntryTime" value="15:15">
                 </div>
@@ -1938,7 +1952,7 @@
                     <input type="number" id="osWings" value="0" min="0" step="50">
                 </div>
                 <div class="form-group">
-                    <label for="osLockAt" title="0 = off. Once the straddle's P&L has closed a 5-minute bar at this % of the premium, a stop rests at Lock To % — a winner is not allowed to turn into a loser.">Profit Lock At %</label>
+                    <label for="osLockAt" title="0 = off. Once the straddle's P&L has reached this % of the premium, a stop rests at Lock To % — a winner is not allowed to turn into a loser.">Profit Lock At %</label>
                     <input type="number" id="osLockAt" value="0" min="0" step="5">
                 </div>
                 <div class="form-group">
@@ -1966,13 +1980,13 @@
                     <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
                         Once a month on Entry Day (last Friday by default) at Entry Time (15:15), sell the ATM CE and the ATM PE (strike nearest the spot)
                         of NEXT month's monthly expiry — or, with Expiry Weekly, once a week on that weekday, on the next weekly expiry · both legs are bought back together when the straddle is up Target&nbsp;%
-                        or down Stop&nbsp;% of the premium collected, filled at that level (a session that opens past it fills at the open) ·
+                        or down Stop&nbsp;% of the premium collected, read at the Exit Check's interval and filled at those prices (on 5 minutes: at the level, or the open on a gap) ·
                         a position trade with no exit time: if neither is hit, it ends with the contract, at the expiry day's close ·
                         Adjustment (optional): when NIFTY's 5-minute close is Adjust At points from the centre, roll the profit leg / re-centre both /
                         buy the losing side at the new ATM / both hedge and roll, and watch from that ATM (Target and Stop stay % of the first premium) ·
                         Wings (optional): buy far CE/PE at entry, capping the loss (the % are then of the net credit) ·
                         Profit Lock (optional): once up Lock At&nbsp;%, a stop rests at Lock To&nbsp;%.
-                        Premiums are ICICI's recorded 5-minute candles (needs an ICICI login; two contracts a month, cached).
+                        Premiums are ICICI's recorded 5-minute candles, with its finer prices for the exit check (needs an ICICI login; cached).
                     </small>
                 </div>
             </div>

@@ -856,3 +856,59 @@ def test_option_range_with_a_failed_chunk_is_never_cached(monkeypatch):
     fetch, store, calls = _range_adapter(
         monkeypatch, lambda s, e: ([], False) if s == date(2026, 2, 10) else ([_bar(s)], False))
     assert len(fetch()) == 1 and store == {}
+
+
+def _open_range_adapter(monkeypatch, answer):
+    """An adapter whose only way out is `answer(start, end)`; the chunks asked for are in .asked."""
+    adapter = ids.IciciDataServiceAdapter.__new__(ids.IciciDataServiceAdapter)
+    adapter.asked = []
+
+    def chunk(info, interval, start, end):
+        adapter.asked.append((start, end))
+        return answer(start, end)
+
+    adapter._history_chunk = chunk
+    monkeypatch.setattr(master, 'stock_code', lambda *a, **k: 'NIFTY')
+    return adapter
+
+
+def _bar_on(day):
+    return [{'date': datetime(day.year, day.month, day.day, 9, 15), 'open': 1.0, 'high': 1.0, 'low': 1.0, 'close': 1.0}]
+
+
+def test_a_running_contract_pays_only_for_the_chunk_holding_today(slice_store, monkeypatch):
+    today = datetime.now(ids.IST).date()
+    frm, expiry = today - timedelta(days=20), today + timedelta(days=9)
+    adapter = _open_range_adapter(monkeypatch, lambda start, end: _bar_on(start))
+    first = adapter.historical_option_range('NIFTY', expiry, 23000, 'CE', frm, today)
+    assert len(adapter.asked) == 2                      # 17-day grid: one closed chunk, one with today
+
+    adapter.asked.clear()
+    waits = []
+    again = adapter.historical_option_range('NIFTY', expiry, 23000, 'CE', frm, today,
+                                            before_request=lambda: waits.append(1))
+    assert adapter.asked == [(frm + timedelta(days=17), today)] and waits == [1]
+    assert again == first
+
+
+def test_a_failed_chunk_of_a_running_contract_is_asked_for_again(slice_store, monkeypatch):
+    today = datetime.now(ids.IST).date()
+    frm = today - timedelta(days=20)
+    answers = [[], _bar_on(today)]
+    adapter = _open_range_adapter(monkeypatch, lambda start, end: answers.pop(0) if answers else [])
+    adapter.historical_option_range('NIFTY', today, 23000, 'CE', frm, today)
+    adapter.asked.clear()
+    answers[:] = [_bar_on(frm), _bar_on(today)]
+    bars = adapter.historical_option_range('NIFTY', today, 23000, 'CE', frm, today)
+    assert len(adapter.asked) == 2 and len(bars) == 2
+
+
+def test_a_settled_contract_is_still_cached_whole(slice_store, monkeypatch):
+    today = datetime.now(ids.IST).date()
+    frm, expiry = today - timedelta(days=20), today - timedelta(days=1)
+    adapter = _open_range_adapter(monkeypatch, lambda start, end: _bar_on(start))
+    adapter.historical_option_range('NIFTY', expiry, 23000, 'CE', frm, expiry)
+    assert len(adapter.asked) == 2
+    adapter.asked.clear()
+    adapter.historical_option_range('NIFTY', expiry, 23000, 'CE', frm, expiry)
+    assert adapter.asked == []

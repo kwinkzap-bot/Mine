@@ -496,13 +496,44 @@ Tests: `tests/test_call_ratio_engine.py`.
 The ⚖️ straddle in the Mine group on /backtest. **Monthly since 2026-11-03**: once a month on the Entry Day box
 (`entry_day`: last Friday by default, last Mon–Thu, or `after_expiry` — `call_ratio_engine.entry_days`) at
 15:15, SELL the ATM CE + PE (50-step) of NEXT month's expiry; both legs out together at +`target_pct` /
-−`stop_pct` (5 / 5) **% of the premium collected**, marked on 5-minute closes. **A position trade: no exit time**
+−`stop_pct` (5 / 5) **% of the premium collected**, marked on 5-minute closes (the backtest also reads seconds, below). **A position trade: no exit time**
 (dropped the evening of 2026-11-03, with the exit-before-expiry box) — only a contract that reaches its expiry
 untouched is closed, at that day's last 5-minute close, reason `Expiry`. Until then it was a weekly 09:20 → 15:14 intraday straddle with a ₹
 stop per leg; the strangle that preceded it (OTM / SL % / re-entry) went 2026-11-01. Both left their names:
 `Backtest/option_selling_engine.py`, the `/api/backtest/option-selling*` routes and the `#optionSellingParamsRow`
 / `os*` ids.
 
+* **BACKTEST reads target/stop/lock every second since 2026-11-05** (`fine_exit`, the form's **Exit Check** box; "5-minute
+  close" is the old read). A bar's highs/lows bound what the MTM can have reached (`mtm_bounds`); only a bar that could reach a level
+  buys its legs' 15-minute 1-second slices (`IciciAdapter.historical_option_seconds`: disk only, closes only, never the
+  live algos' chunk cache). The exit books that second's real prices, not the level. A leg yet to print today does not count
+  at the open (its stale close against the other's gap is an MTM that never existed). A bar without seconds reads its
+  close and is counted (`bars_unchecked`); a run may spend `_cr_second_budget()` requests (400 in market hours, else 1,500) and
+  a re-run carries on from the cache. Weekly Monday T50/S25 · re-centre 200×2 · lock 40→30, Nov 2025 – Nov 2026: 348 bars,
+  401 requests, 267 s cold, 0.7 s warm. Adjustments and the entry stay on 5-minute closes.
+  **A session's first `open_settle_secs` (60, the Open Settle box, 0-300) are not read**: 2026-02-03's 25100 CE printed 1049 / 1242 /
+  921 / 800 / 732 in its first 5 s with ~700 of intrinsic, then 608 at 09:16:00 (StockMojo's "09:16", 655 / PE 13.15, is the minute's
+  close: 650.75 / 13.15 here). Same run: net ₹92,848 on closes, ₹99,859 with no settle, ₹1,27,572 at 60 s (5 s ₹1.16 L, 30 s ₹1.32 L,
+  120 s ₹1.23 L; nearly all of it that one trade, −₹56,334 → −₹28,858). **The live straddle does not wait 60 s**: its first read is 09:15:05-09 (`_OPEN`), so it never sees the 1049; that day's first poll read 502-782 (average 674) against ~630 at 60 s. Kept on purpose (decided 2026-11-05): of 25 straddles through a 25 % stop at the first poll (461 cached openings, last prints, premium = previous close), 22 were still through at 60 s and 1 stayed back inside for 15 min; waiting saved a median 3.1 % of premium (10th-90th percentile −17 to +16) and lost a median 4.7 % against the 5-minute price, and nothing rests at the broker during a wait.
+* **Find Best Params sweeps on closes, then re-checks its whole board (200 rows) every second** (`recheck_picks`, best net and
+  steadiest in turn; `recheck_row` through `run_trade`, so a row's `sec_*` figures are the per-second backtest of its params, and the page's one set of figure columns shows them, `_osBoardRow`).
+  Fully re-checked rows lead the board by their 1s net (`rank_rechecked`); Exit Check = 5-minute close skips it. Rows go one at
+  a time on the same budget and later ones reuse their slices: Nov 2025 – Nov 2026 reached 7 complete rows on 400 requests, and
+  the whole board wants ~4,700 more (20 rows ~400, 100 ~3,400), so several after-hours Recalculates over days; past the budget a row
+  shows figures from what is cached, marked ≈.
+  **The 5-minute numbers flatter the leaders**: that board's top row (monthly Last Wed · none · T50/S25) is ₹1.78 L, DD ₹12 k on closes
+  and ₹1.36 L, DD ₹38 k every second, so old boards and saved rows overstate net and understate DD, sometimes badly.
+* **The re-check shares its work** (`RecheckMemo`, 2026-11-05): the board is few paths under many target/stop/lock levels, so each entry is opened, each path built and each bar read once per Exit Check, and a slice or session decoded once (`closes_at`). Same frozen cache, all 800 re-checks byte-identical: 447 s of CPU → 16 s (Nov 2025 – Nov 2026). What is left is Breeze's pace: 400 requests is ~4.5 min, 1,500 ~17 min.
+* **A sweep runs one at a time** (`_cr_start(one_at_a_time=True)`): the same request re-attaches to the run in progress (a reloaded page), a different one stops it, and so do `_CR_ABANDONED_SECS` (180) without a poll. Until then a reload left the old run going, with its own budget, at ~100 % CPU and 1.5 GB in the live process. While it runs the status route serves the board so far (`partial`, `?seen=`): the 5-minute rows, then after each pass; the page shows them and does not move the form until the end.
+* **A part-checked figure (≈) is not final, and that is the only way a row and its backtest differ.** Same rows, same data: board, sweep and backtest agree to the rupee (checked 2026-11-05 with a read-only replay; rewinding the 1-second cache by `slices.saved` reproduced Saved's ₹5,75,010 / PF 2.15 exactly, and the same row read ₹5,49,069 by 14:04 with half its bars still on closes). Each run's fetches move the next read. Saved and the backtest result carry the ≈; a 1-minute row is complete at no cost, and a whole 1-second row is ~800-1,500 requests.
+* **Exit Check is a dropdown since 2026-11-05: 1 second · 30 seconds · 1 minute · 3 minutes · 5 minutes** (`CHECK_SECS`, `check_steps`:
+  a span's close stamped at its last second). 1s / 30s fetch 1-second slices, 30s only thinning them, so it saves no requests;
+  1m / 3m fetch 1-minute sessions (`historical_option_minute_closes`, one request per contract-day, reusing `60s:d`); 5m fetches
+  nothing and skips the board re-check. Same weekly row: 1s ₹1,27,572 · 30s ₹1,12,433 · 1m ₹1,15,163 · 3m ₹1,09,538 · 5m ₹92,848. At 1m
+  2026-02-03 exits at 09:16:59 on CE 655.15 / PE 13.15, StockMojo's "09:16" exactly. A coarser check is not a safer one: it books later prices, not truer ones.
+* **Find Best Params sweeps Exit Check too** (the box is not read, as with Expiry; set to 5 minutes it skips this): every board row at every
+  interval, one row each, in `RECHECK_PASSES` order (1m, 3m, 1s, 30s: cheapest data first). `rank_rechecked` lists complete rows by checked net,
+  then part-checked, then the **5-minute rows last whatever they earn**, because closes hide stops touched inside a bar and would otherwise lead for that.
 * **It runs on the Monthly Call Ratio's machinery** (below): `call_ratio_engine`'s calendar (`entry_days`,
   `contract_expiry`, `contract_window`, `exit_day`), and the routes go through `_cr_start` (`parse=_os_parse`,
   `frame_for(expiry, strike, right)`), so tasks live in `_cr_tasks` and the option-selling status routes

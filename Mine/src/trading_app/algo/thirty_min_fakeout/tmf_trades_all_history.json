@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "BAJAJHLDNG",
+    "direction": "SELL",
+    "qty": 46,
+    "entry_price": 10747.0,
+    "exit_price": 10850.0,
+    "sl_price": 10850.0,
+    "target_price": 10547.0,
+    "pnl": -4738.0,
+    "reason": "SL Hit",
+    "entry_time": "2026-11-05T10:57:59.941322",
+    "exit_time": "2026-11-05T12:29:34.709470",
+    "broker_idx": 0,
+    "entry_order_id": "PAPER",
+    "sl_order_id": null,
+    "target_order_id": null,
+    "mode": "paper",
+    "date": "2026-11-05"
+  },
+  {
     "symbol": "INDUSINDBK",
     "direction": "SELL",
     "qty": 583,

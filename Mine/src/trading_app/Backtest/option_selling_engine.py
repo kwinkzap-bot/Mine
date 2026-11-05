@@ -41,8 +41,25 @@ The one exception is a **gap**: a session whose first bar OPENS already past
 the level (Friday's close → Monday's open) is filled at that open — no stop
 can do better — and reads 'Stop loss (gap)' / 'Target (gap)'.
 
-`run_trade` (BACKTEST) and `score_expiry` (Find Best Params) book through the
-same `build_path` + `first_exit`, so a sweep row and the backtest of its
+**Every second, where it matters** (`fine_exit`, since 2026-11-05). A close
+every 5 minutes cannot see a target or stop touched and left inside the bar, so
+BACKTEST (`run_trade` given `fine_for`) walks the position's MTM on the legs'
+1-second closes. Only where it could matter: a bar's highs and lows bound what
+the MTM can have reached in it (`mtm_bounds`), and a bar that cannot reach any
+level needs no second data at all. There the exit books at that second's real
+prices, not at the level — the position's P&L is not an order that can rest, and
+live reads it and sells at market. `exit_check` picks the grid (`CHECK_SECS`:
+1 second, 30 seconds, 1 minute, 3 minutes), each a close at the END of its span
+(`check_steps`), or '5m' for the closes alone. A session's first `open_settle_secs` (60) are
+not read at all: its first prints are wild, and a gap past a level books at the
+prices once they have settled. A bar whose seconds Breeze did not serve
+falls back to its 5-minute close and is counted (`bars_unchecked`).
+
+`score_expiry` (Find Best Params, 289,710 combos) stays on the 5-minute closes:
+`run_trade` without `fine_for` and it book through the same `build_path` +
+`first_exit`, so a sweep row and the 5-minute backtest of its parameters agree.
+Only the board's rows are then read every second (`recheck_row`), through that
+same `run_trade`, so a re-checked row and the per-second backtest of its
 parameters agree.
 
 The module is pure: callers hand in the bars, so it never touches a broker.
@@ -83,6 +100,7 @@ DEFAULTS = {
     'wings': 0,                # >0: BUY the CE this far above / the PE this far below at entry (iron fly)
     'lock_at': 0,              # >0: once the MTM reaches this % of the premium …
     'lock_to': 0,              # … a stop rests at this % (0 = break-even) — 'Profit lock'
+    'open_settle_secs': 60,    # every-second exit: a session's first prints are not read for this long
 }
 
 _frame = cre._frame
@@ -330,7 +348,7 @@ def _assemble(idx, grid_spot, legs: List[Dict], frames: Dict[tuple, Optional[pd.
     if days is None:
         days = _days(idx)
     return {'idx': idx, 'legs': legs, 'marks': marks, 'opens': opens, 'adjusts': adjusts,
-            'mtm': mtm, 'open_mtm': open_mtm,
+            'mtm': mtm, 'open_mtm': open_mtm, 'frames': frames,
             'new_session': np.r_[False, days[1:] != days[:-1]] if len(days) else np.zeros(0, bool),
             'spot': grid_spot, 'days': days}
 
@@ -586,6 +604,210 @@ def first_exits(path: Dict, premium: float, ex: Dict[str, np.ndarray],
     return pos, why
 
 
+# ── The second-by-second exit ────────────────────────────────────────────────
+CHECK_SECS = {'1s': 1, '30s': 30, '1m': 60, '3m': 180}     # '5m' = first_exit, on the closes
+OLD_CHECKS = {'second': '1s', 'bar': '5m'}                 # what the box used to send
+
+
+def check_steps(closes: pd.Series, secs: int, origin: pd.Timestamp) -> pd.Series:
+    """Finer closes → one per `secs`, counted from `origin` (the 09:15 open),
+    each stamped the last second of its span: a 3-minute close is not known
+    before it, and 09:20:59 belongs to the 09:20 bar, after that bar's opening
+    adjustment. A span with no print holds the last close."""
+    if secs <= 1 or closes.empty:
+        return closes
+    spans = closes.resample(f'{secs}s', origin=origin).last().ffill().dropna()
+    spans.index = spans.index + pd.Timedelta(seconds=secs - 1)
+    return spans
+
+
+
+def mtm_bounds(path: Dict) -> tuple:
+    """(lowest, highest) the position's MTM can have touched in each bar: every
+    held leg at the worst / best of its bar's low, high, close and the previous
+    mark. A bar that does not reach a level on these cannot have crossed it."""
+    idx = path['idx']
+    n = len(idx)
+    lo, hi = np.zeros(n), np.zeros(n)
+    for leg, mk in zip(path['legs'], path['marks']):
+        px_lo, px_hi = mk.copy(), mk.copy()
+        a = leg['opened']
+        b = n - 1 if leg['closed'] is None else leg['closed']
+        if b > a:
+            prev = np.r_[leg['entry'], mk[:-1]]
+            frame = path['frames'].get((leg['right'], leg['strike']))
+            if frame is None or frame.empty:
+                bar_hi = bar_lo = np.full(n, np.nan)
+            else:
+                bar_hi = frame['high'].reindex(idx).to_numpy(dtype=float)
+                bar_lo = frame['low'].reindex(idx).to_numpy(dtype=float)
+            seg = slice(a + 1, b + 1)
+            px_hi[seg] = np.fmax(np.maximum(mk[seg], prev[seg]), bar_hi[seg])
+            px_lo[seg] = np.fmin(np.minimum(mk[seg], prev[seg]), bar_lo[seg])
+        worst, best = (px_hi, px_lo) if leg['side'] < 0 else (px_lo, px_hi)
+        lo += leg['side'] * (worst - leg['entry'])
+        hi += leg['side'] * (best - leg['entry'])
+    return lo, hi
+
+
+def second_marks(path: Dict, pos: int, expiry: date, entry_ts: pd.Timestamp,
+                 fine_for: Callable, settle_secs: float = 0) -> Optional[tuple]:
+    """Bar `pos` second by second: (stamps, MTM at each, {held leg: its prices}),
+    every leg forward-filled from its own last print. None when a held leg
+    printed in this bar and its seconds are not to be had."""
+    start = path['idx'][pos]
+    end, first = start + BAR, max(start, entry_ts)
+    held = _held_at(path, pos)
+    parts = {}
+    for i in held:
+        lg = path['legs'][i]
+        s = fine_for(expiry, lg['strike'], lg['right'], start)
+        if s is None:
+            return None
+        lo, hi = s.index.searchsorted(first), s.index.searchsorted(end)   # a contract's closes are in time order
+        times = s.index.values[lo:hi].astype('datetime64[ns]').astype('int64')
+        frame = path['frames'].get((lg['right'], lg['strike']))
+        if not len(times) and frame is not None and start in frame.index:
+            return None
+        parts[i] = (times, s.to_numpy(dtype=float)[lo:hi])
+    stamps = np.unique(np.concatenate([t for t, _ in parts.values()])) if parts else np.zeros(0, dtype='int64')
+    base = sum(lg['side'] * (path['marks'][i][pos] - lg['entry'])
+               for i, lg in enumerate(path['legs']) if i not in parts)
+    mtm = np.full(len(stamps), float(base))
+    prices = {}
+    for i, (times, closes) in parts.items():
+        lg = path['legs'][i]
+        prev = path['marks'][i][pos - 1] if pos > 0 else lg['entry']
+        # Each leg at its own last print by then; its previous mark before its first.
+        at = np.searchsorted(times, stamps, side='right') - 1
+        px = np.where(at >= 0, closes[at.clip(0)] if len(times) else prev, prev)
+        prices[i] = px
+        mtm += lg['side'] * (px - lg['entry'])
+    if path['new_session'][pos] and len(stamps):
+        # A leg yet to print today still shows yesterday's close: on a gap the
+        # other leg's first print against it is an MTM that never existed. And
+        # the first prints are not prices (2026-02-03, 25100 CE at 09:15:00-05:
+        # 1049, 1242, 921, 800, 732, 780 with ~700 of intrinsic), so nothing is
+        # read until `settle_secs` in, on each leg's last print by then.
+        ready = max([t[0] for t, _ in parts.values() if len(t)]
+                    + [(start + pd.Timedelta(seconds=settle_secs)).value])
+        keep = stamps >= ready
+        stamps, mtm = stamps[keep], mtm[keep]
+        prices = {i: px[keep] for i, px in prices.items()}
+    return pd.DatetimeIndex(stamps.astype('datetime64[ns]')), mtm, prices
+
+
+class RecheckMemo:
+    """What one Find Best Params run's board re-check would otherwise redo. Its rows
+    are few paths under many target/stop/lock levels, so every row of a path
+    reads the same bars at the same prices: each entry is opened and each path
+    built once, and a bar read once per Exit Check (`new_pass`, since each has
+    its own closes). Holds for one run only, whose other settings do not change."""
+
+    MAX_BARS = 10_000       # a 1-second bar is ~10 KB; past this start again rather than grow in the live process
+
+    def __init__(self):
+        self.opened: Dict[tuple, Dict] = {}
+        self.grids: Dict[tuple, Dict] = {}
+        self.paths: Dict[tuple, Dict] = {}
+        self.bars: Dict[tuple, Optional[tuple]] = {}
+
+    def new_pass(self) -> None:
+        self.bars.clear()
+
+    def bar_reader(self, path_key: tuple, read: Callable) -> Callable:
+        def cached(t: int):
+            key = (path_key, t)
+            if key in self.bars:
+                return self.bars[key]
+            got = read(t)
+            if len(self.bars) >= self.MAX_BARS:
+                self.bars.clear()
+            self.bars[key] = got
+            return got
+        return cached
+
+
+def fine_exit(path: Dict, premium: float, target_pct: float, stop_pct: float, cut_ts: pd.Timestamp,
+              expiry: date, entry_ts: pd.Timestamp, fine_for: Callable,
+              lock_at: float = 0, lock_to: float = 0, settle_secs: float = 0,
+              bar_reader: Optional[Callable] = None) -> Dict:
+    """first_exit read on every second of the bars that could hold an exit.
+    A target beats a lock beats a stop inside one second, as on one bar; the
+    lock arms on the second the MTM reaches `lock_at`, and can only fire after it.
+    `fine_for(expiry, strike, right, bar start)` is that contract's 1-second
+    closes around the bar (a Series), or None when it cannot be had; such a bar
+    is read on its 5-minute close, exactly as first_exit would have.
+    `bar_reader` wraps the read of a bar (RecheckMemo), so rows sharing this path share it."""
+    idx = path['idx']
+    n_cut = int(idx.searchsorted(cut_ts - BAR, side='right'))
+    tp = premium * target_pct / 100.0
+    sp = -premium * stop_pct / 100.0
+    lock_on = lock_at > 0 and lock_to < lock_at and lock_to > -stop_pct
+    arm, lk = premium * lock_at / 100.0, premium * lock_to / 100.0
+    armed = False
+    lo, hi = path['bounds'] if 'bounds' in path else mtm_bounds(path)
+    checked = unchecked = 0
+
+    def read(t):
+        return second_marks(path, t, expiry, entry_ts, fine_for, settle_secs)
+    if bar_reader is not None:
+        read = bar_reader(read)
+
+    def done(pos, reason, pts=None, exit_px=None, ts=None):
+        if pts is None:
+            pts, exit_px, reason = exit_points(path, pos, reason, premium, target_pct, stop_pct, lock_to)
+        return {'pos': pos, 'reason': reason, 'pts': pts, 'exit_px': exit_px, 'exit_ts': ts,
+                'bars_checked': checked, 'bars_unchecked': unchecked}
+
+    # Only a bar that reaches a level under EITHER state of the lock can hold anything.
+    up_at = min(arm, tp) if lock_on else tp
+    down_at = max(lk, sp) if lock_on else sp
+    for t in np.flatnonzero((hi[:n_cut] >= up_at) | (lo[:n_cut] <= down_at)).tolist():
+        up = hi[t] >= (arm if lock_on and not armed and arm < tp else tp)
+        down = lo[t] <= (lk if armed and lk > sp else sp)
+        if not up and not down:
+            continue
+        fine = read(t)
+        if fine is None:                       # no seconds: the 5-minute close decides this bar
+            unchecked += 1
+            m = path['mtm'][t]
+            if m >= tp:
+                return done(t, 'Target')
+            if armed and m <= lk:
+                return done(t, 'Profit lock')
+            if m <= sp:
+                return done(t, 'Stop loss')
+            armed = armed or (lock_on and m >= arm)
+            continue
+        checked += 1
+        stamps, mtm, prices = fine
+        if not len(stamps):
+            continue
+        start = 0
+        if lock_on and not armed:
+            k = _first(mtm >= arm)
+            exit_before = _first((mtm >= tp) | (mtm <= sp))
+            if k >= 0 and (exit_before < 0 or k < exit_before):
+                armed, start = True, k + 1
+        hits = [(_first(mtm >= tp), 0, 'Target'), (_first(mtm <= sp), 2, 'Stop loss')]
+        if armed:
+            after = _first(mtm[start:] <= lk)
+            hits.append((start + after if after >= 0 else -1, 1, 'Profit lock'))
+        hit = min(((k, rank, r) for k, rank, r in hits if k >= 0), default=None)
+        if hit is None:
+            continue
+        k, _, reason = hit
+        exit_px = [float(prices[i][k]) if i in prices else float(path['marks'][i][t])
+                   for i in range(len(path['legs']))]
+        if k == 0 and path['new_session'][t]:
+            reason += ' (gap)'
+        return done(t, reason, float(mtm[k]), exit_px, stamps[k])
+    if n_cut == 0:
+        return done(-1, 'Open (data ends)')
+    return done(n_cut - 1, 'Expiry' if idx[n_cut - 1].date() == cut_ts.date() else 'Open (data ends)')
+
+
 def month_path(m: Dict, spot5: pd.Series, frame_for: Callable, p: Dict,
                cache: Optional[Dict] = None) -> Dict:
     """The path of an opened month (open_month) under `p`'s adjustment rule."""
@@ -597,19 +819,43 @@ def month_path(m: Dict, spot5: pd.Series, frame_for: Callable, p: Dict,
 
 def run_trade(entry: date, sessions: Sequence[date], spot5: pd.Series,
               frame_for: Callable[[date, int, str], Optional[pd.DataFrame]],
-              params: Optional[Dict] = None) -> Dict:
+              params: Optional[Dict] = None, fine_for: Optional[Callable] = None,
+              memo: Optional[RecheckMemo] = None) -> Dict:
     """One month's straddle from entry to exit; 'status' in traded | open | skipped.
 
     `spot5` is NIFTY's 5-minute closes (indexed by bar start) over the run,
-    `frame_for(expiry, strike, right)` that contract's 5-minute frame."""
+    `frame_for(expiry, strike, right)` that contract's 5-minute frame. With
+    `fine_for` the exit is read every second (fine_exit), else on the closes.
+    `memo` shares the entry, the path and its bars with the run's other rows."""
     p = {**DEFAULTS, **(params or {})}
-    m = open_month(entry, sessions, spot5, frame_for, p)
+    entry_key = (entry, p.get('cadence'), bool(p.get('skip_one_night')), int(p.get('wings') or 0))
+    if memo is None:
+        m = open_month(entry, sessions, spot5, frame_for, p)
+    else:
+        m = memo.opened.get(entry_key)
+        if m is None:
+            m = memo.opened[entry_key] = open_month(entry, sessions, spot5, frame_for, p)
     base = {'entry_date': entry, 'expiry': m['expiry'], 'spot': m.get('spot'), 'strike': m.get('strike')}
     if not m['ok']:
         return {**base, 'status': 'skipped', 'reason': m['reason']}
     cut = cut_time(m['expiry'])
-    path = month_path(m, spot5, frame_for, p)
+    path_key = entry_key + (p.get('adjust', 'none'), float(p.get('adjust_pts') or 0), int(p.get('max_adjust') or 0))
+    if memo is None:
+        path = month_path(m, spot5, frame_for, p)
+    else:
+        path = memo.paths.get(path_key)
+        if path is None:
+            path = month_path(m, spot5, frame_for, p, memo.grids.setdefault(entry_key, {}))
+            path['bounds'] = mtm_bounds(path)
+            memo.paths[path_key] = path
     lock = (float(p.get('lock_at') or 0), float(p.get('lock_to') or 0))
+    if fine_for is not None:
+        reader = None if memo is None else (lambda read: memo.bar_reader(path_key, read))
+        r = fine_exit(path, m['premium'], p['target_pct'], p['stop_pct'], cut, m['expiry'],
+                      m['entry_ts'], fine_for, *lock, settle_secs=float(p.get('open_settle_secs') or 0),
+                      bar_reader=reader)
+        return {**base, **_booked(path, r['pos'], r['reason'], r['pts'], r['exit_px'], m, r['exit_ts']),
+                'bars_checked': r['bars_checked'], 'bars_unchecked': r['bars_unchecked']}
     pos, reason = first_exit(path, m['premium'], p['target_pct'], p['stop_pct'], cut, None, *lock)
     pts, exit_px, reason = exit_points(path, pos, reason, m['premium'], p['target_pct'], p['stop_pct'],
                                        lock[1])
@@ -622,12 +868,13 @@ def legs_traded(path: Dict, pos: int) -> int:
     return sum(1 for lg in path['legs'] if lg['opened'] < pos)
 
 
-def _booked(path: Dict, pos: int, reason: str, pts: float, exit_px: List[float], m: Dict) -> Dict:
+def _booked(path: Dict, pos: int, reason: str, pts: float, exit_px: List[float], m: Dict,
+            exit_ts: Optional[pd.Timestamp] = None) -> Dict:
     if pos < 0:
         exit_ts, upto = m['entry_ts'], np.zeros(0)
     else:
         # A level fill happened inside the bar; its close is when it is known.
-        exit_ts = path['idx'][pos] + BAR
+        exit_ts = exit_ts if exit_ts is not None else path['idx'][pos] + BAR
         upto = np.r_[path['mtm'][:pos], pts]
     held = _held_at(path, pos) if pos >= 0 else [0, 1]
     short = {path['legs'][i]['right']: i for i in held if path['legs'][i]['side'] < 0}
@@ -693,6 +940,9 @@ def trade_row(res: Dict, qty: int, lots: int, lot_size: int, brokerage_per_leg: 
     gross = res['pnl_points'] * qty
     brokerage = brokerage_per_leg * res['legs_traded']
     net = gross - brokerage
+    if 'bars_unchecked' in res:
+        row['bars_checked'] = res['bars_checked']
+        row['bars_unchecked'] = res['bars_unchecked']
     row.update({
         'premium': round(prem, 2),
         'premium_rupees': round(collected, 2),
@@ -980,4 +1230,100 @@ def board(rows: List[Dict], n: int = 100) -> List[Dict]:
             seen.add(key)
             out.append(r)
     out.sort(key=lambda r: (r['net_pnl_rupees'], -r['max_drawdown_rupees']), reverse=True)
+    return out
+
+
+# ── Re-checking the board every second ───────────────────────────────────────
+RECHECK_ROWS = 200     # all of `board` (top 100 + top 100); the request budget, not this, is the limit
+
+
+def recheck_picks(rows: List[Dict], n: int = RECHECK_ROWS) -> List[Dict]:
+    """The rows worth their Breeze requests, most deserving first: the best by
+    net ₹ and the steadiest by net ÷ DD (board's floor) in turn, so a budget
+    that runs out part way has still reached both kinds."""
+    if not rows:
+        return []
+    floor = 0.25 * rows[0]['net_pnl_rupees']
+    steady = sorted((r for r in rows if r['net_pnl_rupees'] >= floor and r['net_pnl_rupees'] > 0),
+                    key=lambda r: r['net_dd'], reverse=True)
+    seen, out = set(), []
+    for a, b in itertools.zip_longest(rows, steady):
+        for r in (a, b):
+            if r is None or len(out) >= n:
+                continue
+            key = tuple(r.get(k) for k in SWEEP_KEYS)
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+        if len(out) >= n:
+            break
+    return out
+
+
+def recheck_row(row: Dict, sessions: Sequence[date], spot5: pd.Series, frame_for: Callable,
+                fine_for: Callable, qty: int, base: Dict, start: date, end: date,
+                brokerage_per_leg: float, mapper: Callable = map,
+                memo: Optional[RecheckMemo] = None) -> Dict:
+    """A board row's whole backtest read every second → its `sec_*` figures.
+    `mapper` runs the trades (in order); `sec_complete` is False when any bar
+    had to read its 5-minute close instead."""
+    p = {**base, **{k: row[k] for k in SWEEP_KEYS}}
+    entries = entry_days(sessions, start, end, p['entry_day'], p['cadence'])
+
+    def one(entry):
+        return trade_row(run_trade(entry, sessions, spot5, frame_for, p, fine_for, memo),
+                         qty, 1, qty, brokerage_per_leg)
+
+    fold, unchecked, checked = Fold(), 0, 0
+    combo = tuple(row[k] for k in SWEEP_KEYS)
+    for t in mapper(one, entries):
+        unchecked += t.get('bars_unchecked', 0)
+        checked += t.get('bars_checked', 0)
+        fold.add({combo: (t['status'], t['pnl_rupees'] or 0.0, t['pnl_pct'] or 0.0, t['exit_reason'])})
+    scored = fold.rows()
+    r = scored[0] if scored else {}
+    return {
+        'sec_net_pnl_rupees': r.get('net_pnl_rupees', 0.0), 'sec_win_rate': r.get('win_rate', 0.0),
+        'sec_total_trades': r.get('total_trades', 0), 'sec_worst_pct': r.get('worst_pct', 0.0),
+        'sec_total_pct': r.get('total_pct', 0.0), 'sec_avg_pct': r.get('avg_pct', 0.0),
+        'sec_profit_factor': r.get('profit_factor', 0.0),
+        'sec_max_drawdown_rupees': r.get('max_drawdown_rupees', 0.0), 'sec_net_dd': r.get('net_dd', 0.0),
+        'sec_exits': r.get('exits', {}), 'sec_bars_checked': checked, 'sec_bars_unchecked': unchecked,
+        'sec_complete': unchecked == 0,
+    }
+
+
+# Exit Check as a swept setting. The passes run cheapest data first: 3m is free
+# once 1m has fetched, 30s once 1s has, so a budget that runs out has reached
+# every row on minutes before it starts on seconds.
+RECHECK_PASSES = ('1m', '3m', '1s', '30s')
+
+
+def five_minute_row(row: Dict) -> Dict:
+    """A board row as the Exit Check = 5 minutes row: its own figures, nothing to fetch."""
+    return {**row, 'exit_check': '5m', 'sec_net_pnl_rupees': row['net_pnl_rupees'],
+            'sec_win_rate': row['win_rate'], 'sec_total_trades': row['total_trades'],
+            'sec_worst_pct': row['worst_pct'], 'sec_profit_factor': row['profit_factor'],
+            'sec_total_pct': row['total_pct'], 'sec_avg_pct': row['avg_pct'],
+            'sec_max_drawdown_rupees': row['max_drawdown_rupees'], 'sec_net_dd': row['net_dd'],
+            'sec_exits': row['exits'], 'sec_bars_checked': 0, 'sec_bars_unchecked': 0, 'sec_complete': True}
+
+
+def rank_rechecked(rows: List[Dict]) -> List[Dict]:
+    """The board's order: fully re-checked rows by their checked net, then the
+    part-checked, then the 5-minute rows. Those last go last whatever they earn:
+    closes cannot see a stop touched inside a bar, so on their own net they
+    would lead the board for hiding losses (₹1.78 L against ₹1.36 L on the
+    2025-26 board's top row), not for trading better. `board_order` carries the
+    order to the page (higher = earlier)."""
+    fine = [r for r in rows if r.get('exit_check') != '5m']
+    done = sorted((r for r in fine if r.get('sec_complete')),
+                  key=lambda r: (r['sec_net_pnl_rupees'], -r['sec_max_drawdown_rupees']), reverse=True)
+    part = sorted((r for r in fine if not r.get('sec_complete')),
+                  key=lambda r: r.get('sec_net_pnl_rupees', r['net_pnl_rupees']), reverse=True)
+    coarse = sorted((r for r in rows if r.get('exit_check') == '5m'),
+                    key=lambda r: r['net_pnl_rupees'], reverse=True)
+    out = done + part + coarse
+    for i, r in enumerate(out):
+        r['board_order'] = len(out) - i
     return out

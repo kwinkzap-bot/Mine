@@ -1025,6 +1025,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
+        strategySelect.addEventListener('change', () => document.getElementById('osCheckNote')?.remove());   // the straddle's own note
         // Set initial state
         updateStrategyView();
     }
@@ -1156,10 +1157,11 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Weekly', 'With Expiry = Weekly: once a WEEK on the Entry Day (Mon–Fri, or the session after each weekly expiry), SELL the ATM CE + PE of the first weekly expiry after that day. NIFTY weeklies exist from 11-Feb-2019. Skip one-night trades: no trade in a week whose expiry is the very next session.'],
             ['Target', 'Both legs bought back together once the straddle is up 5% of the premium collected (CE + PE sold).'],
             ['Stop', 'Both legs bought back together once it is down 5% of the premium collected.'],
-            ['Fill', 'At the level itself; if a session opens already past it (an overnight gap), at that open.'],
+            ['Check', 'Exit Check sets how often Target, Stop and Profit Lock are read: 1 second, 30 seconds, 1 minute, 3 minutes or 5 minutes, on that span\'s closing price, wherever a 5-minute bar\'s high/low could have reached them. Find Best Params sweeps on 5-minute closes, then re-checks its board at each of these (one row each, with its own figures; ≈ = some bars not fetched yet); set to 5 minutes it skips that.'],
+            ['Fill', 'At that close\'s real prices, so a fast move books past the level. A session\'s first prints are wild, so nothing is read until Open Settle seconds after 09:15 (60 by default). On 5 minutes: at the level itself; if a session opens already past it (an overnight gap), at that open.'],
             ['Adjustment', 'Optional. When NIFTY\'s 5-minute close is the chosen points away from the centre (the sold strike, then the last adjustment\'s ATM): roll the profit leg to the new ATM, re-centre both legs there, or buy the losing side there as a hedge (once a side), or hedge and roll together — up to Max Adjustments a month, never on expiry day. Target / Stop stay on the first premium collected.'],
             ['Wings', 'Optional. Buy the CE Wings points above and the PE Wings points below the sold strike at the entry (an iron fly). The loss is capped at the wing width less the credit; Target / Stop / Lock are % of the net credit.'],
-            ['Profit lock', 'Optional. Once a 5-minute close has the trade up Lock At % of the premium, a stop rests at Lock To % (0 = break-even), filled at that level — a winner cannot become a loss.'],
+            ['Profit lock', 'Optional. Once the trade is up Lock At % of the premium, a stop rests at Lock To % (0 = break-even) — a winner cannot become a loss.'],
             ['Exit', 'A position trade — no exit time. Only if neither level is hit by expiry does it close at the expiry day\'s last close.']] },
         call_ratio: { sub: 'NIFTY monthly 1:2 call ratio with a far hedge, zero adjustment', steps: [
             ['Entry', 'Last Friday of the month at 15:16, on NEXT month\'s expiry: BUY 1 CE 300 pts above the ATM, SELL 2 CE 300 above that, BUY 1 CE 1,000 above the sold strike.'],
@@ -2341,6 +2343,8 @@ document.addEventListener('DOMContentLoaded', function() {
             end_date:    document.getElementById('endDate')?.value,
             cadence:     document.getElementById('osCadence')?.value || 'monthly',
             skip_one_night: document.getElementById('osSkipOneNight')?.value === 'true',
+            exit_check:  document.getElementById('osExitCheck')?.value || '1s',
+            open_settle_secs: Math.max(0, num('osOpenSettle', 60)),
             entry_day:   document.getElementById('osEntryDay')?.value || 'last_friday',
             entry_time:  document.getElementById('osEntryTime')?.value || '15:15',
             target_pct:  num('osTarget', 5),
@@ -2413,7 +2417,7 @@ document.addEventListener('DOMContentLoaded', function() {
             { key: 'pe_exit', label: 'PE Out', sortable: true, format: prem },
             { key: 'premium', label: 'Premium', sortable: true, format: prem },
             { key: 'wings', label: 'Wings', sortable: false, format: v => v || '—' },
-            { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
+            { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 19) : '—') },
             { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
             { key: 'exit_reason', label: 'Outcome', sortable: true },
             { key: 'adjust_count', label: 'Adj', sortable: true,
@@ -2459,6 +2463,22 @@ document.addEventListener('DOMContentLoaded', function() {
             : 'No entry days in this range', 'warning');
         if (s.breeze_errors) window.showNotification(
             `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected months may be skipped or mis-priced`, 'warning');
+        if (s.exit_check !== '5m' && s.trades_unchecked) window.showNotification(
+            `${s.trades_unchecked} trade${s.trades_unchecked === 1 ? '' : 's'} had bars without ${s.exit_check} data (${s.second_requests}/${s.second_budget} requests used) and read the 5-minute close there. Run it again to carry on — what was fetched is cached.`, 'warning');
+        // A figure with bars still on closes moves as data arrives: say so beside it, not only in a toast.
+        let note = document.getElementById('osCheckNote');
+        if (!note && resultsArea) {
+            note = document.createElement('div');
+            note.id = 'osCheckNote';
+            note.style.cssText = 'margin:0 0 10px;padding:8px 12px;border:1px solid #f59e0b;border-radius:6px;font-size:13px;';
+            resultsArea.prepend(note);
+        }
+        if (note) {
+            note.style.display = s.bars_unchecked ? '' : 'none';
+            note.textContent = s.bars_unchecked
+                ? `≈ Not final: ${s.bars_unchecked} of ${s.bars_unchecked + s.bars_checked} bars across ${s.trades_unchecked} trades have no ${s.exit_check} data yet and read the 5-minute close. These figures will move until a run has them all, so they can differ from a board or Saved row. Each run fetches more (${s.second_requests}/${s.second_budget} requests this time).`
+                : '';
+        }
     }
 
     // ── NIFTY Monthly Call Ratio — start + poll ────────────────────────
@@ -5694,6 +5714,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     <th>Net P&amp;L</th><th>Max DD</th><th>Range</th><th>Saved</th></tr></thead>
                 <tbody>${all.map(x => {
                     const p = x.params || {}, lt = liveTab(x);
+                    // A part-checked straddle row: these figures were true of the data fetched when it was saved.
+                    const ap = p.sec_complete === false ? `<span title="Not final when saved: ${p.sec_bars_unchecked} bars had no ${p.exit_check} data yet and read the 5-minute close. A later backtest with more data will differ.">≈ </span>` : '';
                     return `<tr>
                         <td class="bt-saved-act"><button type="button" class="bt-saved-use" data-use="${esc(x.id)}">USE</button>
                             <button type="button" class="bt-saved-del" data-del="${esc(x.id)}" title="Remove from Saved">✕</button></td>
@@ -5702,10 +5724,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         <td>${lt ? `<a href="/algo#${esc(lt.key)}" title="Mine tab on /algo, sub-tab ${lt.n}">${esc(lt.tab)}</a>` : '<small>—</small>'}</td>
                         <td title="${esc(x.title)}">${esc(x.label)}</td>
                         <td>${p.total_trades ?? ''}</td>
-                        <td>${p.win_rate != null ? Number(p.win_rate).toFixed(0) + '%' : ''}</td>
-                        <td>${p.profit_factor != null ? Number(p.profit_factor).toFixed(2) : ''}</td>
-                        <td class="${(p.net_rs || 0) >= 0 ? 'bc-pos' : 'bc-neg'}">${p.net_rs != null ? inr(p.net_rs) : ''}</td>
-                        <td class="bc-neg">${p.max_dd_rs != null ? inr(-Math.abs(p.max_dd_rs)) : ''}</td>
+                        <td>${p.win_rate != null ? ap + Number(p.win_rate).toFixed(0) + '%' : ''}</td>
+                        <td>${p.profit_factor != null ? ap + Number(p.profit_factor).toFixed(2) : ''}</td>
+                        <td class="${(p.net_rs || 0) >= 0 ? 'bc-pos' : 'bc-neg'}">${p.net_rs != null ? ap + inr(p.net_rs) : ''}</td>
+                        <td class="bc-neg">${p.max_dd_rs != null ? ap + inr(-Math.abs(p.max_dd_rs)) : ''}</td>
                         <td><small>${esc(x.symbol)} ${esc(x.start_date)} → ${esc(x.end_date)}</small></td>
                         <td><small>${esc((x.saved_at || '').slice(0, 10))}</small></td>
                     </tr>`;
@@ -5913,6 +5935,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const _OS_ADJUST = { none: 'None', roll_untested: 'Roll profit leg', recenter: 'Re-centre', hedge: 'Hedge',
                          hedge_roll: 'Hedge + roll' };
+    // A row's figures on the board are its own Exit Check's (sec_*): one set of columns, whichever interval
+    // the row is. ≈ = some bars had no finer data yet and read the 5-minute close.
+    const _OS_CHECKED = ['net_pnl_rupees', 'win_rate', 'total_trades', 'total_pct', 'avg_pct', 'worst_pct',
+                         'profit_factor', 'max_drawdown_rupees', 'net_dd'];
+    const _osBoardRow = (r) => {
+        const row = { ...r };
+        _OS_CHECKED.forEach(k => { if (r[`sec_${k}`] != null) row[k] = r[`sec_${k}`]; });
+        return row;
+    };
+    const _osSec = (r, text) => (r.sec_complete !== false ? text
+        : `<span title="${r.sec_bars_unchecked} bars had no finer data yet and read the 5-minute close. Run it again to carry on.">≈ ${text}</span>`);
+    const _OS_CHECKS = { '1s': '1 second', '30s': '30 seconds', '1m': '1 minute', '3m': '3 minutes', '5m': '5 minutes' };
     const STRADDLE_OPT_COLS = [
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
         { label: 'Expiry',       key: 'cadence',        fmt: r => (r.cadence === 'weekly' ? 'Weekly' : 'Monthly') },
@@ -5924,15 +5958,16 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Target',       key: 'target_pct',     fmt: r => `${r.target_pct}%` },
         { label: 'Stop',         key: 'stop_pct',       fmt: r => `${r.stop_pct}%` },
         { label: 'Lock',         key: 'lock_at',        fmt: r => (r.lock_at ? `${r.lock_at}% → ${r.lock_to}%` : '—') },
+        { label: 'Exit Check',   key: 'exit_check',     fmt: r => _OS_CHECKS[r.exit_check || '5m'] },
         { label: 'Trades',       key: 'total_trades',   fmt: r => `${r.total_trades}${r.skipped ? ` <small>(${r.skipped} skip)</small>` : ''}` },
-        { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
-        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
-        { label: 'Total % Prem', key: 'total_pct',      fmt: r => _crPct(r.total_pct) },
-        { label: 'Avg / Trade',  key: 'avg_pct',        fmt: r => _crPct(r.avg_pct) },
-        { label: 'Worst Trade',  key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
-        { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
-        { label: 'Net / DD',     key: 'net_dd',         fmt: r => (r.net_dd == null ? '—' : r.net_dd >= 999 ? '∞' : Number(r.net_dd).toFixed(2)) },
+        { label: 'Win%',         key: 'win_rate',       fmt: r => _osSec(r, `${(r.win_rate ?? 0).toFixed(0)}%`) },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _osSec(r, _rs(r.net_pnl_rupees)) },
+        { label: 'Total % Prem', key: 'total_pct',      fmt: r => _osSec(r, _crPct(r.total_pct)) },
+        { label: 'Avg / Trade',  key: 'avg_pct',        fmt: r => _osSec(r, _crPct(r.avg_pct)) },
+        { label: 'Worst Trade',  key: 'worst_pct',      fmt: r => _osSec(r, _crPct(r.worst_pct)) },
+        { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => _osSec(r, (r.profit_factor || 0).toFixed(2)) },
+        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => _osSec(r, `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>`) },
+        { label: 'Net / DD',     key: 'net_dd',         fmt: r => _osSec(r, r.net_dd == null ? '—' : r.net_dd >= 999 ? '∞' : Number(r.net_dd).toFixed(2)) },
         { label: '🔖',           key: null,             fmt: r => {
             const on = !!(window.BtSaved && window.BtSaved.has(_osSavedEntry(r).key));
             return `<button type="button" class="os-save-btn" data-skey="${_osSavedEntry(r).key}"`
@@ -5945,21 +5980,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // settings plus the board's figures, keyed on every setting and the range the board was run on.
     let _osOptRange = { start: '', end: '' };
     const _OS_SAVE_KEYS = ['cadence', 'entry_day', 'skip_one_night', 'wings', 'adjust', 'adjust_pts',
-                           'target_pct', 'stop_pct', 'lock_at', 'lock_to'];
+                           'target_pct', 'stop_pct', 'lock_at', 'lock_to', 'exit_check'];
     function _osSavedEntry(r) {
         const day = _OS_ENTRY_DAYS[r.entry_day] || r.entry_day;
         const adj = r.adjust && r.adjust !== 'none' ? `${_OS_ADJUST[r.adjust] || r.adjust} ${r.adjust_pts}` : 'No adj';
         const label = `${day}${r.skip_one_night ? ' (skip 1-night)' : ''} · ${r.wings ? `wings ±${r.wings} · ` : ''}${adj}`
-            + ` · T${r.target_pct}/S${r.stop_pct}${r.lock_at ? ` · lock ${r.lock_at}→${r.lock_to}` : ''}`;
+            + ` · T${r.target_pct}/S${r.stop_pct}${r.lock_at ? ` · lock ${r.lock_at}→${r.lock_to}` : ''}${r.exit_check ? ` · ${_OS_CHECKS[r.exit_check]}` : ''}`;
         const params = {};
         Object.entries(r).forEach(([k, v]) => { if (v === null || typeof v !== 'object') params[k] = v; });
-        Object.assign(params, { net_rs: r.net_pnl_rupees, max_dd_rs: r.max_drawdown_rupees });
+        Object.assign(params, { net_rs: r.sec_net_pnl_rupees ?? r.net_pnl_rupees, max_dd_rs: r.sec_max_drawdown_rupees ?? r.max_drawdown_rupees });
         return {
             key: ['atm_straddle', ..._OS_SAVE_KEYS.map(k => r[k] ?? ''), _osOptRange.start, _osOptRange.end].join('|'),
             strategy: 'atm_straddle', direction: null, swept: [],
             board: '⚖️ Straddle', tag: r.cadence === 'weekly' ? 'Weekly' : 'Monthly', label,
-            title: `${label} · net ₹${Math.round(r.net_pnl_rupees || 0).toLocaleString('en-IN')}`
-                + ` · max DD ₹${Math.round(r.max_drawdown_rupees || 0).toLocaleString('en-IN')} · ${r.total_trades} trades`,
+            title: `${label} · net ₹${Math.round(r.sec_net_pnl_rupees ?? r.net_pnl_rupees ?? 0).toLocaleString('en-IN')}`
+                + ` · max DD ₹${Math.round(r.sec_max_drawdown_rupees ?? r.max_drawdown_rupees ?? 0).toLocaleString('en-IN')} · ${r.total_trades} trades`,
             symbol: 'NIFTY', start_date: _osOptRange.start, end_date: _osOptRange.end, params,
         };
     }
@@ -5987,14 +6022,16 @@ document.addEventListener('DOMContentLoaded', function() {
         set('osWings', String(r.wings || 0));
         set('osLockAt', String(r.lock_at || 0));
         set('osLockTo', String(r.lock_to || 0));
+        if (r.exit_check) set('osExitCheck', r.exit_check);
         if (window.showNotification) window.showNotification(
-            `Applied: ${r.cadence === 'weekly' ? 'Weekly' : 'Monthly'} · ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.skip_one_night ? ' (skip one-night)' : ''}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
+            `Applied:${r.exit_check ? ` ${_OS_CHECKS[r.exit_check]} ·` : ''} ${r.cadence === 'weekly' ? 'Weekly' : 'Monthly'} · ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.skip_one_night ? ' (skip one-night)' : ''}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
             + `${r.adjust && r.adjust !== 'none' ? ` @ ${r.adjust_pts} pts` : ''} · target ${r.target_pct}% · stop ${r.stop_pct}% · `
             + `${r.lock_at ? `lock ${r.lock_at}% → ${r.lock_to}% · ` : ''}`
-            + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`, 'success');
+            + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`
+            + (r.sec_complete === false ? ' · ≈ this row was part-checked, so the backtest can differ' : ''), 'success');
     }
 
-    function renderOsOptResults(data) {
+    function renderOsOptResults(data, stillRunning) {
         const panel     = document.getElementById('optionSellingOptimisePanel');
         const metaEl    = document.getElementById('osOptMeta');
         const recalcBtn = document.getElementById('osRecalcOptBtn');
@@ -6005,11 +6042,16 @@ document.addEventListener('DOMContentLoaded', function() {
             + ` (≥ ${data.min_trades?.weekly ?? '—'} closed)`
             + ` · every Expiry × Entry Day × wings × adjustment × profit lock · top by Net and by Net ÷ DD`
             + ` · ${data.lots}×${data.lot_size} · % of premium collected`
-            + (data.summary?.breeze_errors ? ` · ${data.summary.breeze_errors} ICICI requests failed` : '');
-        _mountSingleOptGrid('osOptGrid', data.results || [], STRADDLE_OPT_COLS, 'net_pnl_rupees', apply);
+            + (data.summary?.breeze_errors ? ` · ${data.summary.breeze_errors} ICICI requests failed` : '')
+            + (data.rechecked ? ` · Exit Check swept: ${data.rechecked} rows at 1 second, 30 seconds, 1 minute and 3 minutes, ${data.rechecked_complete} complete, the rest part-checked (≈); 5-minute rows listed last; ${data.second_requests}/${data.second_budget} requests` : '');
+        if (stillRunning && metaEl) metaEl.textContent = `Still re-checking: ${(data.passes_done || []).join(', ') || 'only the 5-minute rows'} in so far, the rest follow. ` + metaEl.textContent;
+        if (!stillRunning && data.rechecked && data.rechecked_complete < data.rechecked) window.showNotification(
+            `${data.rechecked - data.rechecked_complete} of ${data.rechecked} rows are only part re-checked (≈): the ${data.second_budget}-request limit was reached. Recalculate to carry on — what was fetched is cached.`, 'warning');
+        const byOrder = (data.results || []).some(r => r.board_order != null);
+        _mountSingleOptGrid('osOptGrid', (data.results || []).map(_osBoardRow), STRADDLE_OPT_COLS, byOrder ? 'board_order' : 'net_pnl_rupees', apply);
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
-        if (data.best) apply(data.best);
+        if (data.best && !stillRunning) apply(data.best);   // the form is not moved under someone reading a board in progress
     }
 
     async function runOsOptimise(recalculate) {
@@ -6035,12 +6077,17 @@ document.addEventListener('DOMContentLoaded', function() {
             let data = await resp.json();
             if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
             const taskId = data.task_id;
+            let seen = 0;
             while (true) {
                 await new Promise(r => setTimeout(r, 2500));
                 if (myRun !== _osOptRun) return;
-                data = await (await fetch(`/api/backtest/option-selling/optimise/status/${taskId}`)).json();
+                data = await (await fetch(`/api/backtest/option-selling/optimise/status/${taskId}?seen=${seen}`)).json();
                 if (myRun !== _osOptRun) return;
                 if (data.status !== 'running') break;
+                if (data.partial) {
+                    seen = data.progress?.partial_seq || seen;
+                    renderOsOptResults(data.partial, true);
+                }
                 _showOptLoader('Finding best params…', _crProgress(data.progress || {}, data, 'months'));
             }
             _hideOptLoader();
