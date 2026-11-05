@@ -9297,7 +9297,7 @@ def _os_hm(value, default: Tuple[int, int]) -> Tuple[int, int]:
 
 def _os_exit_check(value) -> str:
     from trading_app.Backtest.option_selling_engine import CHECK_SECS, OLD_CHECKS
-    check = OLD_CHECKS.get(value, value) if value else '1s'
+    check = OLD_CHECKS.get(value, value) if value else '1m'
     if check != '5m' and check not in CHECK_SECS:
         raise ValueError(f'exit_check must be one of {", ".join(CHECK_SECS)}, 5m')
     return check
@@ -9450,85 +9450,70 @@ def run_option_selling_optimise_api():
         # oldest first into one board, and each needs half of its own periods.
         plans = [(cad, ose.entries_by_month(ctx['sessions'], ctx['start'], ctx['end'], cadence=cad))
                  for cad in ose.CADENCES]
-        task['progress']['total'] = sum(len(by) for _, by in plans)
-
-        from concurrent.futures import ThreadPoolExecutor
-        fold = ose.Fold()
-        n = 0
-        for cad, by in plans:
-            base = {**ctx['params'], 'cadence': cad}
-
-            def one(period, by=by, base=base):
-                ctx['check_stopped']()
-                res = ose.score_month(by[period], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
-                                      ctx['qty'], base, _OS_BROKERAGE_PER_LEG)
-                task['progress']['traded'] += 1
-                return res
-
-            with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
-                for res in pool.map(one, sorted(by)):            # oldest first, in order
-                    fold.add(res)
-                    n += 1
-                    task['progress']['done'] = n
-        task['progress']['stage'] = 'scoring'
+        # Exit Check is swept too, each on its own chart: the whole grid at 5 minutes, at 1 minute and at
+        # 3 minutes, with its own board. Weeks first on the finer charts: they are far fewer contract-days,
+        # so a request budget that runs out has finished them before it starts on the months.
+        checks = ose.SWEEP_CHECKS if ctx['params']['exit_check'] != '5m' else ('5m',)
+        ctx['state']['second_budget'] = _cr_sweep_budget()
+        task['progress']['total'] = sum(len(by) for _, by in plans) * len(checks)
         periods = {cad: len(by) for cad, by in plans}
         min_trades = {cad: max(1, k // 2) for cad, k in periods.items()}
-        rows = fold.rows(min_trades)
-        shown = ose.board(rows)
-        best = rows[0] if rows else None
-        rechecked = 0
 
-        def board_payload(results, best_row, n_rechecked):
+        from concurrent.futures import ThreadPoolExecutor
+        n = 0
+
+        def sweep(check):
+            nonlocal n
+            fold = ose.Fold()
+            fine_for = None if check == '5m' else ctx['closes_at'](check)
+            secs = ose.CHECK_SECS.get(check, 0)
+            for cad, by in (plans if check == '5m' else reversed(plans)):
+                base = {**ctx['params'], 'cadence': cad}
+
+                def one(period, by=by, base=base):
+                    ctx['check_stopped']()
+                    res = ose.score_month(by[period], ctx['sessions'], ctx['spot5'], ctx['frame_for'],
+                                          ctx['qty'], base, _OS_BROKERAGE_PER_LEG, fine_for=fine_for, secs=secs)
+                    task['progress']['traded'] += 1
+                    return res
+
+                with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
+                    for res in pool.map(one, sorted(by)):        # oldest first, in order
+                        fold.add(res)
+                        n += 1
+                        task['progress']['done'] = n
+                        task['progress']['stage'] = (f"Sweeping the {check} chart ({cad}) · "
+                                                     f"{ctx['state']['second_requests']} ICICI requests")
+            rows = fold.rows(min_trades)
+            return [{**r, 'exit_check': check} for r in ose.board(rows)], len(rows)
+
+        def board_payload(results, scored):
+            fine = [r for r in results if r.get('exit_check') != '5m']
             return {
-                'results': results, 'best': best_row, 'total': len(rows),
-                'rechecked': n_rechecked, 'exit_check': ctx['params']['exit_check'],
-                'rechecked_complete': sum(1 for r in results if r.get('sec_complete') and r.get('exit_check') != '5m'),
+                'results': results, 'best': results[0] if results else None, 'total': scored,
+                'checks_done': sorted({r['exit_check'] for r in results}),
+                'fine_rows': len(fine), 'fine_complete': sum(1 for r in fine if r.get('complete')),
+                'exit_check': ctx['params']['exit_check'],
                 'second_requests': ctx['state']['second_requests'],
                 'second_budget': ctx['state']['second_budget'],
-                'total_combos_tested': ose.sweep_size(), 'months': periods['monthly'],
+                'total_combos_tested': ose.sweep_size() * len(checks), 'months': periods['monthly'],
                 'weeks': periods['weekly'], 'min_trades': min_trades,
                 'lots': ctx['sets'], 'lot_size': ctx['lot_size'],
                 'summary': {},
             }
 
-        def show_so_far(done_passes, n_rechecked, results):
-            """The page's board before the re-check ends: the slow part is Breeze's
-            pace, and the sweep's answer is already there to read."""
-            task['partial'] = {**board_payload(results, results[0] if results else None, n_rechecked),
-                               'partial': True, 'passes_done': done_passes}
-            task['progress']['partial_seq'] = len(done_passes) + 1
-
-        if ctx['params']['exit_check'] != '5m':
-            # Exit Check is swept too: every board row at every interval, one row each. The closes
-            # of the sweep are its 5-minute rows; the finer ones are fetched, cheapest data first.
-            # Rows past the budget still get figures from what is cached, marked part-checked.
-            picks = ose.recheck_picks(rows, len(shown))
-            five = [ose.five_minute_row(r) for r in picks]
-            show_so_far([], 0, ose.rank_rechecked([dict(r) for r in five]))
-            passes = {check: [] for check in ose.RECHECK_PASSES}
-            memo = ose.RecheckMemo()
-            with ThreadPoolExecutor(max_workers=_cr_workers()) as pool:
-                for done_n, check in enumerate(ose.RECHECK_PASSES):
-                    memo.new_pass()
-                    fine_for = ctx['closes_at'](check)
-                    for i, row in enumerate(picks):
-                        ctx['check_stopped']()
-                        task['progress']['stage'] = (f'Re-checking the board at {check}: {i + 1} / {len(picks)}'
-                                                     f" · {ctx['state']['second_requests']} ICICI requests")
-                        passes[check].append({**row, 'exit_check': check, **ose.recheck_row(
-                            row, ctx['sessions'], ctx['spot5'], ctx['frame_for'], fine_for, ctx['qty'],
-                            ctx['params'], ctx['start'], ctx['end'], _OS_BROKERAGE_PER_LEG, pool.map, memo)})
-                    if done_n < len(ose.RECHECK_PASSES) - 1:
-                        so_far = [r for c in ose.RECHECK_PASSES[:done_n + 1] for r in passes[c]]
-                        show_so_far(list(ose.RECHECK_PASSES[:done_n + 1]), len(so_far),
-                                    ose.rank_rechecked([dict(r) for r in so_far + five]))
-            fine_rows = [r for check in ose.RECHECK_PASSES for r in passes[check]]
-            rechecked = len(fine_rows)
-            shown = ose.rank_rechecked(fine_rows + five)
-            best = shown[0] if shown else best
-        task['payload'] = board_payload(shown, best, rechecked)
+        shown, scored = [], 0
+        for done_n, check in enumerate(checks):
+            rows, count = sweep(check)
+            shown += rows
+            scored += count
+            if done_n < len(checks) - 1:
+                # The page's board before the slow part ends: what is finished is already there to read.
+                task['partial'] = {**board_payload(ose.rank_board([dict(r) for r in shown]), scored), 'partial': True}
+                task['progress']['partial_seq'] = done_n + 1
+        task['payload'] = board_payload(ose.rank_board(shown), scored)
         logger.info('[MonthlyStraddleOptimise] %s..%s: %d months + %d weeks, %d combos scored, %d contracts',
-                    ctx['start'], ctx['end'], periods['monthly'], periods['weekly'], len(rows),
+                    ctx['start'], ctx['end'], periods['monthly'], periods['weekly'], scored,
                     task['progress']['contracts'])
 
     return _cr_start(request.get_json(silent=True) or {}, worker, 'os-opt', parse=_os_parse, background=True, one_at_a_time=True)
@@ -9708,26 +9693,20 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                     return True
 
             def closes_at(check):
-                """fine_for at an Exit Check: a contract's closes around a bar on that grid, or None.
-                1-second data for 1s / 30s (a 15-minute slice), 1-minute for 1m / 3m (the session)."""
+                """fine_for at an Exit Check: a contract's session of 1-minute data on that chart, or None."""
                 from trading_app.Backtest import option_selling_engine as ose
                 import numpy as np
                 secs = ose.CHECK_SECS[check]
-                read: dict = {}         # a contract's slice (1 s) or session (1 m) serves many bars: decoded once
+                read: dict = {}         # a contract's session serves many bars: decoded once
 
                 def fine_for(expiry, strike, right, bar_start):
                     day = bar_start.date()
                     session_open = pd.Timestamp(datetime(day.year, day.month, day.day, 9, 15))
-                    index = int((bar_start - session_open).total_seconds() // 900) if secs < 60 else -1
-                    key = (expiry, int(strike), right, day, index)
+                    key = (expiry, int(strike), right, day)
                     if key in read:
                         return read[key]
-                    if secs < 60:
-                        got = icici.historical_option_seconds('NIFTY', expiry, int(strike), right, day, index,
-                                                              may_fetch=may_fetch_seconds)
-                    else:
-                        got = icici.historical_option_minute_closes('NIFTY', expiry, int(strike), right, day,
-                                                                    may_fetch=may_fetch_seconds)
+                    got = icici.historical_option_minute_closes('NIFTY', expiry, int(strike), right, day,
+                                                                may_fetch=may_fetch_seconds)
                     if got is None:
                         s = None
                     else:
@@ -9736,7 +9715,7 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                         s = ose.check_steps(pd.Series(got['c'], index=stamps, dtype=float), secs, session_open)
                     if len(read) >= 4000:
                         read.clear()
-                    read[key] = s       # None too: a slice that failed is not asked for again by the next row
+                    read[key] = s       # None too: a session that failed is not asked for again by the next read
                     return s
                 return fine_for
 
@@ -9816,14 +9795,24 @@ def _cr_workers() -> int:
 
 
 def _cr_second_budget() -> int:
-    """Breeze requests one backtest may spend on 1-second slices. The ~5,000/day
+    """Breeze requests one backtest may spend on 1-minute sessions. The ~5,000/day
     is shared with the live algos, so a long range stops here and its older
-    trades read their 5-minute closes; every slice bought is on disk, so running
+    trades read their 5-minute closes; every session bought is on disk, so running
     it again carries on from there."""
+    return 400 if _cr_in_market() else 1500
+
+
+def _cr_sweep_budget() -> int:
+    """The same for Find Best Params, whose 1-minute sweep needs far more: every
+    contract-day of every adjustment's strikes (2019-26: ~57,000, ~17,000 on disk by
+    2026-11-05). It carries on from the cache, a few evenings' worth at a time."""
+    return 400 if _cr_in_market() else 3500
+
+
+def _cr_in_market() -> bool:
     from zoneinfo import ZoneInfo
     now = datetime.now(ZoneInfo('Asia/Kolkata'))
-    in_market = now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 45)
-    return 400 if in_market else 1500
+    return now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) <= (15, 45)
 
 
 def _cr_pool(items, fn, task):

@@ -1904,11 +1904,9 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="osExitCheck" title="How often Target, Stop and Profit Lock are read, and so what is fetched from ICICI, wherever a 5-minute bar's high/low could have reached a level. 1 second and 30 seconds fetch 1-second data (the same requests; up to 25 per contract per day). 1 minute and 3 minutes fetch 1-minute data (one request per contract per day). 5 minutes needs nothing more. Find Best Params tries all of these on its board (one row each) whatever this says; only 5 minutes here skips that and fetches nothing. A first run costs requests, later ones are cached.">Exit Check</label>
+                    <label for="osExitCheck" title="How often Target, Stop and Profit Lock are read, and on what chart: 1 minute and 3 minutes fetch 1-minute data from ICICI (one request per contract per day), 5 minutes needs nothing more. Find Best Params runs its whole sweep on each of the three, one board row per setting and chart; set to 5 minutes it runs that one only.">Exit Check</label>
                     <select id="osExitCheck">
-                        <option value="1s" selected>1 second</option>
-                        <option value="30s">30 seconds</option>
-                        <option value="1m">1 minute</option>
+                        <option value="1m" selected>1 minute</option>
                         <option value="3m">3 minutes</option>
                         <option value="5m">5 minutes</option>
                     </select>

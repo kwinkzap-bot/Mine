@@ -34,13 +34,13 @@ class FakeIcici:
     def last_history_error(self):
         return None
 
-    def historical_option_seconds(self, root, expiry, strike, right, day, index, may_fetch=None):
+    def historical_option_minute_closes(self, root, expiry, strike, right, day, may_fetch=None):
+        # CE: 160 for the 10:01 minute only, back to 100 at 10:02 — the 3-minute span 10:00-10:02 closes back at 100.
         if may_fetch is not None and not may_fetch():
             return None
         self.calls += 1
-        assert (day, index) == (date(2025, 2, 4), 3)             # 10:00 sits in the slice from 10:00
-        t, c = ([137, 138], [160.0, 100.0]) if right == 'CE' else ([1], [100.0])
-        return {'start': datetime(2025, 2, 4, 10, 0), 't': t, 'c': c}
+        t, c = ([2760, 2820], [160.0, 100.0]) if right == 'CE' else ([2700], [100.0])
+        return {'start': datetime(day.year, day.month, day.day, 9, 15), 't': t, 'c': c}
 
 
 @pytest.fixture
@@ -76,11 +76,11 @@ def run(monkeypatch):
     return go
 
 
-def test_every_second_catches_the_wick(run):
+def test_one_minute_catches_the_wick(run):
     payload, icici = run()
     row, s = payload['trades'][0], payload['summary']
-    assert row['exit_reason'] == 'Stop loss' and row['exit_time'] == '2025-02-04T10:02:17'
-    assert s['exit_check'] == '1s' and s['bars_checked'] == 1 and s['trades_unchecked'] == 0
+    assert row['exit_reason'] == 'Stop loss' and row['exit_time'] == '2025-02-04T10:02:00'
+    assert s['exit_check'] == '1m' and s['bars_checked'] == 1 and s['trades_unchecked'] == 0
     assert s['second_requests'] == 2 and icici.calls == 2
 
 
@@ -97,21 +97,9 @@ def test_a_spent_budget_falls_back_and_says_so(run, monkeypatch):
     assert payload['summary']['trades_unchecked'] == 1 and payload['summary']['bars_unchecked'] == 1
 
 
-def _wick_minutes(self, root, expiry, strike, right, day, may_fetch=None):
-    # CE: 160 for the 10:01 minute only, back to 100 at 10:02 — the 3-minute span 10:00-10:02 closes back at 100.
-    if may_fetch is not None and not may_fetch():
-        return None
-    self.calls += 1
-    t, c = ([2760, 2820], [160.0, 100.0]) if right == 'CE' else ([2700], [100.0])
-    return {'start': datetime(day.year, day.month, day.day, 9, 15), 't': t, 'c': c}
-
-
-@pytest.mark.parametrize('check,reason,when', [('1m', 'Stop loss', '2025-02-04T10:01:59'),
+@pytest.mark.parametrize('check,reason,when', [('1m', 'Stop loss', '2025-02-04T10:02:00'),
                                                 ('3m', 'Expiry', None)])
-def test_minutes_fetch_minute_data_and_exit_at_the_span_close(run, monkeypatch, check, reason, when):
-    monkeypatch.setattr(FakeIcici, 'historical_option_minute_closes', _wick_minutes, raising=False)
-    monkeypatch.setattr(FakeIcici, 'historical_option_seconds',
-                        lambda *a, **k: pytest.fail('minute checks must not fetch seconds'))
+def test_minutes_fetch_minute_data_and_exit_at_the_span_close(run, check, reason, when):
     payload, icici = run(exit_check=check)
     row = payload['trades'][0]
     assert payload['summary']['exit_check'] == check and icici.calls == 2
@@ -120,11 +108,9 @@ def test_minutes_fetch_minute_data_and_exit_at_the_span_close(run, monkeypatch, 
         assert row['exit_time'] == when
 
 
-def test_thirty_seconds_uses_the_same_second_data(run):
-    payload, icici = run(exit_check='30s')
-    row = payload['trades'][0]
-    assert row['exit_reason'] == 'Expiry'         # 160 at 10:02:17 is out by that span's close (100)
-    assert icici.calls == 2
+@pytest.mark.parametrize('old', ['1s', '30s', 'second'])
+def test_the_removed_intervals_read_one_minute(old):
+    assert api_mod._os_exit_check(old) == '1m'
 
 
 def test_an_unknown_exit_check_is_refused(run):
@@ -149,29 +135,19 @@ def _optimise(run_fixture_app, **extra):
     return task['payload']
 
 
-def test_find_best_params_re_checks_its_leaders(run, monkeypatch):
-    # The stub's seconds assert one slice only, so let any slice be asked for here.
-    monkeypatch.setattr(FakeIcici, 'historical_option_seconds',
-                        lambda self, root, expiry, strike, right, day, index, may_fetch=None:
-                        {'start': datetime(day.year, day.month, day.day, 9, 15), 't': [], 'c': []})
-    monkeypatch.setattr(FakeIcici, 'historical_option_minute_closes',
-                        lambda self, root, expiry, strike, right, day, may_fetch=None:
-                        {'start': datetime(day.year, day.month, day.day, 9, 15), 't': [], 'c': []}, raising=False)
+def test_find_best_params_sweeps_each_chart_on_its_own(run):
     payload = _optimise(run.app)
     shown = payload['results']
-    combos = {tuple(r[k] for k in ose.SWEEP_KEYS) for r in shown}
-    assert len(combos) > 20 and len(shown) == 5 * len(combos)      # every row at every Exit Check
-    assert payload['rechecked'] == 4 * len(combos)
-    assert all('sec_net_pnl_rupees' in r for r in shown)           # no row is left as a dash
-    assert {r['exit_check'] for r in shown} == {'1s', '30s', '1m', '3m', '5m'}
-    assert shown[-1]['exit_check'] == '5m' and payload['best']['exit_check'] != '5m'
+    assert {r['exit_check'] for r in shown} == {'1m', '3m', '5m'}
     assert payload['best'] is shown[0] and shown[0]['board_order'] == len(shown)
-    assert 'sec_net_pnl_rupees' in shown[0]
+    assert shown[-1]['exit_check'] == '5m' and payload['best']['exit_check'] != '5m'
+    assert all('complete' in r for r in shown)
+    assert sum(r['exit_check'] == '1m' for r in shown) > 20
 
 
-def test_five_minute_exit_check_skips_the_re_check(run):
+def test_five_minute_exit_check_runs_that_chart_only(run):
     payload = _optimise(run.app, exit_check='5m')
-    assert payload['rechecked'] == 0 and all('sec_complete' not in r for r in payload['results'])
+    assert payload['fine_rows'] == 0 and {r['exit_check'] for r in payload['results']} == {'5m'}
 
 
 def test_a_sweep_holds_its_breeze_requests_while_a_backtest_runs(monkeypatch):
@@ -280,9 +256,6 @@ def test_the_board_so_far_is_served_while_the_re_check_runs(run, monkeypatch):
         return {'start': datetime(day.year, day.month, day.day, 9, 15), 't': [], 'c': []}
 
     monkeypatch.setattr(FakeIcici, 'historical_option_minute_closes', minutes, raising=False)
-    monkeypatch.setattr(FakeIcici, 'historical_option_seconds',
-                        lambda self, root, expiry, strike, right, day, index, may_fetch=None:
-                        {'start': datetime(day.year, day.month, day.day, 9, 15), 't': [], 'c': []})
     api_mod._cr_tasks.clear()
     task_id = _start(run.app)
     task = api_mod._cr_tasks[task_id]
@@ -292,7 +265,7 @@ def test_the_board_so_far_is_served_while_the_re_check_runs(run, monkeypatch):
         time.sleep(0.01)
     with run.app.test_request_context(f'/?seen=0'):
         body = api_mod.call_ratio_status.__wrapped__(task_id).get_json()
-    assert body['status'] == 'running' and body['partial']['partial'] and body['partial']['rechecked'] == 0
+    assert body['status'] == 'running' and body['partial']['partial'] and body['partial']['fine_rows'] == 0
     assert {r['exit_check'] for r in body['partial']['results']} == {'5m'}
     seq = body['progress']['partial_seq']
     with run.app.test_request_context(f'/?seen={seq}'):

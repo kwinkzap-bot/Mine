@@ -1010,65 +1010,16 @@ class IciciDataServiceAdapter:
                 _slice_cache_put(ckey, bars)
         return bars
 
-    def historical_option_seconds(self, root: str, expiry: dt_date, strike: float,
-                                  option_type: str, day: dt_date, index: int,
-                                  exchange_code: str = 'NFO',
-                                  may_fetch: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-        """ONE 15-minute slice of one option's 1-second CLOSES, for a settled
-        session: {'start': slice start, 't': [seconds after it], 'c': [closes]}.
-        None when it could not be had: the request failed, or `may_fetch()` —
-        asked before every real request, never for a cache hit — said no.
-
-        Disk only, and closes only (~11 KB a slice, against the 100+ KB of the
-        raw rows): a backtest's walk through these must not evict the 30-second
-        bars the live algos read from the shared in-memory chunk cache. A slice
-        Breeze answered empty is cached too, a failed one never.
-        """
-        windows = _session_windows(day)
-        if not 0 <= index < len(windows):
-            return None
-        w_start, w_end = windows[index]
-        right = 'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'
-        symbol = f"{root}:{expiry.isoformat()}:{int(float(strike))}:{right}"
-        ckey = f"{symbol}:1s:c:{w_start:%Y-%m-%dT%H:%M}"
-        cached = _slice_cache_get(ckey)
-        if cached:
-            return {'start': w_start.replace(tzinfo=None), **cached[0]}
-        code = master.stock_code(root, exchange_code)
-        if not code:
-            _HIST_ERROR.msg = f"No ICICI stock_code for {root} on {exchange_code}"
-            return None
-        if may_fetch is not None and not may_fetch():
-            return None
-        info = {
-            'root': (root or '').upper(), 'stock_code': code,
-            'exchange_code': exchange_code.upper(), 'product_type': 'options',
-            'expiry_date': _breeze_expiry(expiry), 'right': right,
-            'strike_price': str(int(float(strike))), 'symbol': symbol,
-        }
-        _HIST_ERROR.msg = None
-        _HIST_ERROR.clean_empty = False
-        rows = self._history_chunk(info, '1second', w_start, w_end)
-        if not rows and not getattr(_HIST_ERROR, 'clean_empty', False):
-            return None
-        closes: Dict[int, float] = {}
-        for row in rows:
-            if row['close'] > 0:
-                closes[int((row['date'] - w_start).total_seconds())] = row['close']
-        keys = sorted(closes)
-        out = {'t': keys, 'c': [closes[k] for k in keys]}
-        if w_end < datetime.now(IST):
-            _slice_cache_put(ckey, [out])
-        return {'start': w_start.replace(tzinfo=None), **out}
-
     def historical_option_minute_closes(self, root: str, expiry: dt_date, strike: float,
                                         option_type: str, day: dt_date, exchange_code: str = 'NFO',
                                         may_fetch: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-        """One settled session of an option's 1-minute CLOSES — one request where
-        the 1-second walk is up to 25 — in historical_option_seconds' shape, with
-        't' the seconds from the open to each bar's START. None when it could
-        not be had. Disk only, for the same reason; a session another backtest
-        already bought (historical_option_minutes) is read from its entry.
+        """One settled session of an option's 1-minute CLOSES: {'start': the open,
+        't': [seconds from the open to each bar's START], 'c': [closes]}. None when
+        it could not be had: the request failed, or `may_fetch()` — asked before
+        every real request, never for a cache hit — said no. Disk only: a backtest's
+        walk through these must not evict the bars the live algos read from the
+        shared in-memory chunk cache. A session another backtest already bought
+        (historical_option_minutes) is read from its entry.
         """
         right = 'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'
         symbol = f"{root}:{expiry.isoformat()}:{int(float(strike))}:{right}"

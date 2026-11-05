@@ -2,6 +2,7 @@
 from datetime import date, datetime, timedelta
 
 import pandas as pd
+import pytest
 
 from trading_app.Backtest import option_selling_engine as ose
 
@@ -573,7 +574,7 @@ def test_a_stop_touched_and_left_inside_a_bar_is_caught_only_by_the_seconds():
     fine = _seconds({('CE', '10:02:17'): 160.0, ('CE', '10:02:18'): 100.0, ('PE', '10:00:01'): 100.0})
     res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, FINE, fine)
     assert res['reason'] == 'Stop loss'
-    assert res['exit_ts'] == pd.Timestamp('2025-02-03 10:02:17')
+    assert res['exit_ts'] == pd.Timestamp('2025-02-03 10:02:18')   # the end of that second
     assert res['pnl_points'] == -60.0                  # that second's real prices, past the −50 level
     assert res['exit_px'] == {'CE': 160.0, 'PE': 100.0}
 
@@ -600,14 +601,14 @@ def test_lock_arms_on_a_second_and_fires_at_its_level():
     fine = _seconds({('CE', '10:00:10'): 15.0, ('CE', '10:00:20'): 45.0, ('PE', '10:00:01'): 100.0})
     res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, {**FINE, 'lock_at': 40, 'lock_to': 30}, fine)
     assert res['reason'] == 'Profit lock' and res['pnl_points'] == 55.0
-    assert res['exit_ts'] == pd.Timestamp('2025-02-03 10:00:20')
+    assert res['exit_ts'] == pd.Timestamp('2025-02-03 10:00:21')
 
 
 def test_target_before_stop_inside_a_bar_goes_by_the_clock():
     frames = _ohlc(_flat, lambda r, ts: (0.5, 160.0) if r == 'CE' and ts == WICK_BAR else None)
     fine = _seconds({('CE', '10:00:05'): 0.5, ('CE', '10:00:06'): 160.0, ('PE', '10:00:01'): 100.0})
     res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, {'target_pct': 40.0, 'stop_pct': 25.0}, fine)
-    assert res['reason'] == 'Target' and res['exit_ts'] == pd.Timestamp('2025-02-03 10:00:05')
+    assert res['reason'] == 'Target' and res['exit_ts'] == pd.Timestamp('2025-02-03 10:00:06')
 
 
 def test_a_quiet_leg_holds_its_last_mark_on_the_seconds():
@@ -633,10 +634,25 @@ def test_the_sessions_first_prints_are_not_read_until_they_settle():
     # 3 Feb in small: a wild first print (−170) that is past the stop, then −60 by 09:16:00.
     bar = pd.Timestamp('2025-02-03 09:15')
     frames = _ohlc(_flat, lambda r, ts: (100.0, 270.0) if r == 'CE' and ts == bar else None)
-    fine = _seconds({('CE', '09:15:00'): 270.0, ('CE', '09:15:30'): 150.0, ('CE', '09:16:00'): 160.0,
+    fine = _seconds({('CE', '09:15:00'): 270.0, ('CE', '09:15:30'): 150.0, ('CE', '09:15:59'): 160.0,
                      ('CE', '09:16:30'): 180.0, ('PE', '09:15:00'): 100.0})
     res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, FINE, fine)
     assert res['reason'] == 'Stop loss (gap)' and res['pnl_points'] == -60.0
+    assert res['exit_ts'] == pd.Timestamp('2025-02-03 09:16:00')
+
+
+def test_the_first_one_minute_candle_closes_at_09_16_00_and_is_read():
+    # The market opens 09:15:00, so a 60 s settle ends exactly as the first candle closes.
+    bar = pd.Timestamp('2025-02-03 09:15')
+    frames = _ohlc(_flat, lambda r, ts: (100.0, 200.0) if r == 'CE' and ts == bar else None)
+    candles = {'CE': {'09:15:00': 160.0, '09:16:00': 180.0}, 'PE': {'09:15:00': 100.0, '09:16:00': 100.0}}
+
+    def fine(expiry, strike, right, bar_start):
+        closes = pd.Series({pd.Timestamp(f'2025-02-03 {t}'): px for t, px in candles[right].items()})
+        return ose.check_steps(closes, 60, pd.Timestamp('2025-02-03 09:15'))
+    res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, FINE, fine)
+    assert res['reason'] == 'Stop loss (gap)' and res['pnl_points'] == -60.0
+    assert res['exit_px'] == {'CE': 160.0, 'PE': 100.0}
     assert res['exit_ts'] == pd.Timestamp('2025-02-03 09:16:00')
 
 
@@ -654,7 +670,7 @@ def test_the_settle_is_only_at_the_open():
     frames = _ohlc(_flat, lambda r, ts: (100.0, 160.0) if r == 'CE' and ts == WICK_BAR else None)
     fine = _seconds({('CE', '10:00:02'): 160.0, ('PE', '10:00:01'): 100.0})
     res = ose.run_trade(ENTRY, SESSIONS, SPOT, frames, FINE, fine)
-    assert res['exit_ts'] == pd.Timestamp('2025-02-03 10:00:02')
+    assert res['exit_ts'] == pd.Timestamp('2025-02-03 10:00:03')
 
 
 def test_a_leg_yet_to_print_today_cannot_trip_the_open():
@@ -700,75 +716,6 @@ def _row(**kw):
     return {**base, **kw}
 
 
-def test_recheck_picks_alternates_net_and_steady_without_repeats():
-    rows = [_row(target_pct=float(i), net_pnl_rupees=1000.0 - i, net_dd=float(i)) for i in range(6)]
-    picks = ose.recheck_picks(rows, 4)
-    assert [r['target_pct'] for r in picks] == [0.0, 5.0, 1.0, 4.0]
-    assert ose.recheck_picks([]) == []
-
-
-def test_recheck_picks_covers_exactly_the_board():
-    rows = sorted((_row(target_pct=float(i), stop_pct=float(i % 7), net_pnl_rupees=5000.0 - i, net_dd=float((i * 37) % 301),
-                        max_drawdown_rupees=1.0) for i in range(300)),
-                  key=lambda r: r['net_pnl_rupees'], reverse=True)
-    key = lambda r: tuple(r[k] for k in ose.SWEEP_KEYS)
-    shown = ose.board(rows)
-    picks = ose.recheck_picks(rows, len(shown))
-    assert {key(r) for r in picks} == {key(r) for r in shown}
-
-
-def test_recheck_row_equals_the_per_second_backtest_of_its_params():
-    frames = _ohlc(_flat, lambda r, ts: (100.0, 160.0) if r == 'CE' and ts == WICK_BAR else None)
-    fine = _seconds({('CE', '10:02:17'): 160.0, ('CE', '10:02:18'): 100.0, ('PE', '10:00:01'): 100.0})
-    got = ose.recheck_row(_row(), SESSIONS, SPOT, frames, fine, QTY, {}, ENTRY, ENTRY, 100)
-    bt = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT, frames, _row(), fine), QTY, 1, QTY, 100)
-    assert bt['exit_reason'] == 'Stop loss' and got['sec_net_pnl_rupees'] == bt['pnl_rupees']
-    assert got['sec_total_trades'] == 1 and got['sec_complete'] and got['sec_bars_checked'] == 1
-    assert got['sec_exits'] == {'Stop loss': 1}
-    assert got['sec_total_pct'] == bt['pnl_pct'] and got['sec_avg_pct'] == bt['pnl_pct']   # the whole row is the check's
-
-
-def test_recheck_without_seconds_equals_the_sweep_row_and_is_not_complete():
-    # Target 5 % of 580 first trips on a close: no seconds → the sweep's own answer.
-    def price(r, ts):
-        return 250.0 if ts >= pd.Timestamp('2025-02-05 10:00') else 290.0
-    frames = _frames(price)
-    combo = ('monthly', 'last_friday', False, 0, 'none', 0, 5.0, 5.0, 0, 0)
-    res = ose.score_month({'last_friday': ENTRY}, SESSIONS, SPOT, frames, QTY, {}, 100)
-    row = ose.rank([res])
-    row = next(r for r in row if tuple(r[k] for k in ose.SWEEP_KEYS) == combo)
-    got = ose.recheck_row(row, SESSIONS, SPOT, frames, lambda *a: None, QTY, {}, ENTRY, ENTRY, 100)
-    assert got['sec_net_pnl_rupees'] == row['net_pnl_rupees'] and got['sec_win_rate'] == row['win_rate']
-    assert got['sec_max_drawdown_rupees'] == row['max_drawdown_rupees']
-    assert got['sec_bars_unchecked'] >= 1 and not got['sec_complete']
-
-
-def test_rank_puts_complete_rows_first_by_their_second_net():
-    a = _row(target_pct=1.0, net_pnl_rupees=900.0)                                   # unchecked
-    b = _row(target_pct=2.0, net_pnl_rupees=800.0, sec_complete=False)               # part-checked
-    c = _row(target_pct=3.0, net_pnl_rupees=700.0, sec_complete=True,
-             sec_net_pnl_rupees=100.0, sec_max_drawdown_rupees=1.0)
-    d = _row(target_pct=4.0, net_pnl_rupees=600.0, sec_complete=True,
-             sec_net_pnl_rupees=200.0, sec_max_drawdown_rupees=1.0)
-    a['sec_complete'] = False
-    a['sec_net_pnl_rupees'] = 900.0
-    b['sec_net_pnl_rupees'] = 800.0
-    out = ose.rank_rechecked([a, b, c, d])
-    assert [r['target_pct'] for r in out] == [4.0, 3.0, 1.0, 2.0]
-    assert [r['board_order'] for r in out] == [4, 3, 2, 1]
-
-
-def test_five_minute_rows_go_last_whatever_they_earn():
-    fine = _row(target_pct=1.0, net_pnl_rupees=900.0, exit_check='1m', sec_complete=True,
-                sec_net_pnl_rupees=100.0, sec_max_drawdown_rupees=1.0)
-    base = _row(target_pct=1.0, net_pnl_rupees=900.0, win_rate=50.0, total_trades=2, worst_pct=-1.0, profit_factor=2.0,
-                total_pct=12.0, avg_pct=6.0, max_drawdown_rupees=5.0, net_dd=180.0, exits={})
-    coarse = ose.five_minute_row(base)
-    assert coarse['sec_net_pnl_rupees'] == 900.0 and coarse['sec_complete'] and coarse['exit_check'] == '5m'
-    assert coarse['sec_total_pct'] == 12.0 and coarse['sec_avg_pct'] == 6.0
-    assert ose.rank_rechecked([coarse, fine]) == [fine, coarse]
-
-
 def test_check_steps_stamps_each_span_at_its_last_second():
     open_ = pd.Timestamp('2025-02-03 09:15')
     closes = pd.Series([10.0, 11.0, 12.0], index=pd.to_datetime(
@@ -781,34 +728,58 @@ def test_check_steps_stamps_each_span_at_its_last_second():
     assert ose.check_steps(secs, 1, open_) is secs
 
 
-def test_a_memo_shared_across_rows_changes_no_figure():
-    # The board re-check shares each path's bars across its rows: every row must read as it does alone,
-    # including a lock (whose candidate bars differ) and a repeat of the first row off the memo.
-    frames = _ohlc(_flat, lambda r, ts: (100.0, 160.0) if r == 'CE' and ts == WICK_BAR else None)
-    fine = _seconds({('CE', '10:02:17'): 160.0, ('CE', '10:02:18'): 100.0, ('PE', '10:00:01'): 100.0})
-    memo = ose.RecheckMemo()
-    for target, stop, lock_at, lock_to in ((50.0, 25.0, 0, 0), (90.0, 15.0, 0, 0), (50.0, 25.0, 15, 5), (50.0, 25.0, 0, 0)):
-        row = _row(target_pct=target, stop_pct=stop, lock_at=lock_at, lock_to=lock_to)
-        alone = ose.recheck_row(row, SESSIONS, SPOT, frames, fine, QTY, {}, ENTRY, ENTRY, 100)
-        shared = ose.recheck_row(row, SESSIONS, SPOT, frames, fine, QTY, {}, ENTRY, ENTRY, 100, map, memo)
-        assert shared == alone
-    assert len(memo.paths) == 1 and len(memo.opened) == 1
+def _minutes(moves):
+    """fine_for on a minute chart: `moves` {(right, 'HH:MM' on 2025-02-03): close}, every other held minute 100."""
+    def f(expiry, strike, right, bar_start):
+        day = bar_start.normalize()
+        stamps = pd.date_range(day + pd.Timedelta(hours=9, minutes=15), periods=375, freq='min')
+        closes = pd.Series(100.0, index=stamps)
+        for (r, hm), px in moves.items():
+            if r == right:
+                closes[pd.Timestamp(f'2025-02-03 {hm}')] = px
+        return closes
+    return f
 
 
-def test_a_memo_reads_a_bar_once_for_all_the_rows_of_a_path():
-    frames = _ohlc(_flat, lambda r, ts: (100.0, 160.0) if r == 'CE' and ts == WICK_BAR else None)
-    fine = _seconds({('CE', '10:02:17'): 160.0, ('CE', '10:02:18'): 100.0, ('PE', '10:00:01'): 100.0})
-    memo = ose.RecheckMemo()
-    for stop in (25.0, 30.0, 35.0):
-        ose.recheck_row(_row(stop_pct=stop), SESSIONS, SPOT, frames, fine, QTY, {}, ENTRY, ENTRY, 100, map, memo)
-    assert len(fine.calls) == 2           # the wick bar's CE and PE, once, not once a row
-    memo.new_pass()                       # another Exit Check has its own closes
-    ose.recheck_row(_row(), SESSIONS, SPOT, frames, fine, QTY, {}, ENTRY, ENTRY, 100, map, memo)
-    assert len(fine.calls) == 4
+def _as_chart(fine, secs):
+    return lambda *a: ose.check_steps(fine(*a), secs, a[3].normalize() + pd.Timedelta(hours=9, minutes=15))
 
 
-def test_a_memo_does_not_grow_past_its_bar_cap(monkeypatch):
-    monkeypatch.setattr(ose.RecheckMemo, 'MAX_BARS', 2)
-    memo = ose.RecheckMemo()
-    read = memo.bar_reader(('path',), lambda t: t * 10)
-    assert [read(t) for t in (1, 2, 3, 3)] == [10, 20, 30, 30] and len(memo.bars) <= 2
+@pytest.mark.parametrize('secs', [60, 180])
+@pytest.mark.parametrize('moves', [
+    {('CE', '10:01'): 160.0},                                         # a stop touched and left inside a bar
+    {('CE', '10:01'): 40.0, ('CE', '10:03'): 95.0},                   # a target, or a lock arming and filling
+    {('PE', '10:00'): 130.0, ('CE', '10:06'): 60.0, ('PE', '10:06'): 60.0},
+])
+def test_the_sweep_on_a_finer_chart_equals_the_backtest_combo_for_combo(secs, moves):
+    frames = _ohlc(_flat, lambda r, ts: (40.0, 160.0) if ts in (WICK_BAR, WICK_BAR + pd.Timedelta(minutes=5)) else None)
+    fine = _as_chart(_minutes(moves), secs)
+    grid = {'target_pct': (5, 20, 25, 50), 'stop_pct': (5, 15, 25)}
+    locks = ((0, 0), (10, 0), (15, 5))
+    got = ose.score_expiry(ENTRY, SESSIONS, SPOT, frames, QTY, {}, 100.0, grid=grid, variants=(('none', 0),),
+                           locks=locks, fine_for=fine, secs=secs)
+    assert got
+    for (w, kind, pts, tp, sp, la, lt), row in got.items():
+        p = {'target_pct': tp, 'stop_pct': sp, 'lock_at': la, 'lock_to': lt}
+        one = ose.trade_row(ose.run_trade(ENTRY, SESSIONS, SPOT, frames, p, fine), QTY, 1, QTY, 100.0)
+        assert (row[0], row[3]) == (one['status'], one['exit_reason']), (tp, sp, la, lt)
+        assert row[1] == pytest.approx(one['pnl_rupees'], abs=0.01), (tp, sp, la, lt)
+
+
+def test_a_sweep_with_no_finer_data_reads_the_closes_and_says_so():
+    frames = _ohlc(_flat)
+    grid = {'target_pct': (50,), 'stop_pct': (25,)}
+    got = ose.score_expiry(ENTRY, SESSIONS, SPOT, frames, QTY, {}, 100.0, grid=grid, variants=(('none', 0),),
+                           locks=((0, 0),), fine_for=lambda *a: None, secs=60)
+    closes = ose.score_expiry(ENTRY, SESSIONS, SPOT, frames, QTY, {}, 100.0, grid=grid, variants=(('none', 0),),
+                              locks=((0, 0),))
+    row = next(iter(got.values()))
+    assert row[:4] == next(iter(closes.values()))[:4] and row[4] > 0
+
+
+def test_five_minute_rows_go_last_whatever_they_earn():
+    r = lambda check, net, complete=True: {'exit_check': check, 'net_pnl_rupees': net, 'max_drawdown_rupees': 1.0,
+                                           'complete': complete}
+    a, b, c = r('5m', 900.0), r('1m', 100.0, False), r('3m', 50.0)
+    assert ose.rank_board([a, b, c]) == [c, b, a]
+    assert [x['board_order'] for x in (c, b, a)] == [3, 2, 1]

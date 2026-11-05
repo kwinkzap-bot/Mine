@@ -1157,7 +1157,7 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Weekly', 'With Expiry = Weekly: once a WEEK on the Entry Day (Mon–Fri, or the session after each weekly expiry), SELL the ATM CE + PE of the first weekly expiry after that day. NIFTY weeklies exist from 11-Feb-2019. Skip one-night trades: no trade in a week whose expiry is the very next session.'],
             ['Target', 'Both legs bought back together once the straddle is up 5% of the premium collected (CE + PE sold).'],
             ['Stop', 'Both legs bought back together once it is down 5% of the premium collected.'],
-            ['Check', 'Exit Check sets how often Target, Stop and Profit Lock are read: 1 second, 30 seconds, 1 minute, 3 minutes or 5 minutes, on that span\'s closing price, wherever a 5-minute bar\'s high/low could have reached them. Find Best Params sweeps on 5-minute closes, then re-checks its board at each of these (one row each, with its own figures; ≈ = some bars not fetched yet); set to 5 minutes it skips that.'],
+            ['Check', 'Exit Check sets how often Target, Stop and Profit Lock are read: 1 minute, 3 minutes or 5 minutes, on that span\'s closing price. Find Best Params runs its whole sweep on each of these charts, with its own best rows (≈ = some bars not fetched yet); set to 5 minutes it runs that one only.'],
             ['Fill', 'At that close\'s real prices, so a fast move books past the level. A session\'s first prints are wild, so nothing is read until Open Settle seconds after 09:15 (60 by default). On 5 minutes: at the level itself; if a session opens already past it (an overnight gap), at that open.'],
             ['Adjustment', 'Optional. When NIFTY\'s 5-minute close is the chosen points away from the centre (the sold strike, then the last adjustment\'s ATM): roll the profit leg to the new ATM, re-centre both legs there, or buy the losing side there as a hedge (once a side), or hedge and roll together — up to Max Adjustments a month, never on expiry day. Target / Stop stay on the first premium collected.'],
             ['Wings', 'Optional. Buy the CE Wings points above and the PE Wings points below the sold strike at the entry (an iron fly). The loss is capped at the wing width less the credit; Target / Stop / Lock are % of the net credit.'],
@@ -2343,7 +2343,7 @@ document.addEventListener('DOMContentLoaded', function() {
             end_date:    document.getElementById('endDate')?.value,
             cadence:     document.getElementById('osCadence')?.value || 'monthly',
             skip_one_night: document.getElementById('osSkipOneNight')?.value === 'true',
-            exit_check:  document.getElementById('osExitCheck')?.value || '1s',
+            exit_check:  document.getElementById('osExitCheck')?.value || '1m',
             open_settle_secs: Math.max(0, num('osOpenSettle', 60)),
             entry_day:   document.getElementById('osEntryDay')?.value || 'last_friday',
             entry_time:  document.getElementById('osEntryTime')?.value || '15:15',
@@ -5715,7 +5715,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <tbody>${all.map(x => {
                     const p = x.params || {}, lt = liveTab(x);
                     // A part-checked straddle row: these figures were true of the data fetched when it was saved.
-                    const ap = p.sec_complete === false ? `<span title="Not final when saved: ${p.sec_bars_unchecked} bars had no ${p.exit_check} data yet and read the 5-minute close. A later backtest with more data will differ.">≈ </span>` : '';
+                    const ap = (p.sec_complete === false || p.complete === false) ? `<span title="Not final when saved: ${p.sec_bars_unchecked ?? p.bars_unchecked} bars had no ${p.exit_check} data yet and read the 5-minute close. A later backtest with more data will differ.">≈ </span>` : '';
                     return `<tr>
                         <td class="bt-saved-act"><button type="button" class="bt-saved-use" data-use="${esc(x.id)}">USE</button>
                             <button type="button" class="bt-saved-del" data-del="${esc(x.id)}" title="Remove from Saved">✕</button></td>
@@ -5935,17 +5935,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const _OS_ADJUST = { none: 'None', roll_untested: 'Roll profit leg', recenter: 'Re-centre', hedge: 'Hedge',
                          hedge_roll: 'Hedge + roll' };
-    // A row's figures on the board are its own Exit Check's (sec_*): one set of columns, whichever interval
-    // the row is. ≈ = some bars had no finer data yet and read the 5-minute close.
-    const _OS_CHECKED = ['net_pnl_rupees', 'win_rate', 'total_trades', 'total_pct', 'avg_pct', 'worst_pct',
-                         'profit_factor', 'max_drawdown_rupees', 'net_dd'];
-    const _osBoardRow = (r) => {
-        const row = { ...r };
-        _OS_CHECKED.forEach(k => { if (r[`sec_${k}`] != null) row[k] = r[`sec_${k}`]; });
-        return row;
-    };
-    const _osSec = (r, text) => (r.sec_complete !== false ? text
-        : `<span title="${r.sec_bars_unchecked} bars had no finer data yet and read the 5-minute close. Run it again to carry on.">≈ ${text}</span>`);
+    // ≈ = some bars had no data on this row's chart yet and read the 5-minute close.
+    const _osSec = (r, text) => (r.complete !== false ? text
+        : `<span title="${r.bars_unchecked} bars had no finer data yet and read the 5-minute close. Run it again to carry on.">≈ ${text}</span>`);
     const _OS_CHECKS = { '1s': '1 second', '30s': '30 seconds', '1m': '1 minute', '3m': '3 minutes', '5m': '5 minutes' };
     const STRADDLE_OPT_COLS = [
         { label: '#',            key: null,             fmt: (r, i) => i + 1 },
@@ -5988,13 +5980,13 @@ document.addEventListener('DOMContentLoaded', function() {
             + ` · T${r.target_pct}/S${r.stop_pct}${r.lock_at ? ` · lock ${r.lock_at}→${r.lock_to}` : ''}${r.exit_check ? ` · ${_OS_CHECKS[r.exit_check]}` : ''}`;
         const params = {};
         Object.entries(r).forEach(([k, v]) => { if (v === null || typeof v !== 'object') params[k] = v; });
-        Object.assign(params, { net_rs: r.sec_net_pnl_rupees ?? r.net_pnl_rupees, max_dd_rs: r.sec_max_drawdown_rupees ?? r.max_drawdown_rupees });
+        Object.assign(params, { net_rs: r.net_pnl_rupees, max_dd_rs: r.max_drawdown_rupees });
         return {
             key: ['atm_straddle', ..._OS_SAVE_KEYS.map(k => r[k] ?? ''), _osOptRange.start, _osOptRange.end].join('|'),
             strategy: 'atm_straddle', direction: null, swept: [],
             board: '⚖️ Straddle', tag: r.cadence === 'weekly' ? 'Weekly' : 'Monthly', label,
-            title: `${label} · net ₹${Math.round(r.sec_net_pnl_rupees ?? r.net_pnl_rupees ?? 0).toLocaleString('en-IN')}`
-                + ` · max DD ₹${Math.round(r.sec_max_drawdown_rupees ?? r.max_drawdown_rupees ?? 0).toLocaleString('en-IN')} · ${r.total_trades} trades`,
+            title: `${label} · net ₹${Math.round(r.net_pnl_rupees ?? 0).toLocaleString('en-IN')}`
+                + ` · max DD ₹${Math.round(r.max_drawdown_rupees ?? 0).toLocaleString('en-IN')} · ${r.total_trades} trades`,
             symbol: 'NIFTY', start_date: _osOptRange.start, end_date: _osOptRange.end, params,
         };
     }
@@ -6022,13 +6014,13 @@ document.addEventListener('DOMContentLoaded', function() {
         set('osWings', String(r.wings || 0));
         set('osLockAt', String(r.lock_at || 0));
         set('osLockTo', String(r.lock_to || 0));
-        if (r.exit_check) set('osExitCheck', r.exit_check);
+        if (r.exit_check) set('osExitCheck', ['1s', '30s'].includes(r.exit_check) ? '1m' : r.exit_check);   // a row saved before those went
         if (window.showNotification) window.showNotification(
             `Applied:${r.exit_check ? ` ${_OS_CHECKS[r.exit_check]} ·` : ''} ${r.cadence === 'weekly' ? 'Weekly' : 'Monthly'} · ${_OS_ENTRY_DAYS[r.entry_day] || r.entry_day}${r.skip_one_night ? ' (skip one-night)' : ''}${r.wings ? ` · wings ±${r.wings}` : ''} · ${_OS_ADJUST[r.adjust] || 'None'}`
             + `${r.adjust && r.adjust !== 'none' ? ` @ ${r.adjust_pts} pts` : ''} · target ${r.target_pct}% · stop ${r.stop_pct}% · `
             + `${r.lock_at ? `lock ${r.lock_at}% → ${r.lock_to}% · ` : ''}`
             + `Win% ${(r.win_rate ?? 0).toFixed(0)}%`
-            + (r.sec_complete === false ? ' · ≈ this row was part-checked, so the backtest can differ' : ''), 'success');
+            + ((r.sec_complete === false || r.complete === false) ? ' · ≈ this row was part-read, so the backtest can differ' : ''), 'success');
     }
 
     function renderOsOptResults(data, stillRunning) {
@@ -6043,12 +6035,12 @@ document.addEventListener('DOMContentLoaded', function() {
             + ` · every Expiry × Entry Day × wings × adjustment × profit lock · top by Net and by Net ÷ DD`
             + ` · ${data.lots}×${data.lot_size} · % of premium collected`
             + (data.summary?.breeze_errors ? ` · ${data.summary.breeze_errors} ICICI requests failed` : '')
-            + (data.rechecked ? ` · Exit Check swept: ${data.rechecked} rows at 1 second, 30 seconds, 1 minute and 3 minutes, ${data.rechecked_complete} complete, the rest part-checked (≈); 5-minute rows listed last; ${data.second_requests}/${data.second_budget} requests` : '');
-        if (stillRunning && metaEl) metaEl.textContent = `Still re-checking: ${(data.passes_done || []).join(', ') || 'only the 5-minute rows'} in so far, the rest follow. ` + metaEl.textContent;
-        if (!stillRunning && data.rechecked && data.rechecked_complete < data.rechecked) window.showNotification(
-            `${data.rechecked - data.rechecked_complete} of ${data.rechecked} rows are only part re-checked (≈): the ${data.second_budget}-request limit was reached. Recalculate to carry on — what was fetched is cached.`, 'warning');
+            + (data.fine_rows ? ` · each chart swept on its own: ${(data.checks_done || []).join(', ')}, ${data.fine_complete} of ${data.fine_rows} finer rows have all their data, the rest are part-read (≈); 5-minute rows listed last; ${data.second_requests}/${data.second_budget} requests` : '');
+        if (stillRunning && metaEl) metaEl.textContent = `Still sweeping: ${(data.checks_done || []).join(', ')} in so far, the rest follow. ` + metaEl.textContent;
+        if (!stillRunning && data.fine_rows && data.fine_complete < data.fine_rows) window.showNotification(
+            `${data.fine_rows - data.fine_complete} of ${data.fine_rows} finer rows are part-read (≈): the ${data.second_budget}-request limit was reached. Recalculate to carry on — what was fetched is cached.`, 'warning');
         const byOrder = (data.results || []).some(r => r.board_order != null);
-        _mountSingleOptGrid('osOptGrid', (data.results || []).map(_osBoardRow), STRADDLE_OPT_COLS, byOrder ? 'board_order' : 'net_pnl_rupees', apply);
+        _mountSingleOptGrid('osOptGrid', data.results || [], STRADDLE_OPT_COLS, byOrder ? 'board_order' : 'net_pnl_rupees', apply);
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
         if (data.best && !stillRunning) apply(data.best);   // the form is not moved under someone reading a board in progress
