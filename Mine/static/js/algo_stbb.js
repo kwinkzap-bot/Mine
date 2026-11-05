@@ -6,7 +6,7 @@
 // key → DOM id prefix (p), API base, index and env-flag prefix. The state is per tab.
 const _STBB = {};
 for (let n = 1; n <= 7; n++) {
-    _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true, group: 'simple' };
+    _STBB['simple-' + n] = { p: 'sim' + n, api: '/api/algo/simple-trader-' + n, sym: n > 5 ? 'SENSEX' : 'NIFTY', pfx: 'ST' + n, simple: true, group: 'simple', fut: n === 4 || n === 5 };
 }
 // The Mine group: ST Touch Break on NIFTY (strategies 8-15 of the same engine), one sub-tab each. The list
 // is the page's (window.MINE_TABS, from simple_trader_live_engine.MINE_TABS); 8 is 'mine-nifty'.
@@ -104,7 +104,7 @@ function _stbbRender(c, key, d) {
         : `<div class="ag-empty">No account has BROKER_N_${c.pfx}_ACTIVE=true — paper only. Live needs one (zerodha / fyers) with BROKER_N_${c.pfx}_LOTS.</div>`;
 
     const st = d.state || {};
-    _stbbEl(c, 'Spot').textContent = st.spot ? `${c.sym} ${_stbbNum(st.spot)}` : (st.day ? (c.simple ? 'Waiting for the first closed candle' : 'Waiting for the first 3-minute candle (09:18)') : '');
+    _stbbEl(c, 'Spot').textContent = st.spot ? `${c.sym}${c.fut ? ' spot' : ''} ${_stbbNum(st.spot)}` : (st.day ? (c.simple ? 'Waiting for the first closed candle' : 'Waiting for the first 3-minute candle (09:18)') : '');
     _stbbEl(c, 'LastUpd').textContent = st.updated ? 'updated ' + st.updated : '';
     _stbbRenderTrades(c, (st.day && st.day.trades) || []);
     const log = (st.log || []).slice(-30).reverse();
@@ -135,7 +135,7 @@ function _stbbRenderTrades(c, trades) {
             { key: 'signal_bar', label: 'Signal candle', format: v => (v || '').slice(11, 16) },
             c.touch ? { key: 'signal', label: 'Touch · level', format: v => v ? `ST ${_stbbNum(v.supertrend)} · level ${_stbbNum(v.level)}` : '—' }
                     : { key: 'signal', label: 'RSI · close', format: v => v ? `${v.rsi ?? '—'} · ${_stbbNum(v.close)}` + (v.pivot ? ` (${v.pivot} ${_stbbNum(v.pivot_level)})` : '') : '—' },
-            { key: 'index_entry', label: 'Index in', format: (v, t) => v == null ? '—' : `${_stbbNum(v)} @ ${t.entry_time || ''}` },
+            { key: 'index_entry', label: c.fut ? 'Future in' : 'Index in', format: (v, t) => v == null ? '—' : `${_stbbNum(v)} @ ${t.entry_time || ''}` },
             { key: 'leg', label: 'Option' },
             { key: 'lots', label: 'Lots' },
             { key: 'prem', label: 'Premium' },
@@ -178,8 +178,8 @@ function _stbbRenderHistory(c) {
             { key: 'side', label: 'Side', tone: v => v === 'Short' ? 'neg' : 'pos', strong: true },
             { key: 'entry_time', label: 'In' },
             { key: 'exit_time', label: 'Out' },
-            { key: 'index_entry', label: 'Index in', format: _stbbNum },
-            { key: 'index_exit', label: 'Index out', format: _stbbNum },
+            { key: 'index_entry', label: c.fut ? 'Future in' : 'Index in', format: _stbbNum },
+            { key: 'index_exit', label: c.fut ? 'Future out' : 'Index out', format: _stbbNum },
             { key: 'result', label: 'Exit', badge: v => v === 'Time Exit' ? 'warn' : 'neutral' },
             { key: 'strike', label: 'Option', format: (v, t) => `${v} ${t.option_type}` },
             { key: 'legs', label: 'Lots · premium', format: v => Object.values(v || {}).map(l => `${l.lots}× ${_stbbNum(l.entry)}→${_stbbNum(l.exit)}`).join(', ') || '—' },

@@ -807,8 +807,7 @@ class StBbRsiAlgo:
                 # Optional floor in case THIS APP is down when the market runs: an SL-M
                 # at `backstop_pct` % below the fill. Off (0) by default — the strategy
                 # has no stop; its exit is the SuperTrend.
-                pct = float(s.get('backstop_pct') or 0)
-                trigger = round(entry * (1 - pct / 100.0), 1) if pct > 0 and entry else None
+                trigger = self._backstop_trigger(t, entry, s)
                 sl_id = None
                 if trigger and trigger > 0.05:
                     signal = {'id': self._signal_id(t), 'symbol': self.p.symbol, 'strike': opt['strike'],
@@ -824,6 +823,11 @@ class StBbRsiAlgo:
                                      if not (b.get('result') or {}).get('success')), 'refused')
             legs[key] = leg
         return legs
+
+    def _backstop_trigger(self, t, entry, s) -> Optional[float]:
+        """Where the broker-side SL-M rests: `backstop_pct` % below the fill (None = no backstop)."""
+        pct = float(s.get('backstop_pct') or 0)
+        return round(entry * (1 - pct / 100.0), 1) if pct > 0 and entry else None
 
     def _leave(self, t: Dict[str, Any], ev: Dict[str, Any], now: datetime) -> None:
         opt = t.get('option')

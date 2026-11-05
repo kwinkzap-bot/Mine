@@ -15,8 +15,9 @@ the ST + BB + RSI tab does not:
   option's minute BEFORE the entry minute and the stop is walked on its 1-minute candles (Kite,
   every 20 s) as well as on the polls — since 2026-11-02, when the fill and 5 s polls missed a
   trail step the backtest took. Live, an SL-M for the initial stop rests at the
-  broker (the floor if this app is down); the trail is watched here every poll and exits at
-  market. After a stop the next candle that still signals re-enters, up to ``ST<n>_MAX_TRADES``.
+  broker (the floor if this app is down) at that SAME level, never one measured from the fill
+  (``_backstop_trigger``, ``_align_backstop``); the trail is watched here every poll and exits
+  at market. After a stop the next candle that still signals re-enters, up to ``ST<n>_MAX_TRADES``.
 * **Other candles.** 3- or 5-minute bars of the index (SENSEX for 6-7) or of the NIFTY FUTURE
   (4-5, as the backtest reads "Fields: Future").
 * **Other exits.** SuperTrend against the trade (1, 3-7) or RSI back across 45 (2).
@@ -41,6 +42,7 @@ from trading_app.service import st_touch_break_live_engine as tb
 _DIR = os.path.dirname(__file__)
 _NEAR_PCT = 0.1                    # ST Touch Break: within this % of the touch-stop line the index is polled every second
 _OPTION_MINUTES_SECS = 20         # how often an open trade re-reads its option's 1-minute candles
+_BACKSTOP_TRIES = 3               # moves of the resting SL-M onto the backtest's stop before it alerts and leaves it
 
 
 def _minute_before(hhmm) -> Optional[str]:
@@ -251,6 +253,8 @@ class SimpleTraderAlgo(StBbRsiAlgo):
                        f"(entry {entry}, peak {peak}) — exiting")
             self._leave(t, {'reason': st['kind'], 'index_close': None}, _now())
             return True
+        if t.get('ref_entry') and self._align_backstop(t, st['base']):
+            changed = True
         if px > peak:
             t['peak'] = px
             nxt = sim.stop_level(entry, px, s['sl_pct'], s['tsl_x'], s['tsl_y'])
@@ -258,6 +262,57 @@ class SimpleTraderAlgo(StBbRsiAlgo):
                 t['stop'] = nxt['stop']
             changed = True
         return changed
+
+    def _backstop_trigger(self, t, entry, s) -> Optional[float]:
+        """The SL-M rests at the backtest's initial stop, measured from the minute-before close like
+        the rest of the stop. Measured from the fill it sits ABOVE the stop this algo watches whenever
+        the fill is above that close: 5 Nov 2026 (ST4, 24150 CE) filled 270.25 on a 265.70 close, so
+        the SL-M rested at 235.3 against a 231.2 stop; the 09:32 low of 232.05 filled it (−₹2,275),
+        and the backtest held to its 284.35 trail (+₹1,212). With no close to hand yet it starts from
+        the fill and `_align_backstop` moves it as soon as the close is read."""
+        pct = float(s.get('backstop_pct') or 0)
+        ref = t.get('ref_quote') or entry
+        return sim.stop_level(float(ref), float(ref), pct, 0, 0)['base'] if pct > 0 and ref else None
+
+    def _align_backstop(self, t, trigger: float) -> bool:
+        """Move a resting SL-M onto `trigger` once the settled minute close is known (a close read at
+        the entry second can still change: 265.5 at 09:20:02 was 265.7 settled). A modify, never a
+        cancel and re-place, so the position is never without it. True when a leg changed."""
+        changed = False
+        for leg in (t.get('legs') or {}).values():
+            if (not leg.get('open') or not leg.get('sl_record') or leg.get('backstop') is None
+                    or abs(float(leg['backstop']) - float(trigger)) < 0.01):
+                continue
+            tries = int(leg.get('backstop_tries') or 0)
+            if tries >= _BACKSTOP_TRIES:
+                continue
+            leg['backstop_tries'] = tries + 1
+            changed = True
+            r = self._modify_backstop(leg['sl_record'], trigger)
+            if r.get('success'):
+                self._note(f"#{t['n']} {leg['name']}: backstop SL-M moved {leg['backstop']} → {trigger} (the backtest's stop)")
+                leg['backstop'] = trigger
+            elif tries + 1 >= _BACKSTOP_TRIES:
+                self._alert('stbb_order_failed', f"{self.p.label} — backstop not moved at {leg['name']}",
+                            f"the SL-M stays at {leg['backstop']}, the stop is {trigger}: {r.get('error') or 'refused'}", t)
+        return changed
+
+    def _modify_backstop(self, record_id, trigger: float) -> Dict[str, Any]:
+        from trading_app.app.order_placement.op_signal_engine import _session
+        from trading_app.app.routes.api import _modify_order_at_brokers
+        from trading_app.app.utils.mine_order_store import MineOrderStore
+        try:
+            rec = MineOrderStore.get_order(record_id)
+            if not rec:
+                return {'success': False, 'error': 'SL record not found'}
+            r = _modify_order_at_brokers(rec.get('broker_order_ids'), self.username, _session(self.username),
+                                         trigger_price=trigger)
+            if r.get('success'):
+                MineOrderStore.update_order(record_id, {'price': trigger, 'trigger_price': trigger})
+            return r
+        except Exception as e:
+            logger.error(f'[{self.p.tag}] backstop modify failed: {e}', exc_info=True)
+            return {'success': False, 'error': str(e)}
 
     def _candle_stop(self, t, bars, entry: float, s) -> tuple:
         """(stop, hit) from the option's closed 1-minute candles since the entry minute, walked
@@ -337,6 +392,7 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         if len(closes) < 2:
             return pick
         best = min(closes, key=lambda k: abs(closes[k] - s['premium']))
+        t['ref_quote'] = closes[best]           # where the broker's SL-M is measured from (_backstop_trigger)
         if best != pick['strike']:
             ladder = getattr(self, '_last_ladder', None) or {}
             quoted = ladder.get(best) or self._premium(best, opt_type)
@@ -344,6 +400,7 @@ class SimpleTraderAlgo(StBbRsiAlgo):
                 self._note(f"#{t['n']}: {before} closes {pick['strike']} {closes[pick['strike']]} / "
                            f"{best} {closes[best]} — {best} {opt_type} is the ≈{s['premium']:g} the backtest takes")
                 return {'strike': best, 'premium': quoted}
+            t.pop('ref_quote', None)            # that strike has no quote: the pick stands, and this close is not its
         return pick
 
     def _minute_closes(self, strikes, opt_type, hhmm, timeout: float = 1.5) -> Dict[int, float]:
@@ -412,8 +469,13 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         # A live leg whose broker SL-M filled leaves the trade 'open' with every leg flat: that is
         # the stop-loss, and the trade is over so the next candle's signal can re-enter.
         if t['status'] == 'open' and self._all_flat(t) and 'paper' not in (t.get('legs') or {}):
+            spot = self._spot()
+            # 4-5 read the NIFTY FUTURE, as `_leave` books them; the row keeps the spot beside it
+            under = (self._future_px() or spot) if self.spec.data == 'fut' else spot
             t.update(status='closed', result=t.get('result') or 'Stop Loss', exit_time=_hhmm(_now()),
-                     index_exit=self._spot() or t.get('index_exit'), pending_entry=False)
+                     index_exit=under or t.get('index_exit'), pending_entry=False)
+            if self.spec.data == 'fut':
+                t['spot_exit'] = spot
             self._note(f"#{t['n']}: flat at the broker (stop-loss) — the trade is over")
         return super()._book_if_settled(t)
 

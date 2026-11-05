@@ -401,3 +401,83 @@ def test_without_the_minute_closes_the_live_pick_stands(monkeypatch):
     a, _ = _picker(monkeypatch, ladder, {76100: 470.15})              # 76000's 09:19 candle not in yet
     t = {'n': 1, 'type': 'Long', 'index_entry': 76240.16, 'entry_time': '09:20'}
     assert a._pick_strike(t, 'CE', {'premium': 500.0})['strike'] == 76100
+
+
+# ── the broker's SL-M sits at the backtest's stop, not one measured from the fill ───────────────
+
+def _live_leg(backstop=235.3):
+    return {'name': 'Z1', 'instance': 1, 'lots': 1, 'qty': 65, 'entry': 270.25, 'open': True,
+            'entry_record': 'e1', 'sl_record': 's1', 'backstop': backstop}
+
+
+def test_backstop_is_measured_from_the_minute_before_close_not_the_fill():
+    """5 Nov 2026, ST4 24150 CE: fill 270.25 on a 265.70 close. 13 % under the fill is 235.3, which
+    the 09:32 low of 232.05 went through; 13 % under the close is the backtest's 231.2, which it did not."""
+    a = algo.SimpleTraderAlgo('u', algo.PROFILES[4])
+    assert a._backstop_trigger({'ref_quote': 265.7}, 270.25, {'backstop_pct': 13}) == 231.2
+    assert a._backstop_trigger({}, 270.25, {'backstop_pct': 13}) == 235.15     # no close yet: from the fill
+    assert a._backstop_trigger({'ref_quote': 265.7}, 270.25, {'backstop_pct': 0}) is None
+
+
+def test_the_pick_records_the_close_of_the_strike_it_chose(monkeypatch):
+    ladder = {75900: 585.0, 76000: 529.0, 76100: 473.65, 76200: 420.0}
+    a, _ = _picker(monkeypatch, ladder, {76000: 526.60, 76100: 470.15})
+    t = {'n': 1, 'type': 'Long', 'index_entry': 76240.16, 'entry_time': '09:20'}
+    a._pick_strike(t, 'CE', {'premium': 500.0})
+    assert t['ref_quote'] == 526.60
+
+
+def _live_trade(a, leg, entry_time='09:20'):
+    t = {'n': 1, 'type': 'Long', 'status': 'open', 'entry_time': entry_time, 'legs': {'1': leg},
+         'option': {'symbol': 'NIFTY', 'strike': 24150, 'type': 'CE'}, 'signal_bar': '2026-11-05 09:15:00'}
+    a.state = {'day': {'date': '2026-11-05', 'trades': [t]}, 'log': []}
+    return t
+
+
+def _kept_alert(a):
+    return [x for x in a.alerts if x[0] == 'stbb_order_failed']
+
+
+def test_the_resting_backstop_moves_onto_the_backtests_stop_once_the_close_is_known(monkeypatch):
+    a = _FakeAlgo('u', algo.PROFILES[4], None)
+    leg = _live_leg()
+    t = _live_trade(a, leg)
+    moved = []
+    monkeypatch.setattr(a, '_modify_backstop', lambda rid, trig: moved.append((rid, trig)) or {'success': True})
+    a.minutes = [_m('09:19', 269.45, 271.85, 263, 265.7), _m('09:20', 265.7, 273.3, 262.8, 264.15)]
+    assert a._after_mark(t, 264.0) is True
+    assert t['ref_entry'] == 265.7 and t['stop'] == 231.2
+    assert moved == [('s1', 231.2)] and leg['backstop'] == 231.2
+    a._after_mark(t, 264.0)
+    assert moved == [('s1', 231.2)]                    # settled: never sent twice
+    assert t['status'] == 'open'
+
+
+def test_5_nov_2026_the_low_that_filled_the_old_backstop_does_not_stop_the_trade(monkeypatch):
+    a = _FakeAlgo('u', algo.PROFILES[4], None)
+    leg = _live_leg(backstop=231.2)
+    t = _live_trade(a, leg)
+    a.minutes = [_m('09:19', 269.45, 271.85, 263, 265.7), _m('09:32', 240.55, 246, 232.05, 236.35)]
+    a._after_mark(t, 236.35)
+    assert t['status'] == 'open' and t['stop'] == 231.2
+
+
+def test_a_refused_backstop_move_is_retried_then_alerted_once(monkeypatch):
+    a = _FakeAlgo('u', algo.PROFILES[4], None)
+    leg = _live_leg()
+    t = _live_trade(a, leg)
+    calls = []
+    monkeypatch.setattr(a, '_modify_backstop', lambda rid, trig: calls.append(trig) or {'success': False, 'error': 'no'})
+    a.minutes = [_m('09:19', 269.45, 271.85, 263, 265.7)]
+    for _ in range(algo._BACKSTOP_TRIES + 2):
+        a._after_mark(t, 264.0)
+    assert len(calls) == algo._BACKSTOP_TRIES and leg['backstop'] == 235.3 and len(_kept_alert(a)) == 1
+
+
+def test_a_backstop_filled_at_the_broker_books_the_future_on_a_future_strategy(monkeypatch):
+    monkeypatch.setattr(algo.base, '_append_history', lambda *x, **k: None)
+    a = _FakeAlgo('u', algo.PROFILES[4], None)
+    leg = dict(_live_leg(), open=False, exit=235.25, pnl=-2275.0, entry_confirmed=True, exit_confirmed=True)
+    t = _live_trade(a, leg)
+    a._book_if_settled(t)
+    assert t['status'] == 'closed' and t['index_exit'] == 23050.0 and t['spot_exit'] == 23000.0   # _FakeAlgo's future, spot
