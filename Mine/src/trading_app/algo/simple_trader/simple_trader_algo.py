@@ -53,14 +53,22 @@ def _minute_before(hhmm) -> Optional[str]:
         return None
 
 
+def _label(spec: sim.Spec) -> str:
+    """The title on this algo's alerts. A Touch Break row carries the serial /algo and /backtest show for it:
+    its place in MINE_TABS, not its spec number."""
+    if spec.kind != 'tb':
+        return f'Simple Trader {spec.n}'
+    serial = [n for n, _key, _p in sim.MINE_TABS].index(spec.n) + 1
+    return f'ST Touch Break · {serial}. {spec.tab}'
+
+
 class SimpleProfile(base.Profile):
     """A Profile whose symbol is the option underlying and whose files are per strategy."""
 
     def __init__(self, spec: sim.Spec):
         super().__init__(spec.symbol, f'st{spec.n}', f'ST{spec.n}', spec.premium,
                          'BFO' if spec.symbol == 'SENSEX' else 'NFO',
-                         f'ST{spec.n}', 'Mine · ST Touch Break' if spec.n == 8 else
-                         (f'Mine · {spec.tab}' if spec.kind == 'tb' else f'Simple Trader {spec.n}'))
+                         f'ST{spec.n}', _label(spec))
         self.spec = spec
         self.rule = spec.rule
 

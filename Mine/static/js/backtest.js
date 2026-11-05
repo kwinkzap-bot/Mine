@@ -446,6 +446,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // ST Touch Break: every symbol has its own default settings. The board's Default button keeps a row's
     // settings (and the premium / SL / TSL it was priced with) for the symbol on the page; selecting that
     // symbol again puts them back, and a symbol with none saved starts from the factory values.
+    let _stbKey = null;                            // the symbol whose defaults are on the form (syncStbSymbol)
     const STB_DEFAULT_KEY = 'stbDefaultsBySymbol';
     const STB_DEFAULT_IDS = { st_period: 'stbStLen', st_mult: 'stbStFactor', modes: 'stbModes',
                               stop_mode: 'stbStopMode', min_wick_pct: 'stbMinWick', direction: 'stbDirection',
@@ -477,6 +478,26 @@ document.addEventListener('DOMContentLoaded', function() {
         stbApplyDefaults({ ...factory, ...(stbSavedDefaults(sym) || {}) });
         const lot = document.getElementById('pcLotValue');
         if (lot) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
+    }
+
+    // The 🧲 ST Touch Break group's rows (pages._mine_live_tabs: the /algo Mine sub-tabs 8-15, the Saved rows they
+    // came from). Picking one fills the ordinary form, still editable: NIFTY, premium 250, no premium stop, as the
+    // rows were run. It wins over the symbol's saved default, which syncStbSymbol would otherwise lay on top.
+    function stbSelectedRow() {
+        const n = strategySelect?.selectedOptions[0]?.dataset.stbRow;
+        return n ? (window.MINE_LIVE_TABS || []).find(t => String(t.n) === n) || null : null;
+    }
+    function stbApplyRow(t) {
+        selectedSymbol = 'NIFTY';
+        symbolSearch.value = 'NIFTY';
+        _stbKey = 'NIFTY';
+        stbApplyDefaults({ ...t, premium: 250, sl_pct: 0, tsl_x: 0, tsl_y: 0 });
+        const tf = document.getElementById('interval');
+        if (tf) tf.value = t.timeframe;
+        const start = document.getElementById('startDate');
+        if (start) start.value = '2026-11-01';     // this group's start date; the plain entry in Mine keeps 2020
+        const lot = document.getElementById('pcLotValue');
+        if (lot) lot.value = lotValueForSymbol('NIFTY');
     }
 
     function updateStrategyView() {
@@ -815,6 +836,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intFg) intFg.style.display = '';
             if (intervalSelect) intervalSelect.value = '3minute';
             if (startDateInput) startDateInput.value = '2020-01-01';
+            const stbRow = stbSelectedRow();
+            if (stbRow) stbApplyRow(stbRow);
             updatePcInvestment();
 
         } else if (val === 'ma_htf') {
@@ -928,8 +951,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // Candle Breakout (paper-only since 2026-09-15, but still a running
     // thread), 30-Min Fakeout, Swing Momentum (Go Live / Live Watch) and EMA
     // Confluence, and ST + BB + RSI (3 index algos, paper by default). A strategy is in exactly one bucket: when one goes live,
-    // MOVE it here rather than copying it.
+    // MOVE it here rather than copying it. The one exception is st_touch_break: besides its plain entry in Mine it
+    // has a group of its own, whose options are its saved rows — all with that same value, so everything keyed on
+    // strategySelect.value treats them as the one strategy, told apart by data-stb-row.
+    const STB_GROUP = 'st_touch_break';
     const STRATEGY_STATUS = {
+        [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
         mine:    ['st_all_indicators', 'st_touch_break', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
@@ -939,18 +966,28 @@ document.addEventListener('DOMContentLoaded', function() {
     };
     // Keep every <option> node around — filtering re-appends from this list, so
     // switching status back restores the original labels and order.
+    if (strategySelect) {
+        // Numbered by position, as /algo's ST Touch Break sub-tabs are: the same list, so the same serial.
+        (window.MINE_LIVE_TABS || []).forEach((t, i) => {
+            const opt = new Option(`🧲 ${i + 1}. ${t.tab}`, 'st_touch_break');
+            opt.dataset.stbRow = t.n;
+            strategySelect.appendChild(opt);
+        });
+    }
     const _allStrategyOptions = strategySelect
         ? Array.from(strategySelect.options)
         : [];
 
-    function applyStrategyStatusFilter() {
+    function applyStrategyStatusFilter(byHand = false) {
         if (!strategySelect || !strategyStatusSelect) return;
         const allowed = STRATEGY_STATUS[strategyStatusSelect.value] || [];
         const prev    = strategySelect.value;
+        const rows    = strategyStatusSelect.value === STB_GROUP;
+        const wasRow  = !!strategySelect.selectedOptions[0]?.dataset.stbRow;
 
         strategySelect.innerHTML = '';
         _allStrategyOptions
-            .filter(opt => allowed.includes(opt.value))
+            .filter(opt => rows ? !!opt.dataset.stbRow : !opt.dataset.stbRow && allowed.includes(opt.value))
             .forEach(opt => strategySelect.appendChild(opt));
 
         if (!strategySelect.options.length) return;
@@ -958,6 +995,11 @@ document.addEventListener('DOMContentLoaded', function() {
         // otherwise fall back to the first one and rebuild the form for it.
         if (allowed.includes(prev)) {
             strategySelect.value = prev;
+            // Same strategy, but into the rows or out of them: put the row on the form, or take it back off.
+            if (byHand && (rows || wasRow)) {
+                if (wasRow && !rows) _stbKey = null;
+                updateStrategyView();
+            }
         } else {
             strategySelect.selectedIndex = 0;
             updateStrategyView();
@@ -966,7 +1008,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     if (strategyStatusSelect) {
-        strategyStatusSelect.addEventListener('change', applyStrategyStatusFilter);
+        strategyStatusSelect.addEventListener('change', () => applyStrategyStatusFilter(true));
         applyStrategyStatusFilter();
     }
 
@@ -1013,7 +1055,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // ST Touch Break: the symbol sets the lot and the premium — NIFTY 250, BANKNIFTY 300, SENSEX 500,
     // a stock is bought ATM (0) — and brings that symbol's saved defaults. All stay editable; re-set only when the symbol changes.
     const STB_PREMIUM = { NIFTY: '250', FINNIFTY: '250', MIDCPNIFTY: '250', BANKNIFTY: '300', SENSEX: '500' };
-    let _stbKey = null;
     function syncStbSymbol() {
         if (!strategySelect || strategySelect.value !== 'st_touch_break' || !symbolSearch) { _stbKey = null; return; }
         const sym = (symbolSearch.value || '').trim().toUpperCase();
@@ -5721,7 +5762,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             <button type="button" class="bt-saved-del" data-del="${esc(x.id)}" title="Remove from Saved">✕</button></td>
                         <td><small>${esc(stratName(x.strategy))}</small></td>
                         <td><b>${esc(x.board)} ${esc(x.tag)}</b></td>
-                        <td>${lt ? `<a href="/algo#${esc(lt.key)}" title="Mine tab on /algo, sub-tab ${lt.n}">${esc(lt.tab)}</a>` : '<small>—</small>'}</td>
+                        <td>${lt ? `<a href="/algo#${esc(lt.key)}" title="ST Touch Break tab on /algo">${window.MINE_LIVE_TABS.indexOf(lt) + 1}. ${esc(lt.tab)}</a>` : '<small>—</small>'}</td>
                         <td title="${esc(x.title)}">${esc(x.label)}</td>
                         <td>${p.total_trades ?? ''}</td>
                         <td>${p.win_rate != null ? ap + Number(p.win_rate).toFixed(0) + '%' : ''}</td>
@@ -5736,6 +5777,12 @@ document.addEventListener('DOMContentLoaded', function() {
         function use(x) {
             const sel = document.getElementById('strategySelect');
             if (sel && x.strategy && sel.value !== x.strategy) {
+                // Filed under another group: go there first (the Mine entry, for a Touch Break row).
+                const group = Object.keys(STRATEGY_STATUS).find(g => g !== STB_GROUP && STRATEGY_STATUS[g].includes(x.strategy));
+                if (group && strategyStatusSelect && ![...sel.options].some(o => o.value === x.strategy)) {
+                    strategyStatusSelect.value = group;
+                    strategyStatusSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                }
                 if (![...sel.options].some(o => o.value === x.strategy)) {
                     if (window.showNotification) window.showNotification(`Strategy ${x.strategy} is not on this page any more`, 'error');
                     return;

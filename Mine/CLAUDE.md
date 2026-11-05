@@ -452,6 +452,12 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
   overstate them.
+**The 🧲 ST Touch Break group on /backtest (2026-11-05)** lists those eight rows (`MINE_LIVE_TABS` from
+`pages._mine_live_tabs`, so a new `MINE_TABS` row appears by itself). Every option's value is `st_touch_break`, told apart
+by `data-stb-row`, so the form, Find Best Params and the run are the one strategy's; picking one fills the form (still
+editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. The plain entry stays in Mine (start 2020-01-01). **The top tab on /algo reads ST Touch
+Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
+display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
 The api blueprint is at 255 rules (`tests/route_inventory.txt`) since the ATM Straddle live algo added six (above).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the

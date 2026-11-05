@@ -26,7 +26,7 @@
         <button class="ag-tab"        id="algo-tab-cpr"             onclick="algoSwitch('cpr')">CPR Logic</button>
         <button class="ag-tab"        id="algo-tab-straddle"        onclick="algoSwitch('straddle')">ATM Straddle</button>
         <button class="ag-tab"        id="algo-tab-simple"          onclick="algoSwitch('simple-1')">Simple Trader</button>
-        <button class="ag-tab"        id="algo-tab-mine"            onclick="algoSwitch('mine-nifty')">Mine</button>
+        <button class="ag-tab"        id="algo-tab-mine"            onclick="algoSwitch('mine-nifty')">ST Touch Break</button>
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
@@ -234,7 +234,7 @@
     {% with key='simple-7', p='sim7', n=7, names={1: 'BB PP ST RSI WR', 2: 'ST EMA RSI CCI WR CPR BB (PE)', 3: 'ST RSI PP BB', 4: 'ST RSI PP BB Fut', 5: 'ST RSI CCI WR PP BB Fut', 6: 'ST RSI CPR BB Sensex', 7: 'ST RSI CPR BB WR SX2'}, symbol='SENSEX', pfx='ST7' %}{% include 'algo_simple.html' %}{% endwith %}
 
     {# The Mine group: ST Touch Break, one sub-tab per row (simple_trader_live_engine.MINE_TABS; 8 = mine-nifty). #}
-    {% for m in mine_tabs %}{% with key=m.key, p=m.p, n=m.n, group='mine', names={m.n: m.tab}, symbol='NIFTY', pfx='ST' ~ m.n %}{% include 'algo_simple.html' %}{% endwith %}
+    {% for m in mine_tabs %}{% with key=m.key, p=m.p, n=m.n, group='mine', names={m.n: loop.index ~ '. ' ~ m.tab}, symbol='NIFTY', pfx='ST' ~ m.n %}{% include 'algo_simple.html' %}{% endwith %}
     {% endfor %}
     {% include 'algo_ema_confluence.html' %}
 

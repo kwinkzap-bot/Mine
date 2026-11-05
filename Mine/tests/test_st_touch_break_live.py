@@ -234,7 +234,7 @@ def _at(hh, mm, ss=10):
 
 def test_profile_8_is_the_mine_algo_with_its_own_flags_and_files():
     pr = algo.PROFILES[8]
-    assert pr.pfx == 'ST8' and pr.key == 'st8' and pr.label == 'Mine · ST Touch Break'
+    assert pr.pfx == 'ST8' and pr.key == 'st8' and pr.label == 'ST Touch Break · 1. NIFTY - Both - 3m'
     assert pr.state_file().endswith('simple_trader_8_state.json') and pr.history_file().endswith('simple_trader_8_trades_history.json')
     from trading_app.app.routes import api
     assert api._STBB_FLAGS['st8'] == 'ST8'
@@ -408,7 +408,7 @@ def test_each_mine_row_is_its_own_paper_algo_with_the_rows_numbers(n, tmp_path, 
     monkeypatch.setattr(algo, '_uvar', fake)
     monkeypatch.setattr(algo.base, '_uvar', fake)
     pr = algo.PROFILES[n]
-    assert pr.pfx == f'ST{n}' and pr.label == f'Mine · {tab}' and pr.spec.tab == tab and pr.spec.kind == 'tb'
+    assert pr.pfx == f'ST{n}' and pr.label == f'ST Touch Break · {n - 7}. {tab}' and pr.spec.tab == tab and pr.spec.kind == 'tb'
     assert pr.state_file().endswith(f'simple_trader_{n}_state.json')
     s = algo.settings('u', pr)
     assert s['mode'] == 'paper'                                               # nothing live until the tab says so

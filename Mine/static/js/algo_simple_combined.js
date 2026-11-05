@@ -468,11 +468,11 @@
     window.mineCombinedOpen = function (tabs) {
         if (!mineOpen) {
             mineOpen = makeCombined({
-                title: 'Combined — Mine · ST Touch Break (Live Algos)',
-                subtitle: `Every booked trade of the ${tabs.length} Mine sub-tabs merged into one book.`,
+                title: 'Combined — ST Touch Break (Live Algos)',
+                subtitle: `Every booked trade of the ${tabs.length} ST Touch Break sub-tabs merged into one book.`,
                 csvName: 'combined_mine_live.csv',
-                defs: tabs.map(t => ({
-                    n: t.n, name: t.n + '. ' + t.tab, symbol: 'NIFTY',
+                defs: tabs.map((t, i) => ({
+                    n: t.n, name: (i + 1) + '. ' + t.tab, symbol: 'NIFTY',
                     side: / - Sell - /.test(t.tab) ? 'PE' : 'CE',      // a Both tab's rows carry their own option_type
                 })),
             });

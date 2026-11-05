@@ -7,9 +7,9 @@
     <div class="ag-panel" id="algo-{{ key }}-panel">
 
     <div class="ag-subtabs">
-        {% if group == 'mine' %}{% for m in mine_tabs %}<button class="ag-subtab{% if key == m.key %} active{% endif %}" onclick="algoSwitch('{{ m.key }}')" title="ST Touch Break · {{ m.tab }} (strategy {{ m.n }}, flags ST{{ m.n }}_*)">{{ m.tab }}</button>
+        {% if group == 'mine' %}{% for m in mine_tabs %}<button class="ag-subtab{% if key == m.key %} active{% endif %}" onclick="algoSwitch('{{ m.key }}')" title="ST Touch Break · {{ loop.index }}. {{ m.tab }} (flags ST{{ m.n }}_*)">{{ loop.index }}. {{ m.tab }}</button>
         {% endfor %}
-        <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick='mineCombinedOpen({{ mine_tabs|tojson }})' title="All the live Mine (ST Touch Break) algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>
+        <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick='mineCombinedOpen({{ mine_tabs|tojson }})' title="All the live ST Touch Break algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>
         {% else %}{% for n in range(1, 8) %}<button class="ag-subtab{% if key == 'simple-' ~ n %} active{% endif %}" onclick="algoSwitch('simple-{{ n }}')" title="{{ names[n] }}">{{ n }}</button>
         {% endfor %}
         <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick="simpleCombinedOpen()" title="All seven live Simple Trader algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>{% endif %}
@@ -32,7 +32,7 @@
         </span>
         <button class="ag-btn ag-btn-strikes" onclick="_stbbStart('{{ key }}')">▶ Start</button>
         <button class="ag-btn ag-btn-strikes" onclick="_stbbStop('{{ key }}')">■ Stop</button>
-        <a class="ag-btn ag-btn-strikes" href="/backtest" title="{% if group == 'mine' %}The rule's backtest: the Mine group, ST Touch Break{% else %}The rule's backtest: Simple Trader group, strategy {{ n }}{% endif %}">Backtest ↗</a>
+        <a class="ag-btn ag-btn-strikes" href="/backtest" title="{% if group == 'mine' %}The rule's backtest: the ST Touch Break group{% else %}The rule's backtest: Simple Trader group, strategy {{ n }}{% endif %}">Backtest ↗</a>
         <span class="ag-last-upd" id="{{ p }}LastUpd" style="margin-left:auto"></span>
     </div>
 

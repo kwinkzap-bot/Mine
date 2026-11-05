@@ -10,9 +10,9 @@ for (let n = 1; n <= 7; n++) {
 }
 // The Mine group: ST Touch Break on NIFTY (strategies 8-15 of the same engine), one sub-tab each. The list
 // is the page's (window.MINE_TABS, from simple_trader_live_engine.MINE_TABS); 8 is 'mine-nifty'.
-(window.MINE_TABS || [{ n: 8, key: 'mine-nifty', p: 'mnn', tab: 'NIFTY - Both - 3m' }]).forEach(m => {
+(window.MINE_TABS || [{ n: 8, key: 'mine-nifty', p: 'mnn', tab: 'NIFTY - Both - 3m' }]).forEach((m, i) => {
     _STBB[m.key] = { p: m.p, api: '/api/algo/simple-trader-' + m.n, sym: 'NIFTY', pfx: 'ST' + m.n, simple: true,
-                     group: 'mine', label: `Mine · ${m.tab} (ST Touch Break)`, touch: true };
+                     group: 'mine', label: `ST Touch Break · ${i + 1}. ${m.tab}`, touch: true };
 });
 Object.values(_STBB).forEach(c => Object.assign(c, { timer: null, mode: null, book: 'all', history: [] }));
 
