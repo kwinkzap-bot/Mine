@@ -495,7 +495,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const tf = document.getElementById('interval');
         if (tf) tf.value = t.timeframe;
         const start = document.getElementById('startDate');
-        if (start) start.value = '2026-11-01';     // this group's start date; the plain entry in Mine keeps 2020
+        if (start) start.value = '2026-11-01';     // this group's start date
         const lot = document.getElementById('pcLotValue');
         if (lot) lot.value = lotValueForSymbol('NIFTY');
     }
@@ -951,14 +951,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // Candle Breakout (paper-only since 2026-09-15, but still a running
     // thread), 30-Min Fakeout, Swing Momentum (Go Live / Live Watch) and EMA
     // Confluence, and ST + BB + RSI (3 index algos, paper by default). A strategy is in exactly one bucket: when one goes live,
-    // MOVE it here rather than copying it. The one exception is st_touch_break: besides its plain entry in Mine it
-    // has a group of its own, whose options are its saved rows — all with that same value, so everything keyed on
-    // strategySelect.value treats them as the one strategy, told apart by data-stb-row.
+    // MOVE it here rather than copying it. st_touch_break has a group of its own, whose options are its saved
+    // rows — all with that same value, so everything keyed on strategySelect.value treats them as the one
+    // strategy, told apart by data-stb-row. It has no plain entry (removed from Mine 2026-11-06).
     const STB_GROUP = 'st_touch_break';
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['st_all_indicators', 'st_touch_break', 'atm_straddle'],
+        mine:    ['st_all_indicators', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
@@ -978,12 +978,11 @@ document.addEventListener('DOMContentLoaded', function() {
         ? Array.from(strategySelect.options)
         : [];
 
-    function applyStrategyStatusFilter(byHand = false) {
+    function applyStrategyStatusFilter() {
         if (!strategySelect || !strategyStatusSelect) return;
         const allowed = STRATEGY_STATUS[strategyStatusSelect.value] || [];
         const prev    = strategySelect.value;
         const rows    = strategyStatusSelect.value === STB_GROUP;
-        const wasRow  = !!strategySelect.selectedOptions[0]?.dataset.stbRow;
 
         strategySelect.innerHTML = '';
         _allStrategyOptions
@@ -995,11 +994,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // otherwise fall back to the first one and rebuild the form for it.
         if (allowed.includes(prev)) {
             strategySelect.value = prev;
-            // Same strategy, but into the rows or out of them: put the row on the form, or take it back off.
-            if (byHand && (rows || wasRow)) {
-                if (wasRow && !rows) _stbKey = null;
-                updateStrategyView();
-            }
         } else {
             strategySelect.selectedIndex = 0;
             updateStrategyView();
@@ -1008,7 +1002,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     if (strategyStatusSelect) {
-        strategyStatusSelect.addEventListener('change', () => applyStrategyStatusFilter(true));
+        strategyStatusSelect.addEventListener('change', applyStrategyStatusFilter);
         applyStrategyStatusFilter();
     }
 
@@ -5777,8 +5771,8 @@ document.addEventListener('DOMContentLoaded', function() {
         function use(x) {
             const sel = document.getElementById('strategySelect');
             if (sel && x.strategy && sel.value !== x.strategy) {
-                // Filed under another group: go there first (the Mine entry, for a Touch Break row).
-                const group = Object.keys(STRATEGY_STATUS).find(g => g !== STB_GROUP && STRATEGY_STATUS[g].includes(x.strategy));
+                // Filed under another group: go there first (the 🧲 group, for a Touch Break row).
+                const group = Object.keys(STRATEGY_STATUS).find(g => STRATEGY_STATUS[g].includes(x.strategy));
                 if (group && strategyStatusSelect && ![...sel.options].some(o => o.value === x.strategy)) {
                     strategyStatusSelect.value = group;
                     strategyStatusSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -5788,7 +5782,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 sel.value = x.strategy;
+                // A Touch Break row: the 🧲 option running these numbers if there is one, and the range it was saved on
+                // (the group's own start date is a few days back, not the row's).
+                if (x.strategy === 'st_touch_break') {
+                    const lt = liveTab(x);
+                    const opt = lt && [...sel.options].find(o => o.dataset.stbRow === String(lt.n));
+                    if (opt) opt.selected = true;
+                }
                 sel.dispatchEvent(new Event('change', { bubbles: true }));
+                if (x.strategy === 'st_touch_break' && x.start_date) {
+                    const start = document.getElementById('startDate');
+                    if (start) start.value = x.start_date;
+                }
             }
             if (x.strategy === 'atm_straddle') applyStraddleOptResult(x.params || {});
             else withDirection(applySbrStrategyResult(x.strategy, x.swept || []), x.direction)(x.params || {});
