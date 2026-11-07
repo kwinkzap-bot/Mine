@@ -9676,7 +9676,7 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                     for x in _ism.expiries(_ism.stock_code('NIFTY', 'NFO') or 'NIFTY', 'NFO'))
             except Exception as exc:          # noqa: BLE001 — the calendar's date stands
                 logger.warning('[CallRatio] listed NIFTY expiries unavailable: %s', exc)
-            state = {'errors': 0, 'last_error': None, 'second_requests': 0,
+            state = {'errors': 0, 'last_error': None, 'second_requests': 0, 'breeze_requests': 0,
                      'second_budget': _cr_second_budget()}
             lock = threading.Lock()
             memo: dict = {}
@@ -9719,6 +9719,15 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                     return s
                 return fine_for
 
+            def before_breeze_request():
+                # A sweep's only (a backtest never waits). Called for a real request, never a cache
+                # hit, so this is what a budgeted sweep counts.
+                with lock:
+                    state['breeze_requests'] += 1
+                    task['progress']['requests'] = state['breeze_requests']
+                if background:
+                    _cr_yield_to_foreground()
+
             def frame_for(expiry, strike, right='CE'):
                 key = (expiry, int(strike), right)
                 with lock:
@@ -9735,7 +9744,7 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                 t0 = _time.time()
                 raw = icici.historical_option_range('NIFTY', expiry, int(strike), right,
                                                     frm, min(to, today),
-                                                    before_request=_cr_yield_to_foreground if background else None)
+                                                    before_request=before_breeze_request if background else None)
                 # Set only when a chunk FAILED (or nothing came back): a range
                 # Breeze answered empty is not an error, and is cached.
                 err = icici.last_history_error()
@@ -9958,6 +9967,137 @@ def call_ratio_status(task_id):
     if task['status'] == 'error':
         return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
+# ── NIFTY Matrix Calendar backtest (Mine) ────────────────────────────────────
+# Monday 15:16, IV above 20: sell 2 × 0.23-delta CE + PE on the 8-day weekly, buy
+# 1 × each 500 further out, buy 1 × each sold strike on the monthly; +1.5 % / −2 % of
+# capital or 2 sessions. Rule: Backtest/matrix_calendar_engine.py. Runs on _cr_start.
+def _mc_parse(data: dict):
+    """The Matrix Calendar's boxes → (start, end, params, sets, capital_per_set), or raises ValueError."""
+    start_dt = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
+    end_dt = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
+    if end_dt < start_dt:
+        raise ValueError('end_date is before start_date')
+    hedge_gap = int(float(data.get('hedge_gap', 500)))
+    if hedge_gap % 100 or not 100 <= hedge_gap <= 2000:
+        raise ValueError('hedge_gap must be a multiple of 100, 100-2000')
+    params = {
+        'entry_hm': _os_hm(data.get('entry_time', '15:16'), (15, 16)),
+        'exit_hm': _os_hm(data.get('exit_time', '15:15'), (15, 15)),
+        'min_iv': min(100.0, max(0.0, float(data.get('min_iv', 20)))),
+        'target_delta': min(0.45, max(0.05, float(data.get('target_delta', 0.23)))),
+        'hedge_gap': hedge_gap,
+        'balance_premium': str(data.get('balance_premium', True)).lower() not in ('false', '0', 'no', 'off'),
+        'target_pct': max(0.1, float(data.get('target_pct', 1.5))),
+        'stop_pct': max(0.1, float(data.get('stop_pct', 2.0))),
+        'max_hold_sessions': min(5, max(1, int(data.get('max_hold_sessions', 2)))),
+    }
+    sets = max(1, int(data.get('sets', 1) or 1))
+    capital_per_set = max(10000.0, float(data.get('capital_per_set', 225000)))
+    return start_dt, end_dt, params, sets, capital_per_set
+
+
+@api_bp.route('/backtest/matrix-calendar', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_matrix_calendar_backtest_api():
+    """Start a NIFTY Matrix Calendar backtest; returns {'task_id'} to poll at
+    /backtest/matrix-calendar/status/<task_id>.
+
+    Body: start_date, end_date ('YYYY-MM-DD'); entry_time (15:16); exit_time (15:15, on
+    the last day); min_iv (20, 0 = off); target_delta (0.23); hedge_gap (500);
+    balance_premium (true); target_pct (1.5); stop_pct (2); max_hold_sessions (2);
+    sets (1 set = 4 sold + 4 bought lots); capital_per_set (₹, 225000)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    def worker(ctx, task):
+        from trading_app.Backtest import matrix_calendar_engine as mce
+        p = ctx['params']
+        sessions = mce.regular_sessions(ctx['sessions'], ctx['spot5'])
+        entries = mce.entry_days(sessions, ctx['start'], ctx['end'])
+        task['progress']['total'] = len(entries)
+
+        def one(entry):
+            res = mce.run_trade(entry, sessions, ctx['spot5'], ctx['frame_for'],
+                                ctx['qty'], ctx['capital'], p)
+            row = mce.trade_row(res, ctx['qty'], ctx['sets'], ctx['lot_size'], ctx['capital'],
+                                _OS_BROKERAGE_PER_LEG)
+            if row['status'] != 'skipped':
+                task['progress']['traded'] += 1
+            return row
+
+        rows = sorted(_cr_pool(entries, one, task), key=lambda r: r['date'])
+        summary = mce.summarise(rows)
+        summary.update({'weeks_scanned': len(entries), 'sets': ctx['sets'],
+                        'lot_size': ctx['lot_size'], 'capital': ctx['capital'],
+                        'capital_per_set': ctx['capital_per_set'],
+                        'params': {k: (f'{v[0]:02d}:{v[1]:02d}' if isinstance(v, tuple) else v)
+                                   for k, v in p.items() if k != 'listed_expiries'}})
+        logger.info('[MatrixCalendar] %s..%s: %d Mondays, %d traded, %d skipped, %d contracts',
+                    ctx['start'], ctx['end'], len(entries), summary['total_trades'],
+                    summary['skipped_months'], task['progress']['contracts'])
+        task['payload'] = {'trades': rows, 'summary': summary}
+
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'mc', parse=_mc_parse)
+
+
+@api_bp.route('/backtest/matrix-calendar/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_matrix_calendar_optimise_api():
+    """Find Best Params for the Matrix Calendar; poll /backtest/matrix-calendar/status/<task_id>.
+
+    Sweeps matrix_calendar_engine.SWEEP_GRID on the page's times, sets and capital. Newest Monday
+    first, with _cr_sweep_budget() real Breeze requests a run: past it the older Mondays are left
+    out and the board says so. All it fetched is cached, so Recalculate carries on further back."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    def worker(ctx, task):
+        from trading_app.Backtest import matrix_calendar_engine as mce
+        sessions = mce.regular_sessions(ctx['sessions'], ctx['spot5'])
+        entries = mce.entry_days(sessions, ctx['start'], ctx['end'])
+        task['progress']['total'] = len(entries)
+        budget = _cr_sweep_budget()
+
+        def one(entry):
+            ctx['check_stopped']()
+            if ctx['state']['breeze_requests'] >= budget:
+                return entry, None
+            res = mce.score_monday(entry, sessions, ctx['spot5'], ctx['frame_for'], ctx['qty'], ctx['capital'],
+                                   ctx['params'], _OS_BROKERAGE_PER_LEG)
+            task['progress']['traded'] += 1
+            return entry, res
+
+        done = sorted(_cr_pool(entries, one, task), key=lambda t: t[0])
+        reached = [(d, r) for d, r in done if r is not None]
+        task['progress']['stage'] = 'scoring'
+        rows = mce.rank_board([r for _, r in reached], len(reached))
+        task['payload'] = {
+            'results': rows[:100], 'best': rows[0] if rows else None, 'total': len(rows),
+            'total_combos_tested': mce.cre.sweep_size(mce.SWEEP_GRID), 'mondays': len(reached),
+            'mondays_in_range': len(entries), 'covered_from': reached[0][0].isoformat() if reached else None,
+            'budget': budget, 'requests': ctx['state']['breeze_requests'],
+            'min_trades': mce.MIN_SWEEP_TRADES, 'sets': ctx['sets'], 'lot_size': ctx['lot_size'],
+            'capital': ctx['capital'], 'summary': {},
+        }
+        logger.info('[MatrixCalendarOptimise] %s..%s: %d of %d Mondays, %d combos scored, %d requests',
+                    ctx['start'], ctx['end'], len(reached), len(entries), len(rows), ctx['state']['breeze_requests'])
+
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'mc-opt', parse=_mc_parse,
+                     background=True, one_at_a_time=True)
+
+
+@api_bp.route('/backtest/matrix-calendar/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def matrix_calendar_status(task_id):
+    """Poll a Matrix Calendar backtest (it runs on _cr_start)."""
+    return call_ratio_status(task_id)
 
 
 # Find Best Params grid for Weekly CPR Breakout. Only the target changes how a

@@ -39548,8 +39548,26 @@
       "reason": "Gap-up open 24,378; R1/PDH 23,961-24,049 never reached by 11:00 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 88.1 pts (0.368%), 09:15 candle O 24378.05 H 24391.95 L 24296.3 C 24354.7 | Trade by rule: gap-up open 24,378; R1/PDH 23,961-24,049 never reached by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-11-06",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Medium",
+      "cpr_direction": "Asc",
+      "first_candle": "In decision candle(doji) near CPR",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "10:40 candle rejected from R1 (high 24,651, closed 24,619) -> SELL under it; SL over R1 24,646; target CPR 24,504 \u2014 set up at 10:40, in the 10:30-11:30 lull \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 65.7 pts (0.268%), 09:15 candle O 24538.2 H 24538.2 L 24388.05 C 24514.6 | Trade by rule: 10:40 candle rejected from R1 (high 24,651, closed 24,619) -> SELL under it; SL over R1 24,646; target CPR 24,504 \u2014 set up at 10:40, in the 10:30-11:30 lull \u2014 no trade"
     }
   ],
-  "extended_at": "2026-11-05 19:31",
+  "extended_at": "2026-11-07 08:22",
   "backfilled_from": "2018-01-01"
 }

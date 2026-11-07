@@ -562,10 +562,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (osParamsRow)   osParamsRow.style.display   = 'none';
         const crParamsRow   = document.getElementById('callRatioParamsRow');
         if (crParamsRow)   crParamsRow.style.display   = 'none';
+        const mcParamsRow   = document.getElementById('matrixCalendarParamsRow');
+        if (mcParamsRow)   mcParamsRow.style.display   = 'none';
         const crResultsEl   = document.getElementById('crResults');
         if (crResultsEl)   crResultsEl.style.display   = 'none';
         const crOptPanel    = document.getElementById('callRatioOptimisePanel');
         if (crOptPanel)    crOptPanel.style.display    = 'none';
+        const mcOptPanel    = document.getElementById('matrixCalendarOptimisePanel');
+        if (mcOptPanel)    mcOptPanel.style.display    = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
         const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
         if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
@@ -596,7 +600,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'matrix_calendar' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -889,6 +893,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const crStart = new Date(); crStart.setFullYear(crStart.getFullYear() - 1);
             if (startDateInput) startDateInput.value = crStart.toISOString().slice(0, 10);
             if (crEnd) crEnd.value = localToday();
+        } else if (val === 'matrix_calendar') {
+            if (mcParamsRow) mcParamsRow.style.display = 'grid';
+            // NIFTY only, six option legs on 5-minute premiums: no Symbol / Timeframe.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            selectedSymbol = 'NIFTY';
+            symbolSearch.value = 'NIFTY';
+            const mcEnd = document.getElementById('endDate');
+            const mcStart = new Date(); mcStart.setFullYear(mcStart.getFullYear() - 1);
+            if (startDateInput) startDateInput.value = mcStart.toISOString().slice(0, 10);
+            if (mcEnd) mcEnd.value = localToday();
         }
 
         // "All Stocks" only exists for EMA Confluence Breakout — every other
@@ -958,7 +973,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['st_all_indicators', 'atm_straddle'],
+        mine:    ['matrix_calendar', 'st_all_indicators', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
@@ -1198,6 +1213,12 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Wings', 'Optional. Buy the CE Wings points above and the PE Wings points below the sold strike at the entry (an iron fly). The loss is capped at the wing width less the credit; Target / Stop / Lock are % of the net credit.'],
             ['Profit lock', 'Optional. Once the trade is up Lock At % of the premium, a stop rests at Lock To % (0 = break-even) — a winner cannot become a loss.'],
             ['Exit', 'A position trade — no exit time. Only if neither level is hit by expiry does it close at the expiry day\'s last close.']] },
+        matrix_calendar: { sub: 'NIFTY weekly ratio calendar, zero adjustment, held 1-2 days', steps: [
+            ['When', 'Monday at 15:16, only when ATM IV is above 20. A Monday holiday is no trade that week.'],
+            ['Expiries', 'The weekly is not tomorrow\'s: the first at least 7 days out (Tuesday 8 days later; Thursday 10 days later before Sep 2025). The monthly is the first one after that weekly.'],
+            ['Legs', 'SELL 2 CE and 2 PE at about 0.23 delta on the weekly, 100-step strikes only. BUY 1 of each 500 pts further out, same weekly. BUY 1 CE and 1 PE at the sold strikes on the monthly. Four sold, four bought.'],
+            ['Strikes', 'Each side offers the two strikes either side of 0.23 delta; the pair with the closest premiums is taken.'],
+            ['Exit', '+1.5% / −2% of capital on the mark-to-market, read on 5-minute closes, or 2 sessions after the entry at 15:15. Nothing is adjusted.']] },
         call_ratio: { sub: 'NIFTY monthly 1:2 call ratio with a far hedge, zero adjustment', steps: [
             ['Entry', 'Last Friday of the month at 15:16, on NEXT month\'s expiry: BUY 1 CE 300 pts above the ATM, SELL 2 CE 300 above that, BUY 1 CE 1,000 above the sold strike.'],
             ['Strikes', 'If NIFTY falling to zero would leave more than 1% of capital as credit, the strikes are too close — move all three out 100 pts and check again. A downside debit above 1% is not traded.'],
@@ -1331,6 +1352,7 @@ document.addEventListener('DOMContentLoaded', function() {
         option_breakout: 'trades on the option’s own candles, not the index',
         atm_straddle: 'a two-leg monthly straddle, not a single chart',
         call_ratio: 'a three-leg monthly option position, not a single chart',
+        matrix_calendar: 'a six-leg option position across two expiries, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
     };
     const BT_LOGIC_DAILY = ['ema_pullback', 'hilega_milega', 'weekly_cpr_breakout'];
@@ -1658,6 +1680,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (_strat === 'call_ratio') {
             await runCallRatio();
+            return;
+        }
+        if (_strat === 'matrix_calendar') {
+            await runMatrixCalendar();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
@@ -2574,6 +2600,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderCallRatio(data) {
         const s = data.summary || {};
+        const mcYears = document.getElementById('mcYears');
+        if (mcYears) mcYears.style.display = 'none';
         const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
         const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
             <span class="stat-card__lbl">${lbl}</span>
@@ -2625,6 +2653,143 @@ document.addEventListener('DOMContentLoaded', function() {
         if (crRes) crRes.style.display = '';
         if (s.breeze_errors) window.showNotification(
             `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected months may be skipped or mis-priced`, 'warning');
+    }
+
+    // ── Matrix Calendar — start + poll; shows in the Call Ratio's result panel ──
+    function _mcPayload() {
+        const val = id => document.getElementById(id)?.value;
+        const num = (id, d) => { const v = parseFloat(val(id)); return Number.isFinite(v) ? v : d; };
+        return {
+            start_date: val('startDate'), end_date: val('endDate'),
+            entry_time: val('mcEntryTime') || '15:16', exit_time: val('mcExitTime') || '15:15',
+            min_iv: num('mcMinIv', 20), target_delta: num('mcDelta', 0.23),
+            balance_premium: val('mcBalance') !== 'false', hedge_gap: num('mcHedgeGap', 500),
+            target_pct: num('mcTarget', 1.5), stop_pct: num('mcStop', 2),
+            max_hold_sessions: num('mcHold', 2),
+            sets: num('mcSets', 1), capital_per_set: num('mcCapital', 225000),
+        };
+    }
+
+    async function runMatrixCalendar() {
+        const title = 'Running NIFTY Matrix Calendar';
+        const myRun = ++_crRun;
+        resultsArea.style.display = 'none';
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/matrix-calendar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_mcPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _crRun) return;
+                data = await (await fetch(`/api/backtest/matrix-calendar/status/${taskId}`)).json();
+                if (myRun !== _crRun) return;
+                if (data.status !== 'running') break;
+                _showOptLoader(title, _crProgress(data.progress || {}, data, 'Mondays'));
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            renderMatrixCalendar(data);
+        } catch (err) {
+            if (myRun !== _crRun) return;
+            _hideOptLoader();
+            console.error('Matrix Calendar error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderMatrixCalendar(data) {
+        const s = data.summary || {};
+        const inr = v => (v >= 0 ? '+' : '−') + '₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        const reasons = Object.entries(s.exit_reasons || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+        const otherSkips = (s.skipped_months || 0) - (s.skipped_low_iv || 0);
+        const stats = document.getElementById('crStats');
+        if (stats) stats.innerHTML = [
+            card('Weeks Traded', String(s.total_trades || 0), 'ac-blue',
+                 `of ${s.weeks_scanned || 0} Mondays · ${s.skipped_low_iv || 0} low IV · ${otherSkips} no data · ${s.open_trades || 0} open`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green', `${s.wins || 0} W / ${s.losses || 0} L`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `${pct(s.total_pnl_pct)} of ₹${Math.round(s.capital || 0).toLocaleString('en-IN')} · avg ${pct(s.avg_pnl_pct)} / trade`),
+            card('Profit Factor', String(s.profit_factor ?? 0), 'ac-blue',
+                 `avg win ${inr(s.avg_win_rupees || 0)} · avg loss −₹${Math.round(s.avg_loss_rupees || 0).toLocaleString('en-IN')}`),
+            card('Max Drawdown', { text: '−₹' + Math.round(s.max_drawdown_rupees || 0).toLocaleString('en-IN'), cls: 'stat-val-red' }, 'ac-red',
+                 `avg ${s.avg_sessions_held || 0} sessions held`),
+            card('Exits', reasons || '—', 'ac-blue', `${s.sets} set × ${s.lot_size}, ₹${s.total_brokerage != null ? Math.round(s.total_brokerage).toLocaleString('en-IN') : 0} brokerage`),
+        ].join('');
+        // Every year, traded or not: the trade table alone leaves a calm year looking like missing data.
+        const count = v => (v ? v : '—');
+        DataGrid.mountSortable('mcYearGrid', {
+            rows: s.by_year || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                { key: 'mondays', label: 'Mondays', sortable: true },
+                { key: 'iv_median', label: 'Median IV', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(1)) },
+                { key: 'iv_max', label: 'Highest IV', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(1)) },
+                { key: 'low_iv', label: `Below IV ${s.params?.min_iv ?? ''}`, sortable: true, format: count },
+                { key: 'no_data', label: 'No Data', sortable: true, format: count },
+                { key: 'traded', label: 'Traded', sortable: true, format: count },
+                { key: 'wins', label: 'Wins', sortable: true, format: count },
+                { key: 'net', label: 'Net P&L', sortable: true, format: (v, r) => (r.traded ? DataGrid.inr(v) : '—'), tone: DataGrid.sign },
+            ],
+            empty: 'No Mondays in this range',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        const mcYears = document.getElementById('mcYears');
+        if (mcYears) mcYears.style.display = '';
+        const leg = (k, label) => ({
+            key: `${k}_strike`, label, sortable: true,
+            format: (v, r) => (v == null ? '—' : `${v} · ${Number(r[`${k}_entry`]).toFixed(1)} → ${Number(r[`${k}_exit`]).toFixed(1)}`),
+        });
+        const delta = v => (v == null ? '—' : Number(v).toFixed(2));
+        DataGrid.mountSortable('crGrid', {
+            // Most Mondays are below the IV floor: the card counts them, the grid is the trades.
+            rows: (data.trades || []).filter(r => !r.low_iv),
+            columns: [
+                { key: 'date', label: 'Entry', sortable: true },
+                { key: 'expiry', label: 'Weekly', sortable: true },
+                { key: 'monthly', label: 'Monthly', sortable: true },
+                { key: 'spot', label: 'Spot', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(2)) },
+                { key: 'iv', label: 'ATM IV', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(1)) },
+                leg('sell_ce', 'Sell CE ×2'), { key: 'ce_delta', label: 'Δ', sortable: true, format: delta },
+                leg('sell_pe', 'Sell PE ×2'), { key: 'pe_delta', label: 'Δ', sortable: true, format: delta },
+                leg('hedge_ce', 'Hedge CE'), leg('hedge_pe', 'Hedge PE'),
+                leg('cal_ce', 'Monthly CE'), leg('cal_pe', 'Monthly PE'),
+                { key: 'net_points', label: 'Net Cr', sortable: true, format: v => (v == null ? '—' : Number(v).toFixed(1)), tone: DataGrid.sign },
+                { key: 'exit_time', label: 'Exit', sortable: true, format: v => (v ? v.replace('T', ' ').slice(0, 16) : '—') },
+                { key: 'sessions_held', label: 'Days', sortable: true, format: v => v ?? '—' },
+                { key: 'exit_reason', label: 'Outcome', sortable: true },
+                { key: 'trough_pct', label: 'Worst', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_pct', label: 'P&L %', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => (v == null ? '—' : DataGrid.inr(v)), tone: DataGrid.sign },
+            ],
+            empty: s.last_breeze_error
+                ? `No Mondays could be priced — ICICI Breeze said: ${s.last_breeze_error}. Its history service may be down; retry later.`
+                : (s.skipped_low_iv ? `All ${s.skipped_low_iv} Mondays were below the Min ATM IV` : 'No Mondays in this range'),
+            defaultSort: { key: 'date', dir: 'desc' },
+        });
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = '';
+        if (s.breeze_errors) window.showNotification(
+            `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected weeks may be skipped or mis-priced`, 'warning');
     }
 
     // ── Weekly CPR Breakout — start + poll ─────────────────────────────
@@ -4965,6 +5130,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'weekly_cpr_breakout') runWcbOptimise(false);
         else if (strat === 'atm_straddle') runOsOptimise(false);
         else if (strat === 'call_ratio') runCrOptimise(false);
+        else if (strat === 'matrix_calendar') runMcOptimise(false);
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (strat === 'hilega_milega' || strat === 'ma_htf') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
@@ -6265,6 +6431,100 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     const crRecalcBtn = document.getElementById('crRecalcOptBtn');
     if (crRecalcBtn) crRecalcBtn.addEventListener('click', () => runCrOptimise(true));
+
+    // ── NIFTY Matrix Calendar — Find Best Params ───────────────────────
+    // matrix_calendar_engine.SWEEP_GRID on the page's times, sets and capital, newest Monday
+    // first under a request budget; polled on the backtest's own status route.
+    let _mcOptRun = 0;
+    const MC_OPT_COLS = [
+        { label: '#',            key: null,             fmt: (r, i) => i + 1 },
+        { label: 'Min IV',       key: 'min_iv',         fmt: r => r.min_iv },
+        { label: 'Delta',        key: 'target_delta',   fmt: r => Number(r.target_delta).toFixed(2) },
+        { label: 'Hedge Gap',    key: 'hedge_gap',      fmt: r => r.hedge_gap },
+        { label: 'Balance',      key: 'balance_premium', fmt: r => r.balance_premium ? 'Yes' : 'No' },
+        { label: 'Target',       key: 'target_pct',     fmt: r => `${r.target_pct}%` },
+        { label: 'Stop',         key: 'stop_pct',       fmt: r => `${r.stop_pct}%` },
+        { label: 'Hold',         key: 'max_hold_sessions', fmt: r => `${r.max_hold_sessions} d` },
+        { label: 'Weeks',        key: 'total_trades',   fmt: r => r.total_trades },
+        { label: 'Win%',         key: 'win_rate',       fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees', fmt: r => _rs(r.net_pnl_rupees) },
+        { label: 'Total %',      key: 'total_pct',      fmt: r => _crPct(r.total_pct) },
+        { label: 'Avg / Week',   key: 'avg_pct',        fmt: r => _crPct(r.avg_pct) },
+        { label: 'Worst Week',   key: 'worst_pct',      fmt: r => _crPct(r.worst_pct) },
+        { label: 'Prof. Factor', key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_drawdown_rupees || 0)).toLocaleString('en-IN')}</span>` },
+        { label: '',             key: null,             fmt: () => '' },   // Use button
+    ];
+
+    function applyMatrixOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('mcMinIv', String(r.min_iv));
+        set('mcDelta', String(r.target_delta));
+        set('mcHedgeGap', String(r.hedge_gap));
+        set('mcBalance', r.balance_premium ? 'true' : 'false');
+        set('mcTarget', String(r.target_pct));
+        set('mcStop', String(r.stop_pct));
+        set('mcHold', String(r.max_hold_sessions));
+        if (window.showNotification) window.showNotification(
+            `Applied: IV ≥ ${r.min_iv} · Δ ${r.target_delta} · hedge ${r.hedge_gap} · target ${r.target_pct}% · stop ${r.stop_pct}% · hold ${r.max_hold_sessions} d`, 'success');
+    }
+
+    async function runMcOptimise(recalculate) {
+        const panel     = document.getElementById('matrixCalendarOptimisePanel');
+        const recalcBtn = document.getElementById('mcRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_mcOptRun;
+        const done = () => { if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/matrix-calendar/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_mcPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2500));
+                if (myRun !== _mcOptRun) return;
+                data = await (await fetch(`/api/backtest/matrix-calendar/status/${taskId}`)).json();
+                if (myRun !== _mcOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Finding best params…', _crProgress(p, data, 'Mondays') + (p.requests ? ` · ${p.requests} requests` : ''));
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            const s = data.summary || {};
+            const left = (data.mondays_in_range || 0) - (data.mondays || 0);
+            const metaEl = document.getElementById('mcOptMeta');
+            if (metaEl) metaEl.textContent =
+                `${(data.total_combos_tested || 0).toLocaleString('en-IN')} combos · ${data.total} scored (≥ ${data.min_trades} closed weeks)`
+                + ` · ${data.mondays} of ${data.mondays_in_range} Mondays`
+                + (left ? ` from ${data.covered_from}: the ${(data.budget || 0).toLocaleString('en-IN')}-request limit stopped ${left} older ones, Recalculate carries on from the cache` : '')
+                + ` · ${data.sets} set × ${data.lot_size} on ₹${Math.round(data.capital || 0).toLocaleString('en-IN')}`
+                + ` · ${data.requests || 0} ICICI requests` + (s.breeze_errors ? `, ${s.breeze_errors} failed` : '');
+            _mountSingleOptGrid('mcOptGrid', data.results || [], MC_OPT_COLS, 'net_pnl_rupees', applyMatrixOptResult);
+            if (panel)     panel.style.display     = '';
+            if (recalcBtn) recalcBtn.style.display = '';
+            if (data.best) applyMatrixOptResult(data.best);
+            if (left) window.showNotification(`Covered ${data.mondays} of ${data.mondays_in_range} Mondays: Recalculate to go further back`, 'warning');
+        } catch (err) {
+            if (myRun !== _mcOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('Matrix Calendar optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
+    const mcRecalcBtn = document.getElementById('mcRecalcOptBtn');
+    if (mcRecalcBtn) mcRecalcBtn.addEventListener('click', () => runMcOptimise(true));
 
     // ── Weekly CPR Breakout — Find Best Params ──────────────────────────
     // Sweeps Target × W CPR Width × Min 1H Range × Direction (192 combos)
