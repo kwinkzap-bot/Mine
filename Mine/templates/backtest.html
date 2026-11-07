@@ -45,8 +45,7 @@
                 <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
-                <option value="matrix_calendar" selected>🧮 NIFTY Matrix Calendar (Weekly Ratio Calendar)</option>
-                <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
+                <option value="st_all_indicators" selected>🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
                 <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (Monthly / Weekly)</option>
                 <option value="call_ratio">🧠 NIFTY Monthly Call Ratio 1:2 (No-Brainer)</option>
             </select>
@@ -2067,65 +2066,6 @@
                 </div>
             </div>
 
-            <!-- NIFTY Matrix Calendar (Mine) — Monday 15:16 when ATM IV is above 20: sell 2 × 0.23-delta CE + PE on the
-                 8-day weekly, buy 1 × each 500 further out, buy 1 × each sold strike on the monthly. +1.5 % / −2 % of
-                 capital or 2 sessions. See Backtest/matrix_calendar_engine.py. -->
-            <div id="matrixCalendarParamsRow" class="form-row" style="display:none">
-                <div class="form-group">
-                    <label for="mcEntryTime" title="Every Monday at this time. A Monday holiday is no trade that week. Prices are the close of the last 5-minute bar finished by then.">Monday Entry Time</label>
-                    <input type="time" id="mcEntryTime" value="15:16">
-                </div>
-                <div class="form-group">
-                    <label for="mcMinIv" title="A Monday whose ATM IV (Black-76, mean of the 100-step ATM call and put on the weekly sold) is below this is not traded. The author trades this only above 20. 0 = every Monday.">Min ATM IV %</label>
-                    <input type="number" id="mcMinIv" value="20" min="0" max="100" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="mcDelta" title="Delta of the CE and PE sold, 2 lots each, on 100-step strikes only (the author avoids the 50s).">Sold Delta</label>
-                    <input type="number" id="mcDelta" value="0.23" min="0.05" max="0.45" step="0.01">
-                </div>
-                <div class="form-group">
-                    <label for="mcBalance" title="Each side offers the two 100-step strikes either side of the delta. Yes: the pair whose premiums are closest, as the author does (0.26 over 0.21 when 0.21 leaves the premiums far apart). No: each side's nearest delta.">Balance Premiums</label>
-                    <select id="mcBalance">
-                        <option value="true" selected>Yes</option>
-                        <option value="false">No</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="mcHedgeGap" title="1 lot of the same weekly is bought this many points beyond each sold strike. The second lot's cover is the monthly at the sold strike itself.">Hedge Gap (pts)</label>
-                    <input type="number" id="mcHedgeGap" value="500" min="100" max="2000" step="100">
-                </div>
-                <div class="form-group">
-                    <label for="mcTarget" title="All legs out once the mark-to-market profit, read on 5-minute closes, reaches this % of the capital.">Target % of Capital</label>
-                    <input type="number" id="mcTarget" value="1.5" min="0.1" step="0.1">
-                </div>
-                <div class="form-group">
-                    <label for="mcStop" title="All legs out once the mark-to-market loss, read on 5-minute closes, reaches this % of the capital. Books that close's real prices, so a gap goes past it.">Stop % of Capital</label>
-                    <input type="number" id="mcStop" value="2" min="0.1" step="0.1">
-                </div>
-                <div class="form-group">
-                    <label for="mcHold" title="Sessions after the entry before the position is closed whatever it shows.">Max Hold (sessions)</label>
-                    <input type="number" id="mcHold" value="2" min="1" max="5" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="mcExitTime" title="Time of the exit on the last session of the hold.">Exit Time</label>
-                    <input type="time" id="mcExitTime" value="15:15">
-                </div>
-                <div class="form-group">
-                    <label for="mcSets" title="1 set = 2 + 2 lots sold, 1 + 1 hedges, 1 + 1 monthly.">Sets</label>
-                    <input type="number" id="mcSets" value="1" min="1" step="1">
-                </div>
-                <div class="form-group">
-                    <label for="mcCapital" title="₹ per set; every % is on it. There is no historical SPAN here, so this is the page's number: the author's max loss of about ₹44,000 at 19.5 % makes one set about ₹2.25 L.">Capital per Set (₹)</label>
-                    <input type="number" id="mcCapital" value="225000" min="10000" step="5000">
-                </div>
-                <div class="form-group" style="grid-column:1/-1;">
-                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
-                        Sold on the first weekly at least 7 days out (not tomorrow's); the calendar on the first monthly after it. Zero adjustments.
-                        Premiums are ICICI's 5-minute candles (needs an ICICI login; 2-3 requests a contract, about 2 contracts a Monday under the IV filter and 12-14 when traded, instant once cached).
-                    </small>
-                </div>
-            </div>
-
             <!-- Swing Momentum params -->
             <!-- Weekly CPR Breakout — the /scanners "W CPR Open" rule traded
                  over every F&O future stock: open inside the weekly CPR, first
@@ -2367,20 +2307,6 @@
                 </div>
             </div>
 
-            <!-- NIFTY Matrix Calendar Find Best Params (matrix_calendar_engine.SWEEP_GRID) -->
-            <div id="matrixCalendarOptimisePanel" style="display:none;">
-                <div class="opt-header">
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 style="margin:0;">🧮 NIFTY Matrix Calendar Best Params</h4>
-                        <button id="mcRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
-                    </div>
-                    <small id="mcOptMeta"></small>
-                </div>
-                <div class="opt-table-wrap">
-                    <div id="mcOptGrid"></div>
-                </div>
-            </div>
-
             <!-- ST + BB + RSI + R1/S1 Find Best Params — one flat leaderboard on INDEX points -->
             <div id="stBbRsiOptimisePanel" style="display:none;">
                 <div id="sbrOptBody">
@@ -2493,7 +2419,6 @@
             <div id="crResults" style="display:none;">
                 <div class="results-section">
                     <div class="results-row results-row-6" id="crStats"></div>
-                    <div id="mcYears" style="margin-top:8px;display:none;"><div id="mcYearGrid"></div></div>
                     <div style="margin-top:8px;"><div id="crGrid"></div></div>
                 </div>
             </div>
