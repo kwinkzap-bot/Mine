@@ -39566,8 +39566,44 @@
       "reason": "10:40 candle rejected from R1 (high 24,651, closed 24,619) -> SELL under it; SL over R1 24,646; target CPR 24,504 \u2014 set up at 10:40, in the 10:30-11:30 lull \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 65.7 pts (0.268%), 09:15 candle O 24538.2 H 24538.2 L 24388.05 C 24514.6 | Trade by rule: 10:40 candle rejected from R1 (high 24,651, closed 24,619) -> SELL under it; SL over R1 24,646; target CPR 24,504 \u2014 set up at 10:40, in the 10:30-11:30 lull \u2014 no trade"
+    },
+    {
+      "date": "2026-11-08",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Wide",
+      "cpr_direction": "Asc",
+      "first_candle": "Candle green near Prev High",
+      "boxes": "Big",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "No candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 214.1 pts (0.855%), 09:15 candle O 25070.45 H 25131.85 L 25038.75 C 25104.9 | Trade by rule: no candle rejected from the CPR or a PDH/PDL/R1/S1 level by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-11-09",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "Strong big candle red near S1",
+      "boxes": "Medium",
+      "trade": "SELL",
+      "entry": 24896.0,
+      "target": 24776.0,
+      "sl": 24956.0,
+      "result": "SL",
+      "pnl": -60.0,
+      "reason": "09:15 candle opened at 25,076 over PDL/S1 24,937-24,985 and closed below both at 24,917, but a 172-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDL/S1 (24,954-24,898) -> SELL under it; SL over its high; target 1:2",
+      "setup_time": "09:20",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 48.1 pts (0.193%), 09:15 candle O 25076.4 H 25084.05 L 24912.45 C 24917.35 | Trade by rule: 09:15 candle opened at 25,076 over PDL/S1 24,937-24,985 and closed below both at 24,917, but a 172-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDL/S1 (24,954-24,898) -> SELL under it; SL over its high; target 1:2; chart replay SL 09:40 -> 09:45"
     }
   ],
-  "extended_at": "2026-11-07 08:22",
+  "extended_at": "2026-11-10 08:02",
   "backfilled_from": "2018-01-01"
 }
