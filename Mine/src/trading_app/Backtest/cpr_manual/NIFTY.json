@@ -39591,19 +39591,19 @@
       "price_vs_hourly": "Above",
       "cpr_type": "Narrow",
       "cpr_direction": "Asc",
-      "first_candle": "Strong big candle red near S1",
+      "first_candle": "Strong very big candle red from Prev High/R1 box through CPR, closed below Prev Low/S1 box",
       "boxes": "Medium",
-      "trade": "SELL",
-      "entry": 24896.0,
-      "target": 24776.0,
-      "sl": 24956.0,
-      "result": "SL",
-      "pnl": -60.0,
-      "reason": "09:15 candle opened at 25,076 over PDL/S1 24,937-24,985 and closed below both at 24,917, but a 172-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDL/S1 (24,954-24,898) -> SELL under it; SL over its high; target 1:2",
-      "setup_time": "09:20",
-      "note": "Analysis added from the chart (Fyers 5-min): CPR 48.1 pts (0.193%), 09:15 candle O 25076.4 H 25084.05 L 24912.45 C 24917.35 | Trade by rule: 09:15 candle opened at 25,076 over PDL/S1 24,937-24,985 and closed below both at 24,917, but a 172-pt candle is too big to enter under \u2014 waited for 09:20; 09:20 small red candle held under PDL/S1 (24,954-24,898) -> SELL under it; SL over its high; target 1:2; chart replay SL 09:40 -> 09:45"
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Price above the weekly CPR (24,169-24,714) but below the daily CPR (25,010-25,059): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 48.1 pts (0.193%), 09:15 candle O 25076.4 H 25084.05 L 24912.45 C 24912.45 | Trade by rule: price above the weekly CPR (24,169-24,714) but below the daily CPR (25,010-25,059): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-11-10 08:02",
+  "extended_at": "2026-11-10 09:54",
   "backfilled_from": "2018-01-01"
 }

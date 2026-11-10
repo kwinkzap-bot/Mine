@@ -1894,3 +1894,37 @@ def test_vwap_cpr_rejection_needs_the_extreme_ten_points_past_the_previous_candl
     assert vwap_cpr_rejection({'levels': _VW_LV}, bars) is None
     bars[-2] = dict(bars[-2], high=23114.5)                                # exactly 10
     assert vwap_cpr_rejection({'levels': _VW_LV}, bars) is not None
+
+
+# ── 9 Nov 2026: a box-to-box 09:15 candle is not followed at 09:20 ──
+
+PREV_N9 = (25131.85, 24985.3, 24986.4)          # 8 Nov session: PDH/R1 25,084-25,132, PDL/S1 24,937-24,985
+WEEK_N9 = (25030.35, 23207.05, 25030.35)        # 2-6 Nov: the weekly CPR well under the day
+C1_N9 = {'time': '09:15', 'open': 25076.4, 'high': 25084.05, 'low': 24912.45, 'close': 24912.45}
+C2_N9 = {'time': '09:20', 'open': 24919.45, 'high': 24953.8, 'low': 24897.85, 'close': 24925.6}
+
+
+def test_9_nov_2026_box_to_box_candle_is_labelled_and_not_followed_at_0920():
+    """High on R1 (the PDH/R1 box), through the whole CPR, closed under
+    PDL/S1: a 172-pt candle that spent the day's move. The 09:20 SELL the
+    big-break case took (stopped at 09:45) is not taken."""
+    chart = _chart_31(C1_N9)
+    chart.update(_chart(C1_N9, PREV_N9, WEEK_N9))
+    lv = chart['levels']
+    assert svc.box_sweep(C1_N9, lv) == 'down'
+    fc = svc.describe_first_candle(C1_N9, lv, 105.0)
+    assert fc['sweep'] == 'down' and 'Very big Red' in fc['text']
+    assert svc.candle_words(fc) == ('Strong very big candle red from Prev High/R1 box through CPR, '
+                                    'closed below Prev Low/S1 box')
+    p, why, i = propose(chart, _session(C1_N9, C2_N9))
+    assert not (p and i == 1 and 'too big to enter under' in why)
+
+
+def test_a_big_break_that_never_reached_the_upper_box_is_still_followed():
+    """The same day with the 09:15 high under R1 is the ordinary big break."""
+    c1 = dict(C1_N9, open=25060.0, high=25062.0)
+    lv = svc.levels(*PREV_N9)
+    assert svc.box_sweep(c1, lv) is None
+    assert svc.box_sweep(dict(c1, high=25080.0), lv) == 'down'      # a touch short of R1 counts
+    green = {'open': 24920.0, 'high': 25145.0, 'low': 24930.0, 'close': 25140.0}
+    assert svc.box_sweep(green, lv) == 'up'

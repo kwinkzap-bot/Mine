@@ -208,8 +208,18 @@ def describe_first_candle(c: Dict[str, float], lv: Dict[str, float],
     dist_of['CPR'] = abs(lv['pp'] - cl)
     touched = sorted(touched, key=lambda n: dist_of[n])[:3]
 
+    # Box to box: a red candle that reached the PDH/R1 box, fell through the
+    # whole CPR and closed under the PDL/S1 box — or the green mirror. The
+    # day's move is spent in one candle (9 Nov 2026: H 25,084 on R1, through
+    # CPR 25,010-25,059, C 24,912 under PDL/S1 24,937-24,985, 172 pts).
+    sweep = box_sweep(c, lv)
+    if sweep:
+        size = 'Very big'
     words = [w for w in (strength, size, colour) if w]
     text = ' '.join(words) if colour != 'Doji' else 'Indecision (doji)' + (f', {size.lower()}' if size else '')
+    if sweep:
+        text += (' · PDH/R1 box → through CPR → closed under PDL/S1 box' if sweep == 'down'
+                 else ' · PDL/S1 box → through CPR → closed over PDH/R1 box')
     if touched:
         text += ' · touched ' + ', '.join(touched)
     elif nearest:
@@ -223,7 +233,24 @@ def describe_first_candle(c: Dict[str, float], lv: Dict[str, float],
         'range_ratio': _r(ratio, 2),
         'touched': touched,
         'near': nearest[0] if nearest else None,
+        'sweep': sweep,
     }
+
+
+def box_sweep(c: Dict[str, float], lv: Dict[str, float]) -> Optional[str]:
+    """'down' for a red candle whose high reached the PDH/R1 box (a touch
+    short of its lower edge counts), that crossed the whole CPR and closed
+    under the PDL/S1 box; 'up' for the green mirror; else None."""
+    o, h, l, cl = c['open'], c['high'], c['low'], c['close']
+    tol = cl * LEVEL_TOUCH_PCT / 100
+    lo_box = (min(lv['pdl'], lv['s1']), max(lv['pdl'], lv['s1']))
+    hi_box = (min(lv['pdh'], lv['r1']), max(lv['pdh'], lv['r1']))
+    cpr_lo, cpr_hi = min(lv['bc'], lv['tc']), max(lv['bc'], lv['tc'])
+    if cl < o and h >= hi_box[0] - tol and h >= cpr_hi and cl < lo_box[0]:
+        return 'down'
+    if cl > o and l <= lo_box[1] + tol and l <= cpr_lo and cl > hi_box[1]:
+        return 'up'
+    return None
 
 
 # The chart's level names in the sheet's words.
@@ -250,6 +277,10 @@ def candle_words(fc: Dict[str, Any]) -> str:
         adj = ' '.join(p.lower() for p in parts[:-1])
         words = (adj.capitalize() + ' ' if adj else '') + f'candle {colour}'
         words = words[0].upper() + words[1:]
+    if fc.get('sweep') == 'down':
+        return words + ' from Prev High/R1 box through CPR, closed below Prev Low/S1 box'
+    if fc.get('sweep') == 'up':
+        return words + ' from Prev Low/S1 box through CPR, closed above Prev High/R1 box'
     if level:
         words += ' near ' + _LEVEL_WORDS.get(level, level)
     return words

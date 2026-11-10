@@ -195,6 +195,11 @@ through the Trend page's reasons: trade the REJECTION, not the break.
                2026: 09:15 O 24,152 in PDL/S1 24,117-24,155, H 24,173,
                L 24,103, C 24,119; 09:20 red 24,125-24,105, C 24,106 ->
                SELL 24,104, SL 24,127, target 1:2 24,058). Mirror above.
+               Not after a BOX-TO-BOX candle: one that reached the
+               PDH/R1 box, fell through the whole CPR and closed under
+               PDL/S1 (mirror up) has spent the move — no 09:20
+               continuation (9 Nov 2026: 172 pts R1 -> under S1, the
+               09:20 SELL stopped at 09:45).
     09:15 OUT OF THE PDH/R1 BOX — narrow CPR, open above both CPRs, the
                09:15 candle opens inside the PDH/R1 box and closes above
                it. Two ways from there, whichever comes first: a bar
@@ -452,7 +457,14 @@ def propose(chart, bars):
     # A 09:15 candle of SHOCK size (SHOCK_CANDLE_PCT, ~140 pts) is a news gap, not a
     # break to follow: the 09:20 continuation sells (buys) an exhausted move (20 Apr
     # 2020: 1.31%, 17 Apr 2023: 1.09% — both stopped). The day goes to the other setups.
-    if px * BIG_CANDLE_PCT / 100 < rng1 <= px * SHOCK_CANDLE_PCT / 100 and len(bars) > 1:
+    # A BOX-TO-BOX candle — high on the PDH/R1 box, through the whole CPR,
+    # closed under the PDL/S1 box (or the mirror) — is not followed either:
+    # the day's move is spent in that one candle (9 Nov 2026: R1 25,084 ->
+    # C 24,912 under PDL/S1, 172 pts; the 09:20 SELL 24,896 was stopped at
+    # 09:45). Its own-candle trades (the narrow-CPR trend day) are untouched.
+    box_sweep = svc.box_sweep(c1, lv)
+    if (px * BIG_CANDLE_PCT / 100 < rng1 <= px * SHOCK_CANDLE_PCT / 100 and len(bars) > 1
+            and not box_sweep):
         c2 = bars[1]
         rng2 = c2['high'] - c2['low']
         small2 = 0 < rng2 <= rng1 * INSIDE_MAX
