@@ -1402,7 +1402,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // a strict rule can go weeks without a signal: widen the look-back until one turns up
         for (const days of (btgInterval(key) === 'day' ? [150, 700] : [14, 120, 500])) {
             const start = new Date(end.getTime() - days * 86400000);
-            const body = { ...cap.payload, start_date: iso(start), end_date: iso(end), price_options: false };
+            // index points only: never set off the background option pricing (price_options / option_pnl)
+            const body = { ...cap.payload, start_date: iso(start), end_date: iso(end), price_options: false, option_pnl: false };
             const r = await fetch(cap.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body) });
             const j = await r.json();
@@ -1742,6 +1743,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 // P&L basis: unticked = NIFTY index points, ticked = the
                 // premium of the CE/PE leg the live algo would have bought.
                 payload.option_pnl   = document.getElementById('scOptionPnl')?.checked ?? false;
+                // Ticked: each leg is priced from the contract's recorded candles in the
+                // background (strike nearest ₹250 at entry, as the live algo picks it).
+                payload.premium      = 250;
             }
 
             // SuperTrend + BB + RSI + R1, bought as the ≈250 CE; exit on SuperTrend break
@@ -2253,7 +2257,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Simple Trader / Hilega / MA: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators' || strat === 'st_touch_break')) {
+            if (data.success && data.task_id && (strat === 'second_candle' || strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators' || strat === 'st_touch_break')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -3634,9 +3638,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 const subtitle = document.getElementById('btSubtitle');
                 if (subtitle) {
                     subtitle.textContent = isScOption
-                        ? `P&L basis: option premium  ·  ${summary.strike_mode === 'delta' ? '~0.90Δ strike' : 'strike priced nearest ₹250'}`
-                          + `  ·  nearest weekly expiry  ·  IV ${Math.round((summary.option_iv || 0.15) * 100)}% assumed`
-                          + '  ·  modelled (Black-Scholes), not a recorded chain'
+                        ? `P&L basis: option premium  ·  strike priced nearest ₹${summary.premium || 250} at entry`
+                          + '  ·  nearest weekly expiry  ·  recorded 1-minute option candles (ICICI)'
+                          + '  ·  entry/exit read at the minute the index traded the level'
                         : 'P&L basis: NIFTY index points';
                 }
             }
@@ -4184,11 +4188,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const SC_OPTION_COLS = [
         { label: 'Leg', sortable: true,
           sortValue: t => Number(t.strike) || 0,
-          format: (_, t) => t.strike ? `${t.strike} ${t.option_type || ''}`.trim() : '—' },
+          format: (_, t) => t.strike ? `${t.strike} ${t.option_type || ''}`.trim() : '—',
+          title: (_, t) => t.expiry ? `expiry ${t.expiry}` : '' },
+        { key: 'expiry', label: 'Expiry', sortable: true,
+          format: v => v || '—' },
         { key: 'entry_premium', label: 'Entry Prem', sortable: true,
-          format: v => (v || 0).toFixed(2) },
+          format: v => (v || 0).toFixed(2),
+          title: (_, t) => t.option_entry_time ? `read at ${t.option_entry_time}` : '' },
         { key: 'exit_premium', label: 'Exit Prem', sortable: true,
-          format: v => (v || 0).toFixed(2) },
+          format: v => (v || 0).toFixed(2),
+          title: (_, t) => t.option_exit_time ? `read at ${t.option_exit_time}` : '' },
         { key: 'index_pnl', label: 'Index P&L', sortable: true,
           format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
     ];
@@ -4544,9 +4553,10 @@ document.addEventListener('DOMContentLoaded', function() {
         container.innerHTML = groups.map((g, gi) => `
             <div class="opt-tf-block">
                 <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
-                    <span>best ${(g.results || []).length} of ${g.total}</span>
+                    <span>best ${(g.results || []).length} of ${g.total}${g.from ? ` · sessions ${g.from} → ${g.to}` : ''}</span>
                 </div>
                 <div class="opt-table-wrap collapsed-hide">
+                    ${g.note ? `<div class="opt-tf-note" style="font-size:12px;color:var(--text-secondary,#64748b);padding:6px 10px;">${String(g.note).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</div>` : ''}
                     <div id="${spec.idPrefix}-${gi}"></div>
                 </div>
             </div>`).join('') || '<div class="opt-tf-title">No timeframe produced enough trades.</div>';
@@ -4798,6 +4808,51 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: '',              key: null,            fmt: () => '' },   // Use button
     ];
 
+    // Every board shows BOTH bases side by side: index points and the option
+    // leg's premium points (the engine's Black-Scholes model — USE a row and
+    // BACKTEST with OPT P&L ticked to read the real option candles). The basis
+    // the board was ranked on owns the `net_pnl_inr` key, so its ₹ column is
+    // the default sort.
+    function _scPtsCell(v) {
+        if (v == null) return '—';
+        return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + v.toFixed(1)} pts</span>`;
+    }
+    function _scInrCell(v) {
+        if (v == null) return '—';
+        return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`;
+    }
+    function _scNetOf(r, field) {
+        const pts = field === 'total_pnl' ? r.total_pnl : r[field];
+        if (pts == null) return null;
+        const { lots, lotValue } = _scOptMoney();
+        return pts * lotValue * lots - _scOptBrokerage(r, lots);
+    }
+    function _scOptCols(isOpt) {
+        const idxPts = r => r.index_pnl != null ? r.index_pnl : (isOpt ? null : r.total_pnl);
+        const optPts = r => r.option_pnl != null ? r.option_pnl : (isOpt ? r.total_pnl : null);
+        const idxNet = r => { const v = idxPts(r); return v == null ? null : _scNetOf({ ...r, x: v }, 'x'); };
+        const optNet = r => { const v = optPts(r); return v == null ? null : _scNetOf({ ...r, x: v }, 'x'); };
+        const pnlCols = [
+            { label: 'Index P&L (pts)', key: 'index_pnl',  fmt: r => _scPtsCell(idxPts(r)) },
+            { label: 'Index P&L (₹)',   key: isOpt ? 'index_net_inr' : 'net_pnl_inr', fmt: r => _scInrCell(idxNet(r)) },
+            { label: 'Opt P&L (pts)',   key: 'option_pnl', fmt: r => _scPtsCell(optPts(r)) },
+            { label: 'Opt P&L (₹)',     key: isOpt ? 'net_pnl_inr' : 'option_net_inr', fmt: r => _scInrCell(optNet(r)) },
+        ];
+        const derived = {
+            index_pnl:      r => idxPts(r) ?? -Infinity,
+            option_pnl:     r => optPts(r) ?? -Infinity,
+            index_net_inr:  r => idxNet(r) ?? -Infinity,
+            option_net_inr: r => optNet(r) ?? -Infinity,
+            net_pnl_inr:    r => (isOpt ? optNet(r) : idxNet(r)) ?? -Infinity,
+        };
+        const cols = [];
+        SC_OPT_COLS.forEach(c => {
+            if (c.key === 'total_pnl') cols.push(...pnlCols);
+            else if (c.key !== 'net_pnl_inr') cols.push(c);
+        });
+        return { cols, derived };
+    }
+
     let _scOptGroupsByTf = {};
 
     function renderScOptResults(data) {
@@ -4807,23 +4862,26 @@ document.addEventListener('DOMContentLoaded', function() {
         const recalcBtn = document.getElementById('scRecalcOptBtn');
 
         refreshLiveConfigs();   // re-badge rows against the current live algos
+        // The board's own basis (an older cached board has none: the checkbox it was asked with)
+        const isOpt = data.pnl_basis ? data.pnl_basis !== 'index' : _scOptionBasis();
 
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
-            meta += _scOptionBasis() ? ' · option premium basis' : ' · index basis';
+            meta += ` · ranked on ${isOpt ? 'option' : 'index'} P&L · option premiums modelled (Black-Scholes) — USE a row, tick OPT P&L and BACKTEST for real option candles`;
             if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
             metaEl.textContent = meta;
         }
 
-        _renderOptTfGrids(container, data.timeframes || [], SC_OPT_COLS, {
+        const { cols: scCols, derived: scDerived } = _scOptCols(isOpt);
+        _renderOptTfGrids(container, data.timeframes || [], scCols, {
             idPrefix: 'scOptGrid',
             isLive: _isScComboLive,
             applyFn: applyScOptResult,
             stateStore: _scOptGroupsByTf,
             derivedSort: {
                 win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
-                net_pnl_inr: r => { const { lots, lotValue } = _scOptMoney(); return _scOptNetRs(r, lots, lotValue); },
                 brokerage_inr: r => { const { lots } = _scOptMoney(); return _scOptBrokerage(r, lots); },
+                ...scDerived,
             },
         });
 
@@ -4951,7 +5009,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (window.showNotification) {
             const tfStr = r.tf_label ? `${r.tf_label} · ` : '';
             window.showNotification(
-                `Applied: ${tfStr}Candle ${r.candle_index}  ·  1:${r.rr_ratio}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
+                `Applied: ${tfStr}Candle ${r.candle_index}  ·  1:${r.rr_ratio}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`
+                + (_scOptionBasis() ? '  ·  click BACKTEST to price every trade on the real option candles' : ''), 'success'
             );
         }
     }

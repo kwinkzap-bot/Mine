@@ -3609,6 +3609,297 @@ def _resample_1min(candles, interval):
     return result
 
 
+_sc_extending: set = set()          # symbols whose 30-second backfill thread is running
+_sc_extending_lock = threading.Lock()
+_sc_empty: dict = {}                # symbol → {(from, to)} short ranges Breeze answered empty (holidays)
+
+# The 30-second backfill: Breeze 1-second history, aggregated to 30 s, walked from
+# the store's oldest session back to BREEZE_SECONDS_SINCE (2018-04-02) — ~2,100
+# sessions, 25 requests each, ≈54,000 requests in all. The ~5,000/day Breeze
+# allowance is shared with the live algos, so the walk spends nothing in market
+# hours, up to _SC_BACKFILL_WEEKDAY after 15:45 and _SC_BACKFILL_WEEKEND on a
+# Saturday/Sunday; what each day spent is kept on disk so a restart does not
+# reset it. One thread per symbol, alive across days until the history is
+# complete (or the process restarts — the next backtest/board starts it again).
+_SC_BACKFILL_WEEKDAY = 3500
+_SC_BACKFILL_WEEKEND = 4500
+_SC_BACKFILL_CHUNK = 800            # requests per fetch = 32 weekdays, the adapter's own cap
+_SC_BACKFILL_IDLE = 600             # seconds between looks while there is no allowance
+_SC_BACKFILL_RETRY = 1800           # after a chunk that came back empty (logged out / refused)
+_SC_BACKFILL_STRIKES = 3            # empty chunks in a row before giving up until the next start
+_SC_DAY_REQUESTS = 25
+
+
+def _sc_sleep(seconds):             # patched in tests
+    _time.sleep(seconds)
+
+
+def _sc_backfill_allowance(now=None) -> int:
+    """Breeze requests the 30-second backfill may spend on `now`'s IST date."""
+    from zoneinfo import ZoneInfo
+    now = now or datetime.now(ZoneInfo('Asia/Kolkata'))
+    if now.weekday() >= 5:
+        return _SC_BACKFILL_WEEKEND
+    return _SC_BACKFILL_WEEKDAY if (now.hour, now.minute) >= (15, 45) else 0
+
+
+def _sc_spent_path():
+    import os
+    from trading_app.Backtest import seconds_store
+    return os.path.join(seconds_store.DATA_DIR, 'backfill_spent.json')
+
+
+def _sc_spent_today(add=0) -> int:
+    """Requests the backfill has spent today (IST), optionally adding `add`."""
+    import json, os
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo('Asia/Kolkata')).date().isoformat()
+    path = _sc_spent_path()
+    try:
+        with open(path) as f:
+            book = json.load(f)
+    except (OSError, ValueError):
+        book = {}
+    n = int(book.get(today, 0)) + add
+    if add:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({today: n}, f)
+        os.replace(tmp, path)
+    return n
+
+
+def _sc_weekdays(fd, td) -> int:
+    if fd > td:
+        return 0
+    n = (td - fd).days + 1
+    full, rest = divmod(n, 7)
+    return full * 5 + sum(1 for i in range(rest) if (fd + timedelta(days=full * 7 + i)).weekday() < 5)
+
+
+def _sc_backfill_gap(symbol):
+    """(from, to) still to fetch, newest end first, or None when complete.
+    The tail (the store's newest session up to Fyers' free window) comes first."""
+    from datetime import date
+    from trading_app.Backtest import seconds_store, seconds_history
+    first, last, _n = seconds_store.span(symbol)
+    since = seconds_history.BREEZE_SECONDS_SINCE
+    fyers_from = date.today() - timedelta(days=seconds_history.FYERS_SECONDS_DAYS)
+    if last is None:
+        return since, fyers_from - timedelta(days=1)
+    last_d = date.fromisoformat(last)
+    tail = (last_d + timedelta(days=1), fyers_from - timedelta(days=1))
+    if _sc_weekdays(*tail) and tail not in _sc_empty.get(symbol, ()):
+        return tail
+    first_d = date.fromisoformat(first)
+    if _sc_weekdays(since, first_d - timedelta(days=1)):
+        return since, first_d - timedelta(days=1)
+    return None
+
+
+def _sc_breeze_30s(provider, token, fd, td):
+    """One chunk of 30-second bars straight from Breeze (never Fyers: these
+    dates are past its window, so asking it would only spend a request)."""
+    return provider.historical_data(instrument_token=token, from_date=fd.isoformat(),
+                                    to_date=td.isoformat(), interval='30second',
+                                    use_cache=False) or []
+
+
+def _sc_backfill_30s(symbol, token, user=None) -> bool:
+    """Start the 30-second backfill for `symbol` unless it is running or done.
+    True if a thread was started."""
+    if _sc_backfill_gap(symbol) is None:
+        return False
+    with _sc_extending_lock:
+        if symbol in _sc_extending:
+            return False
+        _sc_extending.add(symbol)
+
+    def _run():
+        from trading_app.Backtest import seconds_store
+        strikes = 0
+        try:
+            while True:
+                gap = _sc_backfill_gap(symbol)
+                if gap is None:
+                    logger.info('[2ndCandle 30s] %s backfill complete', symbol)
+                    return
+                left = _sc_backfill_allowance() - _sc_spent_today()
+                if left < _SC_DAY_REQUESTS:
+                    _sc_sleep(_SC_BACKFILL_IDLE)
+                    continue
+                provider = get_icici_adapter(user)
+                if provider is None:
+                    logger.warning('[2ndCandle 30s] %s backfill: no ICICI session — stopped', symbol)
+                    return
+                # The newest end of the gap, as many weekdays as the budget buys.
+                days = min(_SC_BACKFILL_CHUNK, left) // _SC_DAY_REQUESTS
+                gfd, td = gap
+                fd = td
+                while fd > gfd and _sc_weekdays(fd - timedelta(days=1), td) <= days:
+                    fd -= timedelta(days=1)
+                t0 = _time.time()
+                candles = _sc_breeze_30s(provider, token, fd, td)
+                _sc_spent_today(add=_sc_weekdays(fd, td) * _SC_DAY_REQUESTS)
+                if not candles and _sc_weekdays(fd, td) < 5:
+                    # A few weekdays with nothing: holidays. Remembered for this
+                    # process so the walk moves on to the head.
+                    _sc_empty.setdefault(symbol, set()).add((fd, td))
+                    continue
+                if not candles:
+                    # Breeze has every NIFTY session since 2018-04-02, so a whole
+                    # empty chunk is a refusal or a dead session — never skip past it.
+                    strikes += 1
+                    logger.warning('[2ndCandle 30s] %s %s→%s came back empty (%d/%d)',
+                                   symbol, fd, td, strikes, _SC_BACKFILL_STRIKES)
+                    if strikes >= _SC_BACKFILL_STRIKES:
+                        return
+                    _sc_sleep(_SC_BACKFILL_RETRY)
+                    continue
+                strikes = 0
+                df = seconds_store.merge_and_read(symbol, candles, fd.isoformat(), td.isoformat())
+                f, l, n = seconds_store.span(symbol)
+                logger.info('[2ndCandle 30s] %s %s→%s: %d sessions in %.0fs — store %s→%s, %d sessions',
+                            symbol, fd, td, df.index.normalize().nunique() if not df.empty else 0,
+                            _time.time() - t0, f, l, n)
+                if df.empty or (gap[0] < fd and df.index[0].date() > fd + timedelta(days=7)):
+                    # Bars that do not reach the chunk's start would leave the
+                    # walk stuck on the same days; treat as a refusal.
+                    strikes += 1
+                    if strikes >= _SC_BACKFILL_STRIKES:
+                        return
+        except Exception as e:          # noqa: BLE001 — the next run restarts it
+            logger.warning('[2ndCandle 30s] %s backfill failed: %s', symbol, e)
+        finally:
+            with _sc_extending_lock:
+                _sc_extending.discard(symbol)
+
+    threading.Thread(target=_run, name=f'sc-30s-{symbol}', daemon=True).start()
+    return True
+
+
+def _sc_backfill_note(symbol):
+    """One line on how far the 30-second history reaches and what is left."""
+    from datetime import date
+    from trading_app.Backtest import seconds_store, seconds_history
+    first, last, n = seconds_store.span(symbol)
+    gap = _sc_backfill_gap(symbol)
+    if gap is None:
+        return None
+    left = _sc_weekdays(*gap)
+    if first and gap[0] > seconds_history.BREEZE_SECONDS_SINCE:     # the tail first, then the head
+        left += _sc_weekdays(seconds_history.BREEZE_SECONDS_SINCE,
+                             date.fromisoformat(first) - timedelta(days=1))
+    req = left * _SC_DAY_REQUESTS
+    week = 5 * _SC_BACKFILL_WEEKDAY + 2 * _SC_BACKFILL_WEEKEND
+    when = ('one evening' if req <= _SC_BACKFILL_WEEKDAY
+            else f'about {max(2, round(req / week * 7))} days')
+    running = symbol in _sc_extending
+    have = f'{n} sessions on disk from {first}' if first else 'no sessions on disk yet'
+    return (f'30-second history: {have}. ' +
+            (f'Backfilling to {seconds_history.BREEZE_SECONDS_SINCE} from ICICI — ~{left:,} weekdays '
+             f'(~{req:,} Breeze requests) to go, spent only after 15:45 on weekdays (up to '
+             f'{_SC_BACKFILL_WEEKDAY:,} a day) and at weekends ({_SC_BACKFILL_WEEKEND:,}): {when}. '
+             f'The board rebuilds on the next load once new sessions are in.'
+             if running else
+             f'~{left:,} older weekdays back to {seconds_history.BREEZE_SECONDS_SINCE} are not '
+             f'fetched yet — the backfill could not start (ICICI login?).'))
+
+
+_SC_INDEX_TOKENS = {
+    'NIFTY':      'NSE:NIFTY50-INDEX',
+    'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+    'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+    'SENSEX':     'BSE:SENSEX-INDEX',
+}
+_SC_MIN_TF = {'minute': 1, '2minute': 2, '3minute': 3, '5minute': 5}
+
+
+def _sc_bars(symbol, interval, start_date_str, end_date_str, fyers, backfill=False,
+             user=None, need_minutes=False):
+    """(candles, index_minutes, note) for Candle Breakout — the ONE place the
+    backtest and its Find Best Params board get their bars, so both run on the
+    same sessions (they disagreed on 2026-11-11: 44 trades against 19).
+
+    * 1/2/3/5-minute: the on-disk Fyers 1-minute store, resampled here.
+    * 30-second: Backtest/seconds_store, read back over [start, end] after
+      Fyers' free ~28-day window is added (one request). With `backfill`
+      (both the backtest and the board) the rest of the history back to
+      2018-04-02 is fetched from Breeze in the BACKGROUND (_sc_backfill_30s),
+      after hours, so the call itself never waits on Breeze.
+    * Today's session is left out until it closes (seconds_store.drop_forming).
+    """
+    from datetime import date
+    from trading_app.Backtest import seconds_store
+    from trading_app.Backtest.seconds_history import (
+        BREEZE_SECONDS_SINCE, FYERS_SECONDS_DAYS, fetch_seconds_history)
+    token = _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ')
+    minutes_df = None
+    if fyers is not None and (interval in _SC_MIN_TF or need_minutes):
+        minutes_df, _ = _sbr_load_minutes(fyers, token, symbol, start_date_str, end_date_str,
+                                          warmup_days=0)
+        if minutes_df is not None and not minutes_df.empty:
+            hm = minutes_df.index.hour * 60 + minutes_df.index.minute
+            minutes_df = minutes_df[(hm >= 9 * 60 + 15) & (hm < 15 * 60 + 30)]
+            minutes_df = minutes_df[minutes_df.index >= pd.Timestamp(start_date_str)]
+            minutes_df = seconds_store.drop_forming(minutes_df)
+
+    if interval in _SC_MIN_TF:
+        if minutes_df is None or minutes_df.empty:
+            return [], minutes_df, None
+        bars_df, _ = _sbr_bars(minutes_df, interval, start_date_str)
+        return bars_df.to_dict('records'), minutes_df, None
+
+    if interval != '30second':
+        raise ValueError(f'Unsupported interval {interval!r}')
+    start_d = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+    end_d = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+    first, last, _n = seconds_store.span(symbol)
+    notes = []
+    fetched = []
+    # Fyers' free window, in one request, on every call. Everything older is
+    # Breeze at 25 requests a session — ~10 minutes for a couple of months — so
+    # the backtest no longer waits on it: it runs on what the store holds now
+    # and the rest is backfilled in the background (_sc_backfill_30s), for later runs.
+    sec_from = max(start_d, end_d - timedelta(days=FYERS_SECONDS_DAYS))
+    if fyers is not None:
+        c, _ = fetch_seconds_history(fyers, token, sec_from.isoformat(), end_d.isoformat(),
+                                     interval='30second', user=user)
+        fetched += c or []
+    df = seconds_store.merge_and_read(symbol, fetched, start_date_str, end_date_str)
+    if backfill:
+        # Everything older than Fyers' window, back to BREEZE_SECONDS_SINCE, is
+        # walked in the background over the next evenings (_sc_backfill_30s); this
+        # call runs on what the store holds now.
+        _sc_backfill_30s(symbol, token, user)
+        bnote = _sc_backfill_note(symbol)
+        if bnote:
+            notes.append(bnote)
+    if start_d < BREEZE_SECONDS_SINCE:
+        notes.append(f'30-second history starts {BREEZE_SECONDS_SINCE} — ICICI has no '
+                     f'1-second data before it, so nothing earlier is fetched.')
+    return seconds_store.records(df), minutes_df, ('  ·  '.join(notes) or None)
+
+
+# Candle Breakout option legs priced per run. Each leg probes a few strikes,
+# one Breeze request each (disk-cached once the session has settled), out of the
+# 5,000/day the live algos share — so in market hours a run prices only its
+# newest trades; after hours up to the shared pricer's own ceiling.
+_SC_OPTION_LEGS_MARKET = 300
+_SC_OPTION_LEGS_MAX = 3000
+
+
+def _sc_option_leg_cap() -> int:
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo('Asia/Kolkata'))
+    hm = now.hour * 60 + now.minute
+    if now.weekday() < 5 and 9 * 60 <= hm < 15 * 60 + 45:
+        return _SC_OPTION_LEGS_MARKET
+    return _SC_OPTION_LEGS_MAX
+
+
 @api_bp.route('/backtest/second-candle', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3643,45 +3934,38 @@ def run_second_candle_backtest_api():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
-        kite_indices = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105,
-            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
-        }
-
-        if _speaks_symbols(current_kite):
-            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-        else:
-            instrument_token = kite_indices.get(symbol, symbol)
-
-        # Fetch the chosen base interval (30second → Fyers "30S", minute → "1", etc.)
-        from trading_app.Backtest.seconds_history import fetch_seconds_history
-        candles, hist_note = fetch_seconds_history(
-            current_kite, instrument_token, start_date_str, end_date_str,
-            interval=interval, user=session.get('username'),
-        )
+        # Bars come from _sc_bars — the same call Find Best Params makes, so the
+        # two run on the same sessions. Minute timeframes: the on-disk Fyers
+        # 1-minute store. 30-second: the on-disk 30-second store, which this
+        # run (and only this run) may extend through Breeze. The same minutes
+        # place a 2/3/5-minute trade's option leg at the minute the index
+        # actually traded the level (second_candle_options).
+        fyers_bt = get_fyers_adapter(session.get('username'))
+        _MIN_TF = _SC_MIN_TF
+        candles, index_minutes, hist_note = _sc_bars(
+            symbol, interval, start_date_str, end_date_str,
+            fyers_bt, backfill=True,
+            user=session.get('username'), need_minutes=option_pnl)
 
         if not candles:
-            return jsonify({'success': False, 'error': f'No {interval} data found for the given range'}), 404
+            # Say why: usually the 30-second history is still being fetched.
+            return jsonify({'success': False,
+                            'error': hist_note or f'No {interval} data found for the given range'}), 404
 
         logger.info('[2ndCandle BT] %d %s bars received  first=%s  last=%s',
                     len(candles), interval,
                     candles[0].get('date', '?'),
                     candles[-1].get('date', '?'))
 
-        import pandas as pd
         import importlib
         import trading_app.Backtest.second_candle_engine as _sc_mod
         importlib.reload(_sc_mod)
         from trading_app.Backtest.second_candle_engine import SecondCandleBacktestEngine
 
         df = pd.DataFrame(candles)
+        # Always run on the index. With OPT P&L the legs are priced afterwards
+        # from the contracts' own recorded candles, not the engine's
+        # Black-Scholes model (still what Find Best Params ranks on).
         engine = SecondCandleBacktestEngine(
             df=df,
             candle_index=candle_index,
@@ -3690,7 +3974,7 @@ def run_second_candle_backtest_api():
             exit_minute=exit_minute,
             enable_long=enable_long,
             enable_short=enable_short,
-            option_pnl=option_pnl,
+            option_pnl=False,
             strike_step=_opt_strike_step(symbol),
         )
         trades, summary = engine.run()
@@ -3719,32 +4003,79 @@ def run_second_candle_backtest_api():
             except Exception:
                 pass
 
-        return jsonify({
-            'success': True,
-            'trades':  trades,
-            'warning': warning,
-            '_debug': {
-                'bars_fetched': len(candles),
-                'first_bar':    str(candles[0].get('date', '?')),
-                'last_bar':     str(candles[-1].get('date', '?')),
-            },
-            'summary': {
-                'total_trades':  summary['total_trades'],
-                'wins':          summary['wins'],
-                'losses':        summary['losses'],
-                'total_pnl':     summary['total_pnl'],
-                'win_rate':      summary['win_rate'],
-                'profit_factor': summary['profit_factor'],
-                'max_drawdown':  summary['max_drawdown'],
-                'avg_win':       summary['avg_win'],
-                'avg_loss':      summary['avg_loss'],
-                # Option basis only — the frontend labels the P&L column and
-                # card as premium points and shows the leg it priced.
-                'pnl_basis':     summary.get('pnl_basis', 'index'),
-                'option_iv':     summary.get('option_iv'),
-                'strike_mode':   summary.get('strike_mode'),
+        def _payload(rows, summ, warn, option_info=None):
+            return {
+                'success': True,
+                'trades':  rows,
+                'warning': warn,
+                'option':  option_info,
+                '_debug': {
+                    'bars_fetched': len(candles),
+                    'first_bar':    str(candles[0].get('date', '?')),
+                    'last_bar':     str(candles[-1].get('date', '?')),
+                },
+                'summary': {
+                    'total_trades':  summ['total_trades'],
+                    'wins':          summ['wins'],
+                    'losses':        summ['losses'],
+                    'total_pnl':     summ['total_pnl'],
+                    'win_rate':      summ['win_rate'],
+                    'profit_factor': summ['profit_factor'],
+                    'max_drawdown':  summ['max_drawdown'],
+                    'avg_win':       summ['avg_win'],
+                    'avg_loss':      summ['avg_loss'],
+                    # 'option' = premium points of the real ≈₹250 leg; the
+                    # frontend labels the P&L column and shows the leg columns.
+                    'pnl_basis':     'option' if option_info else 'index',
+                    'option_source': 'recorded' if option_info else None,
+                    'premium':       (option_info or {}).get('premium'),
+                },
             }
-        })
+
+        if not (option_pnl and trades):
+            return jsonify(_payload(trades, summary, warning))
+
+        # Real premiums: one Breeze request per strike probed per contract-day
+        # (disk-cached once settled), paced app-wide — minutes when cold, so it
+        # runs in the background and the page polls /backtest/st-bb-rsi/status.
+        from trading_app.Backtest.second_candle_options import price_trades
+        span_min = _MIN_TF.get(interval, 1)
+        sessions = sorted({pd.Timestamp(str(c['date'])).date() for c in candles})
+        cap = _sc_option_leg_cap()
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': min(len(trades), cap)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run_legs():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                priced, info = price_trades(symbol, trades, span_min, index_minutes,
+                                            calendar=sessions, max_legs=cap,
+                                            progress=_progress)
+                notes = []
+                if info['unpriced'] or info['truncated']:
+                    notes.append(
+                        f"{info['index_trades']} index trades: {info['unpriced']} had no option "
+                        f"candles and {info['truncated']} older ones were not priced "
+                        f"(at most {cap} a run{' in market hours' if cap < _SC_OPTION_LEGS_MAX else ''}); "
+                        f"they are left out of the totals.")
+                if warning:
+                    notes.append(warning)
+                task['payload'] = _payload(priced, _sc_mod._summary(priced),
+                                           ' '.join(notes) or None, info)
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[2ndCandle BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, summary,
+                    ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.',
+                                         warning) if w))
+            task['status'] = 'complete'
+
+        threading.Thread(target=_run_legs, name=f'sc-legs-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
 
     except Exception as e:
         logger.error(f"Error in 2nd Candle backtest API: {e}", exc_info=True)
@@ -3782,13 +4113,32 @@ def run_second_candle_optimise():
         # The two P&L bases rank the grid differently, so they are separate
         # cache entries — one would otherwise serve the other's leaderboard.
         basis_key = 'opt' if option_pnl else 'idx'
-        cache_key = f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}_v2"
+
+        def _board_key():
+            # v5: keyed on everything the board's numbers depend on — the date
+            # range, the newest settled session, and the 30-second sessions on
+            # disk — so it can never answer for bars a BACKTEST would not run
+            # on. Until 2026-11-11 it was symbol + cut-off + basis only: a board
+            # built for one range was served for any other.
+            from trading_app.Backtest import seconds_store
+            f30, l30, n30 = seconds_store.span(symbol)
+            return (f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}"
+                    f"_{start_date_str}_{end_date_str}_{seconds_store.last_settled_day()}"
+                    f"_30s{f30}-{l30}-{n30}_v5")
+        cache_key = _board_key()
 
         # ── Serve from cache unless caller asked to recalculate ──────────────
         if not recalculate:
             cache = _load_opt_cache()
             if cache_key in cache:
                 entry = cache[cache_key]
+                # The 30-second backfill's progress is today's, not the cached run's.
+                tfs = entry.get('timeframes', [])
+                if any(g.get('tf_label') == '30s' for g in tfs):
+                    _sc_backfill_30s(symbol, _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ'),
+                                     session.get('username'))
+                    note = _sc_backfill_note(symbol)
+                    tfs = [dict(g, note=note) if g.get('tf_label') == '30s' else g for g in tfs]
                 return jsonify({
                     'success':            True,
                     'from_cache':         True,
@@ -3797,7 +4147,8 @@ def run_second_candle_optimise():
                     'interval':           entry['interval'],
                     'total_combos_tested': entry['total_combos_tested'],
                     'best':               entry['best'],
-                    'timeframes':         entry.get('timeframes', []),
+                    'timeframes':         tfs,
+                    'pnl_basis':          entry.get('pnl_basis'),
                 })
 
         current_kite = get_data_provider(context='backtest')
@@ -3813,20 +4164,6 @@ def run_second_candle_optimise():
 
         def _run():
             try:
-                fyers_indices = {
-                    'NIFTY':      'NSE:NIFTY50-INDEX',
-                    'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-                    'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-                    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-                    'SENSEX':     'BSE:SENSEX-INDEX',
-                }
-                if _speaks_symbols(current_kite):
-                    instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-                else:
-                    kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
-                                    'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
-                    instrument_token = kite_indices.get(symbol, symbol)
-
                 import pandas as pd
                 import importlib
                 import trading_app.Backtest.second_candle_engine as _sc_mod
@@ -3870,37 +4207,50 @@ def run_second_candle_optimise():
                         'results':  top_by_pnl,
                     })
 
-                # ── Minute timeframes: native fetch per interval ─────────────
+                # ── Bars: the same _sc_bars call the BACKTEST makes ──────────
+                # Minute timeframes from the on-disk Fyers 1-minute store (one
+                # series, resampled here); 30-second from the on-disk 30-second
+                # store the backtest fills — this sweep only adds Fyers' free
+                # window to it, never Breeze. Today's session is left out until
+                # it closes. So a board row and a BACKTEST of its settings run
+                # on the same sessions and book the same trades.
+                t0 = _time.time()
+                fyers = get_fyers_adapter(opt_user)
+                if fyers is None:
+                    raise RuntimeError('Fyers is not logged in — the sweep reads its '
+                                       '1-minute history. Run the daily Fyers login first.')
+                _, minutes_df, _ = _sc_bars(symbol, 'minute', start_date_str, end_date_str,
+                                            fyers, user=opt_user)
                 for minutes, interval_str, tf_label in [
                     (1, 'minute', '1m'), (2, '2minute', '2m'),
                     (3, '3minute', '3m'), (5, '5minute', '5m'),
                 ]:
                     try:
-                        _sweep(current_kite.historical_data(
-                            instrument_token=instrument_token,
-                            from_date=start_date_str, to_date=end_date_str,
-                            interval=interval_str, use_cache=False,
-                        ), interval_str, tf_label, minutes)
+                        if minutes_df is None or minutes_df.empty:
+                            _sweep([], interval_str, tf_label, minutes)
+                            continue
+                        bars_df, _ = _sbr_bars(minutes_df, interval_str, start_date_str)
+                        _sweep(bars_df.to_dict('records'), interval_str, tf_label, minutes)
+                        logger.info("[2ndCandle OPT] %s %s swept (%d bars), %.1fs into the run",
+                                    symbol, tf_label, len(bars_df), _time.time() - t0)
                     except Exception as tf_exc:
                         logger.warning(f"[2ndCandle OPT] timeframe {interval_str} failed: {tf_exc}")
 
-                # ── 30-second: Fyers-first, provider beyond it ──────────────
-                # Still capped to a recent window: this sweep runs every
-                # timeframe, and the days Fyers cannot serve cost 25 Breeze
-                # requests each (best-effort; skip on any failure).
                 try:
-                    from datetime import timedelta as _td
-                    from trading_app.Backtest.seconds_history import fetch_seconds_history
-                    _end_dt   = datetime.strptime(end_date_str, '%Y-%m-%d')
-                    _start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
-                    sec_from  = max(_start_dt, _end_dt - _td(days=90)).strftime('%Y-%m-%d')
-                    sec_candles, sec_note = fetch_seconds_history(
-                        current_kite, instrument_token, sec_from, end_date_str,
-                        interval='30second', user=opt_user,
-                    )
-                    if sec_note:
-                        logger.info("[2ndCandle OPT] 30-second: %s", sec_note)
+                    sec_candles, _, sec_note = _sc_bars(symbol, '30second', start_date_str,
+                                                        end_date_str, fyers, backfill=True,
+                                                        user=opt_user)
                     _sweep(sec_candles, '30second', '30s', 0.5)
+                    if sec_candles:
+                        # Which sessions the 30s board covers — the backtest's own
+                        # 30-second run reads exactly these.
+                        for g in tf_groups:
+                            if g['tf_label'] == '30s':
+                                g['from'] = str(sec_candles[0]['date'])[:10]
+                                g['to'] = str(sec_candles[-1]['date'])[:10]
+                                g['note'] = sec_note
+                    logger.info("[2ndCandle OPT] %s 30s swept (%d bars), %.1fs into the run",
+                                symbol, len(sec_candles or []), _time.time() - t0)
                 except Exception as sec_exc:
                     logger.warning(f"[2ndCandle OPT] 30-second timeframe failed: {sec_exc}")
 
@@ -3922,11 +4272,16 @@ def run_second_candle_optimise():
                     'total_combos_tested': combos_tested,
                     'best':               best_overall,
                     'timeframes':         tf_groups,
+                    # 'option_model': premiums from the engine's Black-Scholes
+                    # model — real premiums for every combo would be tens of
+                    # thousands of Breeze requests; a single BACKTEST reads them.
+                    'pnl_basis':          'option_model' if option_pnl else 'index',
                     'cached_at':          datetime.now().strftime('%Y-%m-%d %H:%M'),
                 }
 
                 disk_cache            = _load_opt_cache()
-                disk_cache[cache_key] = payload
+                # Re-read: this run may have added sessions to the 30-second store.
+                disk_cache[_board_key()] = payload
                 _save_opt_cache(disk_cache)
 
                 with _sc_opt_tasks_lock:
@@ -8241,6 +8596,13 @@ def run_ema_pullback_optimise():
             cache = _load_opt_cache()
             if cache_key in cache:
                 entry = cache[cache_key]
+                # The 30-second backfill's progress is today's, not the cached run's.
+                tfs = entry.get('timeframes', [])
+                if any(g.get('tf_label') == '30s' for g in tfs):
+                    _sc_backfill_30s(symbol, _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ'),
+                                     session.get('username'))
+                    note = _sc_backfill_note(symbol)
+                    tfs = [dict(g, note=note) if g.get('tf_label') == '30s' else g for g in tfs]
                 return jsonify({'success': True, 'from_cache': True, **entry})
 
         current_kite = get_data_provider(context='backtest')
@@ -8758,6 +9120,13 @@ def run_thirty_min_fakeout_optimise():
             cache = _load_opt_cache()
             if cache_key in cache:
                 entry = cache[cache_key]
+                # The 30-second backfill's progress is today's, not the cached run's.
+                tfs = entry.get('timeframes', [])
+                if any(g.get('tf_label') == '30s' for g in tfs):
+                    _sc_backfill_30s(symbol, _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ'),
+                                     session.get('username'))
+                    note = _sc_backfill_note(symbol)
+                    tfs = [dict(g, note=note) if g.get('tf_label') == '30s' else g for g in tfs]
                 return jsonify({'success': True, 'status': 'complete', 'from_cache': True, **entry})
 
         current_kite = get_data_provider(context='backtest')

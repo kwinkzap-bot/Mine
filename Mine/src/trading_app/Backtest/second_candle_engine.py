@@ -183,9 +183,11 @@ class SecondCandleBacktestEngine:
 
 # ── Single-day simulation ──────────────────────────────────────────────────────
 
-def _run_day(day_pos, opens, highs, lows, closes, time_mins, ts_strs,
-             candle_index, rr, cutoff, enable_long, enable_short):
-    """Simulate one trading day. Returns a single trade dict or None."""
+def _find_entry(day_pos, opens, highs, lows, time_mins, candle_index, cutoff,
+                enable_long, enable_short):
+    """The day's first breakout of the range candle: (go_long, entry, sl_level,
+    bar index) or None. Independent of the SL:Target ratio, which is why the
+    optimiser finds it once per (candle #, direction) rather than per ratio."""
     n = len(day_pos)
     if n <= candle_index:          # need the range candle + at least one watch bar
         return None
@@ -197,15 +199,14 @@ def _run_day(day_pos, opens, highs, lows, closes, time_mins, ts_strs,
         return None
 
     # ── Find the first breakout, starting on the bar AFTER the range candle ──
-    position = None
     for k in range(candle_index, n):
         i = day_pos[k]
         tmin = time_mins[i]
-        o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+        o, h, l = opens[i], highs[i], lows[i]
 
         # No more new entries at/after the cut-off
         if tmin >= cutoff:
-            break
+            return None
 
         long_break  = enable_long  and h >= range_high
         short_break = enable_short and l <= range_low
@@ -226,22 +227,33 @@ def _run_day(day_pos, opens, highs, lows, closes, time_mins, ts_strs,
 
         if go_long:
             entry = o if o > range_high else range_high   # gap-up fills at open
-            sl_level = range_low
-            risk = entry - sl_level
-            tp_level = entry + rr * risk
-            position = {'long': True, 'entry': entry, 'entry_ts': ts_strs[i],
-                        'sl': sl_level, 'tp': tp_level, 'entry_pos': i}
-        else:
-            entry = o if o < range_low else range_low     # gap-down fills at open
-            sl_level = range_high
-            risk = sl_level - entry
-            tp_level = entry - rr * risk
-            position = {'long': False, 'entry': entry, 'entry_ts': ts_strs[i],
-                        'sl': sl_level, 'tp': tp_level, 'entry_pos': i}
-        break
+            return True, entry, range_low, i
+        entry = o if o < range_low else range_low         # gap-down fills at open
+        return False, entry, range_high, i
+    return None
 
-    if position is None:
+
+def _position(go_long, entry, sl_level, i, rr, ts_strs):
+    risk = (entry - sl_level) if go_long else (sl_level - entry)
+    tp_level = (entry + rr * risk) if go_long else (entry - rr * risk)
+    return {'long': go_long, 'entry': entry, 'entry_ts': ts_strs[i],
+            'sl': sl_level, 'tp': tp_level, 'entry_pos': i}
+
+
+def _run_day(day_pos, opens, highs, lows, closes, time_mins, ts_strs,
+             candle_index, rr, cutoff, enable_long, enable_short):
+    """Simulate one trading day. Returns a single trade dict or None."""
+    found = _find_entry(day_pos, opens, highs, lows, time_mins, candle_index, cutoff,
+                        enable_long, enable_short)
+    if found is None:
         return None
+    return _manage(_position(*found, rr, ts_strs), day_pos, opens, highs, lows, closes,
+                   time_mins, ts_strs, cutoff)
+
+
+def _manage(position, day_pos, opens, highs, lows, closes, time_mins, ts_strs, cutoff):
+    """Walk an open position bar by bar to its exit (the reference path)."""
+    n = len(day_pos)
 
     # ── Manage the position from the entry bar onward ──
     is_long  = position['long']
@@ -277,6 +289,54 @@ def _run_day(day_pos, opens, highs, lows, closes, time_mins, ts_strs,
     c = closes[last_i]
     pnl = (c - entry) if is_long else (entry - c)
     return _make_trade(position, ts_strs[last_i], c, pnl, 'EOD Exit')
+
+
+def _exits_for_ratios(found, day_pos, opens, highs, lows, closes, time_mins, ts_strs,
+                      rrs, cutoff):
+    """The trade `_run_day` books for each ratio in `rrs`, from one entry —
+    without re-walking the day per ratio. The SL bar and the cut-off bar do not
+    depend on the ratio; the target bar is the first where the running high
+    (low, for a short) reaches the level, found by binary search. Priority on
+    one bar is _run_day's: cut-off, then SL, then target. A test holds every
+    sweep row equal to a bar-by-bar run of its settings."""
+    go_long, entry, sl_level, i0 = found
+    last = day_pos[-1]
+    lo_, hi_ = lows[i0:last + 1], highs[i0:last + 1]
+    if np.isnan(lo_).any() or np.isnan(hi_).any():
+        return [_manage(_position(*found, rr, ts_strs), day_pos, opens, highs, lows, closes,
+                        time_mins, ts_strs, cutoff) for rr in rrs]
+    n = len(lo_)
+    tm = time_mins[i0 + 1:last + 1]
+    cut = np.flatnonzero(tm >= cutoff)
+    cut_j = int(cut[0]) + 1 if len(cut) else n
+    if go_long:
+        hit = np.flatnonzero(lo_ <= sl_level)
+        reach = np.maximum.accumulate(hi_)                 # nondecreasing
+    else:
+        hit = np.flatnonzero(hi_ >= sl_level)
+        reach = -np.minimum.accumulate(lo_)                # nondecreasing
+    sl_j = int(hit[0]) if len(hit) else n
+    out = []
+    for rr in rrs:
+        position = _position(go_long, entry, sl_level, i0, rr, ts_strs)
+        tp = position['tp']
+        tp_j = int(np.searchsorted(reach, tp if go_long else -tp, side='left'))
+        j = min(cut_j, sl_j, tp_j)
+        if j >= n:
+            c = closes[last]
+            out.append(_make_trade(position, ts_strs[last], c,
+                                   (c - entry) if go_long else (entry - c), 'EOD Exit'))
+        elif j == cut_j:
+            o = opens[i0 + j]
+            out.append(_make_trade(position, ts_strs[i0 + j], o,
+                                   (o - entry) if go_long else (entry - o), 'Time Exit'))
+        elif j == sl_j:
+            out.append(_make_trade(position, ts_strs[i0 + j], sl_level,
+                                   (sl_level - entry) if go_long else (entry - sl_level), 'SL Hit'))
+        else:
+            out.append(_make_trade(position, ts_strs[i0 + j], tp,
+                                   (tp - entry) if go_long else (entry - tp), 'TG Hit'))
+    return out
 
 
 # ── Option leg model ───────────────────────────────────────────────────────────
@@ -358,7 +418,47 @@ def _select_strike(flag: str, mode: str, spot_q: float, t_q: float, iv: float,
                 best = max(under, key=price)
         return best
 
-    return min(strikes, key=lambda k: abs(price(k) - _PREM250_TARGET))
+    # A CE's premium falls as the strike rises (a PE's rises), so the strike
+    # nearest ₹250 sits where the ladder crosses 250: binary-search it (~7
+    # prices instead of 81), then take the nearest of the strikes around the
+    # crossing exactly as min() over the whole ladder would — first in ladder
+    # order on a tie.
+    lo, hi = 0, len(strikes) - 1
+    rising = flag != 'c'
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if (price(strikes[mid]) < _PREM250_TARGET) == rising:
+            lo = mid
+        else:
+            hi = mid
+    window = strikes[max(0, lo - 2):min(len(strikes), hi + 3)]
+    return min(window, key=lambda k: abs(price(k) - _PREM250_TARGET))
+
+
+@functools.lru_cache(maxsize=200_000)
+def _parse_ts(s: str) -> datetime:
+    """'YYYY-MM-DD HH:MM:SS' → datetime, ~10× faster than strptime (the sweep
+    parses a quarter of a million of these)."""
+    if not isinstance(s, str) or len(s) != 19 or s[4] != '-' or s[10] != ' ':
+        raise ValueError(f'bad timestamp {s!r}')
+    return datetime(int(s[0:4]), int(s[5:7]), int(s[8:10]),
+                    int(s[11:13]), int(s[14:16]), int(s[17:19]))
+
+
+@functools.lru_cache(maxsize=200_000)
+def _entry_leg(flag: str, entry_time: str, spot_in: float, iv: float, mode: str, step: float):
+    """(expiry datetime, strike, entry premium) of a trade's leg. The sweep
+    books five SL:Target ratios off every entry, so this is computed once per
+    entry rather than once per trade."""
+    entry_dt = _parse_ts(entry_time)
+    expiry_dt = datetime.combine(_weekly_expiry_on_or_after(entry_dt.date()), _EXPIRY_TIME)
+    t_entry = max((expiry_dt - entry_dt).total_seconds(), _MIN_T_SECS) / _YEAR_SECS
+    # Quantised only for the strike CHOICE (5 spot points, ~5 minutes of T);
+    # the premium is then priced at the trade's exact spot and time.
+    strike = _select_strike(flag, mode, round(spot_in / 5.0) * 5.0, round(t_entry, 5), iv, step)
+    # A bought option is never below tick.
+    prem_in = max(_bs_price(flag, spot_in, strike, t_entry, _RISK_FREE, iv), 0.05)
+    return expiry_dt, strike, prem_in
 
 
 def _apply_option_pnl(trade: dict, cfg: dict) -> dict:
@@ -372,29 +472,18 @@ def _apply_option_pnl(trade: dict, cfg: dict) -> dict:
     flag = 'c' if trade['type'] == 'Long' else 'p'
 
     try:
-        entry_dt = datetime.strptime(trade['entry_time'], '%Y-%m-%d %H:%M:%S')
-        exit_dt  = datetime.strptime(trade['exit_time'],  '%Y-%m-%d %H:%M:%S')
+        exit_dt = _parse_ts(trade['exit_time'])
+        expiry_dt, strike, prem_in = _entry_leg(flag, trade['entry_time'],
+                                                float(trade['entry_price']), iv,
+                                                cfg['strike_mode'], cfg['strike_step'])
     except (ValueError, TypeError):
         logger.warning("[2ndCandle] un-parseable trade timestamps — left on the index basis")
         return trade
 
-    expiry_dt = datetime.combine(_weekly_expiry_on_or_after(entry_dt.date()), _EXPIRY_TIME)
-    t_entry = max((expiry_dt - entry_dt).total_seconds(), _MIN_T_SECS) / _YEAR_SECS
-    t_exit  = max((expiry_dt - exit_dt).total_seconds(),  _MIN_T_SECS) / _YEAR_SECS
-
-    spot_in  = float(trade['entry_price'])
+    t_exit   = max((expiry_dt - exit_dt).total_seconds(), _MIN_T_SECS) / _YEAR_SECS
     spot_out = float(trade['exit_price'])
-
-    # Quantised only for the strike CHOICE (5 spot points, ~5 minutes of T);
-    # both premiums are then priced at the trade's exact spot and time.
-    strike = _select_strike(flag, cfg['strike_mode'],
-                            round(spot_in / 5.0) * 5.0, round(t_entry, 5), iv,
-                            cfg['strike_step'])
-
-    prem_in  = _bs_price(flag, spot_in,  strike, t_entry, _RISK_FREE, iv)
-    prem_out = _bs_price(flag, spot_out, strike, t_exit,  _RISK_FREE, iv)
-    # A bought option is worth nothing less than zero, and never below tick.
-    prem_in  = max(prem_in,  0.05)
+    prem_out = _bs_price(flag, spot_out, strike, t_exit, _RISK_FREE, iv)
+    # A bought option is worth nothing less than zero.
     prem_out = max(prem_out, 0.0)
 
     pnl = prem_out - prem_in          # always a BUY — CE for Long, PE for Short
@@ -507,17 +596,34 @@ def optimise_second_candle(df, exit_hour: int = 15, exit_minute: int = 25,
     opens, highs, lows, closes, time_mins, ts_strs, day_positions = base._arrays()
     cutoff = exit_hour * 60 + exit_minute
 
+    # Each day's entry depends on (candle #, direction) only, so it is found
+    # once per pair and every ratio's exit is read off it (_exits_for_ratios) —
+    # 12 entry searches a day instead of 60 full bar-by-bar walks.
+    by_combo = {}
+    for ci in _CANDLE_GRID:
+        for dlabel, el, es in _DIR_GRID:
+            per_rr = {rr: [] for rr in _RR_GRID}
+            for day_pos in day_positions:
+                found = _find_entry(day_pos, opens, highs, lows, time_mins, ci, cutoff, el, es)
+                if found is None:
+                    continue
+                for rr, t in zip(_RR_GRID, _exits_for_ratios(
+                        found, day_pos, opens, highs, lows, closes, time_mins, ts_strs,
+                        _RR_GRID, cutoff)):
+                    per_rr[rr].append(t)
+            for rr in _RR_GRID:
+                by_combo[(ci, rr, dlabel)] = per_rr[rr]
+
     results = []
     for ci in _CANDLE_GRID:
         for rr in _RR_GRID:
             for dlabel, el, es in _DIR_GRID:
-                trades = []
-                for day_pos in day_positions:
-                    t = _run_day(day_pos, opens, highs, lows, closes, time_mins,
-                                 ts_strs, ci, rr, cutoff, el, es)
-                    if t is not None:
-                        trades.append(_apply_option_pnl(t, cfg) if option_pnl else t)
-                s = _summary(trades)
+                idx_trades = by_combo[(ci, rr, dlabel)]
+                opt_trades = [_apply_option_pnl(t, cfg) for t in idx_trades]
+                # Both bases for every combo: the board shows index AND option
+                # P&L side by side; `option_pnl` only picks which one it ranks on.
+                s_idx, s_opt = _summary(idx_trades), _summary(opt_trades)
+                trades, s = (opt_trades, s_opt) if option_pnl else (idx_trades, s_idx)
                 if s['total_trades'] < min_trades:
                     continue
                 results.append({
@@ -534,6 +640,10 @@ def optimise_second_candle(df, exit_hour: int = 15, exit_minute: int = 25,
                     'avg_win':       s['avg_win'],
                     'avg_loss':      s['avg_loss'],
                     'score':         round(_opt_score(s), 2),
+                    # The same trades on the index, beside the premium points
+                    # they are booked on (option basis only).
+                    'index_pnl':     s_idx['total_pnl'],
+                    'option_pnl':    s_opt['total_pnl'],
                 })
 
     results.sort(key=lambda x: x['score'], reverse=True)

@@ -35,6 +35,17 @@ logger = logging.getLogger(__name__)
 # that definitely has it.
 FYERS_SECONDS_DAYS = 28
 
+# The first session Breeze has 1-second data for (so 30-second bars), probed
+# 2026-11-11 on NIFTY's index: 2018-04-02 answered 898 of 900 seconds, every
+# March 2018 trading day tried (05, 28) and 2017-06-01 / 2017-12-04 answered
+# nothing, and every day tried after it (one a year to 2025) was full. Asking
+# before it costs 25 requests a session for an empty answer that is never
+# stored, so it would be asked again on every run. Only NIFTY was probed; the
+# other indices are assumed to start no earlier. Option 1-second data reaches
+# back to the same month but has holes (2018-05-02, 2019-06-03, 2022-06-01
+# were empty for ATM monthly calls whose 1-minute bars were complete).
+BREEZE_SECONDS_SINCE = date(2018, 4, 2)
+
 # Only these need the split; a minute and above is one cheap request everywhere.
 SUB_MINUTE = ('30second',)
 
