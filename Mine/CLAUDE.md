@@ -458,10 +458,90 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 255 rules (`tests/route_inventory.txt`) since the ATM Straddle live algo added six (above).
+The api blueprint is at 258 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## NIFTY Bi-weekly Iron Condor backtest (the /backtest default)
+
+Added 2026-11-10 in the Mine group, **the default strategy on /backtest**, from a Hindi video by its author
+(rule-based, no chart or OI reading). `Backtest/biweekly_iron_condor_engine.py` (pure), routes
+`/api/backtest/biweekly-iron-condor{,/optimise,/status/<id>}` (run on `_cr_start` like the call ratio),
+params `#biweeklyIcParamsRow` (`bic*` ids), results in the call ratio's `#crResults` plus `#bicYears`, sweep panel
+`#biweeklyIcOptimisePanel`, JS `runBiweeklyIc` / `runBicOptimise`.
+
+* **Rule.** Friday 15:15 (Thursday on a Friday holiday) while India VIX < 13: SELL a CE and a PE at ≈0.20 delta,
+  100-step strikes only, BUY each 200 further out, on the **bi-weekly** = the second weekly expiry after the Friday
+  (Tue 11 days out; Thu 13 days out before 2025-09-01). Skip if net credit × qty < 4 % of capital. Out at ±1 % of
+  capital (5-minute closes, booked at that close) or the next week's last session at 15:00. At 15:15 a profit
+  ≥ 0.8 % / loss ≥ 0.9 % is closed rather than carried overnight (the author's habit; boxes, 0 = off).
+* **Adjustments**, on 5-minute closes, a side = its short + hedge closed and re-opened together: premium doubled,
+  delta ≥ 0.30, or one side's delta > 2× the other's → that side moves OUT to ≈0.20; a short decayed 50 % is rolled
+  IN to ≈0.20 matching the other side's premium. Rule 3 with the high side already at ≈0.20 rolls the low side in
+  instead (the author: "it is 0.2 anyway"); an OUT move is only taken if it lands nearer 0.20, so nothing churns.
+  Brokerage `_OS_BROKERAGE_PER_LEG` (₹100) × every leg opened, adjustments included.
+* **Delta** is Black-76 off the leg's own premium; the forward is put-call parity at the entry ATM, then NIFTY +
+  that basis shrunk with time. Entry pair: nearest delta each side, unless the premiums are > 20 % apart; then the
+  side nearer 0.20 stays and only the OTHER side moves to the strike priced nearest it (the video's 0.23 CE at 57
+  against his 0.20 PE at 58). Until the evening of 2026-11-10 it took the closest-premium pair of all four strikes,
+  which walked BOTH sides in (0.24 / 0.22 on 2026-06-19) and let thin weeks clear the 4 % floor by selling nearer.
+  On one close a target/stop outranks the day-end rule it also trips (2026-01-16 read "Day-end loss" at −1.20 %).
+* **The adjustments read prices only, never the P&L**, so one path per (delta, gap, adjust) serves every
+  target / stop / day-end combo: `score_week` builds it once, and a test holds every sweep row equal to
+  `run_trade`. `SWEEP_GRID` is 9,216 combos since the calm key (VIX ceiling has no "off", so a calm-filter week costs 2 contracts).
+* **India VIX** is Fyers minutes via `minute_candle_store` (`NSE:INDIAVIX-INDEX`, file `fyers_INDIAVIX.pkl`,
+  fetched on first run); no VIX with Max VIX above 0 is an error.
+* **Contract window.** Thursday-era weeklies are sold 13 days out, past `cre.contract_window`'s 12 days, so
+  `bic.contract_window` widens those to 16 (Tuesday weeklies and monthlies keep the shared window and its cache).
+  `_cr_start`'s `frame_for` grew a `window=` argument for it, and its `breeze_requests` counter (the sweep budget,
+  removed with Matrix Calendar) is back.
+* **Capital is ₹ per NIFTY unit** (`capital_per_unit`, ₹1,280 = the author's ₹9.6 L on 10 lots of 75), × the lot size
+  × sets; no historical SPAN. Per unit since 2026-11-10: it was ₹96,000 per set on today's 65 lot, which priced
+  every credit 13 % low against capital and failed 19 of 22 calm Fridays on the 4 % floor (2 trades in the year).
+  **Sets default to 10** (the author's): brokerage is ₹100 a leg at any size, and at 1 set the 10-14 legs of an
+  adjusted week outweigh the 1 % target. An ATM with no candle at the entry falls back ±200 (`ATM_FALLBACK`).
+  First real run (Nov 2025 – Nov 2026): 29 of 51 Fridays VIX ≥ 13 — that rule, not a bug, is the main skip.
+* **3 % a month is out of reach** (checked the night of 2026-11-10 at the user's ask): over every board combo on cached
+  2020-26 the best average month was 0.71 % (1.69 % in 2024-26 alone, in-sample), median ≈ 0. It trades ~1.5 Fridays a
+  month at +1-1.5 % a win, so ~2 % is the ceiling even with no losses (the author's own claim: 2-2.5 %). The Per Month
+  card (`summarise`: `avg_month_pct`, `months_3pct`, `losing_months`; idle months count as 0) shows it per run.
+* **Amount needed** (2026-11-10 night): the form's description (`#bicNeed`, `updateBicNeed`, live off Sets / Capital % /
+  Hedge Gap / Stop) states the capital at NIFTY's 2020-26 high (26,400 × 5 % × qty: ₹8.58 L at 10 sets) and that one
+  trade can lose at most the hedge width × qty; after a run the Max Amount Needed card is `summarise`'s
+  `amount_needed` = the largest traded week's capital + max drawdown (and `max_trade_loss`).
+* **Calm-market filter** (`max_rv` 10 / `max_week_move` 2, boxes "Max NIFTY 10-Day Vol %" / "5-Day Move %", 0 = off;
+  `calm_reading` / `calm_skip`; NOT in the video, added the night of 2026-11-10): NIFTY's 10-session realised vol and
+  5-session move, each session read at the entry time, today's included. Why: on cached 2020-26 the MEDIAN sweep combo
+  lost money (net ÷ DD −0.34); with the filter the share in profit went 16 → 62 % (2020-23) and 48 → 77 % (2024-26), the
+  only filter tried that helped both halves (VIX change, realised vol alone, 20-day drawdown helped 2024-26 only).
+  Through the engine (5-minute bars, real cache, 5 % capital): author's defaults 83 trades ₹25 k DD ₹57 k → 54 trades
+  ₹88 k DD ₹29 k (2021 still −₹20 k); VIX 14 · Δ0.15 · hedge 300 · adjust on · credit 3 · T1.5/S0.75 · no day-end + calm:
+  71 trades ₹1.97 L DD ₹27 k, every traded year positive (2021 only +₹0.4 k). Borderline weeks flip with how the
+  daily price is read (an analysis on 1-minute closes had shown ₹1.11 L / DD ₹20 k), so the edge is real but not sharp. The sweep has a `calm` key (on/off), so the grid is 9,216 combos; a week the filter
+  drops has no "on" row, and `_KEYS` shares one key tuple per combo across Fridays to keep that board's memory down.
+* **Capital follows NIFTY** (`capital_pct`, the page's "Capital, % of NIFTY" = 5, since 2026-11-10 night;
+  `week_capital`): each Friday's capital = that % of NIFTY at the entry × qty, so the 4 % credit floor and the ±1 %
+  exits are on the margin of that week's index. The author's ₹9.6 L / 750 units is ≈5 % of NIFTY 25,700. With the
+  fixed ₹1,280 a unit (still there: % = 0) 2023's NIFTY ~18,000 failed the floor on 46 of 52 Fridays. Cached
+  2020-26, VIX 16 · Δ0.15 · hedge 300 · no adjust · T1.5/S2: 61 → 133 trades, ₹3.27 L → ₹4.90 L, DD ₹67 k → ₹93 k;
+  the defaults 49 → 84 trades. VIX (the author's rule) is then the main skip: 2020-22 sat above 16 most weeks.
+* **The sweep's Day-end "On" is `sweep_base`**: the page's two boxes, or 0.8 / 0.9 where a box is 0 (what applying
+  a Day-end Off row leaves), and every board row carries the levels it ran with so applying it writes them back.
+  Until 2026-11-10 night an Off row's zeros made the next sweep's "On" rows run with no day-end rule, and the board
+  no longer matched the backtest. On cached 2020-26 data, 25 random combos × 350 Fridays: board = backtest.
+* **Breeze history goes over one pooled keep-alive session** (`icici_data_service._HistoryTransport`, since
+  2026-11-10 night): the SDK's `get_historical_data_v2` was a fresh connection per request with no timeout, and
+  ~11 connects every 10 minutes hung for the OS's 75 s, so a 2020-26 condor sweep ran ~6.6 s a request. Only the
+  `historicalcharts` GET is re-routed (5 s connect / 30 s read, 2 connect retries); orders keep the SDK's path. A
+  sweep also waits (`_cr_yield_to_foreground`) while any ordinary backtest runs.
+* **Cost:** ~6 Breeze contracts a traded week plus 2-3 per adjustment, cached after. Nov 2025 – Nov 2026 at 10 sets
+  (real data): 12 trades of 51 Fridays, 7 W, +₹2.2 k, DD ₹28.2 k, PF 1.05 — wins ≈ +₹6.1-7.9 k, stops −₹8.9-10.7 k.
+* **A target/stop crossed inside a session is booked AT its level** (`booked`, since 2026-11-10 night; the straddle's
+  `exit_fill` rule), with the legs held before that close; a session's first close past it is booked at that close,
+  `Target (gap)` / `Stop loss (gap)`. Booking the close had shown stops at −1.18 / −1.23 %. P&L % still sits below
+  −1 % by the brokerage (₹100 × legs: 24 legs on 2025-12-05 = −1.29 %); Worst shows the −1.00 % booked. Tests: `tests/test_biweekly_iron_condor_engine.py`
+  (a synthetic Black-76 market).
 
 ## NIFTY Monthly Call Ratio backtest ("No-Brainer")
 
@@ -627,7 +707,7 @@ the shared `rtp_opt_cache.json`.
 ## NIFTY Matrix Calendar backtest — removed
 
 Added 2026-11-06 (Mine group, the default on /backtest) and removed 2026-11-07 at the user's request; the commit that added it is `adee85a`.
-`Backtest/matrix_calendar_engine.py`, the three `/api/backtest/matrix-calendar*` routes, its option, panels, JS and tests went, and `st_all_indicators` is the default again.
+`Backtest/matrix_calendar_engine.py`, the three `/api/backtest/matrix-calendar*` routes, its option, panels, JS and tests went, and `st_all_indicators` was the default again until the Bi-weekly Iron Condor (above) took it on 2026-11-10.
 With its Min IV 20 it traded 62 of 338 Mondays (2020-26), +₹16,961, three-quarters of that from seven 2026 trades, and none in 2023. Its cached Breeze contracts stay on disk, as any cached contract does.
 
 ## RSI Credit Spread / Iron Condor backtests — removed

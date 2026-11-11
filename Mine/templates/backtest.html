@@ -45,7 +45,8 @@
                 <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
-                <option value="st_all_indicators" selected>🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
+                <option value="biweekly_iron_condor" selected>🦅 NIFTY Bi-weekly Iron Condor (Delta Adjusted)</option>
+                <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
                 <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (Monthly / Weekly)</option>
                 <option value="call_ratio">🧠 NIFTY Monthly Call Ratio 1:2 (No-Brainer)</option>
             </select>
@@ -2066,6 +2067,113 @@
                 </div>
             </div>
 
+            <!-- NIFTY Bi-weekly Iron Condor (Mine) — Friday 15:15 while India VIX is below 13: sell 0.20-delta CE + PE
+                 on the weekly after next, buy each 200 further out; credit at least 4 % of capital; ±1 % of capital or next
+                 Friday 15:00; delta adjustments. See Backtest/biweekly_iron_condor_engine.py. -->
+            <div id="biweeklyIcParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="bicEntryTime" title="Every Friday (Thursday when Friday is a holiday) at this time. Prices are the close of the last 5-minute bar finished by then.">Friday Entry Time</label>
+                    <input type="time" id="bicEntryTime" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="bicMaxVix" title="India VIX at the entry must be below this, or the week is not traded: calm weeks, no event gaps. The author trades only under 13. 0 = every Friday.">Max India VIX</label>
+                    <input type="number" id="bicMaxVix" value="13" min="0" max="100" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="bicMaxRv" title="Calm-market filter (not in the video): NIFTY's realised volatility over the last 10 sessions, annualised %, read at the entry, must be below this. Over 2020-26 it roughly halved the drawdown of most settings. 0 = off.">Max NIFTY 10-Day Vol %</label>
+                    <input type="number" id="bicMaxRv" value="10" min="0" max="200" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="bicMaxWeekMove" title="Calm-market filter: NIFTY's move over the last 5 sessions, either way, must be inside this %. Weeks right after a fast market carried most of the stop-outs. 0 = off.">Max NIFTY 5-Day Move %</label>
+                    <input type="number" id="bicMaxWeekMove" value="2" min="0" max="50" step="0.25">
+                </div>
+                <div class="form-group">
+                    <label for="bicDelta" title="Delta of the CE and PE sold, on 100-step strikes only (the author avoids the 50s). Also the delta every adjustment re-sells at.">Sold Delta</label>
+                    <input type="number" id="bicDelta" value="0.20" min="0.05" max="0.45" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="bicBalance" title="Each side takes its nearest-delta strike. Yes: if the two premiums are more than 20% apart, the strikes either side of the delta with the closest premiums are taken instead, as the author does (0.23 over 0.20 when 0.20 leaves the premiums far apart); a side rolled in matches the other side's premium. No: nearest delta always.">Balance Premiums</label>
+                    <select id="bicBalance">
+                        <option value="true" selected>Yes</option>
+                        <option value="false">No</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bicHedgeGap" title="Each hedge is bought this many points beyond its sold strike, and moves with it on every adjustment.">Hedge Gap (pts)</label>
+                    <input type="number" id="bicHedgeGap" value="200" min="100" max="1000" step="100">
+                </div>
+                <div class="form-group">
+                    <label for="bicMinCredit" title="The net credit (sold − hedges) × quantity must be at least this % of the capital, or the week is not traded. 0 = off.">Min Credit % of Capital</label>
+                    <input type="number" id="bicMinCredit" value="4" min="0" max="50" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="bicTarget" title="Everything out once the mark-to-market profit, read on 5-minute closes, reaches this % of the capital.">Target % of Capital</label>
+                    <input type="number" id="bicTarget" value="1" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicStop" title="Everything out once the mark-to-market loss, read on 5-minute closes, reaches this % of the capital. Books that close's real prices, so a gap goes past it.">Stop % of Capital</label>
+                    <input type="number" id="bicStop" value="1" min="0.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicEodProfit" title="At 15:15 each day, a profit at least this % of capital is taken rather than carried overnight (the author would not risk a gap for the last 0.1-0.2 %). 0 = off.">Day-end Take Profit %</label>
+                    <input type="number" id="bicEodProfit" value="0.8" min="0" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicEodLoss" title="At 15:15 each day, a loss at least this % of capital is cut rather than carried overnight. 0 = off.">Day-end Cut Loss %</label>
+                    <input type="number" id="bicEodLoss" value="0.9" min="0" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicExitTime" title="If neither level is hit, everything is closed on the next week's last session (Friday) at this time, so the next condor can open at 15:15.">Next-Friday Exit Time</label>
+                    <input type="time" id="bicExitTime" value="15:00">
+                </div>
+                <div class="form-group">
+                    <label for="bicAdjust" title="The author's adjustment trigger points, on 5-minute closes. A side (its short and hedge) is closed and re-opened at the sold delta.">Adjustments</label>
+                    <select id="bicAdjust">
+                        <option value="true" selected>On</option>
+                        <option value="false">Off (zero adjustment)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="bicDoubleX" title="Rule 1: a short whose premium reaches this × what it was sold for is moved out.">Premium Doubles (×)</label>
+                    <input type="number" id="bicDoubleX" value="2" min="1.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicMaxDelta" title="Rule 2: a short whose delta reaches this is moved out.">Max Short Delta</label>
+                    <input type="number" id="bicMaxDelta" value="0.30" min="0.1" max="0.9" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="bicSkewX" title="Rule 3: one side's delta above this × the other side's. The high side moves out — or, if it is already at the sold delta, the low side is rolled in.">Delta Skew (×)</label>
+                    <input type="number" id="bicSkewX" value="2" min="1.1" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicRollDecay" title="Rule 4: a short that has lost this % of its premium is rolled in to the sold delta (the untested side follows the market).">Roll In at Decay %</label>
+                    <input type="number" id="bicRollDecay" value="50" min="5" max="95" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="bicMaxAdjust" title="Side moves per trade at most; past it the condor is left as it is.">Max Adjustments</label>
+                    <input type="number" id="bicMaxAdjust" value="10" min="0" max="30" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="bicSets" title="1 set = 1 lot of each of the four legs. 10 is the author's size: brokerage is ₹100 a leg whatever the size, so at 1 set the 10-14 legs of an adjusted week cost more than the 1 % target.">Sets (Lots)</label>
+                    <input type="number" id="bicSets" value="10" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="bicCapitalPct" title="Capital (the margin every % is on) = this % of NIFTY at each Friday's entry × the quantity. The author's ₹9.6 L for 10 lots of 75 is ≈5 % of NIFTY 25,700. A margin moves with the index, so at NIFTY 18,000 it was ~30 % smaller in ₹; a fixed ₹ figure made the 4 % credit floor skip most of 2023. 0 = use the fixed Capital per Unit below.">Capital, % of NIFTY</label>
+                    <input type="number" id="bicCapitalPct" value="5" min="0" max="50" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label for="bicCapital" title="Only when Capital, % of NIFTY is 0: a fixed ₹ per NIFTY unit (₹1,280 = the author's ₹9.6 L ÷ 750) every week, whatever the index was.">Capital per Unit (₹, if % is 0)</label>
+                    <input type="number" id="bicCapital" value="1280" min="100" step="10">
+                </div>
+                <div class="form-group" style="grid-column:1/-1;">
+                    <small style="display:block;line-height:1.5;color:var(--oip-text-muted, #6b7280);">
+                        <span id="bicNeed" style="display:block;margin-bottom:6px;color:var(--oip-text, #111827);"></span>
+                        Sold on the second weekly expiry after the Friday (Tuesday 11 days out; Thursday 13 days out before Sep 2025). Brokerage ₹100 per leg traded, adjustments included.
+                        Premiums are ICICI's 5-minute candles (needs an ICICI login; about 6 contracts a traded week plus 2-3 per adjustment, instant once cached); India VIX and NIFTY are Fyers minutes.
+                    </small>
+                </div>
+            </div>
+
             <!-- Swing Momentum params -->
             <!-- Weekly CPR Breakout — the /scanners "W CPR Open" rule traded
                  over every F&O future stock: open inside the weekly CPR, first
@@ -2307,6 +2415,20 @@
                 </div>
             </div>
 
+            <!-- NIFTY Bi-weekly Iron Condor Find Best Params (biweekly_iron_condor_engine.SWEEP_GRID) -->
+            <div id="biweeklyIcOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">🦅 NIFTY Bi-weekly Iron Condor Best Params</h4>
+                        <button id="bicRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="bicOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="bicOptGrid"></div>
+                </div>
+            </div>
+
             <!-- ST + BB + RSI + R1/S1 Find Best Params — one flat leaderboard on INDEX points -->
             <div id="stBbRsiOptimisePanel" style="display:none;">
                 <div id="sbrOptBody">
@@ -2419,6 +2541,7 @@
             <div id="crResults" style="display:none;">
                 <div class="results-section">
                     <div class="results-row results-row-6" id="crStats"></div>
+                    <div id="bicYears" style="margin-top:8px;display:none;"><div id="bicYearGrid"></div></div>
                     <div style="margin-top:8px;"><div id="crGrid"></div></div>
                 </div>
             </div>

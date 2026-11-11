@@ -9620,6 +9620,8 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
         lot_size = int(_fno_lot_sizes().get('NIFTY') or 65)
     except Exception:
         lot_size = 65
+    if callable(capital_per_set):   # a parse that prices capital per unit (the Bi-weekly Iron Condor)
+        capital_per_set = float(capital_per_set(lot_size))
 
     request_key = json.dumps(data, sort_keys=True, default=str) if one_at_a_time else None
     task_id = uuid.uuid4().hex[:12]
@@ -9676,7 +9678,7 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                     for x in _ism.expiries(_ism.stock_code('NIFTY', 'NFO') or 'NIFTY', 'NFO'))
             except Exception as exc:          # noqa: BLE001 — the calendar's date stands
                 logger.warning('[CallRatio] listed NIFTY expiries unavailable: %s', exc)
-            state = {'errors': 0, 'last_error': None, 'second_requests': 0,
+            state = {'errors': 0, 'last_error': None, 'second_requests': 0, 'breeze_requests': 0,
                      'second_budget': _cr_second_budget()}
             lock = threading.Lock()
             memo: dict = {}
@@ -9719,8 +9721,19 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                     return s
                 return fine_for
 
-            def frame_for(expiry, strike, right='CE'):
-                key = (expiry, int(strike), right)
+            def before_breeze_request():
+                # A sweep's only (a backtest never waits). Called for a real request, never a cache
+                # hit, so this is what a budgeted sweep counts.
+                with lock:
+                    state['breeze_requests'] += 1
+                    task['progress']['requests'] = state['breeze_requests']
+                if background:
+                    _cr_yield_to_foreground()
+
+            def frame_for(expiry, strike, right='CE', window=None):
+                # `window` (frm, to) overrides cre.contract_window for a backtest whose entry
+                # sits before it (the bi-weekly condor's Thursday weeklies, 13 days out).
+                key = (expiry, int(strike), right) if window is None else (expiry, int(strike), right, window)
                 with lock:
                     if key in memo:
                         return memo[key]
@@ -9731,11 +9744,11 @@ def _cr_start(data: dict, worker, name: str, parse=None, background: bool = Fals
                 if not owner:                   # another thread is fetching it
                     ev.wait()
                     return memo.get(key)
-                frm, to = cre.contract_window(expiry)
+                frm, to = window or cre.contract_window(expiry)
                 t0 = _time.time()
                 raw = icici.historical_option_range('NIFTY', expiry, int(strike), right,
                                                     frm, min(to, today),
-                                                    before_request=_cr_yield_to_foreground if background else None)
+                                                    before_request=before_breeze_request if background else None)
                 # Set only when a chunk FAILED (or nothing came back): a range
                 # Breeze answered empty is not an error, and is cached.
                 err = icici.last_history_error()
@@ -9959,6 +9972,199 @@ def call_ratio_status(task_id):
         return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
+
+
+# ── NIFTY Bi-weekly Iron Condor backtest (Mine) ──────────────────────────────
+# Friday 15:15 while India VIX is below 13: sell 0.20-delta CE + PE on the weekly after
+# next, buy each 200 further out; credit ≥ 4 % of capital; ±1 % of capital or next Friday
+# 15:00; delta adjustments. Rule: Backtest/biweekly_iron_condor_engine.py. Runs on _cr_start.
+def _bic_parse(data: dict):
+    """The Bi-weekly Iron Condor's boxes → (start, end, params, sets, capital_per_set), or raises ValueError."""
+    start_dt = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
+    end_dt = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
+    if end_dt < start_dt:
+        raise ValueError('end_date is before start_date')
+    hedge_gap = int(float(data.get('hedge_gap', 200)))
+    if hedge_gap % 100 or not 100 <= hedge_gap <= 1000:
+        raise ValueError('hedge_gap must be a multiple of 100, 100-1000')
+    on = lambda k, d: str(data.get(k, d)).lower() not in ('false', '0', 'no', 'off')
+    pct = lambda k, d, lo=0.0: max(lo, float(data.get(k, d)))
+    params = {
+        'entry_hm': _os_hm(data.get('entry_time', '15:15'), (15, 15)),
+        'exit_hm': _os_hm(data.get('exit_time', '15:00'), (15, 0)),
+        'max_vix': min(100.0, pct('max_vix', 13)),
+        'max_rv': min(200.0, pct('max_rv', 10)),
+        'max_week_move': min(50.0, pct('max_week_move', 2)),
+        'target_delta': min(0.45, max(0.05, float(data.get('target_delta', 0.20)))),
+        'hedge_gap': hedge_gap,
+        'balance_premium': on('balance_premium', True),
+        'min_credit_pct': min(50.0, pct('min_credit_pct', 4)),
+        'target_pct': pct('target_pct', 1.0, 0.1),
+        'stop_pct': pct('stop_pct', 1.0, 0.1),
+        'eod_profit_pct': pct('eod_profit_pct', 0.8),
+        'eod_loss_pct': pct('eod_loss_pct', 0.9),
+        'adjust': on('adjust', True),
+        'double_x': max(1.1, float(data.get('double_x', 2.0))),
+        'max_delta': min(0.9, max(0.1, float(data.get('max_delta', 0.30)))),
+        'skew_x': max(1.1, float(data.get('skew_x', 2.0))),
+        'roll_decay_pct': min(95.0, pct('roll_decay_pct', 50, 5.0)),
+        'max_adjust': min(30, max(0, int(data.get('max_adjust', 10)))),
+        # Capital as a % of NIFTY at each entry (the margin moves with the index); 0 = capital_per_unit fixed.
+        'capital_pct': min(50.0, pct('capital_pct', 0)),
+    }
+    sets = max(1, int(data.get('sets', 1) or 1))
+    # Capital is ₹ per unit of NIFTY, not per lot: the author's ₹9.6 L was 10 lots of 75 (₹1,280 a
+    # unit), and every % rule is credit ÷ capital, so a per-lot figure would move the 4 % floor
+    # whenever the exchange changes the lot (₹96,000 on today's 65 made a 51-point credit 3.4 %).
+    per_unit = max(100.0, float(data.get('capital_per_unit', 1280)))
+    return start_dt, end_dt, params, sets, (lambda lot_size: per_unit * lot_size)
+
+
+def _bic_context(ctx: dict, need_vix: bool):
+    """(sessions, the 5-minute India VIX or None, frame_for on the condor's contract windows)."""
+    from trading_app.Backtest import biweekly_iron_condor_engine as bic
+    from trading_app.Backtest.minute_candle_store import get_minute_history
+    sessions = bic.regular_sessions(ctx['sessions'], ctx['spot5'])
+    vix5 = None
+    fyers = get_fyers_adapter()
+    if fyers is not None:
+        vm = get_minute_history(fyers, 'NSE:INDIAVIX-INDEX', 'INDIAVIX',
+                                ctx['start'].isoformat(), min(ctx['end'] + timedelta(days=3),
+                                                              datetime.now().date()).isoformat(),
+                                provider_tag=_provider_tag(fyers), retain=False)
+        if vm is not None and not vm.empty:
+            if getattr(vm.index, 'tz', None) is not None:
+                vm = vm.copy()
+                vm.index = vm.index.tz_localize(None)
+            vix5 = vm['close'].astype(float).resample('5min', label='left', closed='left').last().dropna()
+    if vix5 is None and need_vix:
+        raise RuntimeError('No India VIX minutes from Fyers for this range — set Max VIX to 0 to run without it.')
+    raw = ctx['frame_for']
+
+    def frame_for(expiry, strike, right='CE'):
+        return raw(expiry, strike, right, window=bic.contract_window(expiry))
+    return sessions, vix5, frame_for
+
+
+@api_bp.route('/backtest/biweekly-iron-condor', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_biweekly_iron_condor_backtest_api():
+    """Start a NIFTY Bi-weekly Iron Condor backtest; returns {'task_id'} to poll at
+    /backtest/biweekly-iron-condor/status/<task_id>.
+
+    Body: start_date, end_date ('YYYY-MM-DD'); entry_time (15:15, Friday); exit_time (15:00,
+    next Friday); max_vix (13, 0 = off); max_rv (10: NIFTY's 10-session realised vol %, 0 = off);
+    max_week_move (2: |5-session move| %, 0 = off); target_delta (0.20); hedge_gap (200); balance_premium
+    (true); min_credit_pct (4); target_pct / stop_pct (1 / 1); eod_profit_pct / eod_loss_pct
+    (0.8 / 0.9, 0 = off); adjust (true); double_x (2); max_delta (0.30); skew_x (2);
+    roll_decay_pct (50); max_adjust (10); sets (1 set = 1 lot of each leg); capital_pct (capital = this %
+    of NIFTY at each entry × qty; the page sends 5; 0 = fixed) else capital_per_unit (₹ per NIFTY unit,
+    1280 = ₹9.6 L ÷ 750; one set's capital is this × the lot size)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    def worker(ctx, task):
+        from trading_app.Backtest import biweekly_iron_condor_engine as bic
+        p = ctx['params']
+        task['progress']['stage'] = 'India VIX (Fyers)'
+        sessions, vix5, frame_for = _bic_context(ctx, bool(p['max_vix']))
+        task['progress']['stage'] = 'pricing'
+        entries = bic.entry_days(sessions, ctx['start'], ctx['end'])
+        task['progress']['total'] = len(entries)
+
+        def one(entry):
+            res = bic.run_trade(entry, sessions, ctx['spot5'], vix5, frame_for, ctx['qty'], ctx['capital'], p)
+            row = bic.trade_row(res, ctx['qty'], ctx['sets'], ctx['lot_size'], ctx['capital'],
+                                _OS_BROKERAGE_PER_LEG)
+            if row['status'] != 'skipped':
+                task['progress']['traded'] += 1
+            return row
+
+        rows = sorted(_cr_pool(entries, one, task), key=lambda r: r['date'])
+        summary = bic.summarise(rows)
+        last_capital = next((r['capital'] for r in reversed(rows) if r.get('capital')), ctx['capital'])
+        summary.update({'weeks_scanned': len(entries), 'sets': ctx['sets'], 'capital_pct': p['capital_pct'],
+                        'lot_size': ctx['lot_size'], 'capital': last_capital if p['capital_pct'] else ctx['capital'],
+                        'capital_per_set': ctx['capital_per_set'],
+                        'params': {k: (f'{v[0]:02d}:{v[1]:02d}' if isinstance(v, tuple) else v)
+                                   for k, v in p.items() if k != 'listed_expiries'}})
+        logger.info('[BiweeklyIC] %s..%s: %d Fridays, %d traded, %d skipped, %d contracts',
+                    ctx['start'], ctx['end'], len(entries), summary['total_trades'],
+                    summary['skipped_months'], task['progress']['contracts'])
+        task['payload'] = {'trades': rows, 'summary': summary}
+
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'bic', parse=_bic_parse)
+
+
+@api_bp.route('/backtest/biweekly-iron-condor/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_biweekly_iron_condor_optimise_api():
+    """Find Best Params for the Bi-weekly Iron Condor; poll /backtest/biweekly-iron-condor/status/<task_id>.
+
+    Sweeps biweekly_iron_condor_engine.SWEEP_GRID on the page's times, adjustment triggers, sets
+    and capital. Newest Friday first, with _cr_sweep_budget() real Breeze requests a run: past it
+    the older Fridays are left out and the board says so. All it fetched is cached, so
+    Recalculate carries on further back."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    def worker(ctx, task):
+        from trading_app.Backtest import biweekly_iron_condor_engine as bic
+        task['progress']['stage'] = 'India VIX (Fyers)'
+        sessions, vix5, frame_for = _bic_context(ctx, True)
+        task['progress']['stage'] = 'pricing'
+        entries = bic.entry_days(sessions, ctx['start'], ctx['end'])
+        task['progress']['total'] = len(entries)
+        budget = _cr_sweep_budget()
+        # Day-end "On" is the page's two boxes, or the author's 0.8 / 0.9 where a box is 0. Applying a
+        # Day-end Off row zeroes those boxes, and the next sweep's "On" rows then ran with no day-end
+        # rule at all, while applying one wrote 0.8 / 0.9 back: board and backtest no longer agreed.
+        base = bic.sweep_base(ctx['params'])
+
+        def one(entry):
+            ctx['check_stopped']()
+            if ctx['state']['breeze_requests'] >= budget:
+                return entry, None
+            res = bic.score_week(entry, sessions, ctx['spot5'], vix5, frame_for, ctx['qty'], ctx['capital'],
+                                 base, _OS_BROKERAGE_PER_LEG)
+            task['progress']['traded'] += 1
+            return entry, res
+
+        done = sorted(_cr_pool(entries, one, task), key=lambda t: t[0])
+        reached = [(d, r) for d, r in done if r is not None]
+        task['progress']['stage'] = 'scoring'
+        rows = bic.rank_board([r for _, r in reached], len(reached))
+        task['payload'] = {
+            'results': rows[:100], 'best': rows[0] if rows else None, 'total': len(rows),
+            'total_combos_tested': bic.cre.sweep_size(bic.SWEEP_GRID), 'weeks': len(reached),
+            'weeks_in_range': len(entries), 'covered_from': reached[0][0].isoformat() if reached else None,
+            'budget': budget, 'requests': ctx['state']['breeze_requests'],
+            'min_trades': bic.MIN_SWEEP_TRADES, 'sets': ctx['sets'], 'lot_size': ctx['lot_size'],
+            'capital': ctx['capital'], 'summary': {},
+            'eod_profit_pct': base['eod_profit_pct'], 'eod_loss_pct': base['eod_loss_pct'],
+            'capital_pct': base.get('capital_pct') or 0,
+            'max_rv': base['max_rv'], 'max_week_move': base['max_week_move'],
+        }
+        for r in task['payload']['results']:
+            r['eod_profit_pct'], r['eod_loss_pct'] = base['eod_profit_pct'], base['eod_loss_pct']
+            r['max_rv'], r['max_week_move'] = base['max_rv'], base['max_week_move']
+        logger.info('[BiweeklyICOptimise] %s..%s: %d of %d Fridays, %d combos scored, %d requests',
+                    ctx['start'], ctx['end'], len(reached), len(entries), len(rows), ctx['state']['breeze_requests'])
+
+    return _cr_start(request.get_json(silent=True) or {}, worker, 'bic-opt', parse=_bic_parse,
+                     background=True, one_at_a_time=True)
+
+
+@api_bp.route('/backtest/biweekly-iron-condor/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def biweekly_iron_condor_status(task_id):
+    """Poll a Bi-weekly Iron Condor backtest (it runs on _cr_start)."""
+    return call_ratio_status(task_id)
 
 # Find Best Params grid for Weekly CPR Breakout. Only the target changes how a
 # trade plays out, so each stock is replayed once per target with the quality

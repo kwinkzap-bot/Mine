@@ -85,6 +85,60 @@ class BreezeRateLimiter:
 
 _rate_limiter = BreezeRateLimiter()
 
+
+# The SDK's get_historical_data_v2 is a bare `requests.get` per call: a new TCP +
+# TLS connection every request and NO timeout. On 2026-11-10 one connect in five to
+# breezeapi.icicidirect.com lost its SYN (5 s), and ~11 every 10 minutes never
+# connected at all, each holding a backtest thread for the OS's 75 s connect
+# timeout — a 2020-26 condor sweep crawled at ~6.6 s a request against a 0.7 s
+# pacer. Only the history endpoint is re-routed, onto one pooled keep-alive
+# session with a 5 s connect / 30 s read timeout and two connect retries (a GET
+# that never connected is safe to resend). Orders and every other call keep the
+# SDK's own path untouched.
+HISTORY_URL_MARK = 'historicalcharts'
+HISTORY_TIMEOUT = (5, 30)
+
+
+class _HistoryTransport:
+    """Stands in for the `requests` module inside breeze_connect: `get` on the
+    history URL goes through a pooled session, everything else is requests itself."""
+
+    def __init__(self, real):
+        self._real = real
+        self._session = None
+        self._lock = threading.Lock()
+
+    def _pooled(self):
+        with self._lock:
+            if self._session is None:
+                from requests.adapters import HTTPAdapter
+                from urllib3.util.retry import Retry
+                s = self._real.Session()
+                retry = Retry(total=2, connect=2, read=0, status=0, backoff_factor=0.5,
+                              allowed_methods=frozenset({'GET'}), raise_on_status=False)
+                s.mount('https://', HTTPAdapter(pool_connections=4, pool_maxsize=16, max_retries=retry))
+                self._session = s
+            return self._session
+
+    def get(self, url=None, *args, **kwargs):
+        if url is not None and HISTORY_URL_MARK in str(url):
+            kwargs.setdefault('timeout', HISTORY_TIMEOUT)
+            return self._pooled().get(url, *args, **kwargs)
+        return self._real.get(url, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _install_history_transport() -> None:
+    """Point breeze_connect's `requests` at _HistoryTransport, once per process."""
+    try:
+        import breeze_connect.breeze_connect as sdk
+    except Exception:                    # noqa: BLE001 — no SDK, nothing to route
+        return
+    if not isinstance(getattr(sdk, 'requests', None), _HistoryTransport):
+        sdk.requests = _HistoryTransport(sdk.requests)
+
 # Caches. Kept process-global so the adapter can be rebuilt per request (which
 # provider_logic does) without throwing the data away.
 _QUOTE_CACHE: Dict[str, Tuple[Dict[str, Any], datetime]] = {}
@@ -393,6 +447,7 @@ class IciciDataServiceAdapter:
                          "(pip install breeze-connect) — adapter resolves symbols "
                          "but fetches nothing.")
             return
+        _install_history_transport()
 
         try:
             self.breeze = BreezeConnect(api_key=api_key)
