@@ -13,7 +13,7 @@ engine, four brokers. Treat every change as touching real orders.
 
 **Never call `create_app()` outside the real app.** It runs
 `init_extensions` → `init_scheduler` (`app/__init__.py:27` →
-`extensions.py:96` → `scheduler.py:978`), which registers 21 cron jobs and
+`extensions.py:96` → `scheduler.py:978`), which registers 22 cron jobs and
 immediately restarts the live algos. A test or REPL that imports it during
 market hours places real orders. Tests build a bare `Flask()` instead — see
 `tests/route_app.py`.
@@ -61,7 +61,7 @@ few seconds later. Booting it out is the real stop, and `bootstrap` puts it
 back.
 
 A restart takes ~8s to serve again and re-runs `init_scheduler`, so it
-re-registers the 21 cron jobs and **restarts the live algos** — the same reason
+re-registers the 22 cron jobs and **restarts the live algos** — the same reason
 `create_app()` is dangerous. Verify afterwards:
 
 ```bash

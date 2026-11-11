@@ -20,6 +20,8 @@ whatever bar the call happened to see, and two calls a minute apart disagree.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import logging
 import os
 import pickle
@@ -41,9 +43,23 @@ _locks: Dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
-def _lock(path: str) -> threading.Lock:
+def _thread_lock(path: str) -> threading.Lock:
     with _locks_guard:
         return _locks.setdefault(path, threading.Lock())
+
+
+@contextlib.contextmanager
+def _lock(path: str):
+    """Across threads AND processes: scripts/backfill_30s.py writes the same
+    file the app does, and a read-merge-write from each at once loses one side."""
+    with _thread_lock(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(f'{path}.lock', 'w') as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _path(symbol: str, interval: str) -> str:

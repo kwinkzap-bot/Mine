@@ -423,6 +423,27 @@ class MarketScheduler:
             misfire_grace_time=600,
         )
 
+        # Candle Breakout 30-second history: Breeze 1-second data back to
+        # 2018-04-02, ~25 requests a session, so it is fetched a few hundred
+        # sessions a day — after 15:45 on weekdays, all day at weekends
+        # (api._sc_backfill_allowance). The walk is a thread that dies with
+        # the process; this restarts it each day (and once more in the
+        # evening, after a refusal stood it down). A no-op once complete.
+        self.scheduler.add_job(
+            self._run_sc_30s_backfill_task,
+            CronTrigger(
+                day_of_week='mon-sun',
+                hour='9,15,20',
+                minute=50,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='sc_30s_backfill',
+            name='Candle Breakout 30s History Backfill',
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -587,6 +608,17 @@ class MarketScheduler:
                 logger.warning("[FIISector Scheduler] No data returned — skipping save")
         except Exception as e:
             logger.error(f"[FIISector Scheduler] Error: {e}", exc_info=True)
+
+    def _run_sc_30s_backfill_task(self):
+        """Start the Candle Breakout 30-second backfill thread unless it is
+        running or done. It spends nothing outside its allowance."""
+        try:
+            from trading_app.app.routes import api
+            started = api._sc_backfill_30s('NIFTY', api._SC_INDEX_TOKENS['NIFTY'])
+            logger.info('[2ndCandle 30s] scheduled backfill: %s',
+                        'started' if started else 'already running or complete')
+        except Exception as e:      # noqa: BLE001 — tomorrow's run tries again
+            logger.warning('[2ndCandle 30s] scheduled backfill failed to start: %s', e)
 
     def _run_ema_narrow_prewarm_task(self):
         """~4:05 PM IST (after market close): refresh the local daily-candle

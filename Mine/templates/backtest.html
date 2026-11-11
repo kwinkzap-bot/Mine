@@ -132,8 +132,8 @@
                     </select>
                 </div>
                 <div class="form-group form-check-group">
-                    <input type="checkbox" id="scOptionPnl">
-                    <label for="scOptionPnl" title="OFF: P&amp;L is measured in NIFTY index points (the default). ON: P&amp;L is measured on the OPTION the live algo would have bought — CE for a Buy signal, PE for a Sell — so theta decay and delta drift are in the numbers and a 1:3 index trade is no longer 1:3. Signals, SL and Target are always decided on the index either way. The leg is modelled with Black-Scholes on the nearest weekly expiry at 15% assumed IV, strike priced nearest ₹250 (the live algo's default) — there is no historical option chain in this app, so the premiums are a model, not a recorded price.">Opt P&amp;L</label>
+                    <input type="checkbox" id="scOptionPnl" checked>
+                    <label for="scOptionPnl" title="ON (the default): every trade is also priced on the OPTION the live algo would have bought — CE for a Long, PE for a Short, the strike nearest ₹250 on the nearest weekly expiry — from that contract's recorded 1-minute candles (ICICI), with the index P&amp;L kept beside it. OFF: NIFTY index points only, no option requests. Signals, SL and Target are always decided on the index. Needs an ICICI login; in market hours only the newest 300 trades are priced.">Opt P&amp;L</label>
                 </div>
             </div>
 
@@ -150,6 +150,18 @@
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="scInvestmentDisplay" class="investment-display">₹50,000</div>
+                </div>
+                <div class="form-group">
+                    <label for="scCompound">Compounding</label>
+                    <input type="checkbox" id="scCompound" title="Off: every trade is the Lots box's size. On: each trade is sized from the running balance — 1 lot per 'Capital per Lot' (25,000 = 1 lot, 50,000 = 2 lots, …, at most 27), re-sized after every trade, brokerage taken off each one. Needs Opt P&amp;L: the balance moves by the option's real premium P&amp;L.">
+                </div>
+                <div class="form-group">
+                    <label for="scCapital">Start Capital (₹)</label>
+                    <input type="number" id="scCapital" value="25000" min="1000" step="1000">
+                </div>
+                <div class="form-group">
+                    <label for="scPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="scPerLot" value="25000" placeholder="Auto" min="1000" step="1000" title="Default 25,000 per lot. Clear the box for Auto: one lot costs that trade's entry premium × lot size, so the size follows the option's price.">
                 </div>
             </div>
 

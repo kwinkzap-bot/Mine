@@ -1746,6 +1746,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Ticked: each leg is priced from the contract's recorded candles in the
                 // background (strike nearest ₹250 at entry, as the live algo picks it).
                 payload.premium      = 250;
+                // ₹ sizing of the option legs: the Lots box, or compounding from the balance.
+                payload.lots          = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
+                payload.lot_value     = Math.max(1, parseFloat(document.getElementById('scLotValue')?.value || 65));
+                payload.compounding   = document.getElementById('scCompound')?.checked ?? false;
+                payload.start_capital = parseFloat(document.getElementById('scCapital')?.value || 25000);
+                payload.per_lot       = parseFloat(document.getElementById('scPerLot')?.value || 0);
             }
 
             // SuperTrend + BB + RSI + R1, bought as the ≈250 CE; exit on SuperTrend break

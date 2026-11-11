@@ -139,3 +139,115 @@ def test_opt_pnl_prices_every_trade_from_recorded_candles_in_the_background(clie
     assert len(st['trades']) == len(calls[0][1]) > 0
     assert all(t['entry_premium'] == 250.0 and t['exit_premium'] == 280.0 for t in st['trades'])
     assert st['summary']['total_pnl'] == pytest.approx(30.0 * len(st['trades']))
+
+
+# ── 30-second runs re-read at the crossing second ────────────────────────────
+from datetime import datetime as _dt, timedelta as _td
+
+from trading_app.Backtest.second_candle_options import refine_on_30s
+
+
+def _secs(start, values):
+    """1-second bars from `start`, each a flat print at `values[k]` (None = no print)."""
+    t0 = _dt.strptime(start, '%Y-%m-%d %H:%M:%S')
+    return [{'date': (t0 + _td(seconds=k)).strftime('%Y-%m-%d %H:%M:%S'),
+             'open': v, 'high': v, 'low': v, 'close': v}
+            for k, v in enumerate(values) if v is not None]
+
+
+def _leg(**kw):
+    t = {'entry_time': '2026-04-22 09:16:00', 'exit_time': '2026-04-22 09:16:30',
+         'type': 'Short', 'entry_price': 24500.0, 'exit_price': 24530.6,
+         'exit_reason': 'SL Hit', 'pnl': -30.6, 'expiry': '2026-04-28', 'strike': 24500,
+         'option_type': 'PE', 'entry_premium': 248.28, 'exit_premium': 248.28}
+    t.update(kw)
+    return t
+
+
+def test_a_same_minute_stop_is_priced_at_the_seconds_the_index_crossed():
+    """2026-04-22: in at 09:16:00, stopped at 09:16:30 — one 1-minute candle,
+    so Opt P&L read 0.00. The PE is bought the second the index falls through
+    24500 and sold the second it trades 24530.6."""
+    index = _secs('2026-04-22 09:16:00', [24510] * 4 + [24499] + [24490] * 25    # through 24500 at :04
+                  + [24520] * 26 + [24531] * 4)                                  # SL at :56
+    option = _secs('2026-04-22 09:16:00', [250 + k * 0.1 for k in range(60)])
+    out, counts = refine_on_30s([_leg()], lambda *k: option, lambda *k: index)
+    t = out[0]
+    assert counts == {'second': 1, 'bar': 0, 'minute': 0}
+    assert (t['option_entry_time'], t['option_exit_time']) == ('09:16:04', '09:16:56')
+    assert (t['entry_premium'], t['exit_premium']) == (250.4, 255.6)
+    assert t['pnl'] == 5.2 and t['result'] == 'WIN'
+
+
+def test_entry_and_exit_inside_one_30_second_bar():
+    index = _secs('2026-04-22 09:16:00', [24510] * 3 + [24499] * 5 + [24531] * 22)
+    option = _secs('2026-04-22 09:16:00', [260 - k for k in range(30)])
+    out, _ = refine_on_30s([_leg(exit_time='2026-04-22 09:16:00')],
+                           lambda *k: option, lambda *k: index)
+    assert (out[0]['option_entry_time'], out[0]['option_exit_time']) == ('09:16:03', '09:16:08')
+    assert out[0]['pnl'] == -5.0
+
+
+def test_a_missing_print_takes_the_last_one_before_and_a_time_exit_reads_before_the_cutoff():
+    index = _secs('2026-04-22 09:16:00', [24510] * 5 + [24499] * 25)
+    option = _secs('2026-04-22 09:16:00', [240, 241, 242, None, None, None, 246] + [250] * 23)
+    late = _secs('2026-04-22 15:24:50', [300] * 9 + [301, 999])           # 15:24:59 → 301; 15:25:00 not used
+    t = _leg(exit_time='2026-04-22 15:25:00', exit_reason='Time Exit', exit_price=24400.0)
+    out, counts = refine_on_30s([t], lambda e, s, o, d, i: late if i > 20 else option,
+                                lambda *k: index)
+    assert out[0]['entry_premium'] == 242.0            # :05 crossing, last print :02
+    assert out[0]['exit_premium'] == 301.0 and out[0]['option_exit_time'] == '15:25:00'
+    assert counts['second'] == 1
+
+
+def test_fallbacks_are_counted_never_invented():
+    option = _secs('2026-04-22 09:16:00', [250] * 30 + [240] * 30)
+    out, counts = refine_on_30s([_leg()], lambda *k: option, lambda *k: [])      # no index seconds
+    assert counts == {'second': 0, 'bar': 1, 'minute': 0}
+    assert (out[0]['entry_premium'], out[0]['exit_premium']) == (250.0, 240.0)
+    out, counts = refine_on_30s([_leg()], lambda *k: [], lambda *k: [])          # no option seconds
+    assert counts == {'second': 0, 'bar': 0, 'minute': 1}
+    assert out[0]['entry_premium'] == out[0]['exit_premium'] == 248.28            # 1-minute kept
+
+
+def _finish_legs(c, body):
+    for _ in range(200):
+        st = c.get(f"/api/backtest/st-bb-rsi/status/{body['task_id']}").get_json()
+        if st['status'] != 'running':
+            return st
+        time.sleep(0.05)
+    raise AssertionError('legs never finished')
+
+
+def test_compounding_sizes_each_trade_from_the_running_balance(client):
+    """₹25,000 at ₹10,000 a lot is 2 lots; every +30-point leg (×65, less the
+    2-lot brokerage) grows the balance, and the next trade is sized from it."""
+    from trading_app.Backtest.st_bb_rsi_engine import brokerage_for
+    c, _ = client
+    st = _finish_legs(c, _post(c, option_pnl=True, premium=250, compounding=True,
+                               start_capital=25000, per_lot=10000, lot_value=65))
+    s, trades = st['summary'], sorted(st['trades'], key=lambda t: t['entry_time'])
+    assert s['server_rupees'] and s['compounding'] and len(trades) >= 2
+    balance = 25000.0
+    for t in trades:
+        lots = max(1, min(27, int(balance // 10000)))
+        assert t['lots'] == lots
+        assert t['pnl_rupees'] == pytest.approx(30 * 65 * lots - brokerage_for(lots))
+        balance += t['pnl_rupees']
+        assert t['balance_after'] == pytest.approx(balance)
+    assert s['final_balance'] == pytest.approx(balance)
+    assert s['total_pnl_rupees'] == pytest.approx(balance - 25000)
+
+
+def test_without_compounding_every_trade_is_the_lots_box(client):
+    c, _ = client
+    st = _finish_legs(c, _post(c, option_pnl=True, premium=250, lots=3, lot_value=65))
+    assert st['summary']['server_rupees'] and not st['summary']['compounding']
+    assert {t['lots'] for t in st['trades']} == {3}
+    assert all(t['gross_pnl_rupees'] == pytest.approx(30 * 65 * 3) for t in st['trades'])
+
+
+def test_index_basis_is_not_booked_in_rupees(client):
+    c, _ = client
+    body = _post(c, compounding=True)
+    assert body['success'] and 'server_rupees' not in body['summary']

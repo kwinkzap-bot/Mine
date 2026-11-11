@@ -308,3 +308,34 @@ def test_an_empty_chunk_never_moves_the_walk_past_it(env, monkeypatch):
     _wait_backfill()
     assert len(client.breeze) == 3 and len(set(client.breeze)) == 1
     assert seconds_store.span('NIFTY')[0] == '2026-09-01'
+
+
+def test_the_script_walk_stops_at_its_floor_and_its_budget(env, monkeypatch):
+    """scripts/backfill_30s.py: --since stops the walk there, --budget caps the
+    day (the book's earlier spend counts), and it returns instead of sleeping."""
+    from datetime import date
+    from trading_app.Backtest import seconds_store
+    client, _, _, _ = env
+    monkeypatch.setattr(api, '_sc_breeze_30s', lambda prov, token, fd, td: (
+        client.breeze.append((fd, td)), _any_weekday_30s(fd, td))[1])
+    seconds_store.merge_and_read('NIFTY', _any_weekday_30s('2026-09-01', '2026-10-13'),
+                                 '2026-09-01', '2026-10-13')
+    assert api._sc_backfill_walk('NIFTY', 'T', floor=date(2026, 7, 1), wait=False,
+                                 allowance=10 ** 6) == 'complete'
+    assert seconds_store.span('NIFTY')[0] == '2026-07-01'
+    assert min(fd for fd, _ in client.breeze) == date(2026, 7, 1)
+    spent = api._sc_spent_today()
+    assert api._sc_backfill_walk('NIFTY', 'T', wait=False, allowance=spent + 50) == 'budget'
+    assert api._sc_spent_today() == spent + 50 and api._sc_weekdays(*client.breeze[-1]) == 2
+
+
+def test_the_scheduler_job_restarts_the_backfill_each_day(monkeypatch):
+    """A restart kills the walk's thread; the sc_30s_backfill job (09:50, 15:50,
+    20:50 IST every day) starts it again. Called unbound — no scheduler built."""
+    from trading_app.app import scheduler as sched
+    calls = []
+    monkeypatch.setattr(api, '_sc_backfill_30s', lambda sym, tok, user=None: calls.append((sym, tok)) or True)
+    cls = next(v for v in vars(sched).values()
+               if isinstance(v, type) and hasattr(v, '_run_sc_30s_backfill_task'))
+    cls._run_sc_30s_backfill_task(None)
+    assert calls == [('NIFTY', 'NSE:NIFTY50-INDEX')]

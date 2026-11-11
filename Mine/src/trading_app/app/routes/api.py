@@ -3678,13 +3678,14 @@ def _sc_weekdays(fd, td) -> int:
     return full * 5 + sum(1 for i in range(rest) if (fd + timedelta(days=full * 7 + i)).weekday() < 5)
 
 
-def _sc_backfill_gap(symbol):
+def _sc_backfill_gap(symbol, floor=None):
     """(from, to) still to fetch, newest end first, or None when complete.
-    The tail (the store's newest session up to Fyers' free window) comes first."""
+    The tail (the store's newest session up to Fyers' free window) comes first.
+    `floor` stops the walk there instead of at BREEZE_SECONDS_SINCE."""
     from datetime import date
     from trading_app.Backtest import seconds_store, seconds_history
     first, last, _n = seconds_store.span(symbol)
-    since = seconds_history.BREEZE_SECONDS_SINCE
+    since = max(seconds_history.BREEZE_SECONDS_SINCE, floor or seconds_history.BREEZE_SECONDS_SINCE)
     fyers_from = date.today() - timedelta(days=seconds_history.FYERS_SECONDS_DAYS)
     if last is None:
         return since, fyers_from - timedelta(days=1)
@@ -3706,6 +3707,67 @@ def _sc_breeze_30s(provider, token, fd, td):
                                     use_cache=False) or []
 
 
+def _sc_backfill_walk(symbol, token, user=None, floor=None, wait=True, allowance=None):
+    """Walk the 30-second store back towards BREEZE_SECONDS_SINCE (or `floor`),
+    newest first, a chunk at a time, inside the day's allowance. With `wait`
+    (the app's thread) it sleeps through hours with no allowance; without it
+    (scripts/backfill_30s.py) it returns. `allowance` overrides the clock's.
+    Returns 'complete', 'budget', 'refused' or 'no-session'."""
+    from trading_app.Backtest import seconds_store
+    strikes = 0
+    while True:
+        gap = _sc_backfill_gap(symbol, floor)
+        if gap is None:
+            logger.info('[2ndCandle 30s] %s backfill complete', symbol)
+            return 'complete'
+        left = (_sc_backfill_allowance() if allowance is None else allowance) - _sc_spent_today()
+        if left < _SC_DAY_REQUESTS:
+            if not wait:
+                return 'budget'
+            _sc_sleep(_SC_BACKFILL_IDLE)
+            continue
+        provider = get_icici_adapter(user)
+        if provider is None:
+            logger.warning('[2ndCandle 30s] %s backfill: no ICICI session — stopped', symbol)
+            return 'no-session'
+        # The newest end of the gap, as many weekdays as the budget buys.
+        days = min(_SC_BACKFILL_CHUNK, left) // _SC_DAY_REQUESTS
+        gfd, td = gap
+        fd = td
+        while fd > gfd and _sc_weekdays(fd - timedelta(days=1), td) <= days:
+            fd -= timedelta(days=1)
+        t0 = _time.time()
+        candles = _sc_breeze_30s(provider, token, fd, td)
+        _sc_spent_today(add=_sc_weekdays(fd, td) * _SC_DAY_REQUESTS)
+        if not candles and _sc_weekdays(fd, td) < 5:
+            # A few weekdays with nothing: holidays. Remembered for this
+            # process so the walk moves on to the head.
+            _sc_empty.setdefault(symbol, set()).add((fd, td))
+            continue
+        if not candles:
+            # Breeze has every NIFTY session since 2018-04-02, so a whole
+            # empty chunk is a refusal or a dead session — never skip past it.
+            strikes += 1
+            logger.warning('[2ndCandle 30s] %s %s→%s came back empty (%d/%d)',
+                           symbol, fd, td, strikes, _SC_BACKFILL_STRIKES)
+            if strikes >= _SC_BACKFILL_STRIKES:
+                return 'refused'
+            _sc_sleep(_SC_BACKFILL_RETRY if wait else 60)
+            continue
+        strikes = 0
+        df = seconds_store.merge_and_read(symbol, candles, fd.isoformat(), td.isoformat())
+        f, l, n = seconds_store.span(symbol)
+        logger.info('[2ndCandle 30s] %s %s→%s: %d sessions in %.0fs — store %s→%s, %d sessions',
+                    symbol, fd, td, df.index.normalize().nunique() if not df.empty else 0,
+                    _time.time() - t0, f, l, n)
+        if df.empty or (gap[0] < fd and df.index[0].date() > fd + timedelta(days=7)):
+            # Bars that do not reach the chunk's start would leave the
+            # walk stuck on the same days; treat as a refusal.
+            strikes += 1
+            if strikes >= _SC_BACKFILL_STRIKES:
+                return 'refused'
+
+
 def _sc_backfill_30s(symbol, token, user=None) -> bool:
     """Start the 30-second backfill for `symbol` unless it is running or done.
     True if a thread was started."""
@@ -3717,58 +3779,8 @@ def _sc_backfill_30s(symbol, token, user=None) -> bool:
         _sc_extending.add(symbol)
 
     def _run():
-        from trading_app.Backtest import seconds_store
-        strikes = 0
         try:
-            while True:
-                gap = _sc_backfill_gap(symbol)
-                if gap is None:
-                    logger.info('[2ndCandle 30s] %s backfill complete', symbol)
-                    return
-                left = _sc_backfill_allowance() - _sc_spent_today()
-                if left < _SC_DAY_REQUESTS:
-                    _sc_sleep(_SC_BACKFILL_IDLE)
-                    continue
-                provider = get_icici_adapter(user)
-                if provider is None:
-                    logger.warning('[2ndCandle 30s] %s backfill: no ICICI session — stopped', symbol)
-                    return
-                # The newest end of the gap, as many weekdays as the budget buys.
-                days = min(_SC_BACKFILL_CHUNK, left) // _SC_DAY_REQUESTS
-                gfd, td = gap
-                fd = td
-                while fd > gfd and _sc_weekdays(fd - timedelta(days=1), td) <= days:
-                    fd -= timedelta(days=1)
-                t0 = _time.time()
-                candles = _sc_breeze_30s(provider, token, fd, td)
-                _sc_spent_today(add=_sc_weekdays(fd, td) * _SC_DAY_REQUESTS)
-                if not candles and _sc_weekdays(fd, td) < 5:
-                    # A few weekdays with nothing: holidays. Remembered for this
-                    # process so the walk moves on to the head.
-                    _sc_empty.setdefault(symbol, set()).add((fd, td))
-                    continue
-                if not candles:
-                    # Breeze has every NIFTY session since 2018-04-02, so a whole
-                    # empty chunk is a refusal or a dead session — never skip past it.
-                    strikes += 1
-                    logger.warning('[2ndCandle 30s] %s %s→%s came back empty (%d/%d)',
-                                   symbol, fd, td, strikes, _SC_BACKFILL_STRIKES)
-                    if strikes >= _SC_BACKFILL_STRIKES:
-                        return
-                    _sc_sleep(_SC_BACKFILL_RETRY)
-                    continue
-                strikes = 0
-                df = seconds_store.merge_and_read(symbol, candles, fd.isoformat(), td.isoformat())
-                f, l, n = seconds_store.span(symbol)
-                logger.info('[2ndCandle 30s] %s %s→%s: %d sessions in %.0fs — store %s→%s, %d sessions',
-                            symbol, fd, td, df.index.normalize().nunique() if not df.empty else 0,
-                            _time.time() - t0, f, l, n)
-                if df.empty or (gap[0] < fd and df.index[0].date() > fd + timedelta(days=7)):
-                    # Bars that do not reach the chunk's start would leave the
-                    # walk stuck on the same days; treat as a refusal.
-                    strikes += 1
-                    if strikes >= _SC_BACKFILL_STRIKES:
-                        return
+            _sc_backfill_walk(symbol, token, user)
         except Exception as e:          # noqa: BLE001 — the next run restarts it
             logger.warning('[2ndCandle 30s] %s backfill failed: %s', symbol, e)
         finally:
@@ -3881,6 +3893,47 @@ def _sc_bars(symbol, interval, start_date_str, end_date_str, fyers, backfill=Fal
         notes.append(f'30-second history starts {BREEZE_SECONDS_SINCE} — ICICI has no '
                      f'1-second data before it, so nothing earlier is fetched.')
     return seconds_store.records(df), minutes_df, ('  ·  '.join(notes) or None)
+
+
+def _sc_refine_30s(symbol, priced):
+    """second_candle_options.refine_on_30s against Breeze: the option's and the
+    index's 1-second data, one 15-minute slice a request, disk-cached once
+    settled (the option through historical_option_window, the index here)."""
+    from datetime import date
+    from trading_app.Backtest.second_candle_options import refine_on_30s
+    from trading_app.service import icici_data_service as ics
+    from trading_app.service.cpr_option_service import OPTION_EXCHANGE
+    adapter = get_icici_adapter()
+    if adapter is None or not hasattr(adapter, 'historical_option_window'):
+        return priced, {'second': 0, 'bar': 0, 'minute': len(priced)}
+    exchange = OPTION_EXCHANGE.get(symbol.upper(), 'NFO')
+    token = _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ')
+
+    def fetch_option(expiry, strike, option_type, day, index):
+        return adapter.historical_option_window(symbol, date.fromisoformat(str(expiry)[:10]),
+                                                strike, option_type, day, index,
+                                                bar_seconds=1, exchange_code=exchange)
+
+    def fetch_index(day, index):
+        windows = ics._session_windows(day)
+        if not 0 <= index < len(windows):
+            return []
+        w0, w1 = windows[index]
+        key = f'{token}:1s:w:{w0:%Y-%m-%dT%H:%M}'
+        rows = ics._slice_cache_get(key)
+        if rows is not None:
+            return rows
+        rows, _ = adapter.historical_seconds_range(token, w0, w1, max_requests=1)
+        if rows and w1 < datetime.now(ics.IST):
+            ics._slice_cache_put(key, rows)
+        return rows or []
+
+    t0 = _time.time()
+    out, counts = refine_on_30s(priced, fetch_option, fetch_index)
+    logger.info('[2ndCandle BT] 30s legs: %d at the crossing second, %d on the 30s bar, '
+                '%d kept 1-minute — %.0fs', counts['second'], counts['bar'], counts['minute'],
+                _time.time() - t0)
+    return out, counts
 
 
 # Candle Breakout option legs priced per run. Each leg probes a few strikes,
@@ -4003,7 +4056,27 @@ def run_second_candle_backtest_api():
             except Exception:
                 pass
 
+        # Sizing in ₹ (option basis only — index points are not money on a
+        # bought option): the Lots box at a fixed size, or with Compounding each
+        # trade sized from the running balance, 1 lot per `per_lot` of it (0 =
+        # Auto: the trade's own entry premium × lot size), up to `max_lots`,
+        # brokerage off every trade. The shared apply_compounding the
+        # Simple Trader family books with.
+        compounding   = bool(data.get('compounding', False))
+        start_capital = float(data.get('start_capital', 25000) or 25000)
+        per_lot       = float(data.get('per_lot') or 0)
+        max_lots      = int(data.get('max_lots', 27) or 27)
+        fixed_lots    = max(1, int(data.get('lots', 1) or 1))
+        lot_size_in   = float(data.get('lot_value', 0) or 0)
+
         def _payload(rows, summ, warn, option_info=None):
+            extra = {}
+            if option_info and rows:
+                from trading_app.Backtest.st_bb_rsi_engine import apply_compounding
+                extra = apply_compounding(
+                    rows, int(lot_size_in or option_info.get('lot') or _bt_lot_value(symbol)),
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
             return {
                 'success': True,
                 'trades':  rows,
@@ -4029,6 +4102,7 @@ def run_second_candle_backtest_api():
                     'pnl_basis':     'option' if option_info else 'index',
                     'option_source': 'recorded' if option_info else None,
                     'premium':       (option_info or {}).get('premium'),
+                    **extra,
                 },
             }
 
@@ -4056,6 +4130,16 @@ def run_second_candle_backtest_api():
                                             calendar=sessions, max_legs=cap,
                                             progress=_progress)
                 notes = []
+                if interval == '30second' and priced:
+                    # Same-minute in-and-out reads one 1-minute candle twice
+                    # (Opt P&L 0.00): re-read both premiums on 30-second bars.
+                    priced, counts = _sc_refine_30s(symbol, priced)
+                    if counts['minute'] or counts['bar']:
+                        notes.append(
+                            f"Premiums of {counts['second']} of {len(priced)} legs read at the second "
+                            f"the index crossed the level; {counts['bar']} on the option's 30-second "
+                            f"bar (no index seconds) and {counts['minute']} on 1-minute candles "
+                            f"(no ICICI 1-second option data).")
                 if info['unpriced'] or info['truncated']:
                     notes.append(
                         f"{info['index_trades']} index trades: {info['unpriced']} had no option "
