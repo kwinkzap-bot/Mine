@@ -241,7 +241,7 @@ class OptionsChartService:
                     valid_expiries.append((expiry_date, expiry_val))
             except ValueError:
                 # If parsing fails, still include it as fallback
-                valid_expiries.append((None, expiry_str))
+                valid_expiries.append((None, expiry_val))
         
         # If we have future expiries, use the nearest one
         if valid_expiries:
@@ -507,9 +507,6 @@ class OptionsChartService:
         except Exception as e:
             logging.error(f"Error getting tokens for strikes: {e}", exc_info=True)
             return None, None
-        except Exception as e:
-            logging.error(f"Error getting tokens for strikes: {e}", exc_info=True)
-            return None, None
 
     def _fetch_prev_day_ohlc(self, token: Union[int, str], target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
         """Fetch previous day's OHLC using daily historical data to avoid intraday highs.
@@ -715,7 +712,7 @@ class OptionsChartService:
                 'pe_pdl': pe_ohlc.get('low')
             }
             
-            logging.info(f"✓ Fetched PDH/PDL for tokens {ce_token_int}, {pe_token_int}")
+            logging.info(f"✓ Fetched PDH/PDL for tokens {ce_token_val}, {pe_token_val}")
         except Exception as e:
             logging.error(f"Error fetching quotes: {e}", exc_info=True)
         

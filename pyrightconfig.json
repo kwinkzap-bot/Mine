@@ -1,7 +1,7 @@
 {
   "pythonVersion": "3.9",
   "include": ["Mine/src", "Mine"],
-  "exclude": ["**/node_modules", "**/__pycache__", "tests"],
+  "exclude": ["**/node_modules", "**/__pycache__", "tests", "**/.claude/worktrees", "Mine/scratch", "**/.venv"],
   "typeCheckingMode": "standard",
   "extraPaths": ["Mine/src"],
   "pythonPath": "Mine/src"

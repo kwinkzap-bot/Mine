@@ -1826,6 +1826,7 @@ class OpenInterestService:
             logger.info(f"[DEBUG] Total instruments in NFO: {len(instruments)}")
             # Force refresh instruments if empty or stale
             if not instruments:
+                exchange = config.get('exchange', 'NFO')
                 logger.info(f"[DEBUG] detailed_instruments is empty, refetching from kite for {exchange}...")
                 try:
                     # Use the correct exchange (BFO for Sensex, NFO for others)

@@ -1134,12 +1134,8 @@ def candles(symbol: str, interval: str = '1d') -> Dict[str, Any]:
 
     # Lightweight Charts wants epoch seconds for an intraday series and a
     # plain date for anything daily or wider; mixing them silently drops bars.
-    if spec['intraday']:
-        def stamp(when):
-            return int(when.timestamp())
-    else:
-        def stamp(when):
-            return when.strftime('%Y-%m-%d')
+    def stamp(when):
+        return int(when.timestamp()) if spec['intraday'] else when.strftime('%Y-%m-%d')
 
     points = []
     for ts, close in frame['Close'].items():

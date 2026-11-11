@@ -1107,6 +1107,7 @@ def propose(chart, bars):
     if side_open == 'inside' and c1['high'] > lv['tc'] + 2 and c1['low'] < lv['bc'] - 2:     # real wicks, not a tick
         brk, brk_side = None, None
         blocked = None                       # a continuation refused for a virgin CPR in its way; the day then looks the other way
+        blocked_v, swing = None, None        # set together with `blocked`; initialised so linters see them bound
         head = (f"09:15 opened and closed inside the CPR {lv['bc']:,.0f}-{lv['tc']:,.0f} but wicked out of it both ways "
                 f"({c1['high']:,.0f}-{c1['low']:,.0f}) — the box decides")
 
@@ -1202,6 +1203,7 @@ def propose(chart, bars):
     reached = False
     in_break, break_t, break_px = None, None, None       # the inside-CPR break awaiting its cross candle
     box_turn = None                                      # between the CPRs: the break ran into the far box, so the trade is that box's rejection
+    turn_why = ''                                        # set together with `box_turn`
     big_reject = None                                    # a CPR rejection too big to enter off, awaiting its small retest candle
     # The weekly CPR lying over the PDH/R1 box (under the PDL/S1 box) with
     # the 09:15 open inside that zone: the zone_rejection setup.

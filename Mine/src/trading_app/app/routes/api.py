@@ -5665,7 +5665,7 @@ def run_st_bb_rsi_optimise():
             return jsonify({'success': False,
                             'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
         token = _sp_instrument_token(provider, symbol)
-        knobs = dict(
+        knobs: Dict[str, Any] = dict(
             rsi_period=int(data.get('rsi_period', 14) or 14),
             bb_period=int(data.get('bb_period', 20) or 20),
             bb_offset=int(data.get('bb_offset', 0) or 0),
@@ -9204,13 +9204,9 @@ def run_thirty_min_fakeout_optimise():
             cache = _load_opt_cache()
             if cache_key in cache:
                 entry = cache[cache_key]
-                # The 30-second backfill's progress is today's, not the cached run's.
-                tfs = entry.get('timeframes', [])
-                if any(g.get('tf_label') == '30s' for g in tfs):
-                    _sc_backfill_30s(symbol, _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ'),
-                                     session.get('username'))
-                    note = _sc_backfill_note(symbol)
-                    tfs = [dict(g, note=note) if g.get('tf_label') == '30s' else g for g in tfs]
+                # No timeframe axis here (always 30-min), so no 30 s backfill note
+                # to refresh; the 2nd-Candle copy of this block named an
+                # undefined `symbol`.
                 return jsonify({'success': True, 'status': 'complete', 'from_cache': True, **entry})
 
         current_kite = get_data_provider(context='backtest')

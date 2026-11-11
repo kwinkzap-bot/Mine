@@ -39602,8 +39602,26 @@
       "reason": "Price above the weekly CPR (24,169-24,714) but below the daily CPR (25,010-25,059): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 48.1 pts (0.193%), 09:15 candle O 25076.4 H 25084.05 L 24912.45 C 24912.45 | Trade by rule: price above the weekly CPR (24,169-24,714) but below the daily CPR (25,010-25,059): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-11-11",
+      "price_vs_daily": "Above",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Dec",
+      "first_candle": "Candle green near R3",
+      "boxes": "Medium",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Gap-up open 25,338; R1/PDH 25,084-25,140 never reached by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 55.5 pts (0.222%), 09:15 candle O 25337.8 H 25377.4 L 25263.8 C 25373.35 | Trade by rule: gap-up open 25,338; R1/PDH 25,084-25,140 never reached by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-11-10 09:54",
+  "extended_at": "2026-11-11 20:14",
   "backfilled_from": "2018-01-01"
 }

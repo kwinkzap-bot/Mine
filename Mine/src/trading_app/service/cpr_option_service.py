@@ -749,7 +749,8 @@ def _spot_minutes_for(symbol: str, days: List[date]) -> Dict[str, List[Dict[str,
     for d in days[1:] + [None]:
         if d is None or (d - prev).days > 30 or (d - start).days > 85:
             out.update(_spot_minutes(symbol, start, prev))
-            start = d
+            if d is not None:            # None is the end sentinel; the loop stops there
+                start = d
         prev = d if d is not None else prev
     return out
 

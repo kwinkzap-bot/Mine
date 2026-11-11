@@ -110,9 +110,7 @@ def option_legs():
         mc.resolve_symbol(symbol)
         return jsonify(cpr_opt.legs_at(symbol, trades, premium,
                                        span_min=max(1, min(span, 60)), source=source))
-    except ValueError as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
-    except mc.BadRequest as e:
+    except ValueError as e:          # mc.BadRequest is a ValueError
         return jsonify({'success': False, 'error': str(e)}), 400
     except cpr_opt.OptionDataUnavailable as e:
         return jsonify({'success': False, 'error': str(e), 'icici_required': True}), 401

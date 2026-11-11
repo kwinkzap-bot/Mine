@@ -423,7 +423,7 @@ class CPRFilterService:
         return rsi.tolist()
 
     def calculate_delta_rsi(self, rsi: List[float], window: int = 21, degree: int = 2) -> Tuple[List[float], List[float]]:
-        """
+        r"""
         Calculate Delta-RSI (polynomial derivative of RSI) and its signal line (EMA).
         Matches the logic in Delta-RSI Oscillator: 
         D = \sum_{i=1}^{degree} i * a_i * (window-1)^{i-1}
