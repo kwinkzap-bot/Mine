@@ -34,6 +34,23 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Dedicated file sink for every [SC] line, as tmf_algo.log does for TMF. Since
+# early Nov 2026 the root logger drops INFO, so the range lock, the breakout,
+# the strike pick and the exit went nowhere: on 2026-11-11 there was no line to
+# say why the 09:16 breakout was missed and 09:19 was taken instead. Guarded so
+# a re-import does not stack handlers.
+_LOG_FILE = os.path.join(os.path.dirname(__file__), 'sc_algo.log')
+if not any(getattr(h, '_sc_sink', False) for h in logger.handlers):
+    try:
+        from logging.handlers import RotatingFileHandler
+        _fh = RotatingFileHandler(_LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3)
+        _fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        _fh._sc_sink = True
+        logger.addHandler(_fh)
+        logger.setLevel(logging.INFO)
+    except OSError:
+        pass
+
 _STATE_FILE       = os.path.join(os.path.dirname(__file__), 'sc_state.json')
 _HISTORY_FILE     = os.path.join(os.path.dirname(__file__), 'sc_trades_history.json')
 _ALL_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'sc_trades_all_history.json')
@@ -65,6 +82,7 @@ _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical 13–18%)
 _BREAKOUT_SCAN_SECS = 15  # cadence of the authoritative completed-candle first-breakout scan
 _MAX_QUOTE_AGE_SECS = 30  # a spot quote older than this is stale — never enter or exit on it
+_UNVERIFIED_RETRY_SECS = 3  # wait before re-fetching bars when they cannot vouch for a late live trigger
 
 # Live defaults: 2nd 30-Sec candle range, SL:Target 1:3, cut-off 3:25 PM, Buy-only.
 DEFAULT_PARAMS: Dict[str, Any] = {
@@ -169,6 +187,10 @@ class SecondCandleAlgo:
         self._30s_refused_date: Optional[str] = None
         # Earliest moment _ensure_range may fetch again after an empty answer.
         self._range_retry_at: float = 0.0
+        # Earliest moment the breakout scan may fetch again after bars that
+        # could not vouch for a live-spot trigger (see _bars_cover).
+        self._scan_retry_at: float = 0.0
+        self._unverified_logged_at: float = 0.0
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -573,6 +595,65 @@ class SecondCandleAlgo:
                 if float(c['low'])  <= tgt:
                     return 'TARGET'
         return None
+
+    @staticmethod
+    def _bars_cover(df: Optional[pd.DataFrame], params: Dict[str, Any],
+                    now_ist: pd.Timestamp) -> bool:
+        """Can the bars say whether an EARLIER watch bar already broke out?
+
+        A live-spot trigger is only the day's first breakout if no completed
+        watch bar broke out before it. Inside the first watch bar none has
+        completed, so that is always true. After it, it is true only if every
+        watch bar up to the one before the last closed is in `df` (the bar
+        that has just closed may still be on its way from the provider; the
+        live poll was watching it).
+
+        2026-11-11: the 09:16:00 bar opened above the range (entry 25337.15)
+        and hit the stop at 09:16:22; the backtest books that loss. Live saw
+        neither, and at 09:19:19 the live spot crossed the range high while the
+        bars were unavailable — _check_breakout found nothing, the stale-signal
+        check had no bars to read, and it bought a trade that was already over.
+        """
+        step = pd.Timedelta(seconds=30)
+        first_watch = (now_ist.normalize() + pd.Timedelta(hours=9, minutes=15)
+                       + step * int(params['candle_index']))
+        need_last = now_ist.floor('30s') - 2 * step
+        if need_last < first_watch:
+            return True
+        if df is None or df.empty:
+            return False
+        have = {pd.Timestamp(ts).value for ts in df['datetime']}
+        t = first_watch
+        while t <= need_last:
+            if t.value not in have:
+                return False
+            t += step
+        return True
+
+    @staticmethod
+    def _apply_gap_open(sig: Dict[str, Any], df: Optional[pd.DataFrame],
+                        params: Dict[str, Any], now_ist: pd.Timestamp) -> Dict[str, Any]:
+        """The backtest fills a bar that OPENS beyond the range at its open,
+        not at the range level ("gap-up fills at open"). A live-spot trigger
+        is in the bar now forming; if the bars carry that bar and its open is
+        past the level, enter at the open and re-place the target the same way.
+        2026-11-11: open 25337.15 over a 25336.85 high — the backtest's entry."""
+        if df is None or df.empty:
+            return sig
+        row = df[df['datetime'] == now_ist.floor('30s')]
+        if row.empty:
+            return sig
+        o = float(row.iloc[0]['open'])
+        rr = float(params['rr_ratio'])
+        if sig['direction'] == 'BUY' and o > sig['range_high']:
+            entry = o
+            tgt = entry + rr * (entry - sig['sl_level'])
+        elif sig['direction'] == 'SELL' and o < sig['range_low']:
+            entry = o
+            tgt = entry - rr * (sig['sl_level'] - entry)
+        else:
+            return sig
+        return dict(sig, entry_ref=round(entry, 2), target_level=round(tgt, 2))
 
     # ── Live breakout (tick-by-tick against the range candle) ──────────────────
 
@@ -1400,12 +1481,27 @@ class SecondCandleAlgo:
                                     >= _BREAKOUT_SCAN_SECS)
                         sig  = None
                         _bdf = None
-                        if live_sig is not None or _due:
+                        if (live_sig is not None or _due) and \
+                                time.monotonic() >= self._scan_retry_at:
                             self._last_breakout_scan = now_ist
                             _bdf       = self._fetch_today_30s_candles(provider)
                             candle_sig = self._check_breakout(_bdf, _p, now_ist)
                             # Completed candle wins → matches the backtest direction
                             sig = candle_sig or live_sig
+                            if candle_sig is None and live_sig is not None:
+                                if not self._bars_cover(_bdf, _p, now_ist):
+                                    # Never enter blind on a late trigger — see _bars_cover.
+                                    sig = None
+                                    self._scan_retry_at = time.monotonic() + _UNVERIFIED_RETRY_SECS
+                                    if time.monotonic() - self._unverified_logged_at >= 30:
+                                        self._unverified_logged_at = time.monotonic()
+                                        logger.warning(
+                                            f"[SC] Live spot {spot} broke the range but the 30s"
+                                            f" bars do not reach back to the first watch bar"
+                                            f" ({0 if _bdf is None else len(_bdf)} bars) — not"
+                                            f" entering until they show no earlier breakout")
+                                else:
+                                    sig = self._apply_gap_open(live_sig, _bdf, _p, now_ist)
                             if (candle_sig is not None and live_sig is not None and
                                     candle_sig['direction'] != live_sig['direction']):
                                 logger.info(
@@ -1440,7 +1536,7 @@ class SecondCandleAlgo:
                                 time.sleep(5)
                                 continue
 
-                            _src = 'live-spot' if sig is live_sig else 'candle'
+                            _src = 'candle' if sig.get('entry_bar') else 'live-spot'
                             logger.info(
                                 f"[SC] Breakout {sig['direction']} ({_src}) spot={spot}"
                                 f" entry_ref={sig['entry_ref']} sl={sig['sl_level']}"

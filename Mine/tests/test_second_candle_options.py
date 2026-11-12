@@ -173,7 +173,7 @@ def test_a_same_minute_stop_is_priced_at_the_seconds_the_index_crossed():
     option = _secs('2026-04-22 09:16:00', [250 + k * 0.1 for k in range(60)])
     out, counts = refine_on_30s([_leg()], lambda *k: option, lambda *k: index)
     t = out[0]
-    assert counts == {'second': 1, 'bar': 0, 'minute': 0}
+    assert counts == {'second': 1, 'bar': 0, 'minute': 0, 'repicked': 0}
     assert (t['option_entry_time'], t['option_exit_time']) == ('09:16:04', '09:16:56')
     assert (t['entry_premium'], t['exit_premium']) == (250.4, 255.6)
     assert t['pnl'] == 5.2 and t['result'] == 'WIN'
@@ -203,11 +203,45 @@ def test_a_missing_print_takes_the_last_one_before_and_a_time_exit_reads_before_
 def test_fallbacks_are_counted_never_invented():
     option = _secs('2026-04-22 09:16:00', [250] * 30 + [240] * 30)
     out, counts = refine_on_30s([_leg()], lambda *k: option, lambda *k: [])      # no index seconds
-    assert counts == {'second': 0, 'bar': 1, 'minute': 0}
+    assert counts == {'second': 0, 'bar': 1, 'minute': 0, 'repicked': 0}
     assert (out[0]['entry_premium'], out[0]['exit_premium']) == (250.0, 240.0)
     out, counts = refine_on_30s([_leg()], lambda *k: [], lambda *k: [])          # no option seconds
-    assert counts == {'second': 0, 'bar': 0, 'minute': 1}
+    assert counts == {'second': 0, 'bar': 0, 'minute': 1, 'repicked': 0}
     assert out[0]['entry_premium'] == out[0]['exit_premium'] == 248.28            # 1-minute kept
+
+
+def _by_strike(prices):
+    """fetch_option answering each strike with its own flat-ish 1-second path."""
+    return lambda expiry, strike, ot, day, i: prices.get(int(strike), [])
+
+
+def test_the_strike_is_re_picked_at_the_crossing_second_as_live_picks_it():
+    """2026-11-12: the 1-minute pick (09:16 open/close average) was 25200 CE;
+    at 09:16:16, when the index crossed 25234.45, 25200 was 233.60 and 25150
+    262.80 — live bought 25150. The backtest now buys it too."""
+    index = _secs('2026-11-12 09:16:00', [25229.0] * 16 + [25234.9] * 14)    # cross at :16
+    prices = {25200: _secs('2026-11-12 09:16:00', [240.0] * 16 + [233.6] * 14),
+              25150: _secs('2026-11-12 09:16:00', [270.0] * 16 + [262.8] * 14),
+              25100: _secs('2026-11-12 09:16:00', [300.0] * 30)}
+    leg = _leg(entry_time='2026-11-12 09:16:00', exit_time='2026-11-12 09:16:30',
+               type='Long', entry_price=25234.45, exit_price=25300.0, exit_reason='TG Hit',
+               expiry='2026-11-17', strike=25200, option_type='CE')
+    index += _secs('2026-11-12 09:16:30', [25300.5] * 30)
+    out, counts = refine_on_30s([leg], _by_strike(prices), lambda *k: index)
+    assert counts['repicked'] == 1
+    assert out[0]['strike'] == 25150 and out[0]['entry_premium'] == 262.8
+    assert out[0]['option_entry_time'] == '09:16:16'
+
+
+def test_a_strike_already_nearest_at_the_cross_is_kept():
+    index = _secs('2026-11-12 09:16:00', [25234.9] * 30)
+    prices = {25200: _secs('2026-11-12 09:16:00', [245.0] * 30),
+              25150: _secs('2026-11-12 09:16:00', [275.0] * 30),
+              25250: _secs('2026-11-12 09:16:00', [215.0] * 30)}
+    leg = _leg(entry_time='2026-11-12 09:16:00', type='Long', entry_price=25234.45,
+               strike=25200, option_type='CE')
+    out, counts = refine_on_30s([leg], _by_strike(prices), lambda *k: index)
+    assert counts['repicked'] == 0 and out[0]['strike'] == 25200
 
 
 def _finish_legs(c, body):

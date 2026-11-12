@@ -78,6 +78,7 @@ _STRIKE_WINDOW  = 40      # strikes scanned either side of ATM (±2000 pts on a 
 _YEAR_SECS      = 365.0 * 24 * 3600
 _MIN_T_SECS     = 60.0    # never price at T=0 — the last minute is still worth something
 _EXPIRY_TIME    = dt_time(15, 30)
+MUHURAT_OPEN_MIN = 12 * 60  # a session whose first bar is at/after noon is not a regular one
 
 
 class SecondCandleBacktestEngine:
@@ -148,6 +149,13 @@ class SecondCandleBacktestEngine:
                     day_positions.append(np.arange(start, i))
                     start = i
             day_positions.append(np.arange(start, n))
+
+        # A session that opens in the afternoon is Diwali Muhurat trading
+        # (Sun 2026-11-08 opened 14:20). The live algo only runs 09:15-15:28
+        # on weekdays, so it never trades one, and its "2nd candle" is not the
+        # morning range the rule is about: the backtest booked a 14:21 long
+        # there that live could not have taken.
+        day_positions = [p for p in day_positions if time_mins[p[0]] < MUHURAT_OPEN_MIN]
 
         return opens, highs, lows, closes, time_mins, ts_strs, day_positions
 

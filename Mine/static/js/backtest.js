@@ -4431,6 +4431,15 @@ document.addEventListener('DOMContentLoaded', function() {
             // Leg / premiums / index P&L go in front of the P&L column, which
             // stays last and is now the premium's.
             const pnlCol = columns[columns.length - 1];
+            // A 30-second run reads both premiums at the SECOND the index
+            // crossed the level (option_bars '1s'): show that time, as live
+            // does (09:16:16 rather than the 09:16:00 bar it fell in).
+            const atSecond = (key, secKey) => col => col.key !== key ? col : {
+                ...col,
+                format: (v, t) => (t.option_bars === '1s' && t[secKey] && v)
+                    ? formatDate(`${String(v).slice(0, 10)}T${t[secKey]}`) : formatDate(v) };
+            columns = columns.map(atSecond('entry_time', 'option_entry_time'))
+                             .map(atSecond('exit_time', 'option_exit_time'));
             columns = [columns[0], DAY_COL, ...columns.slice(1, -1), ...SC_OPTION_COLS,
                        { ...pnlCol, label: 'Opt P&L' },
                        ...(lastData.summary.server_rupees ? [

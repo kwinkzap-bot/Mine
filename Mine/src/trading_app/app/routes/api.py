@@ -3905,7 +3905,7 @@ def _sc_refine_30s(symbol, priced):
     from trading_app.service.cpr_option_service import OPTION_EXCHANGE
     adapter = get_icici_adapter()
     if adapter is None or not hasattr(adapter, 'historical_option_window'):
-        return priced, {'second': 0, 'bar': 0, 'minute': len(priced)}
+        return priced, {'second': 0, 'bar': 0, 'minute': len(priced), 'repicked': 0}
     exchange = OPTION_EXCHANGE.get(symbol.upper(), 'NFO')
     token = _SC_INDEX_TOKENS.get(symbol, f'NSE:{symbol}-EQ')
 
@@ -3928,10 +3928,12 @@ def _sc_refine_30s(symbol, priced):
             ics._slice_cache_put(key, rows)
         return rows or []
 
+    from trading_app.service.cpr_option_service import strike_step
     t0 = _time.time()
-    out, counts = refine_on_30s(priced, fetch_option, fetch_index)
+    out, counts = refine_on_30s(priced, fetch_option, fetch_index, step=strike_step(symbol))
     logger.info('[2ndCandle BT] 30s legs: %d at the crossing second, %d on the 30s bar, '
-                '%d kept 1-minute — %.0fs', counts['second'], counts['bar'], counts['minute'],
+                '%d kept 1-minute, %d strikes re-picked at the cross — %.0fs',
+                counts['second'], counts['bar'], counts['minute'], counts['repicked'],
                 _time.time() - t0)
     return out, counts
 

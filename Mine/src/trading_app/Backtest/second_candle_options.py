@@ -135,6 +135,7 @@ def price_trades(symbol: str, trades: List[Dict[str, Any]], span_min: int,
 # 2018-05-02, 2019-06-03, 2022-06-01) → the 1-minute premiums stay.
 
 SLICE_SECONDS = 900          # icici_data_service._SECOND_WINDOW_SECONDS
+_REPICK_STEPS = 4            # strikes the crossing-second re-pick may walk from the 1-minute one
 _OPEN_MIN = 9 * 60 + 15
 
 
@@ -158,12 +159,20 @@ def _by_second(rows: Iterable[Dict[str, Any]]) -> Dict[datetime, Dict[str, float
 
 def refine_on_30s(priced: List[Dict[str, Any]],
                   fetch_option: Callable[[str, float, str, Any, int], List[Dict[str, Any]]],
-                  fetch_index: Callable[[Any, int], List[Dict[str, Any]]]
+                  fetch_index: Callable[[Any, int], List[Dict[str, Any]]],
+                  premium: float = PREMIUM, step: float = 50.0,
                   ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """(trades re-priced on 1-second data, counts). fetch_option(expiry, strike,
     option_type, day, slice) and fetch_index(day, slice) return that 15-minute
     slice's 1-second bars. counts: 'second' (both sides at the crossing
-    second), 'bar' (option 30-second average), 'minute' (1-minute kept)."""
+    second), 'bar' (option 30-second average), 'minute' (1-minute kept),
+    'repicked' (strike moved to the one nearest `premium` at the crossing second).
+
+    The strike is chosen again at the crossing second, as live chooses it: off
+    the chain's prices at the moment it enters. The 1-minute pick reads the
+    entry minute's open/close average, and a breakout minute runs away from its
+    own open — on 2026-11-12 the 09:16 average put 25200 CE nearest ₹250, while
+    at 09:16:16 (the cross) 25200 was 233.60 and 25150 ~262: live bought 25150."""
     ocache: Dict[tuple, Dict[datetime, Dict[str, float]]] = {}
     icache: Dict[tuple, Dict[datetime, Dict[str, float]]] = {}
 
@@ -213,7 +222,26 @@ def refine_on_30s(priced: List[Dict[str, Any]],
         sec = [rows[bar + timedelta(seconds=k)] for k in range(30) if (bar + timedelta(seconds=k)) in rows]
         return (sec[0]['open'] + sec[-1]['close']) / 2 if sec else None
 
-    counts = {'second': 0, 'bar': 0, 'minute': 0}
+    def repick(t, ts: datetime):
+        """`t` on the strike priced nearest `premium` at `ts`, walking one strike
+        at a time from the 1-minute pick while the neighbour is nearer."""
+        try:
+            cur = int(float(t['strike']))
+        except (KeyError, TypeError, ValueError):
+            return t
+        pc = print_at(t, ts)
+        if pc is None:
+            return t
+        itm = -1 if str(t.get('option_type', '')).upper() == 'CE' else 1
+        for _ in range(_REPICK_STEPS):
+            nxt = int(cur + (itm if premium > pc else -itm) * step)
+            pn = print_at(dict(t, strike=nxt), ts)
+            if pn is None or abs(pn - premium) >= abs(pc - premium):
+                break
+            cur, pc = nxt, pn
+        return t if cur == int(float(t['strike'])) else dict(t, strike=cur)
+
+    counts = {'second': 0, 'bar': 0, 'minute': 0, 'repicked': 0}
     out = []
     for t in priced:
         long_ = t.get('type') != 'Short'
@@ -222,6 +250,11 @@ def refine_on_30s(priced: List[Dict[str, Any]],
         reason = t.get('exit_reason')
         # Entry: the index trading through the range level (up for a long).
         ent_s = crossing(ent_bar, t['entry_price'], up=long_)
+        if ent_s is not None and premium:
+            moved = repick(t, ent_s)
+            if moved is not t:
+                counts['repicked'] += 1
+                t = moved
         entry = print_at(t, ent_s) if ent_s else None
         exact = entry is not None
         if entry is None:
