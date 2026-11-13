@@ -574,6 +574,24 @@ JS `runMonthlyRsiBreakout` / `renderMonthlyRsiBreakout`.
   ₹6.55 L vs ₹7.6 L flat (same number of trades, bigger ones), CAGR 18.6% vs 20.4% flat on this particular run
   — not a verdict either way, just a different sizing rule on the same path. Not swept by Find Best Params
   (taken from the page like size_mode/fixed_amount).
+* **Max Stocks at Once (added same day, at the user's ask — "keep maximum of 10 stocks in progress at a
+  time"): `max_positions` (default 10, 0 = off).** A HARD cap on how many stocks are held concurrently, on
+  top of whatever cash and `max_new` (New Stocks a Month) already allow — a breakout is skipped for want of a
+  free slot (`skipped['slots']` / `skipped_slots`) even with cash in hand and room under the monthly cap; it
+  is its own skip reason precisely because `held`/`cash`/`month_cap` were not catching this case before. 10 is
+  not arbitrary: it is exactly what the default ₹1,00,000 capital ÷ ₹10,000 per stock already implied, so the
+  default run's numbers are unchanged by its addition (verified: `max_holdings` in the curve never exceeds the
+  cap, checked on real F&O 2015-26 data). **With `compounding` also on** (Fixed ₹ mode only), the sizing formula
+  changes: instead of `fixed_amount * (capital + realized) / capital`, the position size is the realised
+  balance split evenly across the `max_positions` slots — `(capital + realized) / max_positions` — so `Amount
+  per Stock` is NOT read in this combination (it only happens to match the default because ₹1,00,000 ÷ 10 =
+  ₹10,000). This is "compounding using the other stocks": a stock that exits with a profit grows the balance,
+  and the very next stock bought into its now-freed slot is sized off that larger balance — on real data,
+  position sizes grow from ~₹10,000 (2015) to ~₹39,000 (2026) under this combination. With `max_positions=0`
+  (off), compounding falls back to the plain capital-wide ratio exactly as before this feature existed — a
+  test (`test_compounding_without_a_slot_cap_falls_back_to_the_capital_ratio`) pins that exact backward
+  compatibility. `sweep()` also takes `max_positions` (not swept, taken from the page like the other sizing
+  params) so Find Best Params honours whatever cap the page is set to.
 
 Tests: `tests/test_monthly_rsi_breakout_engine.py` (synthetic months, days and weeks, the sweep/board unit tests, and both routes end to end on fake files).
 

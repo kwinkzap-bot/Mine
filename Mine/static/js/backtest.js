@@ -2884,7 +2884,7 @@ document.addEventListener('DOMContentLoaded', function() {
             nifty_ema: num('mrbNiftyEma', 0),
             timeframe:  document.getElementById('mrbTimeframe')?.value || 'month',
             rsi_lo: num('mrbRsiLo', 65), rsi_hi: num('mrbRsiHi', 75),
-            max_new: num('mrbMaxNew', 5), nifty_floor: num('mrbNiftyFloor', 40),
+            max_new: num('mrbMaxNew', 5), max_positions: num('mrbMaxPositions', 10), nifty_floor: num('mrbNiftyFloor', 40),
             capital: num('mrbCapital', 100000),
             size_mode: document.getElementById('mrbSizeMode')?.value || 'fixed',
             fixed_amount: num('mrbFixedAmount', 10000),
@@ -2984,8 +2984,9 @@ document.addEventListener('DOMContentLoaded', function() {
                  + (s.max_invested >= (s.capital || 0) * 0.95
                     ? 'it used nearly all of it'
                     : `try a smaller Capital box, this run never needed more than that`)),
-            card('Breakouts Not Taken', String((s.skipped_cash || 0) + (s.skipped_month_cap || 0) + (s.skipped_nifty || 0) + (s.skipped_held || 0)), 'ac-blue',
-                 `${s.skipped_cash || 0} no cash · ${s.skipped_month_cap || 0} over ${s.params?.max_new ?? 5} a month · ${s.skipped_nifty || 0} NIFTY ${s.params?.timeframe || 'month'}ly RSI < ${s.params?.nifty_floor ?? 40} · ${s.skipped_held || 0} already held`.replace('dayly', 'daily')),
+            card('Breakouts Not Taken', String((s.skipped_cash || 0) + (s.skipped_month_cap || 0) + (s.skipped_nifty || 0) + (s.skipped_held || 0) + (s.skipped_slots || 0)), 'ac-blue',
+                 `${s.skipped_cash || 0} no cash · ${s.skipped_month_cap || 0} over ${s.params?.max_new ?? 5} a month · ${s.skipped_slots || 0} all ${s.params?.max_positions ?? 10} slots full · `
+                 + `${s.skipped_nifty || 0} NIFTY ${s.params?.timeframe || 'month'}ly RSI < ${s.params?.nifty_floor ?? 40} · ${s.skipped_held || 0} already held`.replace('dayly', 'daily')),
         ].join('');
         const blank = v => (v ? v : '—');
         DataGrid.mountSortable('bicYearGrid', {

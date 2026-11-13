@@ -9896,8 +9896,11 @@ def run_monthly_rsi_breakout_backtest_api():
     size_mode 'fixed' (default: every new stock is bought with fixed_amount, ₹10,000) | 'risk' (the old
     sizing: qty = equity * risk_pct / (entry - stop), capped at max_pos_pct of equity); fixed_amount (₹10,000);
     compounding (false; 'fixed' only — scales fixed_amount with the REALISED balance, capital + the net ₹ of
-    trades already closed, never an open position's paper gain); risk_pct (0.5); max_pos_pct (20); cost_pct
-    (each side, 0.15); brokerage (₹ per order, 20); min_turnover_cr
+    trades already closed, never an open position's paper gain); max_positions (10, 0 = off — a HARD cap on
+    how many stocks are held AT ONCE, on top of whatever cash/max_new already allow; with compounding also on,
+    the realised balance is split evenly across max_positions slots instead of scaled off fixed_amount, so a
+    stock that exits with a profit directly enlarges the next one bought into its freed slot); risk_pct (0.5);
+    max_pos_pct (20); cost_pct (each side, 0.15); brokerage (₹ per order, 20); min_turnover_cr
     (average daily ₹ Cr in the scan month, 1, 0 = off); min_price (0)."""
     auth_error = check_auth()
     if auth_error:
@@ -9936,6 +9939,7 @@ def run_monthly_rsi_breakout_backtest_api():
         'size_mode': size_mode,
         'fixed_amount': _mrb_float(data, 'fixed_amount', DEFAULTS['fixed_amount'], 100, 1e9),
         'compounding': bool(data.get('compounding', DEFAULTS['compounding'])),
+        'max_positions': int(_mrb_float(data, 'max_positions', DEFAULTS['max_positions'], 0, 500)),
         'risk_pct': _mrb_float(data, 'risk_pct', DEFAULTS['risk_pct'], 0.05, 100),
         'max_pos_pct': _mrb_float(data, 'max_pos_pct', DEFAULTS['max_pos_pct'], 0, 100),
         'max_new': int(_mrb_float(data, 'max_new', DEFAULTS['max_new'], 1, 100)),
@@ -10059,6 +10063,7 @@ def run_monthly_rsi_breakout_optimise():
         'size_mode': size_mode,
         'fixed_amount': _mrb_float(data, 'fixed_amount', DEFAULTS['fixed_amount'], 100, 1e9),
         'compounding': bool(data.get('compounding', DEFAULTS['compounding'])),
+        'max_positions': int(_mrb_float(data, 'max_positions', DEFAULTS['max_positions'], 0, 500)),
         'max_pos_pct': _mrb_float(data, 'max_pos_pct', DEFAULTS['max_pos_pct'], 0, 100),
         'cost_pct': _mrb_float(data, 'cost_pct', DEFAULTS['cost_pct'], 0, 5),
         'brokerage': _mrb_float(data, 'brokerage', DEFAULTS['brokerage'], 0, 10_000),
@@ -10117,7 +10122,7 @@ def run_monthly_rsi_breakout_optimise():
             rows = mrb.sweep(cand_sets, closes, start_d, end_d, nifty_rsi=nifty_rsi, nifty_closes=nifty_closes,
                              capital=fixed['capital'], size_mode=fixed['size_mode'],
                              fixed_amount=fixed['fixed_amount'], compounding=fixed['compounding'],
-                             max_pos_pct=fixed['max_pos_pct'],
+                             max_positions=fixed['max_positions'], max_pos_pct=fixed['max_pos_pct'],
                              cost_pct=fixed['cost_pct'], brokerage=fixed['brokerage'],
                              nifty_above_ema=nifty_trend, grid=grid, progress=_progress)
             results = mrb.board(rows, min_trades=mrb.SWEEP_MIN_TRADES, size=mrb.SWEEP_BOARD)

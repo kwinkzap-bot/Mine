@@ -632,16 +632,16 @@ def sweep(cand_sets: Dict[tuple, List[dict]], closes: Dict[str, pd.Series], star
           nifty_rsi: Optional[Dict[str, float]] = None, nifty_closes: Optional[pd.Series] = None,
           capital: float = DEFAULTS['capital'], size_mode: str = DEFAULTS['size_mode'],
           fixed_amount: float = DEFAULTS['fixed_amount'], compounding: bool = DEFAULTS['compounding'],
-          max_pos_pct: float = DEFAULTS['max_pos_pct'],
+          max_positions: int = DEFAULTS['max_positions'], max_pos_pct: float = DEFAULTS['max_pos_pct'],
           cost_pct: float = DEFAULTS['cost_pct'], brokerage: float = DEFAULTS['brokerage'],
           nifty_above_ema: Optional[Dict[str, bool]] = None, grid: Optional[dict] = None,
           paths: tuple = SWEEP_PATHS, progress=None) -> List[dict]:
     """Every combo of `grid`, each the median over `paths` of score(). `cand_sets` maps
     (ema_len, exit_rule) to that pair's candidates on the wide band (keep_raw=True).
-    size_mode/fixed_amount/compounding are NOT swept (same for every combo) — under
-    'fixed', risk_pct in the grid makes no difference to the result, so callers should
-    collapse it to one value before sweeping to avoid paying for combos that can only
-    repeat each other."""
+    size_mode/fixed_amount/compounding/max_positions are NOT swept (same for every combo)
+    — under 'fixed', risk_pct in the grid makes no difference to the result, so callers
+    should collapse it to one value before sweeping to avoid paying for combos that can
+    only repeat each other."""
     combos = sweep_combos(grid)
     rows = []
     sliced: Dict[tuple, List[dict]] = {}
@@ -653,7 +653,7 @@ def sweep(cand_sets: Dict[tuple, List[dict]], closes: Dict[str, pd.Series], star
         for nudge in paths:
             res = simulate(sliced[key], closes, start, end, nifty_rsi=nifty_rsi, nifty_closes=nifty_closes,
                            capital=capital * (1 + nudge), size_mode=size_mode, fixed_amount=fixed_amount,
-                           compounding=compounding, risk_pct=c['risk_pct'], max_pos_pct=max_pos_pct,
+                           compounding=compounding, max_positions=max_positions, risk_pct=c['risk_pct'], max_pos_pct=max_pos_pct,
                            max_new=c['max_new'], nifty_floor=c['nifty_floor'], cost_pct=cost_pct,
                            brokerage=brokerage, nifty_above_ema=nifty_above_ema)
             runs.append(score(res, start, end))

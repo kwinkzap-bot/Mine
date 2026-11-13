@@ -554,9 +554,10 @@ def test_max_positions_zero_is_uncapped():
 
 
 def test_compounding_with_a_slot_cap_splits_the_balance_across_the_slots():
-    """A closes +₹20,000; with a 2-slot cap the realised balance (₹1,20,000) splits in two, so
-    the stock bought into A's freed slot gets ₹60,000 — 'compounding using the other stock' —
-    not the plain capital-wide ratio fixed_amount * balance/capital would give."""
+    """With a 2-slot cap, compounding ignores fixed_amount and buys balance/2 per slot — A and B
+    (nothing closed yet) each get ₹1,00,000/2 = ₹50,000. A then sells for +₹1,00,000, so when C
+    takes its freed slot the balance is ₹2,00,000 and its slot is ₹2,00,000/2 = ₹1,00,000 —
+    'compounding using the other (closed) stock', which plain fixed_amount scaling never gave."""
     cands = [_cand('A', '2020-02-03', '2020-04-01', px=100.0, exit_px=300.0),
              _cand('B', '2020-02-04', '2020-12-31', px=100.0, reason='Open', exit_px=100.0),
              _cand('C', '2020-05-04', '2020-12-31', px=100.0, reason='Open', exit_px=100.0)]
@@ -564,10 +565,9 @@ def test_compounding_with_a_slot_cap_splits_the_balance_across_the_slots():
                      size_mode='fixed', fixed_amount=10_000, compounding=True, max_positions=2,
                      max_new=10, nifty_floor=0, cost_pct=0, brokerage=0)
     by_sym = {t['symbol']: t for t in r['trades']}
-    assert by_sym['A']['qty'] == 100 and by_sym['A']['invested'] == 10_000     # nothing closed yet
-    assert by_sym['B']['qty'] == 100 and by_sym['B']['invested'] == 10_000     # bought same day as A, still 2 free slots
-    # By the time C is bought, A has closed (+₹20,000) and B still holds a slot: balance 120,000 / 2 slots = 60,000.
-    assert by_sym['C']['qty'] == 600 and by_sym['C']['invested'] == 60_000
+    assert by_sym['A']['qty'] == 500 and by_sym['A']['invested'] == 50_000
+    assert by_sym['B']['qty'] == 500 and by_sym['B']['invested'] == 50_000
+    assert by_sym['C']['qty'] == 1000 and by_sym['C']['invested'] == 100_000
 
 
 def test_compounding_without_a_slot_cap_falls_back_to_the_capital_ratio():
@@ -582,3 +582,30 @@ def test_compounding_without_a_slot_cap_falls_back_to_the_capital_ratio():
 
 def test_default_max_positions_is_ten():
     assert mrb.DEFAULTS['max_positions'] == 10
+
+
+def test_run_route_accepts_max_positions_and_passes_it_to_the_sim(monkeypatch):
+    """The run route's own max_positions parsing, and that it actually reaches simulate() (via
+    a tiny cap that must show up as skipped['slots'] in the summary)."""
+    from trading_app.app.routes import api as api_mod
+    months, p = uptrend(30)
+    files = {'AAA': {'df': build(months)}, 'BBB': {'df': build(months)}}
+    monkeypatch.setattr(api_mod, 'check_auth', lambda: None)
+    monkeypatch.setattr(api_mod, '_mrb_universe', lambda kind: ['AAA', 'BBB'])
+    monkeypatch.setattr('trading_app.filters.candle_store._load_disk', lambda sym: files.get(sym))
+    from route_app import build_route_app
+    app = build_route_app()
+    body = {'start_date': '2019-01-01', 'end_date': '2020-06-30', 'rsi_lo': 0, 'rsi_hi': 100,
+            'min_turnover_cr': 0, 'nifty_floor': 0, 'max_new': 10, 'max_positions': 1}
+    with app.test_request_context(json=body):
+        resp = api_mod.run_monthly_rsi_breakout_backtest_api.__wrapped__().get_json()
+    task_id = resp['task_id']
+    import time
+    for _ in range(200):
+        task = api_mod._mrb_tasks[task_id]
+        if task['status'] != 'running':
+            break
+        time.sleep(0.02)
+    s = task['payload']['summary']
+    assert s['params']['max_positions'] == 1
+    assert s['skipped_slots'] > 0           # both stocks break out every month; the 1-slot cap must bind
