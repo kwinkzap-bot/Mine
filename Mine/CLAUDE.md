@@ -448,6 +448,12 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   enter — if the break candle closes with the trend still against it, it is out at that close, as the
   backtest's `SuperTrend flip`. One side is armed per touch (every row is one-sided or Bounce only). The
   chase guard measures a Through against the touch candle's range, since its level sits on the line.
+* **An intrabar row only ever watches the side it can trade** (since 2026-11-13). With the break judged
+  intrabar (body 0, outside bar `first`), `simulate` drops a side the row's direction / setups rule out
+  *before* the outside-bar "crossed first" tie-break (`_side_ok`), as live arms only that side. Until then
+  an outside bar that crossed the wrong side first was read as that side and thrown away: live's tab 2
+  short of 2026-11-12 11:25 (over the touch high at 11:25, under the low at 11:26) was missing from the
+  backtest. Close-judged rows are unchanged (live's `_confirm` uses the same close rule).
 * **The backtest fills a close-judged break at the close** (`StTouchBreakEngine.confirm_at_close`: body > 0
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then

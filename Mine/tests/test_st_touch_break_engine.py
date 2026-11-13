@@ -130,3 +130,30 @@ def test_a_break_judged_on_its_close_is_filled_at_that_close():
     rows[len(_uptrend()) + 1] = (line - 22, last + 3.0, line - 30, line - 20)
     trades, _ = StTouchBreakEngine(_bars(rows), outside_bar='close', modes='bounce').run()
     assert not [x for x in trades if x['signal_time'][:16] == (brk - pd.Timedelta(minutes=3)).strftime('%Y-%m-%d %H:%M')]
+
+
+def test_a_one_sided_row_takes_its_side_of_an_outside_bar_even_if_the_other_broke_first():
+    """Live 2026-11-12 11:25 (tab 2, SELL only, Through, outside bar 'first'): the break candle went
+    over the touch high in its first minute, then under the touch low — live, watching only the low,
+    shorted it; the backtest used to read the bar as a long (crossed first) and drop it."""
+    rows = _uptrend()
+    line = StTouchBreakEngine(_bars(rows)).indicators()['line'][len(rows) - 1]
+    last = rows[-1][3]
+    rows.append((last, last + 1.0, line - 0.2, last + 0.5))                     # touch: an uptrend wick
+    rows.append((last + 1.2, last + 1.5, line - 3.0, line - 2.5))              # over the high, then under the low
+    rows += [(line - 2.5, line - 2.0, line - 4.0, line - 3.0)] * 3
+    bars = _bars(rows)
+    brk = bars['date'].iloc[len(_uptrend()) + 1]
+    mins = pd.DataFrame([{'date': brk + pd.Timedelta(minutes=m), 'open': 0, 'high': hi, 'low': lo, 'close': 0}
+                         for m, (hi, lo) in enumerate([(last + 1.5, last + 1.1), (last + 1.2, line - 1.0),
+                                                       (line - 1.0, line - 3.0)])]).set_index('date')
+    sig = (brk - pd.Timedelta(minutes=3)).strftime('%Y-%m-%d %H:%M')
+    kw = dict(minutes=mins, bar_minutes=3, outside_bar='first', modes='through')
+    short = [t for t in StTouchBreakEngine(bars, direction='short', **kw).run()[0] if t['signal_time'][:16] == sig]
+    assert short and short[0]['type'] == 'Short' and short[0]['setup'] == 'Through'
+    assert short[0]['entry_price'] == round(line - 0.2, 2)                     # the touch low
+    assert short[0]['entry_time'] == (brk + pd.Timedelta(minutes=1)).strftime('%Y-%m-%d %H:%M:%S')
+    # both sides tradeable: the side crossed first still decides (here the long, which Through-only refuses)
+    both = [t for t in StTouchBreakEngine(bars, direction='both', **dict(kw, modes='both')).run()[0]
+            if t['signal_time'][:16] == sig]
+    assert both and both[0]['type'] == 'Long'

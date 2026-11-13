@@ -165,6 +165,13 @@ class StTouchBreakEngine:
         hit = np.flatnonzero(seg)
         return pd.Timestamp(self._m_ts[lo + hit[0]]) if len(hit) else bar_ts
 
+    def _side_ok(self, is_long: bool, touch_kind) -> bool:
+        """Can this row trade that side off a touch of that kind (direction and Bounce/Through)?"""
+        if (self.direction == 'long' and not is_long) or (self.direction == 'short' and is_long):
+            return False
+        bounce = (touch_kind == 1) == is_long
+        return not ((self.modes == 'bounce' and not bounce) or (self.modes == 'through' and bounce))
+
     def trade_after(self, day: str, after_ts: str, taken: int) -> Optional[Dict[str, Any]]:
         """The next trade of `day` entered STRICTLY after `after_ts` ('YYYY-MM-DD HH:MM:SS'),
         for when the option's own stop ended the previous one before the SuperTrend did."""
@@ -211,6 +218,16 @@ class StTouchBreakEngine:
             up_break, dn_break = h[e] > h[t], l[e] < l[t]
             if not (up_break or dn_break):
                 continue
+            if not confirm:
+                # Filled intrabar, a side this row cannot trade is never watched — live arms only the
+                # side it can take (st_touch_break_live_engine.on_bar), so price running through the
+                # other side first does not stop the order below the low (above the high). Until
+                # 2026-11-13 an outside bar that crossed the wrong side first was dropped here, and
+                # live's 11-12 11:25 short (tab 2, SELL only) was missing from the backtest.
+                up_break = up_break and self._side_ok(True, touch[t])
+                dn_break = dn_break and self._side_ok(False, touch[t])
+                if not (up_break or dn_break):
+                    continue
             if up_break and dn_break:                      # an outside bar: see the module note
                 if self.outside_bar == 'close' and c[e] != o[e]:
                     up_break = c[e] > o[e]
