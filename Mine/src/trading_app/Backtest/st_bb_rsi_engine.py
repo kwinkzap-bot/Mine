@@ -728,6 +728,28 @@ def _prior_minute(stamp: str) -> str:
     return (datetime.strptime(stamp[11:16], '%H:%M') - timedelta(minutes=1)).strftime('%H:%M')
 
 
+def _cross_frac(minutes: Optional[pd.DataFrame], day: str, hhmm: str, price: Optional[float]) -> Optional[float]:
+    """How far through the 1-minute index bar `day hhmm` the index stood at `price`, as a share of
+    the way from that minute's open to its close (0 = at the open, 1 = at the close) — where an
+    intrabar fill sat inside its minute. None when the price is not between the open and close
+    (a wick crossed it and came back) or there are no minutes; the leg is then read mid-minute."""
+    if price is None or minutes is None or getattr(minutes, 'empty', True) or 'open' not in minutes:
+        return None
+    ts = pd.Timestamp(f'{day} {hhmm}:00')
+    if getattr(minutes.index, 'tz', None) is not None:
+        ts = ts.tz_localize(minutes.index.tz)
+    try:
+        row = minutes.loc[ts]
+    except KeyError:
+        return None
+    if isinstance(row, pd.DataFrame):
+        row = row.iloc[-1]
+    o, c = float(row['open']), float(row['close'])
+    if o == c or not min(o, c) <= float(price) <= max(o, c):
+        return None
+    return (float(price) - o) / (c - o)
+
+
 def _index_close_at(minutes: Optional[pd.DataFrame], stamp: str) -> Optional[float]:
     """Close of the 1-minute bar stamped `stamp` ('YYYY-MM-DD HH:MM:SS'), else of the
     last one before it on that day; None without minutes."""
@@ -783,10 +805,20 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
         # better in and 2.5 pts better out than the live fills (₹361 on one lot). Those legs are
         # read at the middle of the minute (open and close averaged), not at an edge of it.
         ent = t['entry_time'][11:16] if t.get('intrabar_entry') else _prior_minute(t['entry_time'])
-        reqs.append({'key': n, 'date': t['entry_time'][:10], 'side': 'BUY' if t.get('type') != 'Short' else 'SELL',
+        out = exit_minute(t)
+        day = t['entry_time'][:10]
+        reqs.append({'key': n, 'date': day, 'side': 'BUY' if t.get('type') != 'Short' else 'SELL',
                      'level': t.get('level', t['entry_price']), 'entry_time': ent,
-                     'exit_time': exit_minute(t), 'exit_price': t['exit_price'],
-                     'entry_mid': bool(t.get('intrabar_entry')), 'exit_mid': bool(t.get('intrabar_exit'))})
+                     'exit_time': out, 'exit_price': t['exit_price'],
+                     'entry_mid': bool(t.get('intrabar_entry')), 'exit_mid': bool(t.get('intrabar_exit')),
+                     # ...and where in that minute: the index's own open→close path puts the fill at
+                     # the level. 13 Nov 2026 (tab 3) the 14:31 stop came at the minute's END (the
+                     # index closed on its high, 25,104, the line 25,101.5): mid-minute read the PE
+                     # at 249.6, the live sell filled 244.75, the level-placed read is 246.0.
+                     'entry_frac': _cross_frac(index_minutes, day, ent, t['entry_price'])
+                     if t.get('intrabar_entry') else None,
+                     'exit_frac': _cross_frac(index_minutes, t['exit_time'][:10], out, t['exit_price'])
+                     if t.get('intrabar_exit') else None})
     # Breeze meters requests app-wide, so threads cannot beat that pace on a cold
     # run — but each strike probe also spends most of its time waiting on the
     # network, and a warm (disk-cached) run is CPU/IO bound. Small chunks across

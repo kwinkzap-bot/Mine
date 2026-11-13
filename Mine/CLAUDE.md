@@ -454,6 +454,14 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   an outside bar that crossed the wrong side first was read as that side and thrown away: live's tab 2
   short of 2026-11-12 11:25 (over the touch high at 11:25, under the low at 11:26) was missing from the
   backtest. Close-judged rows are unchanged (live's `_confirm` uses the same close rule).
+* **An intrabar option leg is read where the index crossed, not mid-minute** (since 2026-11-13,
+  `attach_option_legs` → `_cross_frac` → `legs_at`'s `entry_frac` / `exit_frac`; every Simple Trader-style
+  backtest that prices options shares it). When the level lies between the index minute's open and close,
+  the option is read that share of the way from its own open to close; otherwise (a wick) it stays the
+  open/close mid. Tab 3's 2026-11-13 14:31 stop: index 25,092.95 → 25,104 against a 25,101.48 line, PE
+  254.65 → 243.50 — mid 249.6, now 246.3, live filled 244.75. What is left between a backtest row and live
+  is the 1-minute data against the 5 s poll, and fills (Kite slippage); a day the app was down (11-09) has
+  a backtest trade and no live one.
 * **The backtest fills a close-judged break at the close** (`StTouchBreakEngine.confirm_at_close`: body > 0
   or outside bar `close`), as live does. Until 2026-10-30 it filled at the level with the close known —
   look-ahead worth half to two-thirds of every such row's points; boards and saved rows from before then
