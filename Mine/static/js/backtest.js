@@ -5122,6 +5122,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
         if (data.best) applyScOptResult(data.best);
+        // The 🧩 Combined popup (backtest_combined.js) offers these rows as its chips.
+        window.BtScBoard = { data, isOpt, exit: document.getElementById('scExitTime')?.value || '15:25',
+                             start: document.getElementById('startDate')?.value, end: document.getElementById('endDate')?.value };
+        document.dispatchEvent(new CustomEvent('bt-sc-board'));
     }
 
     // Abort any running 2nd-Candle optimise (pending request + polling loop).

@@ -463,6 +463,7 @@ window.BtCombinedReport = function (o) {
             st.warning = data.warning || '';
             st.unpriced = !(data.option || (data.summary && data.summary.pnl_basis === 'option'));
             st.from = start;
+            st.range = from + '|' + to;
             st.status = 'done';
         } catch (e) {
             st.status = 'error'; st.msg = e.message || String(e);
@@ -470,16 +471,35 @@ window.BtCombinedReport = function (o) {
         paintStatus(); paintResults();
     }
 
-    async function runAll() {
-        if (running) return;
+    async function runAll(list) {
+        if (running) return false;
         running = true; cancelled = false;
         const from = $('bcFrom').value || '2019-04-01', to = $('bcTo').value || todayIso();
-        $('bcRun').textContent = 'Stop';
-        const todo = DEFS.filter(d => selected.has(d.id));
+        $('bcRun').textContent = 'Stop'; $('bcBest').disabled = true;
+        const todo = list || DEFS.filter(d => selected.has(d.id));
         for (const d of todo) { if (cancelled) break; await runOne(d, from, to); }
         running = false;
-        $('bcRun').textContent = 'Run again';
+        $('bcRun').textContent = 'Run again'; $('bcBest').disabled = false;
         paintStatus();
+        return !cancelled;
+    }
+
+    // ⚡ Find Best Params: every strategy not yet run is run, then the set that combines best is ticked.
+    let bestNote = '';
+    async function findBest() {
+        const from = $('bcFrom').value || '2019-04-01', to = $('bcTo').value || todayIso();
+        const key = from + '|' + to;
+        if (!(await runAll(DEFS.filter(d => !(state[d.id].status === 'done' && state[d.id].range === key))))) return;
+        const objective = $('bcObjective').value;
+        const items = DEFS.filter(d => state[d.id].status === 'done').map(d => ({ id: d.id, rows: state[d.id].trades }));
+        const best = items.length ? window.BtCombinedBest(items, objective) : { ids: [] };
+        if (!best.ids.length) { bestNote = 'No strategy (or set of them) made money over this range — nothing ticked.'; paintStatus(); return; }
+        selected.clear();
+        best.ids.forEach(id => selected.add(id));
+        bestNote = `⚡ Best set by ${objective === 'net' ? 'P&L' : 'P&L ÷ drawdown'}: ${best.ids.length} of ${items.length} strategies ticked · `
+            + `${basis === 'gross' ? 'gross' : 'net'} ₹${Math.round(best.net).toLocaleString('en-IN')} · max drawdown ₹${Math.round(best.dd).toLocaleString('en-IN')} (day-end)`
+            + (best.dd > 0 ? ` · ${(best.net / best.dd).toFixed(2)}×` : '') + '. In-sample: chosen on the same dates it is scored on.';
+        report.resetPage(); paintStatus(); paintResults();
     }
 
     // ── DOM ─────────────────────────────────────────────────────────────────────────────────
@@ -498,6 +518,8 @@ window.BtCombinedReport = function (o) {
                 <label>From <input type="date" id="bcFrom"></label>
                 <label>To <input type="date" id="bcTo"></label>
                 <label>P&amp;L <select id="bcBasis"><option value="gross">Gross</option><option value="net">Net of brokerage</option></select></label>
+                <label>Rank <select id="bcObjective" title="What ⚡ Find Best Params maximises"><option value="rdd">P&amp;L ÷ drawdown</option><option value="net">P&amp;L</option></select></label>
+                <button type="button" id="bcBest" class="bc-run bc-run-alt" title="Run every strategy, then tick the set that combines best">⚡ Find Best Params</button>
                 <button type="button" id="bcRun" class="bc-run">Run combined</button>
               </div>
               <button class="bt-modal-close" id="bcClose" type="button">✕</button>
@@ -530,8 +552,10 @@ window.BtCombinedReport = function (o) {
             const id = e.target.dataset && e.target.dataset.sid;
             if (!id) return;
             e.target.checked ? selected.add(id) : selected.delete(id);
-            report.resetPage(); paintResults();
+            bestNote = '';
+            report.resetPage(); paintStatus(); paintResults();
         });
+        $('bcBest').addEventListener('click', findBest);
         paintStatus(); paintResults();
     }
 
@@ -563,6 +587,7 @@ window.BtCombinedReport = function (o) {
                 <i style="background:${d.color}"></i><b>${esc(d.name)}</b><span>${esc(tag)}</span></label>`;
         }).join('');
         const notes = [];
+        if (bestNote) notes.push(`<b>${esc(bestNote)}</b>`);
         DEFS.forEach(d => {
             const s = state[d.id];
             if (s.status === 'error') notes.push(`<b>${esc(d.name)}</b>: ${esc(s.msg)}`);
@@ -580,10 +605,324 @@ window.BtCombinedReport = function (o) {
         $('bcNote').innerHTML = notes.join('<br>');
     }
 
-    // ── Header button: only for the Simple Trader group ───────────────────────────────────
-    const group = $('strategyStatusSelect');
-    function syncVisibility() { btn.style.display = !group || group.value === 'simpler' ? '' : 'none'; }
-    if (group) group.addEventListener('change', syncVisibility);
+    // ── Header button: the Simple Trader group, and Candle Breakout (its Best Params rows) ──
+    const group = $('strategyStatusSelect'), strat = $('strategySelect');
+    const isSc = () => !!strat && strat.value === 'second_candle';
+    function syncVisibility() {
+        btn.style.display = !group || group.value === 'simpler' || isSc() ? '' : 'none';
+        btn.title = isSc() ? 'Merge Candle Breakout Best Params rows into one book — and find the set that combines best'
+                           : 'Run every Simple Trader strategy and see them merged into one book';
+    }
+    // The group change re-fills the strategy list in its own handler, so read it a tick later.
+    if (group) group.addEventListener('change', () => setTimeout(syncVisibility, 0));
+    if (strat) strat.addEventListener('change', () => setTimeout(syncVisibility, 0));
     syncVisibility();
-    btn.addEventListener('click', open);
+    btn.addEventListener('click', () => (isSc() && window.BtScCombined ? window.BtScCombined.open() : open()));
+})();
+
+/* ⚡ Find Best Params for a Combined popup: which of its books, merged, make the best one.
+ *
+ *   BtCombinedBest(items, objective) → { ids, net, dd, score }
+ *     items:     [{id, rows: [{entry, net}]}] — every candidate's finished trades
+ *     objective: 'rdd' (P&L ÷ max drawdown, the default) | 'net' (P&L)
+ *
+ * Greedy forward selection on a per-day P&L vector: start from the best single book, add the one
+ * that lifts the objective most, stop when none does. Drawdown is read on day-end equity (trades
+ * of one day are booked together), so it can sit a little under the per-trade figure the report shows.
+ */
+window.BtCombinedBest = function (items, objective) {
+    'use strict';
+    const days = [...new Set(items.flatMap(it => it.rows.map(r => r.entry.slice(0, 10))))].sort();
+    const at = new Map(days.map((d, i) => [d, i]));
+    const vec = items.map(it => {
+        const v = new Float64Array(days.length);
+        it.rows.forEach(r => { v[at.get(r.entry.slice(0, 10))] += Number.isFinite(r.net) ? r.net : 0; });
+        return v;
+    });
+    function measure(sum) {
+        let cum = 0, peak = 0, dd = 0;
+        for (let i = 0; i < sum.length; i++) { cum += sum[i]; if (cum > peak) peak = cum; if (peak - cum > dd) dd = peak - cum; }
+        const score = objective === 'net' ? cum : (cum > 0 ? cum / Math.max(dd, 1) : cum / 1e9);
+        return { net: cum, dd, score };
+    }
+    const chosen = [], sum = new Float64Array(days.length);
+    let best = { net: 0, dd: 0, score: -Infinity };
+    for (;;) {
+        let pick = -1, pickM = null;
+        items.forEach((it, k) => {
+            if (chosen.includes(k) || !it.rows.length) return;
+            const trial = sum.map((x, i) => x + vec[k][i]);
+            const m = measure(trial);
+            if (!pickM || m.score > pickM.score) { pick = k; pickM = m; }
+        });
+        if (pick < 0 || pickM.score <= best.score + 1e-9) break;
+        chosen.push(pick);
+        vec[pick].forEach((x, i) => { sum[i] += x; });
+        best = pickM;
+    }
+    // Nothing that loses (or earns nothing) is a best set.
+    return best.net > 0 ? { ids: chosen.map(k => items[k].id), ...best } : { ids: [], ...best };
+};
+
+/* Backtest page — "Combined" popup for Candle Breakout (🔴 Live group).
+ *
+ * Its chips are the rows of the ⚡ Candle Breakout Best Params boards (30s / 1m / 2m / 3m / 5m).
+ * Each ticked row is BACKTESTed on its own (/api/backtest/second-candle, that row's timeframe,
+ * candle, direction and SL:Target, the page's exit time, OPT P&L and Lots), and the trades are
+ * merged into one book. So the 1m-5m rows are booked on real option candles here, not on the
+ * board's Black-Scholes premiums, and their figures can differ from the board.
+ * ⚡ Find Best Params backtests every row still missing and ticks the set that combines best.
+ */
+(function () {
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const inr = (v, sign) => (v < 0 ? '-' : (sign && v > 0 ? '+' : '')) + '₹' + Math.round(Math.abs(v)).toLocaleString('en-IN');
+    const brokerage = (lots) => lots <= 5 ? ({ 1: 103, 2: 158, 3: 213, 4: 268, 5: 330 }[Math.max(1, Math.floor(lots))] || 103) : 330 + (Math.floor(lots) - 5) * 62;
+    const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5', '#0d9488', '#be123c'];
+    const DIRS = { both: [true, true], long: [true, false], short: [false, true] };
+
+    let defs = [], boardKey = '';          // one per board row
+    const state = {};                       // def id → {status, trades, msg, progress, warning, unpriced}
+    const selected = new Set();
+    let running = false, cancelled = false, basis = 'net', modal = null, report = null, bestNote = '';
+
+    const lots = () => Math.max(1, parseInt(($('scLots') || {}).value || 1, 10) || 1);
+    const lotValue = () => Math.max(1, parseFloat(($('scLotValue') || {}).value || 65) || 65);
+    const optionPnl = () => !!($('scOptionPnl') && $('scOptionPnl').checked);
+
+    // ── Board → chip definitions ──────────────────────────────────────────────────────────
+    function syncDefs() {
+        const b = window.BtScBoard;
+        if (!b || !b.data) return false;
+        const key = JSON.stringify([b.data.symbol, b.data.cached_at, (b.data.timeframes || []).map(g => (g.results || []).length)]);
+        if (key === boardKey) return true;
+        boardKey = key;
+        defs = [];
+        (b.data.timeframes || []).forEach(g => (g.results || []).forEach((r, i) => {
+            defs.push({
+                id: `${g.tf_label}|${r.candle_index}|${r.direction}|${r.rr_ratio}`,
+                tf: g.tf_label, rank: i + 1, interval: r.interval, candle: r.candle_index, dir: r.direction, rr: r.rr_ratio,
+                name: `${g.tf_label} · C${r.candle_index} · ${r.direction} · 1:${r.rr_ratio}`,
+                symbol: b.data.symbol || 'NIFTY',
+            });
+        }));
+        defs.forEach((d, i) => { d.color = COLORS[i % COLORS.length]; if (!state[d.id]) state[d.id] = { status: 'idle', trades: [] }; });
+        selected.clear();
+        // Start with each board's leader ticked.
+        defs.filter(d => d.rank === 1).forEach(d => selected.add(d.id));
+        bestNote = '';
+        return true;
+    }
+
+    function norm(def, t) {
+        const n = t.lots || lots();
+        let gross, net;
+        if (t.gross_pnl_rupees != null) { gross = Number(t.gross_pnl_rupees); net = t.pnl_rupees != null ? Number(t.pnl_rupees) : gross; }
+        else { gross = Number(t.pnl || 0) * lotValue() * n; net = gross - brokerage(n); }
+        return {
+            sid: def.id, sname: def.name, color: def.color, symbol: def.symbol,
+            side: t.option_type || (t.type === 'Short' ? 'PE' : 'CE'), strike: t.strike,
+            entry: String(t.entry_time || ''), exit: String(t.exit_time || ''),
+            ep: t.entry_premium != null ? t.entry_premium : t.entry_price, xp: t.exit_premium != null ? t.exit_premium : t.exit_price,
+            lots: n, gross, brok: gross - net, nb: net, net: basis === 'gross' ? gross : net, reason: t.exit_reason || '',
+        };
+    }
+    function applyBasis() { defs.forEach(d => state[d.id].trades.forEach(r => { r.net = basis === 'gross' ? r.gross : r.nb; })); }
+    function book() {
+        const rows = [];
+        defs.forEach(d => { if (selected.has(d.id)) state[d.id].trades.forEach(r => rows.push(r)); });
+        rows.sort((a, b) => a.entry.localeCompare(b.entry) || a.sid.localeCompare(b.sid));
+        return rows;
+    }
+
+    // ── Running ───────────────────────────────────────────────────────────────────────────
+    async function runOne(def, from, to) {
+        const st = state[def.id];
+        st.status = 'running'; st.trades = []; st.msg = ''; st.progress = null; st.warning = '';
+        paintStatus();
+        const exit = (window.BtScBoard && window.BtScBoard.exit || '15:25').split(':');
+        const [el, es] = DIRS[def.dir] || DIRS.both;
+        const payload = {
+            symbol: def.symbol, interval: def.interval, start_date: from, end_date: to,
+            candle_index: def.candle, rr_ratio: def.rr, exit_hour: parseInt(exit[0] || 15, 10), exit_minute: parseInt(exit[1] || 25, 10),
+            enable_long: el, enable_short: es, option_pnl: optionPnl(), premium: 250,
+            lots: lots(), lot_value: lotValue(), compounding: false,
+        };
+        try {
+            const res = await fetch('/api/backtest/second-candle', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            let data = await res.json();
+            if (data.success && data.task_id) {
+                while (!cancelled) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    const p = await (await fetch('/api/backtest/st-bb-rsi/status/' + data.task_id)).json();
+                    if (p.status === 'running') { st.progress = p.progress || null; paintStatus(); continue; }
+                    data = p; break;
+                }
+                if (cancelled) { st.status = 'idle'; paintStatus(); return; }
+            }
+            if (!data.success) throw new Error(data.error || 'Backtest failed');
+            st.trades = (data.trades || []).filter(t => t.pnl != null).map(t => norm(def, t));
+            st.warning = data.warning || '';
+            st.unpriced = optionPnl() && !(data.option || (data.summary && data.summary.pnl_basis === 'option'));
+            st.range = from + '|' + to + '|' + optionPnl() + '|' + lots() + '|' + lotValue();
+            st.status = 'done';
+        } catch (e) {
+            st.status = 'error'; st.msg = e.message || String(e);
+        }
+        paintStatus(); paintResults();
+    }
+
+    // Rows already run on these dates/settings are kept; the rest are run, one at a time.
+    async function runSet(list) {
+        if (running) return false;
+        running = true; cancelled = false;
+        const from = $('bccFrom').value, to = $('bccTo').value;
+        const key = from + '|' + to + '|' + optionPnl() + '|' + lots() + '|' + lotValue();
+        setButtons();
+        for (const d of list) {
+            if (cancelled) break;
+            if (state[d.id].status === 'done' && state[d.id].range === key) continue;
+            await runOne(d, from, to);
+        }
+        running = false;
+        setButtons(); paintStatus();
+        return !cancelled;
+    }
+
+    async function findBest() {
+        const ok = await runSet(defs);
+        if (!ok) return;
+        const objective = $('bccObjective').value;
+        const items = defs.filter(d => state[d.id].status === 'done').map(d => ({ id: d.id, rows: state[d.id].trades }));
+        if (!items.length) { bestNote = 'No row finished, so nothing to pick from.'; paintStatus(); return; }
+        const best = window.BtCombinedBest(items, objective);
+        if (!best.ids.length) { bestNote = 'No row (or set of rows) made money over this range — nothing ticked.'; paintStatus(); return; }
+        selected.clear();
+        best.ids.forEach(id => selected.add(id));
+        bestNote = `⚡ Best set by ${objective === 'net' ? 'P&L' : 'P&L ÷ drawdown'}: ${best.ids.length} of ${items.length} rows ticked · `
+            + `${inr(best.net, true)} ${basis === 'gross' ? 'gross' : 'net'} · max drawdown ${inr(-best.dd)} (day-end)`
+            + (best.dd > 0 ? ` · ${(best.net / best.dd).toFixed(2)}×` : '')
+            + '. In-sample: chosen on the same dates it is scored on.';
+        report.resetPage(); paintStatus(); paintResults();
+    }
+
+    // ── DOM ───────────────────────────────────────────────────────────────────────────────
+    function setButtons() {
+        if (!modal) return;
+        $('bccRun').textContent = running ? 'Stop' : 'Run combined';
+        $('bccBest').disabled = running;
+    }
+
+    function build() {
+        modal = document.createElement('div');
+        modal.className = 'bt-modal-overlay bc-overlay';
+        modal.style.display = 'none';
+        modal.innerHTML = `
+          <div class="bt-modal-box bc-box">
+            <div class="bt-modal-hdr">
+              <div class="bt-modal-hdr-text">
+                <div class="bt-modal-title">Combined — Candle Breakout</div>
+                <div class="bt-modal-subtitle">Ticked Best Params rows merged into one book, each BACKTESTed on its own timeframe. ₹ = premium points × lots × lot size.</div>
+              </div>
+              <div class="bc-dates">
+                <label>From <input type="date" id="bccFrom"></label>
+                <label>To <input type="date" id="bccTo"></label>
+                <label>P&amp;L <select id="bccBasis"><option value="net">Net of brokerage</option><option value="gross">Gross</option></select></label>
+                <label>Rank <select id="bccObjective" title="What ⚡ Find Best Params maximises"><option value="rdd">P&amp;L ÷ drawdown</option><option value="net">P&amp;L</option></select></label>
+                <button type="button" id="bccBest" class="bc-run bc-run-alt" title="Backtest every row, then tick the set that combines best">⚡ Find Best Params</button>
+                <button type="button" id="bccRun" class="bc-run">Run combined</button>
+              </div>
+              <button class="bt-modal-close" id="bccClose" type="button">✕</button>
+            </div>
+            <div class="bt-modal-body bc-body">
+              <div id="bccStrats"></div>
+              <div id="bccNote" class="bc-note"></div>
+              <div id="bccResults"></div>
+            </div>
+          </div>`;
+        document.body.appendChild(modal);
+        const b = window.BtScBoard || {};
+        $('bccFrom').value = ($('startDate') || {}).value || b.start || '2019-04-01';
+        $('bccTo').value = ($('endDate') || {}).value || b.end || '';
+        $('bccClose').addEventListener('click', close);
+        report = window.BtCombinedReport({
+            box: $('bccResults'), rows: book, basis: () => basis, csvName: 'combined_candle_breakout.csv', groupLabel: 'Row',
+            groups: () => defs.filter(d => selected.has(d.id) && state[d.id].trades.length),
+            meta: () => `${selected.size} of ${defs.length} board rows · ${optionPnl() ? 'option P&L (real candles)' : 'index points × lot value'} · ${lots()} lot each`,
+            empty: () => running ? 'Running the ticked rows — results appear as each one finishes…'
+                : 'Tick rows above and press Run combined, or ⚡ Find Best Params to pick the set for you.',
+        });
+        $('bccBasis').addEventListener('change', (e) => { basis = e.target.value; applyBasis(); report.resetPage(); paintResults(); });
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && modal.style.display !== 'none') close(); });
+        $('bccRun').addEventListener('click', () => {
+            if (running) { cancelled = true; $('bccRun').textContent = 'Stopping…'; return; }
+            runSet(defs.filter(d => selected.has(d.id)));
+        });
+        $('bccBest').addEventListener('click', () => {
+            const todo = defs.filter(d => state[d.id].status !== 'done').length;
+            if (todo > 12 && !confirm(`⚡ Find Best Params backtests every board row first: ${todo} still to run, one at a time` +
+                (optionPnl() ? ', each pricing its option legs on Breeze (cached after)' : '') + '. Carry on?')) return;
+            findBest();
+        });
+        $('bccStrats').addEventListener('change', (e) => {
+            const id = e.target.dataset && e.target.dataset.sid;
+            if (id) { e.target.checked ? selected.add(id) : selected.delete(id); }
+            const tf = e.target.dataset && e.target.dataset.tf;
+            if (tf) defs.filter(d => d.tf === tf).forEach(d => { e.target.checked ? selected.add(d.id) : selected.delete(d.id); });
+            bestNote = '';
+            report.resetPage(); paintStatus(); paintResults();
+        });
+    }
+
+    function paintResults() { if (report) report.paint(); }
+
+    function paintStatus() {
+        if (!modal) return;
+        const tfs = [...new Set(defs.map(d => d.tf))];
+        $('bccStrats').innerHTML = tfs.map(tf => {
+            const rows = defs.filter(d => d.tf === tf);
+            const allOn = rows.every(d => selected.has(d.id));
+            return `<div class="bc-strats"><label class="bc-chip" title="Tick or untick every ${esc(tf)} row"><input type="checkbox" data-tf="${esc(tf)}" ${allOn ? 'checked' : ''}><b>${esc(tf)}</b></label>` +
+                rows.map(d => {
+                    const s = state[d.id];
+                    let tag = '';
+                    if (s.status === 'running') tag = s.progress ? `pricing ${s.progress.done}/${s.progress.total}` : 'running…';
+                    else if (s.status === 'done') tag = s.trades.length + ' trades';
+                    else if (s.status === 'error') tag = 'failed';
+                    else tag = '#' + d.rank;
+                    return `<label class="bc-chip ${s.status}" title="${esc(s.msg || s.warning || 'Board row #' + d.rank + ' · ' + d.interval)}">
+                        <input type="checkbox" data-sid="${esc(d.id)}" ${selected.has(d.id) ? 'checked' : ''}>
+                        <i style="background:${d.color}"></i><b>${esc(d.name.slice(d.tf.length + 3))}</b><span>${esc(tag)}</span></label>`;
+                }).join('') + '</div>';
+        }).join('');
+        const notes = [];
+        if (bestNote) notes.push(`<b>${esc(bestNote)}</b>`);
+        defs.forEach(d => {
+            const s = state[d.id];
+            if (s.status === 'error') notes.push(`<b>${esc(d.name)}</b>: ${esc(s.msg)}`);
+            else if (s.status === 'done' && s.unpriced) notes.push(`<b>${esc(d.name)}</b>: option premiums unavailable — index points × lot value.`);
+            else if (s.status === 'done' && s.warning && selected.has(d.id)) notes.push(`<b>${esc(d.name)}</b>: ${esc(s.warning)}`);
+        });
+        $('bccNote').innerHTML = notes.join('<br>');
+    }
+
+    function open() {
+        if (!syncDefs()) {
+            if (window.showNotification) window.showNotification('Run ⚡ Find Best Params first — Combined merges the rows of its boards.', 'warning');
+            return;
+        }
+        if (!modal) build();
+        setButtons(); paintStatus(); paintResults();
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+    function close() {
+        modal.style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    window.BtScCombined = { open };
 })();

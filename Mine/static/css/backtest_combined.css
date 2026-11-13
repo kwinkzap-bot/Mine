@@ -1,7 +1,7 @@
 /* Backtest page — Combined popup (static/js/backtest_combined.js) */
 .bc-box { width: min(1240px, 100%); max-height: 94vh; max-height: 94dvh; }
 .bc-body { padding: 14px 16px 24px; }
-.bc-dates { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--oip-text-muted, #6b7280); }
+.bc-dates { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--oip-text-muted, #6b7280); }
 .bc-dates input { height: 30px; border: 1px solid var(--oip-border); border-radius: 6px; padding: 0 6px; background: var(--oip-bg); color: var(--oip-text); font-size: 12px; }
 .bc-run { height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: #0b73b8; color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }
 
