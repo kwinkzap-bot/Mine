@@ -9849,6 +9849,318 @@ def weekly_cpr_breakout_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+# ── Monthly RSI Breakout backtest ────────────────────────────────────────────
+# Monthly RSI(14) 60-65 at a month's close → buy the next month above that
+# month's high; out when a month closes under its 20 EMA and a later candle
+# breaks that candle's low. Run as one cash portfolio over every NSE stock (or
+# the F&O list). See Backtest/monthly_rsi_breakout_engine.py. Reads only the
+# per-stock daily files the nightly EMA Narrow prewarm keeps fresh — no broker
+# call, so it is safe in market hours; a stock with no file is counted, not fetched.
+_MRB_FUND_RE = re.compile(r'NIFTY|BEES|ETF|SENSEX|LIQUID|GILT')
+_mrb_tasks: dict = {}
+_mrb_tasks_lock = threading.Lock()
+
+
+def _mrb_universe(kind: str) -> List[str]:
+    import json
+    from trading_app.filters.stock_list_store import EQUITY_LIST_FILE, FO_LIST_FILE
+    path = FO_LIST_FILE if kind == 'fno' else EQUITY_LIST_FILE
+    with open(path) as f:
+        symbols = json.load(f).get('symbols') or []
+    # The equity list's fund filter misses a few index ETFs (AONENIFTY, BANKNIFTY1 …).
+    return [s for s in symbols if not _MRB_FUND_RE.search(s)]
+
+
+def _mrb_float(data: dict, key: str, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(data.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return min(max(v, lo), hi)
+
+
+@api_bp.route('/backtest/monthly-rsi-breakout', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_monthly_rsi_breakout_backtest_api():
+    """Start a Monthly RSI Breakout backtest; poll /backtest/monthly-rsi-breakout/status/<task_id>.
+
+    Body: start_date, end_date; universe 'fno' (default since 2026-11-13) | 'all' (every NSE stock);
+    ema_len (10; the video's 20) and exit_rule 'low_break' (the video's) | 'close' (out at the next
+    candle's open once one closes under the EMA); nifty_ema (0 = off; no new buys while NIFTY's close
+    is under its this-length EMA);
+    timeframe 'month' (the video's, default) | 'week' | 'day' — the candles the RSI, high, 20 EMA
+    and NIFTY filter are read on;
+    rsi_lo / rsi_hi (65 / 75; the video's 60 / 65); max_new (new stocks a month, 5); nifty_floor (no new
+    entries while NIFTY's monthly RSI is below it, 40, 0 = off); capital (₹1 L);
+    size_mode 'fixed' (default: every new stock is bought with fixed_amount, ₹10,000) | 'risk' (the old
+    sizing: qty = equity * risk_pct / (entry - stop), capped at max_pos_pct of equity); fixed_amount (₹10,000);
+    compounding (false; 'fixed' only — scales fixed_amount with the REALISED balance, capital + the net ₹ of
+    trades already closed, never an open position's paper gain); risk_pct (0.5); max_pos_pct (20); cost_pct
+    (each side, 0.15); brokerage (₹ per order, 20); min_turnover_cr
+    (average daily ₹ Cr in the scan month, 1, 0 = off); min_price (0)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    from trading_app.Backtest.monthly_rsi_breakout_engine import DEFAULTS
+    data = request.get_json(silent=True) or {}
+    try:
+        start_d = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
+        end_d = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+    if end_d < start_d:
+        return jsonify({'success': False, 'error': 'end_date is before start_date'}), 400
+    universe_kind = 'all' if str(data.get('universe', DEFAULTS['universe'])).lower() == 'all' else 'fno'
+    exit_rule = str(data.get('exit_rule', DEFAULTS['exit_rule'])).lower()
+    if exit_rule not in ('low_break', 'close'):
+        return jsonify({'success': False, 'error': 'exit_rule must be low_break or close'}), 400
+    nifty_ema = int(_mrb_float(data, 'nifty_ema', DEFAULTS['nifty_ema'], 0, 200))
+    timeframe = str(data.get('timeframe', 'month')).lower()
+    if timeframe not in ('day', 'week', 'month'):
+        return jsonify({'success': False, 'error': 'timeframe must be day, week or month'}), 400
+    p = {
+        'timeframe': timeframe,
+        'rsi_lo': _mrb_float(data, 'rsi_lo', DEFAULTS['rsi_lo'], 0, 100),
+        'rsi_hi': _mrb_float(data, 'rsi_hi', DEFAULTS['rsi_hi'], 0, 100),
+        'ema_len': int(_mrb_float(data, 'ema_len', DEFAULTS['ema_len'], 2, 200)),
+        'exit_rule': exit_rule,
+        'min_turnover_cr': _mrb_float(data, 'min_turnover_cr', DEFAULTS['min_turnover_cr'], 0, 10_000),
+        'min_price': _mrb_float(data, 'min_price', DEFAULTS['min_price'], 0, 1e6),
+    }
+    size_mode = str(data.get('size_mode', DEFAULTS['size_mode'])).lower()
+    if size_mode not in ('fixed', 'risk'):
+        return jsonify({'success': False, 'error': 'size_mode must be fixed or risk'}), 400
+    sim = {
+        'capital': _mrb_float(data, 'capital', DEFAULTS['capital'], 10_000, 1e10),
+        'size_mode': size_mode,
+        'fixed_amount': _mrb_float(data, 'fixed_amount', DEFAULTS['fixed_amount'], 100, 1e9),
+        'compounding': bool(data.get('compounding', DEFAULTS['compounding'])),
+        'risk_pct': _mrb_float(data, 'risk_pct', DEFAULTS['risk_pct'], 0.05, 100),
+        'max_pos_pct': _mrb_float(data, 'max_pos_pct', DEFAULTS['max_pos_pct'], 0, 100),
+        'max_new': int(_mrb_float(data, 'max_new', DEFAULTS['max_new'], 1, 100)),
+        'nifty_floor': _mrb_float(data, 'nifty_floor', DEFAULTS['nifty_floor'], 0, 100),
+        'cost_pct': _mrb_float(data, 'cost_pct', DEFAULTS['cost_pct'], 0, 5),
+        'brokerage': _mrb_float(data, 'brokerage', DEFAULTS['brokerage'], 0, 10_000),
+    }
+    if p['rsi_hi'] < p['rsi_lo']:
+        return jsonify({'success': False, 'error': 'RSI high is below RSI low'}), 400
+    try:
+        universe = _mrb_universe(universe_kind)
+    except FileNotFoundError:
+        return jsonify({'success': False, 'error': 'The NSE stock list has not been built yet '
+                                                   '(the nightly EMA Narrow prewarm writes it).'}), 404
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': len(universe)}}
+    with _mrb_tasks_lock:
+        _mrb_tasks[task_id] = task
+
+    def _run():
+        from trading_app.Backtest import monthly_rsi_breakout_engine as mrb
+        from trading_app.filters.candle_store import _load_disk
+        try:
+            cands, closes, no_data = [], {}, 0
+            for i, sym in enumerate(universe):
+                entry = _load_disk(sym)
+                df = None if entry is None else entry.get('df')
+                if df is None or df.empty:
+                    no_data += 1
+                else:
+                    df = mrb.clean_daily(df)
+                    cands.extend(mrb.candidates(sym, df, start_d, end_d, cleaned=True, **p))
+                    closes[sym] = mrb.month_closes(df)
+                if i % 50 == 0:
+                    task['progress'] = {'done': i + 1, 'total': len(universe)}
+            nifty = _load_disk('NIFTY')
+            ndf = None if nifty is None else nifty.get('df')
+            nifty_rsi = mrb.nifty_rsi_by_period(ndf, timeframe)
+            nifty_closes = None if ndf is None or ndf.empty else mrb.month_closes(mrb.clean_daily(ndf))
+            nifty_trend = mrb.nifty_above_ema_by_period(ndf, timeframe, nifty_ema) if nifty_ema else None
+            result = mrb.simulate(cands, closes, start_d, end_d, nifty_rsi=nifty_rsi,
+                                  nifty_closes=nifty_closes, nifty_above_ema=nifty_trend, **sim)
+            summary = mrb.summarise(result, start_d, end_d, len(cands))
+            summary.update({'universe': universe_kind, 'symbols_scanned': len(universe),
+                            'symbols_no_data': no_data,
+                            'symbols_with_trades': len({t['symbol'] for t in result['trades']}),
+                            'params': {**p, **sim, 'nifty_ema': nifty_ema}})
+            logger.info('[MonthlyRsiBreakout] %s..%s %s: %d stocks, %d candidates -> %d trades',
+                        start_d, end_d, universe_kind, len(universe), len(cands), len(result['trades']))
+            task['payload'] = {'trades': result['trades'], 'summary': summary}
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[MonthlyRsiBreakout] run failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'mrb-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+@api_bp.route('/backtest/monthly-rsi-breakout/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def monthly_rsi_breakout_status(task_id):
+    """Poll a Monthly RSI Breakout backtest; the result is delivered once, then dropped."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _mrb_tasks_lock:
+        task = _mrb_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task['progress'], 'elapsed': elapsed})
+    with _mrb_tasks_lock:
+        _mrb_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
+@api_bp.route('/backtest/monthly-rsi-breakout/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_monthly_rsi_breakout_optimise():
+    """Start a Find Best Params sweep (monthly_rsi_breakout_engine.SWEEP_GRID) over RSI band ×
+    exit EMA length × exit rule × risk % × new-stocks-a-month cap × NIFTY RSI floor, each combo
+    scored on the median of 3 capital-nudged runs (score()); poll
+    /backtest/monthly-rsi-breakout/optimise/status/<task_id>. Reads only the disk stock files —
+    no broker call. Universe/timeframe/capital/size_mode/fixed_amount/max_pos_pct/cost_pct/
+    brokerage/min_turnover_cr/min_price/nifty_ema come from the page's own boxes and are NOT
+    swept. Under size_mode 'fixed' (the page's default) risk_pct makes no difference to the
+    result, so it is collapsed to one value before sweeping rather than tripling the grid."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    from trading_app.Backtest.monthly_rsi_breakout_engine import DEFAULTS
+    data = request.get_json(silent=True) or {}
+    try:
+        start_d = datetime.strptime(str(data.get('start_date') or ''), '%Y-%m-%d').date()
+        end_d = datetime.strptime(str(data.get('end_date') or ''), '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'start_date and end_date must be YYYY-MM-DD'}), 400
+    if end_d < start_d:
+        return jsonify({'success': False, 'error': 'end_date is before start_date'}), 400
+    universe_kind = 'all' if str(data.get('universe', DEFAULTS['universe'])).lower() == 'all' else 'fno'
+    timeframe = str(data.get('timeframe', 'month')).lower()
+    if timeframe not in ('day', 'week', 'month'):
+        return jsonify({'success': False, 'error': 'timeframe must be day, week or month'}), 400
+    nifty_ema = int(_mrb_float(data, 'nifty_ema', DEFAULTS['nifty_ema'], 0, 200))
+    size_mode = str(data.get('size_mode', DEFAULTS['size_mode'])).lower()
+    if size_mode not in ('fixed', 'risk'):
+        return jsonify({'success': False, 'error': 'size_mode must be fixed or risk'}), 400
+    fixed = {
+        'min_turnover_cr': _mrb_float(data, 'min_turnover_cr', DEFAULTS['min_turnover_cr'], 0, 10_000),
+        'min_price': _mrb_float(data, 'min_price', DEFAULTS['min_price'], 0, 1e6),
+        'capital': _mrb_float(data, 'capital', DEFAULTS['capital'], 10_000, 1e10),
+        'size_mode': size_mode,
+        'fixed_amount': _mrb_float(data, 'fixed_amount', DEFAULTS['fixed_amount'], 100, 1e9),
+        'compounding': bool(data.get('compounding', DEFAULTS['compounding'])),
+        'max_pos_pct': _mrb_float(data, 'max_pos_pct', DEFAULTS['max_pos_pct'], 0, 100),
+        'cost_pct': _mrb_float(data, 'cost_pct', DEFAULTS['cost_pct'], 0, 5),
+        'brokerage': _mrb_float(data, 'brokerage', DEFAULTS['brokerage'], 0, 10_000),
+    }
+    try:
+        universe = _mrb_universe(universe_kind)
+    except FileNotFoundError:
+        return jsonify({'success': False, 'error': 'The NSE stock list has not been built yet '
+                                                   '(the nightly EMA Narrow prewarm writes it).'}), 404
+
+    from trading_app.Backtest import monthly_rsi_breakout_engine as mrb
+    # Under 'fixed' sizing risk_pct never changes the result, so it is collapsed to one value —
+    # sweeping it would only triple the combo count (and the run time) for identical rows.
+    grid = dict(mrb.SWEEP_GRID)
+    if size_mode == 'fixed':
+        grid['risk_pct'] = [DEFAULTS['risk_pct']]
+    combos = mrb.sweep_combos(grid)
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'stage': 'loading', 'done': 0, 'total': len(universe)}}
+    with _mrb_tasks_lock:
+        _mrb_tasks[task_id] = task
+
+    def _run():
+        from trading_app.filters.candle_store import _load_disk
+        try:
+            lo, hi = mrb.wide_band()
+            cand_sets: dict = {}
+            closes: dict = {}
+            no_data = 0
+            for i, sym in enumerate(universe):
+                entry = _load_disk(sym)
+                df = None if entry is None else entry.get('df')
+                if df is None or df.empty:
+                    no_data += 1
+                else:
+                    df = mrb.clean_daily(df)
+                    closes[sym] = mrb.month_closes(df)
+                    for el, ex in mrb.candidate_sets():
+                        cand_sets.setdefault((el, ex), []).extend(
+                            mrb.candidates(sym, df, start_d, end_d, rsi_lo=lo, rsi_hi=hi,
+                                          min_turnover_cr=fixed['min_turnover_cr'], min_price=fixed['min_price'],
+                                          timeframe=timeframe, ema_len=el, exit_rule=ex,
+                                          cleaned=True, keep_raw=True))
+                if i % 50 == 0:
+                    task['progress'] = {'stage': 'loading', 'done': i + 1, 'total': len(universe)}
+            nifty = _load_disk('NIFTY')
+            ndf = None if nifty is None else nifty.get('df')
+            nifty_rsi = mrb.nifty_rsi_by_period(ndf, timeframe)
+            nifty_closes = None if ndf is None or ndf.empty else mrb.month_closes(mrb.clean_daily(ndf))
+            nifty_trend = mrb.nifty_above_ema_by_period(ndf, timeframe, nifty_ema) if nifty_ema else None
+
+            def _progress(done, total):
+                task['progress'] = {'stage': 'scoring', 'done': done, 'total': total}
+
+            rows = mrb.sweep(cand_sets, closes, start_d, end_d, nifty_rsi=nifty_rsi, nifty_closes=nifty_closes,
+                             capital=fixed['capital'], size_mode=fixed['size_mode'],
+                             fixed_amount=fixed['fixed_amount'], compounding=fixed['compounding'],
+                             max_pos_pct=fixed['max_pos_pct'],
+                             cost_pct=fixed['cost_pct'], brokerage=fixed['brokerage'],
+                             nifty_above_ema=nifty_trend, grid=grid, progress=_progress)
+            results = mrb.board(rows, min_trades=mrb.SWEEP_MIN_TRADES, size=mrb.SWEEP_BOARD)
+            best = results[0] if results else None
+            logger.info('[MonthlyRsiBreakout] optimise %s..%s %s %s: %d stocks, %d combos -> %d on the board',
+                        start_d, end_d, universe_kind, timeframe, len(universe), len(combos), len(results))
+            task['payload'] = {
+                'total_combos_tested': len(combos), 'total': len(results), 'min_trades': mrb.SWEEP_MIN_TRADES,
+                'universe': universe_kind, 'timeframe': timeframe, 'symbols_scanned': len(universe),
+                'symbols_no_data': no_data, 'results': results, 'best': best,
+            }
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[MonthlyRsiBreakout] optimise failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'mrb-opt-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+@api_bp.route('/backtest/monthly-rsi-breakout/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def monthly_rsi_breakout_optimise_status(task_id):
+    """Poll a Monthly RSI Breakout Find Best Params sweep; the result is delivered once, then dropped."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _mrb_tasks_lock:
+        task = _mrb_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task['progress'], 'elapsed': elapsed})
+    with _mrb_tasks_lock:
+        _mrb_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 # ── NIFTY monthly ATM Straddle backtest (the page's ⚖️ ATM Straddle) ────────
 # Last Friday of the month at 15:15, sell the ATM CE + PE of NEXT month's
 # expiry; a position trade, out together only at +5 % / −5 % of the premium

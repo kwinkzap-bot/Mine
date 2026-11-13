@@ -570,6 +570,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (bicParamsRow)  bicParamsRow.style.display  = 'none';
         const bicOptPanel   = document.getElementById('biweeklyIcOptimisePanel');
         if (bicOptPanel)   bicOptPanel.style.display   = 'none';
+        const mrbOptPanel   = document.getElementById('monthlyRsiBreakoutOptimisePanel');
+        if (mrbOptPanel)   mrbOptPanel.style.display   = 'none';
+        const mrbParamsRow  = document.getElementById('monthlyRsiBreakoutParamsRow');
+        if (mrbParamsRow)  mrbParamsRow.style.display  = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
         const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
         if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
@@ -600,7 +604,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -870,6 +874,15 @@ document.addEventListener('DOMContentLoaded', function() {
             const wcbEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2017-01-01';
             if (wcbEnd) wcbEnd.value = localToday();
+        } else if (val === 'monthly_rsi_breakout') {
+            if (mrbParamsRow) mrbParamsRow.style.display = 'grid';
+            // A whole-market scan on monthly candles: the universe box replaces the
+            // Symbol box, and the timeframe is fixed by the rule.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            const mrbEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = '2015-01-01';
+            if (mrbEnd) mrbEnd.value = localToday();
         } else if (val === 'atm_straddle') {
             if (osParamsRow) osParamsRow.style.display = 'grid';
             // NIFTY only, on a fixed 1-minute basis: no Symbol / Timeframe.
@@ -973,7 +986,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['biweekly_iron_condor', 'st_all_indicators', 'atm_straddle'],
+        mine:    ['monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
@@ -1220,6 +1233,16 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Credit', 'The net credit must be at least 4% of capital, or the week is skipped.'],
             ['Adjust', 'A short must not double, must not reach 0.30 delta, and one side\'s delta must not exceed twice the other\'s: that side (short + hedge) is closed and re-sold at 0.20. A short that has decayed 50% is rolled in to 0.20.'],
             ['Exit', '+1% / −1% of capital on the mark-to-market (5-minute closes), or next Friday 15:00. At 15:15 a profit of 0.8%+ or a loss of 0.9%+ is not carried overnight.']] },
+        monthly_rsi_breakout: { sub: 'F&O stocks whose monthly RSI closes 65-75, bought on a break of that candle\'s high, out on a 10 EMA break', steps: [
+            ['Defaults', 'Swept on 2015-26 at ₹1 L: F&O stocks, RSI 65-75, a 10 EMA and 0.5 % risk beat the video\'s RSI 60-65 / 20 EMA / 1 % in 10 of 12 years. The video\'s numbers are still in the boxes\' notes.'],
+            ['Timeframe', 'Month is the video\'s. Week or Day runs the same rule on those candles: read "month" below as "candle". The 5-a-month cap stays per calendar month.'],
+            ['Scan', 'Last day of the month, after the close: the month\'s RSI(14) is inside the RSI From / To band (65-75; the video: 60-65).'],
+            ['Entry', 'Next month only: buy when the price trades at that month\'s HIGH (a gap over it fills at the open). Not broken that month = no trade.'],
+            ['Size', 'Quantity = equity × Risk % ÷ (entry − the EMA), never more than Max per Stock % of equity. A buy the cash left cannot pay for in full is skipped.'],
+            ['Costs', 'Charges % of the value on each side (STT, stamp, exchange, GST, DP) plus a flat brokerage ₹ on every buy and every sell.'],
+            ['Exit', 'A monthly candle CLOSES below the EMA (10 by default; the video: 20), then a later day trades below that candle\'s LOW (or, with Exit Rule = Close, out at the next open). A month closing back above the EMA disarms it. Otherwise held, for years if need be.'],
+            ['Limits', 'At most 5 new stocks a month; no new entries while NIFTY\'s monthly RSI is below 40 (holdings are kept).'],
+            ['Data', 'Daily bars from the local per-stock files, folded into calendar months. A day that jumps 40 %+ from the last close (an unadjusted split or demerger) starts that stock\'s history afresh.']] },
         call_ratio: { sub: 'NIFTY monthly 1:2 call ratio with a far hedge, zero adjustment', steps: [
             ['Entry', 'Last Friday of the month at 15:16, on NEXT month\'s expiry: BUY 1 CE 300 pts above the ATM, SELL 2 CE 300 above that, BUY 1 CE 1,000 above the sold strike.'],
             ['Strikes', 'If NIFTY falling to zero would leave more than 1% of capital as credit, the strikes are too close — move all three out 100 pts and check again. A downside debit above 1% is not traded.'],
@@ -1355,6 +1378,7 @@ document.addEventListener('DOMContentLoaded', function() {
         call_ratio: 'a three-leg monthly option position, not a single chart',
         biweekly_iron_condor: 'a four-leg option position that is adjusted as it goes, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
+        monthly_rsi_breakout: 'a portfolio of stocks picked across the market each month, not a single chart',
     };
     const BT_LOGIC_DAILY = ['ema_pullback', 'hilega_milega', 'weekly_cpr_breakout'];
     const BT_LOGIC_INTERVAL = { expiry_breakout: '60minute', thirty_min_fakeout: '5minute', second_candle: 'minute' };
@@ -1686,6 +1710,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (_strat === 'call_ratio') {
             await runCallRatio();
+            return;
+        }
+        if (_strat === 'monthly_rsi_breakout') {
+            await runMonthlyRsiBreakout();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
@@ -2845,6 +2873,190 @@ document.addEventListener('DOMContentLoaded', function() {
             `${s.breeze_errors} ICICI request${s.breeze_errors === 1 ? '' : 's'} failed (${s.last_breeze_error}) — affected weeks may be skipped or mis-priced`, 'warning');
     }
 
+    // ── Monthly RSI Breakout — start + poll, rendered in the shared #crResults panel ──
+    function _mrbPayload() {
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        return {
+            start_date: document.getElementById('startDate')?.value,
+            end_date:   document.getElementById('endDate')?.value,
+            universe:   document.getElementById('mrbUniverse')?.value || 'fno',
+            ema_len: num('mrbEmaLen', 10), exit_rule: document.getElementById('mrbExitRule')?.value || 'low_break',
+            nifty_ema: num('mrbNiftyEma', 0),
+            timeframe:  document.getElementById('mrbTimeframe')?.value || 'month',
+            rsi_lo: num('mrbRsiLo', 65), rsi_hi: num('mrbRsiHi', 75),
+            max_new: num('mrbMaxNew', 5), nifty_floor: num('mrbNiftyFloor', 40),
+            capital: num('mrbCapital', 100000),
+            size_mode: document.getElementById('mrbSizeMode')?.value || 'fixed',
+            fixed_amount: num('mrbFixedAmount', 10000),
+            compounding: !!document.getElementById('mrbCompound')?.checked, risk_pct: num('mrbRisk', 0.5),
+            max_pos_pct: num('mrbMaxPos', 20), min_turnover_cr: num('mrbTurnover', 1),
+            cost_pct: num('mrbCost', 0.15), brokerage: num('mrbBrokerage', 20),
+        };
+    }
+
+    // Fixed ₹ per stock vs the video's Risk % sizing — mutually exclusive boxes.
+    function syncMrbSizeMode() {
+        const mode = document.getElementById('mrbSizeMode')?.value || 'fixed';
+        const fixedFg = document.getElementById('mrbFixedAmountFg');
+        const compoundFg = document.getElementById('mrbCompoundFg');
+        const riskFg  = document.getElementById('mrbRiskFg');
+        const maxFg   = document.getElementById('mrbMaxPosFg');
+        if (fixedFg)    fixedFg.style.display    = mode === 'fixed' ? '' : 'none';
+        if (compoundFg) compoundFg.style.display = mode === 'fixed' ? '' : 'none';   // Risk % already compounds on its own
+        if (riskFg)  riskFg.style.display  = mode === 'risk'  ? '' : 'none';
+        if (maxFg)   maxFg.style.display   = mode === 'risk'  ? '' : 'none';
+    }
+    document.getElementById('mrbSizeMode')?.addEventListener('change', syncMrbSizeMode);
+    syncMrbSizeMode();
+
+    async function runMonthlyRsiBreakout() {
+        const tfName = { month: 'Monthly', week: 'Weekly', day: 'Daily' }[document.getElementById('mrbTimeframe')?.value || 'month'];
+        const title = `Running ${tfName} RSI Breakout`;
+        const myRun = ++_crRun;
+        resultsArea.style.display = 'none';
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/monthly-rsi-breakout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_mrbPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 1500));
+                if (myRun !== _crRun) return;
+                data = await (await fetch(`/api/backtest/monthly-rsi-breakout/status/${taskId}`)).json();
+                if (myRun !== _crRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader(title, `${p.done || 0} / ${p.total || 0} stocks · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            renderMonthlyRsiBreakout(data);
+        } catch (err) {
+            if (myRun !== _crRun) return;
+            _hideOptLoader();
+            console.error('Monthly RSI Breakout error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderMonthlyRsiBreakout(data) {
+        const s = data.summary || {};
+        const ph = document.getElementById('btRightPlaceholder');
+        if (ph) ph.style.display = 'none';
+        const rupees = v => '₹' + Math.abs(Math.round(v || 0)).toLocaleString('en-IN');
+        const inr = v => (v >= 0 ? '+' : '−') + rupees(v);
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const stats = document.getElementById('crStats');
+        if (stats) stats.innerHTML = [
+            card('Stocks Bought', String(s.total_trades || 0), 'ac-blue',
+                 `${s.symbols_with_trades || 0} names of ${s.symbols_scanned || 0} scanned · ${s.open_trades || 0} still held · ${s.candidates || 0} breakouts found`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green',
+                 `${s.wins || 0} W / ${s.losses || 0} L closed · avg win ${pct(s.avg_win_pct)} · avg loss ${pct(s.avg_loss_pct)}`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `${rupees(s.capital)} → ${rupees(s.final_equity)} · booked ${inr(s.realised_pnl_rupees || 0)} · open ${inr(s.open_pnl_rupees || 0)}`),
+            card('CAGR', pct(s.cagr_pct), 'ac-blue', `NIFTY ${pct(s.nifty_cagr_pct)} over the same months`),
+            card('Max Drawdown', { text: '−' + rupees(s.max_drawdown_rupees), cls: 'stat-val-red' }, 'ac-red',
+                 `${(s.max_drawdown_pct || 0).toFixed(1)}% on month-end equity · NIFTY ${s.nifty_max_drawdown_pct == null ? '—' : s.nifty_max_drawdown_pct.toFixed(1) + '%'}`),
+            card('Profit Factor', String(s.profit_factor ?? '—'), 'ac-blue',
+                 `${s.multibaggers || 0} trades doubled · best ${pct(s.best_trade_pct)} · worst ${pct(s.worst_trade_pct)}`),
+            card('Holding', `${s.avg_months_held || 0} months avg`, 'ac-blue',
+                 `up to ${s.max_holdings || 0} stocks at once · ${rupees(s.total_charges)} costs, of which ${rupees(s.total_brokerage)} brokerage`),
+            card('Max Amount Needed', rupees(s.max_invested), 'ac-blue',
+                 `the most ever tied up in stock at once, of the ${rupees(s.capital)} pot the run allowed — `
+                 + (s.max_invested >= (s.capital || 0) * 0.95
+                    ? 'it used nearly all of it'
+                    : `try a smaller Capital box, this run never needed more than that`)),
+            card('Breakouts Not Taken', String((s.skipped_cash || 0) + (s.skipped_month_cap || 0) + (s.skipped_nifty || 0) + (s.skipped_held || 0)), 'ac-blue',
+                 `${s.skipped_cash || 0} no cash · ${s.skipped_month_cap || 0} over ${s.params?.max_new ?? 5} a month · ${s.skipped_nifty || 0} NIFTY ${s.params?.timeframe || 'month'}ly RSI < ${s.params?.nifty_floor ?? 40} · ${s.skipped_held || 0} already held`.replace('dayly', 'daily')),
+        ].join('');
+        const blank = v => (v ? v : '—');
+        DataGrid.mountSortable('bicYearGrid', {
+            rows: s.by_year || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                { key: 'entries', label: 'Bought', sortable: true, format: blank },
+                { key: 'exits', label: 'Sold', sortable: true, format: blank },
+                { key: 'wins', label: 'Sold at Profit', sortable: true, format: blank },
+                { key: 'realised', label: 'Booked P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'holdings', label: 'Held at Year End', sortable: true },
+                { key: 'end_equity', label: 'Year-end Equity', sortable: true, format: v => rupees(v) },
+                { key: 'return_pct', label: 'Return', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'nifty_pct', label: 'NIFTY', sortable: true, format: pct, tone: DataGrid.sign },
+            ],
+            empty: 'No months in this range',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        const bicYears = document.getElementById('bicYears');
+        if (bicYears) bicYears.style.display = '';
+        const px = v => (v == null ? '—' : Number(v).toFixed(2));
+        DataGrid.mountSortable('crGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'symbol', label: 'Stock', sortable: true },
+                { key: 'signal_period', label: { month: 'Scan Month', week: 'Scan Week', day: 'Scan Day' }[s.params?.timeframe] || 'Scan', sortable: true },
+                { key: 'rsi', label: 'RSI', sortable: true, format: v => Number(v).toFixed(1) },
+                { key: 'entry_date', label: 'Bought', sortable: true },
+                { key: 'entry_price', label: 'Buy', sortable: true, format: px },
+                { key: 'stop', label: `${s.params?.ema_len ?? 10} EMA`, sortable: true, format: px },
+                { key: 'qty', label: 'Qty', sortable: true },
+                { key: 'invested', label: 'Invested', sortable: true, format: v => rupees(v) },
+                { key: 'exit_date', label: 'Sold', sortable: true, format: (v, r) => (r.result === 'OPEN' ? 'held' : v) },
+                { key: 'exit_price', label: 'Sell', sortable: true, format: (v, r) => (r.result === 'OPEN' ? `${px(v)} (last)` : px(v)) },
+                { key: 'months_held', label: 'Months', sortable: true },
+                { key: 'return_pct', label: 'Return', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'charges', label: 'Costs', sortable: true, format: v => rupees(v),
+                  title: (v, r) => `₹${r.brokerage} brokerage + ₹${Math.round(v - r.brokerage)} STT, stamp, exchange, GST` },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+            ],
+            empty: 'No stock broke out in this range',
+            defaultSort: { key: 'entry_date', dir: 'desc' },
+        });
+
+        // Equity Curve + P&L Breakdown — the shared chart pair the other backtests
+        // use (renderEquityCurve/renderPeriodBreakdown), fed with this portfolio's
+        // own ₹ per trade. Those two sections sit inside #resultsArea, so it must
+        // be shown too — resultsRow1 is its only piece not already behind a
+        // style="display:none" guard, so it is hidden by hand to avoid a second,
+        // empty "Total Trades" row sitting under crResults' own stat cards.
+        // resultsArea (and resultsRow1 inside it) must be shown BEFORE the two charts are
+        // built, not after — Chart.js measures a canvas's own size at construction time, and
+        // a canvas under a still-display:none ancestor measures 0×0 and renders blank even
+        // once the ancestor is revealed a moment later.
+        const resultsRow1 = document.getElementById('resultsRow1');
+        if (resultsRow1) resultsRow1.style.display = 'none';
+        if (resultsArea) resultsArea.style.display = '';
+        const mrbTrades = (data.trades || []).map(t => ({ ...t, entry_time: t.entry_date }));
+        _periodTrades = mrbTrades;
+        _periodIsMoney = true;
+        _periodLots = 1;
+        _periodLotValue = 1;
+        _periodUseDirectRupees = true;
+        renderEquityCurve(mrbTrades, true, 1, 1, s.capital || 100000);
+        const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
+        renderPeriodBreakdown(mrbTrades, true, 1, 1, activePeriod, true);
+
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = '';
+    }
+
     // ── Weekly CPR Breakout — start + poll ─────────────────────────────
     // Two Fyers daily requests per stock plus whatever 1-minute tail is not on
     // disk yet: a minute or two warm, several cold. The server answers with a
@@ -3462,6 +3674,10 @@ document.addEventListener('DOMContentLoaded', function() {
     function _displayResultsCore(data) {
         lastData = data;
         lastDataKey = strategySelect ? strategySelect.value : '';
+        // RSI Breakout hides this row for itself (its own stat cards live in
+        // #crResults instead) — every other strategy's own render restores it.
+        const resultsRow1El = document.getElementById('resultsRow1');
+        if (resultsRow1El) resultsRow1El.style.display = '';
         const { summary } = data;
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
@@ -5254,6 +5470,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'atm_straddle') runOsOptimise(false);
         else if (strat === 'call_ratio') runCrOptimise(false);
         else if (strat === 'biweekly_iron_condor') runBicOptimise(false);
+        else if (strat === 'monthly_rsi_breakout') runMrbOptimise();
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (strat === 'hilega_milega' || strat === 'ma_htf') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
@@ -6658,6 +6875,94 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     const bicRecalcBtn = document.getElementById('bicRecalcOptBtn');
     if (bicRecalcBtn) bicRecalcBtn.addEventListener('click', () => runBicOptimise(true));
+
+    // ── RSI 60-65 Breakout — Find Best Params ──────────────────────────
+    // monthly_rsi_breakout_engine.SWEEP_GRID (RSI band × exit EMA × exit rule × risk % ×
+    // new-stocks cap × NIFTY RSI floor) on the page's own universe/timeframe/capital/costs;
+    // no broker call, no cache — a fresh scan + sweep every run.
+    let _mrbOptRun = 0;
+    const MRB_OPT_COLS = [
+        { label: '#',           key: null,              fmt: (r, i) => i + 1 },
+        { label: 'RSI',         key: 'rsi_lo',          fmt: r => `${r.rsi_lo}-${r.rsi_hi}` },
+        { label: 'Exit EMA',    key: 'ema_len',         fmt: r => r.ema_len },
+        { label: 'Exit Rule',   key: 'exit_rule',       fmt: r => r.exit_rule === 'close' ? 'Close' : 'Low break' },
+        { label: 'Risk %',      key: 'risk_pct',        fmt: r => `${r.risk_pct}%` },
+        { label: 'New/Month',   key: 'max_new',         fmt: r => r.max_new },
+        { label: 'NIFTY Floor', key: 'nifty_floor',     fmt: r => r.nifty_floor || 'Off' },
+        { label: 'Trades',      key: 'total_trades',    fmt: r => r.total_trades },
+        { label: 'Win%',        key: 'win_rate',        fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'CAGR',        key: 'cagr_pct',        fmt: r => `${(r.cagr_pct ?? 0).toFixed(1)}%` },
+        { label: 'Max DD',      key: 'max_drawdown_pct', fmt: r => `<span class="pnl-negative">${(r.max_drawdown_pct ?? 0).toFixed(1)}%</span>` },
+        { label: 'Worst Year',  key: 'worst_year_pct',  fmt: r => _crPct(r.worst_year_pct) },
+        { label: 'Losing Yrs',  key: 'losing_years',    fmt: r => r.losing_years },
+        { label: 'CAGR÷DD',     key: 'cagr_dd',         fmt: r => (r.cagr_dd ?? 0).toFixed(2) },
+        { label: '1st Half',    key: 'first_half_cagr', fmt: r => _crPct(r.first_half_cagr) },
+        { label: '2nd Half',    key: 'second_half_cagr', fmt: r => _crPct(r.second_half_cagr) },
+        { label: 'Net P&L (₹)', key: 'net_pnl_rupees',  fmt: r => _rs(r.net_pnl_rupees) },
+        { label: '',            key: null,              fmt: () => '' },   // Use button
+    ];
+
+    function applyMrbOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('mrbRsiLo', String(r.rsi_lo));
+        set('mrbRsiHi', String(r.rsi_hi));
+        set('mrbEmaLen', String(r.ema_len));
+        set('mrbExitRule', r.exit_rule);
+        set('mrbRisk', String(r.risk_pct));
+        set('mrbMaxNew', String(r.max_new));
+        set('mrbNiftyFloor', String(r.nifty_floor));
+        if (window.showNotification) window.showNotification(
+            `Applied: RSI ${r.rsi_lo}-${r.rsi_hi} · Exit EMA ${r.ema_len} · ${r.exit_rule === 'close' ? 'Close' : 'Low break'} `
+            + `· Risk ${r.risk_pct}% · ${r.max_new} new/month · NIFTY floor ${r.nifty_floor || 'off'} `
+            + `· CAGR ${r.cagr_pct}% · Max DD ${r.max_drawdown_pct}%`, 'success');
+    }
+
+    async function runMrbOptimise() {
+        const panel    = document.getElementById('monthlyRsiBreakoutOptimisePanel');
+        const optimBtn = document.getElementById('runOptimiseBtn');
+        const origText = optimBtn ? optimBtn.textContent : '';
+        if (optimBtn) { optimBtn.textContent = '⏳ Running…'; optimBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_mrbOptRun;
+        const done = () => { if (optimBtn) { optimBtn.textContent = origText; optimBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/monthly-rsi-breakout/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_mrbPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _mrbOptRun) return;
+                data = await (await fetch(`/api/backtest/monthly-rsi-breakout/optimise/status/${taskId}`)).json();
+                if (myRun !== _mrbOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                const stage = p.stage === 'scoring' ? 'scoring combos' : 'scanning stocks';
+                _showOptLoader('Finding best params…', `${stage} · ${p.done || 0} / ${p.total || 0} · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            const metaEl = document.getElementById('mrbOptMeta');
+            if (metaEl) metaEl.textContent =
+                `${(data.total_combos_tested || 0).toLocaleString('en-IN')} combos · ${data.total} on the board `
+                + `(≥ ${data.min_trades} trades, best CAGR / steadiest half / CAGR÷DD) · ${data.symbols_scanned} stocks scanned`
+                + ` (${data.symbols_no_data} with no data) · ${data.universe === 'all' ? 'All NSE' : 'F&O'} · ${data.timeframe}`;
+            _mountSingleOptGrid('mrbOptGrid', data.results || [], MRB_OPT_COLS, 'cagr_pct', applyMrbOptResult);
+            if (panel) panel.style.display = '';
+        } catch (err) {
+            if (myRun !== _mrbOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('RSI Breakout optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
 
     // ── Weekly CPR Breakout — Find Best Params ──────────────────────────
     // Sweeps Target × W CPR Width × Min 1H Range × Direction (192 combos)

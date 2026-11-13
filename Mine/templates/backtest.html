@@ -38,6 +38,7 @@
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="ma_htf">📈 MA Cross + HTF</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
+                <option value="monthly_rsi_breakout" selected>🗓️ RSI Breakout — Day / Week / Month (Stocks, EMA exit)</option>
                 <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
                 <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
                 <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
@@ -45,7 +46,7 @@
                 <option value="st_rsi_cci_wr_pp_bb_fut">🎓 5. ST RSI CCI WR PP BB + SL NIFTY Fut (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_sx">🎓 6. ST RSI CPR BB + SL Sensex (Quantman CE)</option>
                 <option value="st_rsi_cpr_bb_wr_sx">🎓 7. ST RSI CPR BB WR + SL SX2 (Quantman CE)</option>
-                <option value="biweekly_iron_condor" selected>🦅 NIFTY Bi-weekly Iron Condor (Delta Adjusted)</option>
+                <option value="biweekly_iron_condor">🦅 NIFTY Bi-weekly Iron Condor (Delta Adjusted)</option>
                 <option value="st_all_indicators">🎓 ALL Indicators (ST EMA RSI CCI WR CPR PP BB) + SL NIFTY CE</option>
                 <option value="atm_straddle">⚖️ NIFTY ATM Straddle Sell (Monthly / Weekly)</option>
                 <option value="call_ratio">🧠 NIFTY Monthly Call Ratio 1:2 (No-Brainer)</option>
@@ -2192,6 +2193,93 @@
                  1-hour candle closes outside it as a BUY/SELL candle short of
                  R3/S3 → enter 10:15, SL at that hour's other extreme, target
                  1:R. See Backtest/weekly_cpr_breakout_engine.py. -->
+            <div id="monthlyRsiBreakoutParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="mrbTimeframe" title="The candles the rule is read on: RSI 60-65 at a candle's close, buy above that candle's high in the NEXT candle, out when a candle closes under its 20 EMA and a later one breaks its low. NIFTY's RSI filter is on the same candles. Month is the video's. The 5-a-month cap stays per calendar month.">Timeframe</label>
+                    <select id="mrbTimeframe">
+                        <option value="month" selected>Month</option>
+                        <option value="week">Week</option>
+                        <option value="day">Day</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mrbUniverse" title="All NSE stocks: every equity on today's NSE list (index ETFs dropped). F&amp;O: the ~220 stocks with futures — the default since the 2015-26 sweep (better in both halves). Both are today's lists, so stocks delisted since are missing — that flatters any backtest on a current list.">Universe</label>
+                    <select id="mrbUniverse">
+                        <option value="fno" selected>F&amp;O stocks</option>
+                        <option value="all">All NSE stocks</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mrbEmaLen" title="The EMA that sizes the stop and drives the exit. The video: 20. Default 10 since the 2015-26 sweep (10 > 20 > 30 on average).">Exit EMA Length</label>
+                    <input type="number" id="mrbEmaLen" value="10" min="2" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbExitRule" title="Low break (the video's): a candle closes under the EMA, then a later candle trades under that candle's low. Close: out at the next candle's open as soon as one closes under the EMA.">Exit Rule</label>
+                    <select id="mrbExitRule">
+                        <option value="low_break" selected>Close under EMA + low break</option>
+                        <option value="close">Close under EMA</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mrbNiftyEma" title="Not in the video: no new buys while NIFTY closes under its EMA of this length (same timeframe). It did not help in the 2015-26 sweep, so it is off. 0 = off.">NIFTY Trend EMA</label>
+                    <input type="number" id="mrbNiftyEma" value="0" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbRsiLo" title="At the close of a candle of the chosen timeframe (the month, by default): its RSI(14) must be at least this. The video: 60. Default 65: in the 2015-26 sweep the 65-75 band was the best in every EMA / exit / universe and in both halves.">RSI From</label>
+                    <input type="number" id="mrbRsiLo" value="65" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbRsiHi" title="… and at most this. Above it the move is taken as already run. The video: 65; default 75.">RSI To</label>
+                    <input type="number" id="mrbRsiHi" value="75" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbMaxNew" title="At most this many new stocks are bought in a month (the first to break their high; same day: the most traded first). The video: 5.">New Stocks a Month</label>
+                    <input type="number" id="mrbMaxNew" value="5" min="1" max="50" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbNiftyFloor" title="No new entries while NIFTY's RSI (same timeframe) at the scan is below this; stocks already held are kept. The video: 40. 0 = off.">NIFTY RSI Floor</label>
+                    <input type="number" id="mrbNiftyFloor" value="40" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbCapital" title="Starting cash, ₹1 lakh by default. No money is ever added: the book is one portfolio and each buy is paid from cash, and a buy the cash cannot pay for in full is skipped (not bought smaller).">Capital (₹)</label>
+                    <input type="number" id="mrbCapital" value="100000" min="10000" step="10000">
+                </div>
+                <div class="form-group">
+                    <label for="mrbSizeMode" title="Fixed ₹ (default, at the user's ask): every new stock is bought with the same ₹ amount (the box beside it), so every position starts the same size. Risk %: the video's calculator — quantity = equity × Risk % ÷ (entry − the EMA) — so a stock with a tighter stop gets a bigger position. Either way a buy the cash cannot pay for in full is skipped, not bought smaller.">Position Size</label>
+                    <select id="mrbSizeMode">
+                        <option value="fixed" selected>Fixed ₹ per Stock</option>
+                        <option value="risk">Risk % per Stock</option>
+                    </select>
+                </div>
+                <div class="form-group" id="mrbFixedAmountFg">
+                    <label for="mrbFixedAmount" title="The ₹ invested in each new stock, under Fixed ₹. ₹10,000 on a ₹1 lakh pot holds up to 10 stocks at once.">Amount per Stock (₹)</label>
+                    <input type="number" id="mrbFixedAmount" value="10000" min="100" step="1000">
+                </div>
+                <div class="form-group" id="mrbCompoundFg">
+                    <label for="mrbCompound">Compounding</label>
+                    <input type="checkbox" id="mrbCompound" title="Off (default): every new stock is bought with the same Amount per Stock, always. On: that amount scales with the REALISED balance so far — capital + the net ₹ of trades already closed, never an open position's paper gain — so winners buy bigger positions later, same rule the ATM Straddle / Option Selling backtests use. Find Best Params still ranks at whatever this box is set to when you run it.">
+                </div>
+                <div class="form-group" id="mrbRiskFg" style="display:none">
+                    <label for="mrbRisk" title="The video's calculator: quantity = equity × this % ÷ (entry − the EMA). The video shows 0.25 / 0.5 / 1 / 1.5 %. Only used under Risk % per Stock.">Risk per Stock %</label>
+                    <input type="number" id="mrbRisk" value="0.5" min="0.05" max="20" step="0.25">
+                </div>
+                <div class="form-group" id="mrbMaxPosFg" style="display:none">
+                    <label for="mrbMaxPos" title="Not in the video: one stock is never more than this % of equity, however close its EMA stop is. 0 = no cap. Only used under Risk % per Stock.">Max per Stock %</label>
+                    <input type="number" id="mrbMaxPos" value="20" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="mrbTurnover" title="Not in the video: the stock's average daily ₹ traded in the scan month must be at least this many crore, so the thousands of illiquid names on the NSE list are left out. 0 = off.">Min Daily Turnover (₹ Cr)</label>
+                    <input type="number" id="mrbTurnover" value="1" min="0" step="0.5">
+                </div>
+                <div class="form-group">
+                    <label for="mrbCost" title="Charges on each side of a delivery trade, % of the value: STT 0.1 % plus stamp duty, exchange, GST and DP. Brokerage is the box beside it.">Charges % per Side</label>
+                    <input type="number" id="mrbCost" value="0.15" min="0" max="2" step="0.01">
+                </div>
+                <div class="form-group">
+                    <label for="mrbBrokerage" title="Flat brokerage on every order — each buy and each sell — on top of the % charges. ₹20 is the usual discount-broker figure; 0 for a zero-brokerage delivery account.">Brokerage ₹ per Order</label>
+                    <input type="number" id="mrbBrokerage" value="20" min="0" step="1">
+                </div>
+            </div>
             <div id="weeklyCprBreakoutParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="wcbSignal" title="Any candle: the first 1-hour candle's colour gives the side — any bearish (red) candle type is a SELL, any bullish (green) one a BUY (a doji is neither); it need not close outside the CPR. 1H close outside CPR: the earlier rule — closes below BC (SELL) / above TC (BUY).">Signal</label>
@@ -2438,6 +2526,19 @@
                 </div>
                 <div class="opt-table-wrap">
                     <div id="bicOptGrid"></div>
+                </div>
+            </div>
+
+            <!-- RSI 60-65 Breakout Find Best Params (monthly_rsi_breakout_engine.SWEEP_GRID) -->
+            <div id="monthlyRsiBreakoutOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">🗓️ RSI Breakout Best Params</h4>
+                    </div>
+                    <small id="mrbOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="mrbOptGrid"></div>
                 </div>
             </div>
 

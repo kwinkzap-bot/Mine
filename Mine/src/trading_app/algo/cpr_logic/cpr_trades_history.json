@@ -164,5 +164,38 @@
     },
     "pnl": -2710.5,
     "unconfirmed": null
+  },
+  {
+    "date": "2026-11-13",
+    "n": 1,
+    "mode": "live",
+    "strategy": "09:15 strong break (narrow CPR)",
+    "side": "SELL",
+    "setup_time": "09:15",
+    "entry": 25106.0,
+    "sl": 25159.0,
+    "target": 25000.0,
+    "index_fill": 25105.45,
+    "fill_time": "09:20",
+    "index_exit": 25159.5,
+    "exit_time": "09:35",
+    "result": "SL",
+    "pts": -54.05,
+    "locked_at": null,
+    "strike": 25150,
+    "option_type": "PE",
+    "legs": {
+      "2": {
+        "name": "Devanai (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 193.85,
+        "exit": 161.3,
+        "pnl": -2115.75,
+        "exit_reason": null
+      }
+    },
+    "pnl": -2115.75,
+    "unconfirmed": null
   }
 ]
