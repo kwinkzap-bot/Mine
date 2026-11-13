@@ -58,6 +58,29 @@ def _thirty_second(fd, td):
     return out
 
 
+def _fake_price_real(symbol, interval, trades, index_minutes, sessions, cap, progress=None):
+    """Stands in for real option candles: a trade entered on a day divisible
+    by 3 has none (left out, as an unpriced leg is), the rest earn 0.4 x the
+    index move + 1 — decided per trade, whatever batch it is priced in.
+    Nothing here can reach Breeze."""
+    _fake_price_real.calls.append(len(trades))
+    priced = []
+    for t in trades:
+        if int(t['entry_time'][8:10]) % 3 == 0:
+            continue
+        pnl = round(0.4 * t['pnl'] + 1.0, 2)
+        priced.append(dict(t, index_pnl=t['pnl'], pnl=pnl,
+                           result='WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
+                           entry_premium=250.0, exit_premium=250.0 + pnl, strike=25000,
+                           option_type='CE', expiry='2026-10-14'))
+    info = {'premium': 250.0, 'index_trades': len(trades), 'unpriced': len(trades) - len(priced),
+            'truncated': 0, 'lot': 65}
+    return priced, info, []
+
+
+_fake_price_real.calls = []
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     from trading_app.Backtest import seconds_store
@@ -89,6 +112,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(api, '_sc_backfill_allowance', lambda now=None: 10 ** 6)
     monkeypatch.setattr(api, '_sc_sleep', lambda s: None)
     monkeypatch.setattr(api, '_sc_empty', {})
+    monkeypatch.setattr(api, '_sc_price_real', _fake_price_real)
     app = build_route_app()
     app.secret_key = 'test'
     with app.test_client() as c:
@@ -143,7 +167,7 @@ def test_no_fyers_login_is_a_clear_error(env, monkeypatch):
     assert provider.calls == [] and secs == []
 
 
-@pytest.mark.parametrize('option_pnl, basis, ranked', [(True, 'option_model', 'option_pnl'),
+@pytest.mark.parametrize('option_pnl, basis, ranked', [(True, 'option', 'option_pnl'),
                                                        (False, 'index', 'index_pnl')])
 def test_every_board_row_carries_index_and_option_pnl(env, option_pnl, basis, ranked):
     client, _, _, _ = env
@@ -180,8 +204,31 @@ def test_a_board_row_and_a_backtest_of_it_book_the_same_trades(env, tf, option_p
             rr_ratio=row['rr_ratio'], enable_long=d != 'short', enable_short=d != 'long',
             option_pnl=False)).get_json()
         assert bt['success'], bt
-        assert bt['summary']['total_trades'] == row['total_trades']
-        assert bt['summary']['total_pnl'] == pytest.approx(row['index_pnl'], abs=0.05)
+        if option_pnl:
+            assert group['option_source'] == ('recorded' if tf == '30s' else 'model')
+        if not option_pnl or tf != '30s':
+            assert bt['summary']['total_trades'] == row['total_trades']
+            assert bt['summary']['total_pnl'] == pytest.approx(row['index_pnl'], abs=0.05)
+            continue
+        # OPT P&L: the row is what a BACKTEST with OPT P&L ticked books —
+        # the same priced trades, premium points and index points.
+        task = client.post('/api/backtest/second-candle', json=dict(
+            rng, interval=row['interval'], candle_index=row['candle_index'],
+            rr_ratio=row['rr_ratio'], enable_long=d != 'short', enable_short=d != 'long',
+            option_pnl=True)).get_json()
+        for _ in range(300):
+            st = client.get(f"/api/backtest/st-bb-rsi/status/{task['task_id']}").get_json()
+            if st['status'] != 'running':
+                break
+            time.sleep(0.02)
+        s = st['summary']
+        assert s['pnl_basis'] == 'option'
+        assert (s['total_trades'], s['win_rate'], s['max_drawdown']) == \
+               (row['total_trades'], row['win_rate'], row['max_drawdown'])
+        assert s['total_pnl'] == pytest.approx(row['total_pnl'], abs=0.01)
+        assert sum(t['index_pnl'] for t in st['trades']) == \
+               pytest.approx(row['index_pnl'], abs=0.05)
+        assert row['total_trades'] < bt['summary']['total_trades']   # unpriced legs left out
 
 
 def test_the_30s_board_sweeps_the_older_sessions_a_backtest_stored(env):
@@ -339,3 +386,35 @@ def test_the_scheduler_job_restarts_the_backfill_each_day(monkeypatch):
                if isinstance(v, type) and hasattr(v, '_run_sc_30s_backfill_task'))
     cls._run_sc_30s_backfill_task(None)
     assert calls == [('NIFTY', 'NSE:NIFTY50-INDEX')]
+
+
+def test_the_30s_board_prices_each_distinct_trade_once(env):
+    """Rows share entries; the board prices the union of their trades in one
+    call, not one call per row (15 calls per board ran past 10 minutes)."""
+    client, _, _, _ = env
+    _fake_price_real.calls.clear()
+    r = client.post('/api/backtest/second-candle/optimise', json={
+        'symbol': 'NIFTY', 'start_date': '2026-10-01', 'end_date': '2026-10-12',
+        'recalculate': True, 'option_pnl': True})
+    board = _finish(client, r.get_json()['task_id'])
+    assert board['success']
+    assert len(_fake_price_real.calls) == 1
+
+
+def test_a_second_click_joins_the_board_already_running(env, monkeypatch):
+    import threading
+    client, _, _, _ = env
+    gate = threading.Event()
+    real = api._sc_rows_on_real_premiums
+
+    def slow(*a, **k):
+        gate.wait(5)
+        return real(*a, **k)
+    monkeypatch.setattr(api, '_sc_rows_on_real_premiums', slow)
+    body = {'symbol': 'NIFTY', 'start_date': '2026-10-01', 'end_date': '2026-10-12',
+            'recalculate': True, 'option_pnl': True}
+    first = client.post('/api/backtest/second-candle/optimise', json=body).get_json()
+    second = client.post('/api/backtest/second-candle/optimise', json=body).get_json()
+    assert second['task_id'] == first['task_id'] and second.get('joined')
+    gate.set()
+    assert _finish(client, first['task_id'])['success']

@@ -4882,7 +4882,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
-            meta += ` · ranked on ${isOpt ? 'option' : 'index'} P&L · option premiums modelled (Black-Scholes) — USE a row, tick OPT P&L and BACKTEST for real option candles`;
+            meta += data.pnl_basis === 'option'
+                ? ' · ranked on option P&L · 30s rows booked on REAL option candles, as BACKTEST books them; 1m–5m rows on modelled premiums (Black-Scholes) — BACKTEST a row for its real candles'
+                : ` · ranked on ${isOpt ? 'option' : 'index'} P&L · option premiums modelled (Black-Scholes) — USE a row, tick OPT P&L and BACKTEST for real option candles`;
             if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
             metaEl.textContent = meta;
         }
@@ -4975,14 +4977,18 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function _pollScOptimise(taskId, activeBtn, origText, startMs, myRun) {
-        const MAX_WAIT_MS = 10 * 60 * 1000;
+        // The 30s board on OPT P&L prices real option candles — minutes when
+        // they are not on disk yet. The server keeps one run per board, so a
+        // page that gives up and asks again rejoins it rather than restarting.
+        const MAX_WAIT_MS = 30 * 60 * 1000;
+        let stage = '';
         function tick() {
             if (myRun !== _scOptRun) return;
             const elapsed = Math.round((Date.now() - startMs) / 1000);
             if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
-            _showOptLoader('Finding best params…', `${elapsed}s elapsed`);
+            _showOptLoader('Finding best params…', stage ? `${stage} · ${elapsed}s elapsed` : `${elapsed}s elapsed`);
             if (Date.now() - startMs > MAX_WAIT_MS) {
-                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                window.showNotification('Still running on the server — click Find Best Params again to rejoin it', 'error');
                 if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
                 _hideOptLoader();
                 return;
@@ -4991,7 +4997,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(r => r.json())
                 .then(data => {
                     if (myRun !== _scOptRun) return;
-                    if (data.status === 'running') { setTimeout(tick, 2000); return; }
+                    if (data.status === 'running') { stage = data.stage || ''; setTimeout(tick, 2000); return; }
                     _scOptAbort = null;
                     if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
                     _hideOptLoader();

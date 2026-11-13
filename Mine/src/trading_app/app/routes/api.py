@@ -3938,6 +3938,34 @@ def _sc_refine_30s(symbol, priced):
     return out, counts
 
 
+def _sc_price_real(symbol, interval, trades, index_minutes, sessions, cap, progress=None):
+    """Candle Breakout index trades priced on REAL option candles — the one path
+    the BACKTEST and the Find Best Params board both book through, so a board
+    row and a backtest of its settings agree to the rupee. Returns (priced,
+    info, notes): price_trades on 1-minute candles, then on a 30-second run the
+    crossing-second re-read (_sc_refine_30s)."""
+    from trading_app.Backtest.second_candle_options import price_trades
+    span_min = _SC_MIN_TF.get(interval, 1)
+    priced, info = price_trades(symbol, trades, span_min, index_minutes,
+                                calendar=sessions, max_legs=cap, progress=progress)
+    notes = []
+    if interval == '30second' and priced:
+        priced, counts = _sc_refine_30s(symbol, priced)
+        if counts['minute'] or counts['bar']:
+            notes.append(
+                f"Premiums of {counts['second']} of {len(priced)} legs read at the second "
+                f"the index crossed the level; {counts['bar']} on the option's 30-second "
+                f"bar (no index seconds) and {counts['minute']} on 1-minute candles "
+                f"(no ICICI 1-second option data).")
+    if info['unpriced'] or info['truncated']:
+        notes.append(
+            f"{info['index_trades']} index trades: {info['unpriced']} had no option "
+            f"candles and {info['truncated']} older ones were not priced "
+            f"(at most {cap} a run{' in market hours' if cap < _SC_OPTION_LEGS_MAX else ''}); "
+            f"they are left out of the totals.")
+    return priced, info, notes
+
+
 # Candle Breakout option legs priced per run. Each leg probes a few strikes,
 # one Breeze request each (disk-cached once the session has settled), out of the
 # 5,000/day the live algos share — so in market hours a run prices only its
@@ -4114,8 +4142,6 @@ def run_second_candle_backtest_api():
         # Real premiums: one Breeze request per strike probed per contract-day
         # (disk-cached once settled), paced app-wide — minutes when cold, so it
         # runs in the background and the page polls /backtest/st-bb-rsi/status.
-        from trading_app.Backtest.second_candle_options import price_trades
-        span_min = _MIN_TF.get(interval, 1)
         sessions = sorted({pd.Timestamp(str(c['date'])).date() for c in candles})
         cap = _sc_option_leg_cap()
         task_id = uuid.uuid4().hex
@@ -4128,26 +4154,11 @@ def run_second_candle_backtest_api():
             def _progress(done, total):
                 task['progress'] = {'done': done, 'total': total}
             try:
-                priced, info = price_trades(symbol, trades, span_min, index_minutes,
-                                            calendar=sessions, max_legs=cap,
-                                            progress=_progress)
-                notes = []
-                if interval == '30second' and priced:
-                    # Same-minute in-and-out reads one 1-minute candle twice
-                    # (Opt P&L 0.00): re-read both premiums on 30-second bars.
-                    priced, counts = _sc_refine_30s(symbol, priced)
-                    if counts['minute'] or counts['bar']:
-                        notes.append(
-                            f"Premiums of {counts['second']} of {len(priced)} legs read at the second "
-                            f"the index crossed the level; {counts['bar']} on the option's 30-second "
-                            f"bar (no index seconds) and {counts['minute']} on 1-minute candles "
-                            f"(no ICICI 1-second option data).")
-                if info['unpriced'] or info['truncated']:
-                    notes.append(
-                        f"{info['index_trades']} index trades: {info['unpriced']} had no option "
-                        f"candles and {info['truncated']} older ones were not priced "
-                        f"(at most {cap} a run{' in market hours' if cap < _SC_OPTION_LEGS_MAX else ''}); "
-                        f"they are left out of the totals.")
+                # Same-minute in-and-out reads one 1-minute candle twice (Opt
+                # P&L 0.00), so a 30-second run re-reads both premiums at the
+                # second the index crossed — inside _sc_price_real.
+                priced, info, notes = _sc_price_real(symbol, interval, trades, index_minutes,
+                                                     sessions, cap, progress=_progress)
                 if warning:
                     notes.append(warning)
                 task['payload'] = _payload(priced, _sc_mod._summary(priced),
@@ -4166,6 +4177,88 @@ def run_second_candle_backtest_api():
     except Exception as e:
         logger.error(f"Error in 2nd Candle backtest API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _sc_opt_progress(task_id, stage):
+    """What a running board is doing, for the page's loader."""
+    with _sc_opt_tasks_lock:
+        t = _sc_opt_tasks.get(task_id)
+        if t is not None and t.get('status') == 'running':
+            t['stage'] = stage
+
+
+# Find Best Params on OPT P&L: the 30-second board's combos (by the
+# Black-Scholes model) re-booked on real premiums before its top 10 are kept.
+# Only the 30-second board: it is the live algo's timeframe and ~330 sessions,
+# mostly priced already by BACKTEST runs. The minute boards reach back to 2017
+# (~2,000 trades a row): on 2026-11-12 pricing 15 of their rows ran past the
+# page's 10-minute wait without finishing the 1-minute board.
+_SC_REAL_SHORTLIST = 10
+_SC_REAL_INTERVALS = ('30second',)
+
+
+def _sc_trade_key(t):
+    return (t['entry_time'], t.get('type'), t['entry_price'], t['exit_time'],
+            t['exit_price'], t.get('exit_reason'))
+
+
+def _sc_rows_on_real_premiums(symbol, rows, candles, interval, index_minutes,
+                              exit_hour=15, exit_minute=25, progress=None):
+    """Each board row re-run as a BACKTEST of its settings: the engine on the
+    same bars, its trades priced by _sc_price_real, the totals by the engine's
+    own _summary — so Trades, Win %, Opt/Index P&L and Max DD are the numbers a
+    BACKTEST of that row shows. Until 2026-11-12 the board ranked on the model
+    (15 % IV) and counted unpriced trades: the 30s leader read 323 trades /
+    +1,572 pts where its backtest read 312 / +1,385.
+
+    Rows share most of their trades (same entries, different targets), so every
+    distinct trade is priced once and each row is assembled from those legs —
+    the newest `cap` of its own trades, as BACKTEST truncates."""
+    import pandas as pd
+    from trading_app.Backtest import second_candle_engine as sce
+    if not rows:
+        return []
+    df = pd.DataFrame(candles)
+    sessions = sorted({pd.Timestamp(str(c['date'])).date() for c in candles})
+    cap = _sc_option_leg_cap()
+    per_row, union = [], {}
+    for r in rows:
+        el = r['direction'] in ('both', 'long')
+        es = r['direction'] in ('both', 'short')
+        trades, _ = sce.SecondCandleBacktestEngine(
+            df=df, candle_index=r['candle_index'], rr_ratio=r['rr_ratio'],
+            exit_hour=exit_hour, exit_minute=exit_minute,
+            enable_long=el, enable_short=es, option_pnl=False,
+            strike_step=_opt_strike_step(symbol)).run()
+        work = trades[-cap:] if cap else trades
+        per_row.append((r, trades, work))
+        for t in work:
+            union.setdefault(_sc_trade_key(t), t)
+    todo = sorted(union.values(), key=lambda t: t['entry_time'])
+    if not todo:
+        return []
+    try:
+        priced, _, _ = _sc_price_real(symbol, interval, todo, index_minutes, sessions,
+                                      len(todo), progress=progress)
+    except Exception as e:                 # no ICICI login / Breeze down
+        logger.warning('[2ndCandle OPT] real premiums unavailable (%s) — %s board '
+                       'stays on the model', e, interval)
+        return rows
+    legs = {_sc_trade_key(t): t for t in priced}
+    out = []
+    for r, trades, work in per_row:
+        got = [legs[k] for k in map(_sc_trade_key, work) if k in legs]
+        if not got:
+            continue
+        s = sce._summary(got)
+        out.append(dict(
+            r, total_trades=s['total_trades'], wins=s['wins'], losses=s['losses'],
+            win_rate=s['win_rate'], total_pnl=s['total_pnl'], option_pnl=s['total_pnl'],
+            profit_factor=s['profit_factor'], max_drawdown=s['max_drawdown'],
+            avg_win=s['avg_win'], avg_loss=s['avg_loss'],
+            index_pnl=round(sum(t.get('index_pnl', 0) or 0 for t in got), 2),
+            unpriced=len(trades) - len(got), option_source='recorded'))
+    return out
 
 
 @api_bp.route('/backtest/second-candle/optimise', methods=['POST'], strict_slashes=False)
@@ -4210,7 +4303,7 @@ def run_second_candle_optimise():
             f30, l30, n30 = seconds_store.span(symbol)
             return (f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}"
                     f"_{start_date_str}_{end_date_str}_{seconds_store.last_settled_day()}"
-                    f"_30s{f30}-{l30}-{n30}_v5")
+                    f"_30s{f30}-{l30}-{n30}_v7")
         cache_key = _board_key()
 
         # ── Serve from cache unless caller asked to recalculate ──────────────
@@ -4241,12 +4334,20 @@ def run_second_candle_optimise():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        task_id = str(uuid.uuid4())
+        # One run per board: a second click (or a page that gave up waiting
+        # and asked again) joins the run already going instead of starting a
+        # parallel one that spends the same Breeze requests twice.
+        with _sc_opt_tasks_lock:
+            for tid, t in _sc_opt_tasks.items():
+                if t.get('status') == 'running' and t.get('key') == cache_key:
+                    return jsonify({'success': True, 'task_id': tid, 'status': 'running',
+                                    'joined': True})
+            task_id = str(uuid.uuid4())
+            _sc_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time(),
+                                      'key': cache_key}
         # Read in the request thread: _run() has no request context, and the
         # Fyers-first 30-second fetch resolves that user's broker credentials.
         opt_user = session.get('username')
-        with _sc_opt_tasks_lock:
-            _sc_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
 
         def _run():
             try:
@@ -4262,7 +4363,7 @@ def run_second_candle_optimise():
                 tf_groups     = []   # one leaderboard per timeframe
                 combos_tested = 0
 
-                def _sweep(candles, interval_str, tf_label, tf_min):
+                def _sweep(candles, interval_str, tf_label, tf_min, index_minutes=None):
                     """Run the full 2nd-candle sweep on one timeframe, keep its top 10."""
                     nonlocal combos_tested
                     if not candles:
@@ -4273,6 +4374,20 @@ def run_second_candle_optimise():
                         option_pnl=option_pnl, strike_step=_opt_strike_step(symbol),
                     )
                     combos_tested += grid_size
+                    real = option_pnl and interval_str in _SC_REAL_INTERVALS
+                    if real:
+                        # The model only shortlists; the shortlist is booked on
+                        # real premiums exactly as BACKTEST books it.
+                        shortlist = sorted(tf_results, key=lambda r: r.get('total_pnl', 0),
+                                           reverse=True)[:_SC_REAL_SHORTLIST]
+
+                        def _progress(done, total):
+                            _sc_opt_progress(task_id, f'{tf_label}: pricing real option '
+                                                      f'candles — {done:,}/{total:,} legs')
+                        _sc_opt_progress(task_id, f'{tf_label}: pricing real option candles…')
+                        tf_results = _sc_rows_on_real_premiums(
+                            symbol, shortlist, candles, interval_str, index_minutes,
+                            exit_hour, exit_minute, progress=_progress)
                     for r in tf_results:
                         r['tf_label'] = tf_label
                         r['interval'] = interval_str
@@ -4289,6 +4404,10 @@ def run_second_candle_optimise():
                         'tf_label': tf_label,
                         'tf_min':   tf_min,
                         'interval': interval_str,
+                        # 'recorded' = booked on real option candles, as BACKTEST;
+                        # 'model' = Black-Scholes (the minute boards on OPT P&L).
+                        'option_source': (('recorded' if real else 'model')
+                                          if option_pnl else None),
                         'total':    len(tf_results),
                         'results':  top_by_pnl,
                     })
@@ -4311,12 +4430,14 @@ def run_second_candle_optimise():
                     (1, 'minute', '1m'), (2, '2minute', '2m'),
                     (3, '3minute', '3m'), (5, '5minute', '5m'),
                 ]:
+                    _sc_opt_progress(task_id, f'Sweeping {tf_label}…')
                     try:
                         if minutes_df is None or minutes_df.empty:
                             _sweep([], interval_str, tf_label, minutes)
                             continue
                         bars_df, _ = _sbr_bars(minutes_df, interval_str, start_date_str)
-                        _sweep(bars_df.to_dict('records'), interval_str, tf_label, minutes)
+                        _sweep(bars_df.to_dict('records'), interval_str, tf_label, minutes,
+                               index_minutes=minutes_df)
                         logger.info("[2ndCandle OPT] %s %s swept (%d bars), %.1fs into the run",
                                     symbol, tf_label, len(bars_df), _time.time() - t0)
                     except Exception as tf_exc:
@@ -4358,10 +4479,11 @@ def run_second_candle_optimise():
                     'total_combos_tested': combos_tested,
                     'best':               best_overall,
                     'timeframes':         tf_groups,
-                    # 'option_model': premiums from the engine's Black-Scholes
-                    # model — real premiums for every combo would be tens of
-                    # thousands of Breeze requests; a single BACKTEST reads them.
-                    'pnl_basis':          'option_model' if option_pnl else 'index',
+                    # 'option': each timeframe's shortlist (Black-Scholes
+                    # picks it — real premiums for all 300 combos would be tens
+                    # of thousands of Breeze requests) booked on REAL premiums,
+                    # through the backtest's own path.
+                    'pnl_basis':          'option' if option_pnl else 'index',
                     'cached_at':          datetime.now().strftime('%Y-%m-%d %H:%M'),
                 }
 
@@ -4398,7 +4520,8 @@ def run_second_candle_optimise_status(task_id):
     if not task:
         return jsonify({'success': False, 'error': 'Task not found'}), 404
     if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running'})
+        return jsonify({'success': True, 'status': 'running', 'stage': task.get('stage'),
+                        'elapsed': round(_time.time() - task.get('started_at', _time.time()))})
     if task['status'] == 'error':
         return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
     return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
