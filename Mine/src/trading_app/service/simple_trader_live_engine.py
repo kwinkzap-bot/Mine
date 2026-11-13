@@ -112,7 +112,7 @@ SPECS: Dict[int, Spec] = {s.n: s for s in (
     Spec(8, 'ST Touch Break', StTouchBreakEngine, 'tb', 'NIFTY', 'spot', 3, 'long', 250, '10:00',
          0, 0, 0, 5,
          dict(st_period=7, st_mult=1.5, stop_touch=1, min_wick_pct=40.0, min_body_pct=50.0, touch_tol_pct=0.0),
-         fixed=dict(direction='both', outside_bar='close'),
+         fixed=dict(direction='both', outside_bar='close', exit_cutoff='15:15'),
          rule='NIFTY 3-min from 10:00: a candle whose wick (≥ 40 % of its range) touches the SuperTrend(7,1.5) line and closes'
               ' on the trend side arms the next candle; if that candle breaks the touch high (low) and closes the way it broke'
               ' with a body ≥ 50 % of its range (an outside bar goes the way it closes) the ≈250 CE (PE) is bought at its close'
@@ -154,12 +154,12 @@ def _touch_break(n, tab, bar, st_period, st_mult, modes, stop_touch, min_wick, t
 #   n   tab                          bar len fac  setups     stop wick tol body outside from     until    sq-off  /day dir
 for _sp in (
     _touch_break(9,  'NIFTY - Sell - 5m - #15', 5,  10, 2.5, 'through', 1, 25, 0, 0,  'first', '09:15', '14:30', '15:00', 5, 'short'),
-    _touch_break(10, 'NIFTY - Sell - 5m - #9',  5,  14, 2,   'bounce',  1, 0,  0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
-    _touch_break(11, 'NIFTY - Sell - 5m - #8',  5,  14, 2,   'bounce',  1, 25, 0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
+    _touch_break(10, 'NIFTY - Sell - 5m - #9',  5,  14, 2,   'bounce',  1, 0,  0, 25, 'close', '10:30', '14:30', '15:15', 5, 'short'),
+    _touch_break(11, 'NIFTY - Sell - 5m - #8',  5,  14, 2,   'bounce',  1, 25, 0, 25, 'close', '10:30', '14:30', '15:15', 5, 'short'),
     _touch_break(12, 'NIFTY - Sell - 3m - #6',  3,  7,  3,   'both',    1, 0,  0, 50, 'first', '10:00', '13:00', '15:00', 5, 'short'),
     _touch_break(13, 'NIFTY - Sell - 3m - #2',  3,  7,  3,   'both',    1, 0,  0, 50, 'first', '10:30', '13:00', '15:00', 5, 'short'),
-    _touch_break(14, 'NIFTY - Buy - 3m - #8',   3,  14, 3,   'through', 0, 25, 0, 0,  'first', '10:30', '15:14', '15:14', 1, 'long'),
-    _touch_break(15, 'NIFTY - Buy - 5m - #2',   5,  10, 2,   'bounce',  1, 40, 0, 50, 'first', '09:30', '15:14', '15:14', 1, 'long'),
+    _touch_break(14, 'NIFTY - Buy - 3m - #8',   3,  14, 3,   'through', 0, 25, 0, 0,  'first', '10:30', '15:14', '15:15', 1, 'long'),
+    _touch_break(15, 'NIFTY - Buy - 5m - #2',   5,  10, 2,   'bounce',  1, 40, 0, 50, 'first', '09:30', '15:14', '15:15', 1, 'long'),
 ):
     SPECS[_sp.n] = _sp
 

@@ -82,7 +82,7 @@ def build(df: pd.DataFrame, data: Dict[str, Any], minutes: Optional[pd.DataFrame
         modes=str(data.get('modes', 'both')), direction=str(data.get('direction', 'both')),
         stop_mode=str(data.get('stop_mode', 'close')), outside_bar=str(data.get('outside_bar', 'close')),
         entry_start=data.get('entry_start', '09:15'), entry_end=data.get('entry_end', '15:14'),
-        exit_cutoff=data.get('exit_cutoff', '15:14'),
+        exit_cutoff=data.get('exit_cutoff', '15:15'),
         max_trades_per_day=int(_f(data, 'max_trades_per_day', 5)),
         minutes=minutes, bar_minutes=bar_minutes)
 

@@ -26,7 +26,7 @@ Two entries read off the user's NIFTY 3-minute screenshots of 27 Oct 2026, Super
            the direction flips against the trade, exits at that close. `stop_mode='touch'`
            exits intrabar instead, at the previous candle's line. A trade whose entry candle
            does not close on the right side of the line is out at that same close.
-  Exit     Only the stop, or the `exit_cutoff` square-off (default 15:14). There is no
+  Exit     Only the stop, or the `exit_cutoff` square-off (default 15:15). There is no
            target: the trade rides the SuperTrend.
 
 `min_wick_pct` (share of the touch candle's range that is wick on the line's side) and
@@ -65,7 +65,7 @@ class StTouchBreakEngine:
                  touch_tol_pct: float = 0.0, min_wick_pct: float = 0.0, min_body_pct: float = 0.0,
                  modes: str = 'both', direction: str = 'both', stop_mode: str = 'close',
                  entry_start: str = '09:15', entry_end: str = '15:14',
-                 exit_cutoff: str = '15:14', max_trades_per_day: int = 5,
+                 exit_cutoff: str = '15:15', max_trades_per_day: int = 5,
                  minutes: Optional[pd.DataFrame] = None, bar_minutes: int = 3,
                  outside_bar: str = 'close'):
         self.df = df.copy()
@@ -87,7 +87,7 @@ class StTouchBreakEngine:
         self.stop_mode = stop_mode if stop_mode in ('close', 'touch') else 'close'
         self.entry_start = _parse_hhmm(entry_start, 9 * 60 + 15)
         self.entry_end = _parse_hhmm(entry_end, 15 * 60 + 14)
-        self.exit_cutoff = _parse_hhmm(exit_cutoff, 15 * 60 + 14)
+        self.exit_cutoff = _parse_hhmm(exit_cutoff, 15 * 60 + 15)
         self.max_trades_per_day = int(max_trades_per_day) if max_trades_per_day and int(max_trades_per_day) > 0 else 999
         self._prepare()
 

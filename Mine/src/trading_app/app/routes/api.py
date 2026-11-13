@@ -6338,7 +6338,7 @@ def run_st_touch_break_backtest_api():
             modes=str(data.get('modes', 'both')), direction=str(data.get('direction', 'both')),
             stop_mode=str(data.get('stop_mode', 'close')), outside_bar=str(data.get('outside_bar', 'close')),
             entry_start=data.get('entry_start', '09:15'), entry_end=data.get('entry_end', '15:14'),
-            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:15'),
             max_trades_per_day=int(_f('max_trades_per_day', 5)),
             minutes=minutes, bar_minutes=minutes_per_bar,
         )
@@ -6477,7 +6477,7 @@ def st_touch_break_chart_api():
             direction=str(data.get('direction', 'long')), stop_mode=str(data.get('stop_mode', 'close')),
             outside_bar=str(data.get('outside_bar', 'close')),
             entry_start=data.get('entry_start', '09:15'), entry_end=data.get('entry_end', '15:14'),
-            exit_cutoff=data.get('exit_cutoff', '15:14'),
+            exit_cutoff=data.get('exit_cutoff', '15:15'),
             max_trades_per_day=int(_f('max_trades_per_day', 5)), minutes=minutes, bar_minutes=step)
         trades, _ = engine.run()
         trades = [t for t in trades if t['entry_time'][:10] >= start_str]

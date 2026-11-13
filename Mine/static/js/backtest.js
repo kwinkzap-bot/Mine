@@ -1300,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', function() {
             st_period: num('stbStLen', 10), st_mult: num('stbStFactor', 2),
             touch_tol_pct: num('stbTouchTol', 0), min_wick_pct: num('stbMinWick', 0), min_body_pct: num('stbMinBody', 0),
             entry_start: val('stbEntryStart', '09:15'), entry_end: val('stbEntryEnd', '15:14'),
-            exit_cutoff: val('stbExitCutoff', '15:14'), max_trades_per_day: num('stbMaxTrades', 5) };
+            exit_cutoff: val('stbExitCutoff', '15:15'), max_trades_per_day: num('stbMaxTrades', 5) };
         if (date) body.date = date;
         if (info) info.textContent = 'Loading ' + sym + ' candles…';
         let j;
@@ -2115,7 +2115,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.min_body_pct   = tbn('stbMinBody', 0);
                 payload.entry_start    = tbv('stbEntryStart', '09:15');
                 payload.entry_end      = tbv('stbEntryEnd', '15:14');
-                payload.exit_cutoff    = tbv('stbExitCutoff', '15:14');
+                payload.exit_cutoff    = tbv('stbExitCutoff', '15:15');
                 payload.max_trades_per_day = tbn('stbMaxTrades', 5);
                 payload.premium        = parseFloat(tbv('stbPremium', 250));
                 payload.price_options  = document.getElementById('stbPriceOptions')?.checked ?? true;

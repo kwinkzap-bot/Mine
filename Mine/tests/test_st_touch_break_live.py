@@ -391,12 +391,12 @@ from trading_app.service import simple_trader_live_engine as sim               #
 #     square-off, max trades, direction) — the saved rows' own order
 MINE_ROWS = {
     9:  ('NIFTY - Sell - 5m - #15', 5, 10, 2.5, 'through', 1, 25, 0, 0,  'first', '09:15', '14:30', '15:00', 5, 'short'),
-    10: ('NIFTY - Sell - 5m - #9',  5, 14, 2,   'bounce',  1, 0,  0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
-    11: ('NIFTY - Sell - 5m - #8',  5, 14, 2,   'bounce',  1, 25, 0, 25, 'close', '10:30', '14:30', '15:14', 5, 'short'),
+    10: ('NIFTY - Sell - 5m - #9',  5, 14, 2,   'bounce',  1, 0,  0, 25, 'close', '10:30', '14:30', '15:15', 5, 'short'),
+    11: ('NIFTY - Sell - 5m - #8',  5, 14, 2,   'bounce',  1, 25, 0, 25, 'close', '10:30', '14:30', '15:15', 5, 'short'),
     12: ('NIFTY - Sell - 3m - #6',  3, 7,  3,   'both',    1, 0,  0, 50, 'first', '10:00', '13:00', '15:00', 5, 'short'),
     13: ('NIFTY - Sell - 3m - #2',  3, 7,  3,   'both',    1, 0,  0, 50, 'first', '10:30', '13:00', '15:00', 5, 'short'),
-    14: ('NIFTY - Buy - 3m - #8',   3, 14, 3,   'through', 0, 25, 0, 0,  'first', '10:30', '15:14', '15:14', 1, 'long'),
-    15: ('NIFTY - Buy - 5m - #2',   5, 10, 2,   'bounce',  1, 40, 0, 50, 'first', '09:30', '15:14', '15:14', 1, 'long'),
+    14: ('NIFTY - Buy - 3m - #8',   3, 14, 3,   'through', 0, 25, 0, 0,  'first', '10:30', '15:14', '15:15', 1, 'long'),
+    15: ('NIFTY - Buy - 5m - #2',   5, 10, 2,   'bounce',  1, 40, 0, 50, 'first', '09:30', '15:14', '15:15', 1, 'long'),
 }
 
 
