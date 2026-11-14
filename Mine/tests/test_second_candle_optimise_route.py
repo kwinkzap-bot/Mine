@@ -64,6 +64,10 @@ def _fake_price_real(symbol, interval, trades, index_minutes, sessions, cap, pro
     index move + 1 — decided per trade, whatever batch it is priced in.
     Nothing here can reach Breeze."""
     _fake_price_real.calls.append(len(trades))
+    # As the real pricer (attach_option_legs): one call keeps only its newest
+    # MAX_OPTION_LEGS trades.
+    from trading_app.Backtest.st_bb_rsi_engine import MAX_OPTION_LEGS
+    trades = trades[-MAX_OPTION_LEGS:]
     priced = []
     for t in trades:
         if int(t['entry_time'][8:10]) % 3 == 0:
@@ -418,3 +422,49 @@ def test_a_second_click_joins_the_board_already_running(env, monkeypatch):
     assert second['task_id'] == first['task_id'] and second.get('joined')
     gate.set()
     assert _finish(client, first['task_id'])['success']
+
+
+def test_a_30s_row_is_not_cut_by_the_pricers_ceiling(env, monkeypatch):
+    """The board prices the union of its rows' trades, which runs past the
+    pricer's per-call ceiling (3,000) on a real board: until 2026-11-14 every
+    30s row lost its oldest trades that way (482 on the board, 616 in a
+    BACKTEST of the same row). With the ceiling below the union but above one
+    row, each row still equals its own OPT P&L backtest."""
+    from trading_app.Backtest import st_bb_rsi_engine
+    client, _, _, _ = env
+    rng = {'symbol': 'NIFTY', 'start_date': '2026-10-01', 'end_date': '2026-10-12',
+           'exit_hour': 15, 'exit_minute': 25}
+
+    def backtest(row):
+        d = row['direction']
+        task = client.post('/api/backtest/second-candle', json=dict(
+            rng, interval=row['interval'], candle_index=row['candle_index'],
+            rr_ratio=row['rr_ratio'], enable_long=d != 'short', enable_short=d != 'long',
+            option_pnl=True)).get_json()
+        for _ in range(300):
+            st = client.get(f"/api/backtest/st-bb-rsi/status/{task['task_id']}").get_json()
+            if st['status'] != 'running':
+                return st
+            time.sleep(0.02)
+
+    _fake_price_real.calls.clear()
+    r = client.post('/api/backtest/second-candle/optimise',
+                    json=dict(rng, recalculate=True, option_pnl=True))
+    rows = next(g for g in _finish(client, r.get_json()['task_id'])['timeframes']
+                if g['tf_label'] == '30s')['results']
+    union = _fake_price_real.calls[0]
+    widest = max(len(backtest(row)['trades']) + row['unpriced'] for row in rows)
+    assert widest < union
+    monkeypatch.setattr(st_bb_rsi_engine, 'MAX_OPTION_LEGS', widest)
+
+    _fake_price_real.calls.clear()
+    r = client.post('/api/backtest/second-candle/optimise',
+                    json=dict(rng, recalculate=True, option_pnl=True))
+    rows = next(g for g in _finish(client, r.get_json()['task_id'])['timeframes']
+                if g['tf_label'] == '30s')['results']
+    assert len(_fake_price_real.calls) > 1          # priced in chunks
+    for row in rows:
+        s = backtest(row)['summary']
+        assert (s['total_trades'], s['win_rate'], s['max_drawdown']) == \
+               (row['total_trades'], row['win_rate'], row['max_drawdown'])
+        assert s['total_pnl'] == pytest.approx(row['total_pnl'], abs=0.01)

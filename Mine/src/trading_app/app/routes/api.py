@@ -4237,9 +4237,21 @@ def _sc_rows_on_real_premiums(symbol, rows, candles, interval, index_minutes,
     todo = sorted(union.values(), key=lambda t: t['entry_time'])
     if not todo:
         return []
+    # Priced in chunks: the shared pricer (attach_option_legs) keeps only the
+    # newest MAX_OPTION_LEGS of one call, and ten rows' union runs past that —
+    # until 2026-11-14 every 30s row lost its OLDEST ~145 trades that way (482
+    # trades on the board where a BACKTEST of the row read 616).
+    from trading_app.Backtest.st_bb_rsi_engine import MAX_OPTION_LEGS
     try:
-        priced, _, _ = _sc_price_real(symbol, interval, todo, index_minutes, sessions,
-                                      len(todo), progress=progress)
+        priced = []
+        for i in range(0, len(todo), MAX_OPTION_LEGS):
+            chunk = todo[i:i + MAX_OPTION_LEGS]
+            done_before = i
+            prog = (None if progress is None else
+                    (lambda d, t, _o=done_before: progress(_o + d, len(todo))))
+            got, _, _ = _sc_price_real(symbol, interval, chunk, index_minutes, sessions,
+                                       len(chunk), progress=prog)
+            priced.extend(got)
     except Exception as e:                 # no ICICI login / Breeze down
         logger.warning('[2ndCandle OPT] real premiums unavailable (%s) — %s board '
                        'stays on the model', e, interval)
