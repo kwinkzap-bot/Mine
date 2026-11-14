@@ -64,6 +64,7 @@ def _fake_price_real(symbol, interval, trades, index_minutes, sessions, cap, pro
     index move + 1 — decided per trade, whatever batch it is priced in.
     Nothing here can reach Breeze."""
     _fake_price_real.calls.append(len(trades))
+    _fake_price_real.by_interval.setdefault(interval, []).append(len(trades))
     # As the real pricer (attach_option_legs): one call keeps only its newest
     # MAX_OPTION_LEGS trades.
     from trading_app.Backtest.st_bb_rsi_engine import MAX_OPTION_LEGS
@@ -83,6 +84,7 @@ def _fake_price_real(symbol, interval, trades, index_minutes, sessions, cap, pro
 
 
 _fake_price_real.calls = []
+_fake_price_real.by_interval = {}
 
 
 @pytest.fixture
@@ -209,8 +211,8 @@ def test_a_board_row_and_a_backtest_of_it_book_the_same_trades(env, tf, option_p
             option_pnl=False)).get_json()
         assert bt['success'], bt
         if option_pnl:
-            assert group['option_source'] == ('recorded' if tf == '30s' else 'model')
-        if not option_pnl or tf != '30s':
+            assert group['option_source'] == 'recorded'
+        if not option_pnl:
             assert bt['summary']['total_trades'] == row['total_trades']
             assert bt['summary']['total_pnl'] == pytest.approx(row['index_pnl'], abs=0.05)
             continue
@@ -393,8 +395,9 @@ def test_the_scheduler_job_restarts_the_backfill_each_day(monkeypatch):
 
 
 def test_the_30s_board_prices_each_distinct_trade_once(env):
-    """Rows share entries; the board prices the union of their trades in one
-    call, not one call per row (15 calls per board ran past 10 minutes)."""
+    """Rows share entries; each timeframe's board prices the union of its rows'
+    trades in one call, not one call per row (15 calls per board ran past 10
+    minutes)."""
     client, _, _, _ = env
     _fake_price_real.calls.clear()
     r = client.post('/api/backtest/second-candle/optimise', json={
@@ -402,7 +405,8 @@ def test_the_30s_board_prices_each_distinct_trade_once(env):
         'recalculate': True, 'option_pnl': True})
     board = _finish(client, r.get_json()['task_id'])
     assert board['success']
-    assert len(_fake_price_real.calls) == 1
+    # one call per timeframe board (30s and 1/2/3/5-minute), never one per row
+    assert len(_fake_price_real.calls) == 5
 
 
 def test_a_second_click_joins_the_board_already_running(env, monkeypatch):
@@ -447,22 +451,22 @@ def test_a_30s_row_is_not_cut_by_the_pricers_ceiling(env, monkeypatch):
                 return st
             time.sleep(0.02)
 
-    _fake_price_real.calls.clear()
+    _fake_price_real.by_interval.clear()
     r = client.post('/api/backtest/second-candle/optimise',
                     json=dict(rng, recalculate=True, option_pnl=True))
     rows = next(g for g in _finish(client, r.get_json()['task_id'])['timeframes']
                 if g['tf_label'] == '30s')['results']
-    union = _fake_price_real.calls[0]
+    union = _fake_price_real.by_interval['30second'][0]
     widest = max(len(backtest(row)['trades']) + row['unpriced'] for row in rows)
     assert widest < union
     monkeypatch.setattr(st_bb_rsi_engine, 'MAX_OPTION_LEGS', widest)
 
-    _fake_price_real.calls.clear()
+    _fake_price_real.by_interval.clear()
     r = client.post('/api/backtest/second-candle/optimise',
                     json=dict(rng, recalculate=True, option_pnl=True))
     rows = next(g for g in _finish(client, r.get_json()['task_id'])['timeframes']
                 if g['tf_label'] == '30s')['results']
-    assert len(_fake_price_real.calls) > 1          # priced in chunks
+    assert len(_fake_price_real.by_interval['30second']) > 1     # priced in chunks
     for row in rows:
         s = backtest(row)['summary']
         assert (s['total_trades'], s['win_rate'], s['max_drawdown']) == \

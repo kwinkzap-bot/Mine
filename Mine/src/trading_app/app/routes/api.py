@@ -4187,14 +4187,17 @@ def _sc_opt_progress(task_id, stage):
             t['stage'] = stage
 
 
-# Find Best Params on OPT P&L: the 30-second board's combos (by the
-# Black-Scholes model) re-booked on real premiums before its top 10 are kept.
-# Only the 30-second board: it is the live algo's timeframe and ~330 sessions,
-# mostly priced already by BACKTEST runs. The minute boards reach back to 2017
-# (~2,000 trades a row): on 2026-11-12 pricing 15 of their rows ran past the
-# page's 10-minute wait without finishing the 1-minute board.
+# Find Best Params on OPT P&L: every timeframe's combos (by the Black-Scholes
+# model) shortlisted, and the shortlist re-booked on real premiums before its
+# top 10 are kept — so every row is what a BACKTEST of it shows. Until
+# 2026-11-14 only the 30-second board was: the minute boards reach back to 2017
+# (~2,000 trades a row) and on 2026-11-12 pricing 15 of their rows ran past the
+# page's then 10-minute wait. The option-minute cache now holds ~51k NIFTY
+# contract-days (2019-26), the rows of one board share most of their legs (one
+# trade a day) and the timeframes share contract-days, so a warm board is
+# minutes; the page waits 30 and a re-click rejoins the run.
 _SC_REAL_SHORTLIST = 10
-_SC_REAL_INTERVALS = ('30second',)
+_SC_REAL_INTERVALS = ('30second', 'minute', '2minute', '3minute', '5minute')
 
 
 def _sc_trade_key(t):
@@ -4311,11 +4314,14 @@ def run_second_candle_optimise():
             # disk — so it can never answer for bars a BACKTEST would not run
             # on. Until 2026-11-11 it was symbol + cut-off + basis only: a board
             # built for one range was served for any other.
+            # v8 (2026-11-14): every timeframe on real premiums, and the leg
+            # cap in the key — a row prices its newest `cap` trades as BACKTEST
+            # does, and that cap is 300 in market hours, 3,000 after.
             from trading_app.Backtest import seconds_store
             f30, l30, n30 = seconds_store.span(symbol)
             return (f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}"
                     f"_{start_date_str}_{end_date_str}_{seconds_store.last_settled_day()}"
-                    f"_30s{f30}-{l30}-{n30}_v7")
+                    f"_30s{f30}-{l30}-{n30}_cap{_sc_option_leg_cap()}_v8")
         cache_key = _board_key()
 
         # ── Serve from cache unless caller asked to recalculate ──────────────
@@ -4459,7 +4465,9 @@ def run_second_candle_optimise():
                     sec_candles, _, sec_note = _sc_bars(symbol, '30second', start_date_str,
                                                         end_date_str, fyers, backfill=True,
                                                         user=opt_user)
-                    _sweep(sec_candles, '30second', '30s', 0.5)
+                    # The index minutes too, as the BACKTEST's OPT P&L run has them
+                    # (they place each leg's read inside its minute).
+                    _sweep(sec_candles, '30second', '30s', 0.5, index_minutes=minutes_df)
                     if sec_candles:
                         # Which sessions the 30s board covers — the backtest's own
                         # 30-second run reads exactly these.

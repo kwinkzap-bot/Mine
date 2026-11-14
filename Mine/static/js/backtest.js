@@ -5100,7 +5100,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
             meta += data.pnl_basis === 'option'
-                ? ' · ranked on option P&L · 30s rows booked on REAL option candles, as BACKTEST books them; 1m–5m rows on modelled premiums (Black-Scholes) — BACKTEST a row for its real candles'
+                ? ' · ranked on option P&L · every row booked on REAL option candles, as BACKTEST books it (the model only shortlists)'
                 : ` · ranked on ${isOpt ? 'option' : 'index'} P&L · option premiums modelled (Black-Scholes) — USE a row, tick OPT P&L and BACKTEST for real option candles`;
             if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
             metaEl.textContent = meta;
