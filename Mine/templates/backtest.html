@@ -37,8 +37,9 @@
                 <option value="ema_pullback">📉 EMA Confluence Breakout</option>
                 <option value="hilega_milega">🌀 Hilega Milega (RSI + VWMA)</option>
                 <option value="ma_htf">📈 MA Cross + HTF</option>
+                <option value="hull_suite" selected>〰️ Hull Suite (HMA 200 / 100 / 50 break)</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
-                <option value="monthly_rsi_breakout" selected>🗓️ RSI Breakout — Day / Week / Month (Stocks, EMA exit)</option>
+                <option value="monthly_rsi_breakout">🗓️ RSI Breakout — Day / Week / Month (Stocks, EMA exit)</option>
                 <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
                 <option value="st_ema_rsi_cci">🎓 2. ST EMA RSI CCI WR CPR BB + SL (Quantman PE)</option>
                 <option value="st_rsi_pp_bb">🎓 3. ST RSI PP BB + SL (Quantman CE)</option>
@@ -801,6 +802,125 @@
                 <div class="form-group">
                     <label for="mhMaxTrades">Max Entries / Day</label>
                     <input type="number" id="mhMaxTrades" value="2" min="1" max="10" step="1">
+                </div>
+                </fieldset>
+            </div>
+
+            <!-- Hull Suite System (Animesh Kumar video): HMA 200 trend / 100 pullback / 50 trigger on a
+                 5-minute chart, entry on the break of the signal candle's high/low, 1:1.5; index signal,
+                 optionally re-priced on the CE/PE (shares the Pivot Confluence Lots boxes).
+                 See src/trading_app/Backtest/hull_suite_engine.py. -->
+            <div id="hullSuiteParamsRow" class="form-row" style="display:none">
+                <fieldset class="ind-block"><legend>Trade</legend>
+                <div class="form-group">
+                    <label for="hsDirection">Direction</label>
+                    <select id="hsDirection">
+                        <option value="long">Long (CE)</option>
+                        <option value="short">Short (PE)</option>
+                        <option value="both" selected>Both</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hsPriceOptions">Price on options</label>
+                    <input type="checkbox" id="hsPriceOptions" checked title="Off = instant run in INDEX points. On = every trade is bought on the CE (long) / PE (short) and priced in option premiums; needs an ICICI login and is slow the first time.">
+                </div>
+                <div class="form-group">
+                    <label for="hsPremium">Option Premium ≈</label>
+                    <select id="hsPremium">
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                        <option value="250" selected>250</option>
+                        <option value="300">300</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hsCompound">Compounding</label>
+                    <input type="checkbox" id="hsCompound" title="Off: every trade is the Lots box's size. On: 1 lot per 'Capital per lot' of the running balance. Needs Price on options.">
+                </div>
+                <div class="form-group">
+                    <label for="hsCapital">Start Capital (₹)</label>
+                    <input type="number" id="hsCapital" value="25000" min="1000" step="1000" title="Compounding only.">
+                </div>
+                <div class="form-group">
+                    <label for="hsPerLot">Capital per Lot (₹)</label>
+                    <input type="number" id="hsPerLot" value="25000" min="1000" step="1000" title="Compounding only.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Hull lines</legend>
+                <div class="form-group">
+                    <label for="hsSlow">Slow HMA (trend)</label>
+                    <input type="number" id="hsSlow" value="200" min="2" step="1" title="The red line: above it longs only, below it shorts only.">
+                </div>
+                <div class="form-group">
+                    <label for="hsMedium">Medium HMA (pullback)</label>
+                    <input type="number" id="hsMedium" value="100" min="2" step="1" title="The blue line: the pullback has to come from near it.">
+                </div>
+                <div class="form-group">
+                    <label for="hsFast">Fast HMA (trigger)</label>
+                    <input type="number" id="hsFast" value="50" min="2" step="1" title="The black line.">
+                </div>
+                <div class="form-group">
+                    <label for="hsSlope">Slope Bars</label>
+                    <input type="number" id="hsSlope" value="2" min="1" step="1" title="A line is rising when it is above its value this many candles ago (TradingView Hull Suite: 2).">
+                </div>
+                <div class="form-group">
+                    <label for="hsSlowSlope">Slow line must agree</label>
+                    <input type="checkbox" id="hsSlowSlope" checked title="On: the slow line must also be rising (long) / falling (short). Off: price above / below it is enough.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Entry / Exit</legend>
+                <div class="form-group">
+                    <label for="hsPbBars">Pullback Lookback</label>
+                    <input type="number" id="hsPbBars" value="12" min="0" step="1" title="Within this many candles a low (high for a short) came near the medium line. 0 = off.">
+                </div>
+                <div class="form-group">
+                    <label for="hsPbPct">Pullback Near %</label>
+                    <input type="number" id="hsPbPct" value="0.1" min="0" step="0.05" title="How close to the medium line counts as near, % of price.">
+                </div>
+                <div class="form-group">
+                    <label for="hsMaxWait">Break Within (candles)</label>
+                    <input type="number" id="hsMaxWait" value="3" min="1" step="1" title="The signal candle high/low must break within this many candles; trading through the stop first cancels it.">
+                </div>
+                <div class="form-group">
+                    <label for="hsStopMode">Stop at</label>
+                    <select id="hsStopMode">
+                        <option value="signal" selected>Signal candle low / high</option>
+                        <option value="two_bar">Lower of last 2 candles</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="hsStopBuf">Stop Buffer (pts)</label>
+                    <input type="number" id="hsStopBuf" value="0" min="0" step="1" title="Extra points beyond the stop candle.">
+                </div>
+                <div class="form-group">
+                    <label for="hsMaxRisk">Max Risk (pts)</label>
+                    <input type="number" id="hsMaxRisk" value="0" min="0" step="5" title="Skip a setup whose stop is wider than this. 0 = no limit.">
+                </div>
+                <div class="form-group">
+                    <label for="hsRr">Target (R)</label>
+                    <input type="number" id="hsRr" value="1.5" min="0" step="0.25" title="Target = this × risk. 0 = no target, ride to the square-off.">
+                </div>
+                <div class="form-group">
+                    <label for="hsBe">Breakeven at (R)</label>
+                    <input type="number" id="hsBe" value="0" min="0" step="0.25" title="Move the stop to cost once the trade is this many R in profit. 0 = off.">
+                </div>
+                </fieldset>
+                <fieldset class="ind-block"><legend>Session</legend>
+                <div class="form-group">
+                    <label for="hsEntryStart">Entry From</label>
+                    <input type="time" id="hsEntryStart" value="09:20">
+                </div>
+                <div class="form-group">
+                    <label for="hsEntryEnd">Entry Until</label>
+                    <input type="time" id="hsEntryEnd" value="14:30">
+                </div>
+                <div class="form-group">
+                    <label for="hsExitCutoff">Square-off</label>
+                    <input type="time" id="hsExitCutoff" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="hsMaxTrades">Max Entries / Day</label>
+                    <input type="number" id="hsMaxTrades" value="2" min="1" step="1" title="">
                 </div>
                 </fieldset>
             </div>

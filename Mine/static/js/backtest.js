@@ -538,6 +538,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (hmParamsRow)   hmParamsRow.style.display   = 'none';
         const mhParamsRow   = document.getElementById('maHtfParamsRow');
         if (mhParamsRow)   mhParamsRow.style.display   = 'none';
+        const hsParamsRow   = document.getElementById('hullSuiteParamsRow');
+        if (hsParamsRow)   hsParamsRow.style.display   = 'none';
         const secParamsRow  = document.getElementById('stEmaParamsRow');
         if (secParamsRow)  secParamsRow.style.display  = 'none';
         const srpParamsRow  = document.getElementById('stRppParamsRow');
@@ -604,7 +606,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'hilega_milega' || val === 'ma_htf' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'hilega_milega' || val === 'ma_htf' || val === 'hull_suite' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -861,6 +863,19 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2024-01-01';
             updatePcInvestment();
 
+        } else if (val === 'hull_suite') {
+            // Index signal on a 5-minute chart; optional CE/PE leg. Lots / lot value reuse the Pivot Confluence boxes.
+            if (!symbolSearch.value || symbolSearch.value.toUpperCase() === ALL_STOCKS) {
+                selectedSymbol = 'NIFTY';
+                symbolSearch.value = 'NIFTY';
+            }
+            if (hsParamsRow) hsParamsRow.style.display = 'grid';
+            if (pcLotRow)    pcLotRow.style.display    = 'grid';
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '5minute';
+            if (startDateInput) startDateInput.value = '2024-01-01';
+            updatePcInvestment();
+
         } else if (val === 'weekly_cpr_breakout') {
             if (wcbParamsRow) wcbParamsRow.style.display = 'grid';
             // The shared Symbol box, with ALL STOCKS (every F&O future stock)
@@ -986,7 +1001,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators', 'atm_straddle'],
+        mine:    ['hull_suite', 'monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
@@ -1209,6 +1224,13 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Confirm', 'Within a few candles, a candle closes beyond all three lines with the cross still intact. Otherwise the move is skipped as already run.'],
             ['Entry', 'Next candle\'s open (not before 09:30).'],
             ['Exit', 'Fixed stop in points, opposite cross, or square-off. Optional trailing stop and partial booking.']] },
+        hull_suite: { sub: 'Three Hull MAs: 200 trend, 100 pullback, 50 trigger — trade the candle break', steps: [
+            ['Lines', 'Hull MA 200 (trend), 100 (pullback) and 50 (trigger) on the chart\'s close (5-minute by default).'],
+            ['Agree', 'Long only when the medium and fast lines are rising and price is above the slow one (and, by default, the slow line rising too). If the lines disagree the market is flat: no trade. Shorts mirror.'],
+            ['Pullback', 'In the last few candles price came back near the medium (100) line.'],
+            ['Signal', 'The first candle to close above all three lines (below, for a short).'],
+            ['Entry', 'When price breaks that candle\'s High (long) / Low (short) within the next few candles; trading through the stop first cancels it.'],
+            ['Exit', 'Stop at the signal candle\'s other end, target 1.5 × that risk, or the 15:15 square-off. Fills are walked on 1-minute bars.']] },
         weekly_cpr_breakout: { sub: 'Stock opens inside weekly CPR, then breaks the first-hour candle', steps: [
             ['Setup', 'The day opens inside the weekly CPR; the CPR is narrow; the first hour is a decent-sized candle that is not already at weekly R3/S3.'],
             ['Direction', 'Red first-hour candle → SELL, green → BUY.'],
@@ -1397,7 +1419,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // signals over the last couple of weeks, with the page's own settings and index points only. The run
     // button's payload is read through the same capture hook Find Best Params uses, so the filters match;
     // the button's side effects on the results panel are put back straight after.
-    const BT_LOGIC_SAMPLE = ['second_candle', 'ma_htf', 'hilega_milega',
+    const BT_LOGIC_SAMPLE = ['second_candle', 'ma_htf', 'hull_suite', 'hilega_milega',
         'simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut',
         'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx', 'st_all_indicators'];
     function btgCapture(key) {
@@ -2175,6 +2197,44 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.per_lot        = mhn('mhPerLot', 0);
             }
 
+            // Hull Suite: index signal, optionally priced on the CE/PE
+            if (strat === 'hull_suite') {
+                endpoint = '/api/backtest/hull-suite';
+                if (!payload.symbol || payload.symbol === ALL_STOCKS) {
+                    payload.symbol = 'NIFTY';
+                    selectedSymbol = 'NIFTY';
+                    symbolSearch.value = 'NIFTY';
+                }
+                const hsv = (id, d) => document.getElementById(id)?.value || d;
+                const hsn = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+                payload.interval       = hsv('interval', '5minute');
+                payload.premium        = parseFloat(hsv('hsPremium', 250));
+                payload.price_options  = document.getElementById('hsPriceOptions')?.checked ?? true;
+                payload.direction      = hsv('hsDirection', 'both');
+                payload.slow_len       = parseInt(hsv('hsSlow', 200));
+                payload.medium_len     = parseInt(hsv('hsMedium', 100));
+                payload.fast_len       = parseInt(hsv('hsFast', 50));
+                payload.slope_bars     = parseInt(hsv('hsSlope', 2));
+                payload.slow_slope     = document.getElementById('hsSlowSlope')?.checked ?? true;
+                payload.pullback_bars  = hsn('hsPbBars', 12);
+                payload.pullback_pct   = hsn('hsPbPct', 0.1);
+                payload.max_wait       = hsn('hsMaxWait', 3);
+                payload.stop_mode      = hsv('hsStopMode', 'signal');
+                payload.stop_buffer    = hsn('hsStopBuf', 0);
+                payload.max_risk       = hsn('hsMaxRisk', 0);
+                payload.rr             = hsn('hsRr', 1.5);
+                payload.breakeven_rr   = hsn('hsBe', 0);
+                payload.entry_start    = hsv('hsEntryStart', '09:20');
+                payload.entry_end      = hsv('hsEntryEnd', '14:30');
+                payload.exit_cutoff    = hsv('hsExitCutoff', '15:15');
+                payload.max_trades_per_day = parseInt(hsv('hsMaxTrades', 2));
+                payload.lots           = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+                payload.lot_value      = parseFloat(document.getElementById('pcLotValue')?.value || 65);
+                payload.compounding    = document.getElementById('hsCompound')?.checked ?? false;
+                payload.start_capital  = hsn('hsCapital', 25000);
+                payload.per_lot        = hsn('hsPerLot', 0);
+            }
+
             // Hilega Milega: index signal, optionally priced on the CE/PE
             if (strat === 'hilega_milega') {
                 endpoint = '/api/backtest/hilega-milega';
@@ -2291,7 +2351,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Simple Trader / Hilega / MA: signals come back at once, the option legs are
             // priced in the background (Breeze, paced) and polled here.
-            if (data.success && data.task_id && (strat === 'second_candle' || strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators' || strat === 'st_touch_break')) {
+            if (data.success && data.task_id && (strat === 'second_candle' || strat === 'simpler_trader' || strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'hull_suite' || strat === 'st_ema_rsi_cci' || strat === 'st_rsi_pp_bb' || strat === 'st_rsi_pp_bb_fut' || strat === 'st_rsi_cci_wr_pp_bb_fut' || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || strat === 'st_all_indicators' || strat === 'st_touch_break')) {
                 const taskId = data.task_id;
                 const t0 = Date.now();
                 while (true) {
@@ -2370,6 +2430,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         + `${r.index_signals} signals · SMMA ${r.params.fast_len}/${r.params.slow_len}, `
                         + `HTF ${r.params.htf_type.toUpperCase()} ${r.params.htf_len} on ${r.params.htf_minutes}m, `
                         + `stop ${r.params.sl_points}`, 'info');
+                } else if (data.ran && data.ran.strategy === 'hull_suite') {
+                    const r = data.ran, p = r.params, su = r.setups || {};
+                    window.showNotification(
+                        `${r.symbol} ${r.interval} (${r.data_source}) · ${r.start_date} → ${r.end_date} · ${r.bars} bars · `
+                        + `${r.index_signals} trades from ${su.signals ?? '?'} signal candles `
+                        + `(${su.expired ?? 0} never broke, ${su.invalidated ?? 0} stopped first) · `
+                        + `HMA ${p.slow_len}/${p.medium_len}/${p.fast_len}, pullback ${p.pullback_bars ? p.pullback_bars + ' bars ≤' + p.pullback_pct + '%' : 'off'}, `
+                        + `target ${p.rr ? p.rr + 'R' : 'none'}`, 'info');
                 } else if (data.ran && data.ran.strategy === 'hilega_milega') {
                     const r = data.ran;
                     window.showNotification(
@@ -3700,7 +3768,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const isWcb  = strategySelect && strategySelect.value === 'weekly_cpr_breakout';
         const isMultiSymbol = isTmf || isEmaAll || isWcb;
         // The strategies on the shared pcLots row are single-symbol and points-based too.
-        const isPc   = strategySelect && (strategySelect.value === 'st_touch_break' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf' || strategySelect.value === 'atm_straddle');
+        const isPc   = strategySelect && (strategySelect.value === 'st_touch_break' || strategySelect.value === 'simpler_trader' || strategySelect.value === 'st_ema_rsi_cci' || strategySelect.value === 'st_rsi_pp_bb' || strategySelect.value === 'st_rsi_pp_bb_fut' || strategySelect.value === 'st_rsi_cci_wr_pp_bb_fut' || strategySelect.value === 'st_rsi_cpr_bb_sx' || strategySelect.value === 'st_rsi_cpr_bb_wr_sx' || strategySelect.value === 'st_all_indicators' || strategySelect.value === 'hilega_milega' || strategySelect.value === 'ma_htf' || strategySelect.value === 'hull_suite' || strategySelect.value === 'atm_straddle');
         // 30-Sec Option Breakout is single-symbol and points-based as well, but
         // its points are PREMIUM points of a real contract — so Lot Value here
         // is the lot size, not a ₹/index-point conversion.
@@ -5491,7 +5559,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'biweekly_iron_condor') runBicOptimise(false);
         else if (strat === 'monthly_rsi_breakout') runMrbOptimise();
         else if (strat === 'simpler_trader') runSbrOptimise(true);
-        else if (strat === 'hilega_milega' || strat === 'ma_htf') runSbrOptimise(false, strat);
+        else if (strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'hull_suite') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
     });
 
@@ -5590,7 +5658,14 @@ document.addEventListener('DOMContentLoaded', function() {
         day_bias:   ['Day agrees', 'DayBias'],
     };
     // Where a strategy names the same field differently from the table above.
-    const SBR_PARAM_BY = { ma_htf: { chop_lookback: ['Whipsaw', 'ChopLb'] } };
+    const SBR_PARAM_BY = { ma_htf: { chop_lookback: ['Whipsaw', 'ChopLb'] },
+        // Hull Suite (prefix 'hs'): fast_len / slow_len / max_wait / rr / stop_mode / session use the table above.
+        hull_suite: { slow_len: ['Slow HMA', 'Slow'], medium_len: ['Medium HMA', 'Medium'], fast_len: ['Fast HMA', 'Fast'],
+                      pullback_bars: ['Pullback bars', 'PbBars'], pullback_pct: ['Near %', 'PbPct'],
+                      max_wait: ['Break within', 'MaxWait'], rr: ['Target R', 'Rr'],
+                      slope_bars: ['Slope', 'Slope'], slow_slope: ['Slow agrees', 'SlowSlope'],
+                      stop_buffer: ['Stop buf', 'StopBuf'], max_risk: ['Max risk', 'MaxRisk'],
+                      breakeven_rr: ['BE at R', 'Be'] } };
     // ALL Indicators' boards search the timeframe too; the values are the Timeframe dropdown's own.
     const SBR_TF_LABEL = { minute: '1m', '2minute': '2m', '3minute': '3m', '5minute': '5m', '15minute': '15m',
                            '60minute': '1h', day: '1d' };
@@ -5600,7 +5675,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const SBR_GATE_BOX = { st: 'St', rsi: 'Rsi', bb: 'Bb', wr: 'Wr', cci: 'Cci', ema: 'Ema', pivot: 'Pivot' };
     const SBR_PREFIX = { st_ema_rsi_cci: 'sec', st_rsi_pp_bb: 'srp', st_rsi_pp_bb_fut: 'srf',
                          st_rsi_cci_wr_pp_bb_fut: 'scw', st_rsi_cpr_bb_sx: 'scx', st_rsi_cpr_bb_wr_sx: 'swx', st_all_indicators: 'sai', st_touch_break: 'stb',
-                         hilega_milega: 'hm', ma_htf: 'mh' };
+                         hilega_milega: 'hm', ma_htf: 'mh', hull_suite: 'hs' };
 
     function sbrStrategyCols(swept, rankBy, strategy) {
         const pnl = (v) => `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${v >= 0 ? '+' : ''}${(v ?? 0).toFixed(0)}</span>`;
@@ -5727,7 +5802,8 @@ document.addEventListener('DOMContentLoaded', function() {
         } else {
             if (title) title.textContent = data.strategy === 'st_touch_break' ? '🧲 ST Touch Break Best Params'
                 : data.strategy === 'hilega_milega' ? '🌀 Hilega Milega Best Params'
-                : data.strategy === 'ma_htf' ? '📈 MA Cross + HTF Best Params' : '🚀 ST + BB + RSI Best Params';
+                : data.strategy === 'ma_htf' ? '📈 MA Cross + HTF Best Params'
+                : data.strategy === 'hull_suite' ? '〰️ Hull Suite Best Params' : '🚀 ST + BB + RSI Best Params';
             if (posWrap) posWrap.style.display = 'none';
             renderSbrBoard(data, 'sbrOptGrid', document.getElementById('sbrOptMeta'));
         }

@@ -99,6 +99,12 @@ class OptionDataUnavailable(Exception):
     """No Breeze session to read option candles from."""
 
 
+class OptionCacheMiss(Exception):
+    """Breeze is down and this contract-session is not in the disk cache. It must leave its
+    TRADE unpriced: the strike walk skips a strike whose fetch fails, so swallowing this
+    there would quietly price the trade on a different strike than a live run picks."""
+
+
 _stock_specs: Dict[str, Any] = {}
 
 
@@ -280,6 +286,8 @@ def pick_strike(symbol: str, con: Dict[str, Any], day: date, entry_time: str, pr
             c = dict(con, strike=strike)
             try:
                 bars = fetch_option(c, day)
+            except OptionCacheMiss:
+                raise
             except Exception as e:      # noqa: BLE001 — a dead strike is just skipped
                 logger.warning(f"[CPR options] {day} {strike}{con['option_type']}: {e}")
                 bars = []
@@ -470,14 +478,36 @@ def _spot_minutes(symbol: str, first: date, last: date) -> Dict[str, List[Dict[s
     return out
 
 
-def _option_minutes_fetcher(symbol: str) -> Callable[[Dict[str, Any], date], List[Dict[str, Any]]]:
-    from trading_app.service.provider_logic import get_icici_adapter
-    adapter = get_icici_adapter()
-    if adapter is None or not hasattr(adapter, 'historical_option_minutes'):
+def _cached_option_minutes_fetcher(symbol: str, exchange: str) -> Callable[[Dict[str, Any], date], List[Dict[str, Any]]]:
+    """No Breeze session (not logged in, or Breeze refusing sessions — 2026-11-15 "Unable to
+    retrieve customer details"): price from what earlier runs cached on disk. A contract-session
+    not cached raises OptionCacheMiss, so that trade is left unpriced rather than moved to
+    another strike. Still-listed contracts go to Zerodha / Fyers as usual."""
+    from trading_app.service.icici_data_service import cached_option_minutes, option_cache_available
+    if not option_cache_available():
         raise OptionDataUnavailable(
             'Option premiums come from the contract\'s own recorded candles, and Breeze is '
             'the only provider that serves an expired contract. Log in at /auth/login/icici.')
+
+    def fetch(con: Dict[str, Any], day: date) -> List[Dict[str, Any]]:
+        expiry = date.fromisoformat(con['expiry'])
+        if expiry >= date.today():
+            return _kite_option_minutes(symbol, con, day, exchange) or _fyers_option_minutes(symbol, con, day, exchange)
+        raw = cached_option_minutes(symbol, expiry, con['strike'], con['option_type'], day)
+        if raw is None:
+            raise OptionCacheMiss('not in the option cache and Breeze is not connected')
+        return cpr_bt._intraday_by_session(raw).get(day.isoformat(), [])     # as the live fetch reads it
+
+    fetch.cache_only = True
+    return fetch
+
+
+def _option_minutes_fetcher(symbol: str) -> Callable[[Dict[str, Any], date], List[Dict[str, Any]]]:
+    from trading_app.service.provider_logic import get_icici_adapter
+    adapter = get_icici_adapter()
     exchange = OPTION_EXCHANGE.get(symbol.upper(), 'NFO')
+    if adapter is None or not hasattr(adapter, 'historical_option_minutes'):
+        return _cached_option_minutes_fetcher(symbol, exchange)
 
     def fetch(con: Dict[str, Any], day: date) -> List[Dict[str, Any]]:
         raw = adapter.historical_option_minutes(
@@ -926,6 +956,7 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
         raise ValueError(f'{len(trades)} trades asked for; {MAX_TRADES} is the limit per request')
 
     fetch_option = _option_minutes_fetcher(symbol)        # fail before any fetch
+    cache_only = bool(getattr(fetch_option, 'cache_only', False))
     days = sorted({date.fromisoformat(t['date']) for t in trades})
     # A caller pricing many chunks reads the calendar ONCE and hands it in: every
     # call otherwise re-reads it from Fyers, and parallel chunks tripped its
@@ -1016,6 +1047,6 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
     logger.info(f"[ΔX options] {symbol.upper()} {'≈' + str(premium) if premium else 'ATM'}: "
                 f"{priced}/{len(trades)} legs priced")
     return {'success': True, 'symbol': symbol.upper(), 'legs': legs,
-            'premium': premium, 'lot': lot,
+            'premium': premium, 'lot': lot, 'cache_only': cache_only,
             'aligned': bool(minutes) or span_min <= 1,
             'align_error': align_error}

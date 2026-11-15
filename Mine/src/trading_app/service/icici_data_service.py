@@ -974,9 +974,7 @@ class IciciDataServiceAdapter:
 
         Only a day that has closed is cached — today's last bar is still moving.
         """
-        symbol = (f"{root}:{expiry.isoformat()}:{int(float(strike))}:"
-                  f"{'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'}")
-        ckey = f"{symbol}:60s:d:{day.isoformat()}"
+        ckey = option_minutes_key(root, expiry, strike, option_type, day)
         cached = _slice_cache_get(ckey)
         if cached is not None:
             _HIST_ERROR.msg = None
@@ -1689,6 +1687,26 @@ def _slice_cache_import_pickle(conn: 'sqlite3.Connection') -> None:
         os.replace(_SLICE_CACHE_FILE, _SLICE_CACHE_FILE + '.imported')
     except Exception as exc:          # noqa: BLE001
         logger.warning('[IciciAdapter] old option-slice pickle not imported: %s', exc)
+
+
+def option_minutes_key(root: str, expiry: dt_date, strike: float, option_type: str, day: dt_date) -> str:
+    """The disk-cache key IciciAdapter.historical_option_minutes files a session under."""
+    symbol = (f"{root}:{expiry.isoformat()}:{int(float(strike))}:"
+              f"{'call' if str(option_type).upper() in ('CE', 'CALL') else 'put'}")
+    return f"{symbol}:60s:d:{day.isoformat()}"
+
+
+def cached_option_minutes(root: str, expiry: dt_date, strike: float, option_type: str,
+                          day: dt_date) -> Optional[List[Dict[str, Any]]]:
+    """historical_option_minutes' disk cache alone — no session, no request. None = not cached
+    ([] is a cached "Breeze has nothing for it")."""
+    return _slice_cache_get(option_minutes_key(root, expiry, strike, option_type, day))
+
+
+def option_cache_available() -> bool:
+    """True when the option-slice store on disk opens."""
+    with _slice_cache_lock:
+        return _slice_cache_conn() is not None
 
 
 def _slice_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:

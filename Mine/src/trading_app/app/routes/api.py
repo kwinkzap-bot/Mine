@@ -5774,6 +5774,76 @@ def _run_ma_htf_optimise(data):
     return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
 
 
+def _run_hull_suite_optimise(data):
+    """Find Best Params for the Hull Suite System (Backtest/hull_suite_optimise.py): a grid and a
+    one-field-at-a-time walk over the page's boxes, on INDEX points from the run's own payload
+    (fills walked on the 1-minute bars, as the run), then the best 15 rows re-priced on the
+    option as the run prices them. Same task table and status route as the ST + BB + RSI sweep."""
+    from trading_app.Backtest import hull_suite_optimise as hso
+    from trading_app.service import cpr_option_service as _cos
+    symbol = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+    start_date_str = data.get('start_date')
+    end_date_str = data.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+    interval = data.get('interval', '5minute')
+    if not start_date_str:
+        return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+    if symbol == 'ALL STOCKS':
+        symbol = 'NIFTY'
+    price_options = bool(data.get('price_options', True))
+    if not _cos.is_index(symbol):
+        if _cos.stock_spec(symbol) is None and price_options:
+            return jsonify({'success': False,
+                            'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                     "turn off Price on options or pick an index."}), 400
+        data['premium'] = 0           # a stock is bought ATM, as the run does
+        data['lot_value'] = 0
+    provider = get_fyers_adapter()
+    if provider is None:
+        return jsonify({'success': False,
+                        'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+    token = _sp_instrument_token(provider, symbol)
+    minutes_per_bar = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 5)
+
+    task_id = uuid.uuid4().hex
+    task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
+    with _sbr_opt_lock:
+        _sbr_opt_tasks[task_id] = task
+
+    def _run():
+        try:
+            # Run-in for the longest Hull the grid tries (300 candles, plus its √n smoothing).
+            need_days = 320 * minutes_per_bar / 375.0 * 1.6 + 10
+            minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str,
+                                                      interval, warmup_days=int(max(20, need_days)))
+            if bars is None:
+                task.update(status='error', error='No historical data found for the given range')
+                return
+
+            def _progress(done, total, **extra):
+                task['progress'] = {'done': done, 'total': total, **extra}
+
+            res = hso.optimise(bars, data, minutes_per_bar, from_date=start_date_str, minutes=minutes,
+                               progress=_progress)
+            if price_options:
+                try:
+                    hso.verify_on_option(res, bars, data, minutes_per_bar, symbol,
+                                         sorted(set(minutes.index.date)), start_date_str, minutes=minutes,
+                                         progress=lambda k, n: _progress(k, n, stage='pricing'))
+                except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
+                    logger.warning('[HULL OPT] option verification failed: %s', e)
+                    res['option_error'] = str(e)
+            task['payload'] = {'success': True, 'symbol': symbol, 'interval': interval,
+                               'start_date': start_date_str, 'end_date': end_date_str,
+                               'bars': n_bars, **res}
+            task['status'] = 'complete'
+        except Exception as e:      # noqa: BLE001
+            logger.error('[HULL OPT] %s', e, exc_info=True)
+            task.update(status='error', error=str(e))
+
+    threading.Thread(target=_run, name=f'hsopt-{task_id[:6]}', daemon=True).start()
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
 @api_bp.route('/backtest/st-bb-rsi/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -5792,6 +5862,8 @@ def run_st_bb_rsi_optimise():
             return _run_hilega_milega_optimise(data)
         if data.get('strategy') == 'ma_htf':
             return _run_ma_htf_optimise(data)
+        if data.get('strategy') == 'hull_suite':
+            return _run_hull_suite_optimise(data)
         if data.get('strategy'):            # Simple Trader strategies 2-7 have their own engines
             return _run_simple_trader_optimise(str(data['strategy']), data)
         symbol = str(data.get('symbol', 'NIFTY')).strip().upper()
@@ -6871,6 +6943,178 @@ def run_ma_htf_backtest_api():
         return jsonify({'success': True, 'task_id': task_id})
     except Exception as e:
         logger.error(f"Error in MA+HTF backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/hull-suite', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_hull_suite_backtest_api():
+    """Hull Suite System (Animesh Kumar): HMA 200 trend / 100 pullback / 50 trigger, traded
+    on the break of the signal candle's high / low, 1:1.5.
+
+    Index points by default; with `price_options` every trade is re-priced on the
+    ≈premium CE (long) / PE (short), in the background, polled on
+    /backtest/st-bb-rsi/status/<task_id> (the same task table). Fills are walked on
+    the stored 1-minute bars. See Backtest/hull_suite_engine.py.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json() or {}
+        symbol         = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '5minute')
+        premium        = float(data.get('premium', 250) or 250)
+        price_options  = bool(data.get('price_options', True))
+        compounding    = bool(data.get('compounding', False))
+        start_capital  = float(data.get('start_capital', 25000) or 25000)
+        per_lot        = float(data.get('per_lot') or 0)
+        max_lots       = int(data.get('max_lots', 27) or 27)
+        fixed_lots     = max(1, int(data.get('lots', 1) or 1))
+        lot_value      = float(data.get('lot_value', 0) or 0)
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        from trading_app.service import cpr_option_service as _cos
+        if symbol == 'ALL STOCKS':
+            symbol = 'NIFTY'
+        if not _cos.is_index(symbol):
+            if _cos.stock_spec(symbol) is None and price_options:
+                return jsonify({'success': False,
+                                'error': f"'{symbol}' has no listed F&O options (or Fyers is not logged in); "
+                                         "turn off Price on options or pick an index."}), 400
+            premium = 0.0
+            lot_value = 0.0
+
+        current_kite = get_fyers_adapter()
+        if current_kite is None:
+            return jsonify({'success': False,
+                            'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
+
+        instrument_token = _sp_instrument_token(current_kite, symbol)
+        import pandas as pd
+        from trading_app.Backtest.hull_suite_engine import HullSuiteEngine
+        from trading_app.Backtest.st_bb_rsi_engine import (
+            attach_option_legs, summarise, apply_compounding)
+
+        minutes_per_bar = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 5)
+        slow_len = int(data.get('slow_len', 200) or 200)
+        # The slow Hull needs ~slow_len + √slow_len candles of run-in (200 × 5 min ≈ 3 sessions).
+        need_days = slow_len * 1.2 * minutes_per_bar / 375.0 * 1.6 + 10
+        minutes, candles_df, n_junk, n_bars = _sbr_load_bars(
+            current_kite, instrument_token, symbol, start_date_str, end_date_str, interval,
+            warmup_days=int(max(20, need_days)))
+        if minutes is None:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+
+        engine = HullSuiteEngine(
+            df=candles_df,
+            minutes=minutes if minutes_per_bar > 1 else None,
+            slow_len=slow_len,
+            medium_len=int(data.get('medium_len', 100) or 100),
+            fast_len=int(data.get('fast_len', 50) or 50),
+            slope_bars=int(data.get('slope_bars', 2) or 2),
+            slow_slope=bool(data.get('slow_slope', True)),
+            pullback_bars=int(data.get('pullback_bars', 12) or 0),
+            pullback_pct=float(data.get('pullback_pct', 0.1) or 0),
+            max_wait=int(data.get('max_wait', 3) or 3),
+            stop_mode=str(data.get('stop_mode', 'signal')),
+            stop_buffer=float(data.get('stop_buffer', 0) or 0),
+            max_risk=float(data.get('max_risk', 0) or 0),
+            rr=float(data.get('rr', 1.5) or 0),
+            breakeven_rr=float(data.get('breakeven_rr', 0) or 0),
+            direction=str(data.get('direction', 'both')),
+            entry_start=data.get('entry_start', '09:20'),
+            entry_end=data.get('entry_end', '14:30'),
+            exit_cutoff=data.get('exit_cutoff', '15:15'),
+            max_trades_per_day=int(data.get('max_trades_per_day', 2) or 2),
+            bar_minutes=minutes_per_bar,
+        )
+        trades, _ = engine.run()
+        trades = [t for t in trades if t['entry_time'][:10] >= start_date_str]   # drop the run-in's trades
+
+        _want = min(pd.Timestamp(end_date_str).date(), datetime.now().date())
+        while _want.weekday() >= 5:
+            _want -= timedelta(days=1)
+        _have = pd.Timestamp(candles_df['date'].iloc[-1]).date()
+        data_warning = (f"Candles end at {_have:%d %b}; {_want:%d %b} could not be loaded (data provider "
+                        f"limit or outage), so it is not in this run.") if _have < _want else None
+        ran = {
+            'symbol': symbol, 'interval': interval, 'data_source': _provider_tag(current_kite),
+            'start_date': start_date_str, 'end_date': end_date_str,
+            'bars': n_bars, 'junk_bars_dropped': n_junk,
+            'first_bar': str(candles_df['date'].iloc[0]), 'last_bar': str(candles_df['date'].iloc[-1]),
+            'params': dict(slow_len=engine.slow_len, medium_len=engine.medium_len, fast_len=engine.fast_len,
+                           slope_bars=engine.slope_bars, slow_slope=engine.slow_slope,
+                           pullback_bars=engine.pullback_bars, pullback_pct=engine.pullback_pct,
+                           max_wait=engine.max_wait, stop_mode=engine.stop_mode,
+                           stop_buffer=engine.stop_buffer, max_risk=engine.max_risk, rr=engine.rr,
+                           breakeven_rr=engine.breakeven_rr, direction=engine.direction,
+                           premium=premium, price_options=price_options, compounding=compounding),
+            'setups': getattr(engine, 'setups', {}),
+            'index_signals': len(trades),
+            'strategy': 'hull_suite',          # backtest.js words the run banner by it
+        }
+
+        def _payload(priced_trades, option_info, warning):
+            summ = summarise(priced_trades)
+            summ['pnl_basis'] = 'option' if option_info else 'index'
+            extra = {}
+            if option_info:
+                extra = apply_compounding(
+                    priced_trades, lot_value or option_info.get('lot') or 65,
+                    start_capital if compounding else fixed_lots * 50000.0, per_lot, max_lots,
+                    fixed_lots=None if compounding else fixed_lots)
+            return {
+                'success': True, 'trades': priced_trades, 'option': option_info,
+                'warning': warning, 'ran': ran,
+                'summary': {**{k: summ[k] for k in (
+                    'total_trades', 'wins', 'losses', 'total_pnl', 'win_rate',
+                    'profit_factor', 'max_drawdown', 'avg_win', 'avg_loss')},
+                    'pnl_basis': summ['pnl_basis'], **extra},
+            }
+
+        logger.info('[HULL BT] %s %s %s→%s  %d bars  %d signals  options=%s',
+                    symbol, interval, start_date_str, end_date_str, n_bars, len(trades), price_options)
+        if not (price_options and trades):
+            return jsonify(_payload(trades, None, data_warning))
+
+        sessions = sorted(set(minutes.index.date))
+        task_id = uuid.uuid4().hex
+        task = {'status': 'running', 'started': _time.time(),
+                'progress': {'done': 0, 'total': len(trades)}}
+        with _sbr_tasks_lock:
+            _sbr_tasks[task_id] = task
+
+        def _run():
+            def _progress(done, total):
+                task['progress'] = {'done': done, 'total': total}
+            try:
+                priced, info = attach_option_legs(symbol, trades, premium or None, minutes_per_bar, _progress,
+                                                   calendar=sessions, index_minutes=minutes)
+                warn = None
+                if info.get('cache_only'):
+                    warn = (f"ICICI Breeze is not connected, so premiums came from the option cache on disk "
+                            f"only: {len(priced)} of {info['index_trades']} trades priced, {info['unpriced']} "
+                            f"left out. Log in to ICICI and run again to fetch the rest.")
+                elif info['unpriced'] or info['truncated']:
+                    warn = (f"{info['index_trades']} index signals: {info['unpriced']} had no option "
+                            f"candles and {info['truncated']} older ones were not priced; "
+                            f"they are left out of the totals.")
+                task['payload'] = _payload(priced, info, ' '.join(w for w in (warn, data_warning) if w) or None)
+            except Exception as e:     # no ICICI login / Breeze down: keep the index result
+                logger.warning('[HULL BT] option pricing failed: %s', e)
+                task['payload'] = _payload(
+                    trades, None, ' '.join(w for w in (f'Option premiums unavailable ({e}); showing INDEX points.', data_warning) if w))
+            task['status'] = 'complete'
+
+        threading.Thread(target=_run, name=f'hull-{task_id[:6]}', daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id})
+    except Exception as e:
+        logger.error(f"Error in Hull Suite backtest API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

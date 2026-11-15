@@ -472,14 +472,44 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 262 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three and the Monthly RSI Breakout four (below, now with Find Best Params).
+The api blueprint is at 263 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three and the Monthly RSI Breakout four (below, now with Find Best Params).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
 
-## RSI 60-65 Breakout backtest — Day / Week / Month (stocks, the /backtest default; `monthly_rsi_breakout`)
+## Hull Suite System backtest (NIFTY, the /backtest default; `hull_suite`)
 
-Added 2026-11-13 in the Mine group, **the default strategy on /backtest** since that day (it took over from the Bi-weekly Iron Condor), from a video (Darshan Rathod, "hedge fund / mutual fund strategy"; transcript via youtube-transcript-api).
+Added 2026-11-15 in the Mine group, **the default strategy on /backtest** since that day (it took over from the
+Monthly RSI Breakout), from a video (Animesh Kumar, PhonePe Invest series, youtube xVF85pCj1YQ).
+`Backtest/hull_suite_engine.py` (pure), route `/api/backtest/hull-suite` (option legs priced in the background and
+polled on `/backtest/st-bb-rsi/status/<id>`, as MA Cross + HTF), params row `#hullSuiteParamsRow` (`hs*` ids, shares
+the `pcLots` row).
+
+* **Rule**: HMA 200 (trend) / 100 (pullback) / 50 (trigger) on 5-minute closes, TradingView's `ta.hma`. A long needs
+  the 100 and 50 rising (slope over 2 bars) and the close above the 200 (and, by default, the 200 rising); the signal
+  is the first candle to close above all three, with a low within 0.1 % of the 100 in the last 12 candles. A stop
+  order at its high is live for 3 candles; trading through the stop first cancels it. Stop = the signal candle's
+  low, target 1.5 R, square-off 15:15, 2 a day, one at a time. Shorts mirror. The video gives only the lines and
+  "break of the candle, 1 : 1.5"; every other number is a box.
+* **Fills walk the stored 1-minute bars** (`minutes=`), so entry / stop / target order inside a 5-minute candle is
+  the market's; trades carry `intrabar_entry` / `intrabar_exit` for `attach_option_legs`.
+* **First real run** (index points, no costs): 2024-26 605 trades, 39.8 % win, PF 0.98, −216 pts; 2018-26 PF 1.08,
+  +1,794 pts over 1,752 trades (~1 pt a trade). 15-minute chart PF 1.18, 1 R target PF 1.05; nothing tried was
+  clearly profitable.
+* **⚡ Find Best Params (2026-11-15)**: `Backtest/hull_suite_optimise.py`, built like MA Cross + HTF's (grid over the
+  three Hull lengths × pullback lookback × break window × target = 432, then a one-box-at-a-time walk over the rest,
+  ranked on return ÷ drawdown, best 15 re-priced on the option). No new URL: `strategy='hull_suite'` on
+  `/backtest/st-bb-rsi/optimise`, the board is the shared Simple Trader one (prefix `hs`, names in
+  `SBR_PARAM_BY.hull_suite`). The timeframe is not swept. ~2 min of CPU for 2024-26 (727 combos). **It overfits**:
+  its 2024-26 top row (slow 300 / medium 100 / fast 20, pullback 24 bars, 2 R, breakeven at 1 R, 1 a day) read
+  PF 1.53, +4,725 pts there, but PF 1.02, +316 pts on 2018-23, where the plain defaults made PF 1.17, +2,010.
+  Check a row on a range it was not swept on before trusting it. A test holds every board row equal to a direct run.
+
+Tests: `tests/test_hull_suite_engine.py`.
+
+## RSI 60-65 Breakout backtest — Day / Week / Month (stocks; `monthly_rsi_breakout`)
+
+Added 2026-11-13 in the Mine group, the default strategy on /backtest until 2026-11-15 (Hull Suite, above; it took over from the Bi-weekly Iron Condor), from a video (Darshan Rathod, "hedge fund / mutual fund strategy"; transcript via youtube-transcript-api).
 `Backtest/monthly_rsi_breakout_engine.py` (pure), routes `/api/backtest/monthly-rsi-breakout{,/status/<id>}`, params row
 `#monthlyRsiBreakoutParamsRow` (`mrb*` ids), results in the shared `#crResults` (`#crStats`, `#bicYearGrid` as the per-year table, `#crGrid`),
 JS `runMonthlyRsiBreakout` / `renderMonthlyRsiBreakout`.
@@ -917,6 +947,14 @@ login and say `ICICI login` without one. One Breeze request per trade,
 disk-cached per settled session (`icici_data_service.historical_option_minutes`),
 so the first read of the sheet is ~70 s and later ones are instant. Tests:
 `tests/test_cpr_option_service.py`.
+
+**With no Breeze session the option legs price from the disk cache** (since 2026-11-15, when Breeze refused
+sessions all day with "Unable to retrieve customer details"): `_option_minutes_fetcher` falls back to
+`_cached_option_minutes_fetcher`, which reads `icici_option_slices.db` alone. A contract-session not cached raises
+`OptionCacheMiss`, which `pick_strike` re-raises instead of skipping the strike — skipping it would quietly price
+the trade on a different strike than a connected run picks — so that trade is left unpriced and the result says
+`cache_only`. Every backtest that calls `legs_at` / `attach_option_legs` gets this. Tests:
+`tests/test_option_cache_only.py`.
 
 ## Swing Momentum value graph
 

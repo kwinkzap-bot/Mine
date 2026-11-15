@@ -849,6 +849,7 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
     for res in results:
         legs.extend(res['legs'])
         info['lot'] = res.get('lot')
+        info['cache_only'] = info.get('cache_only', False) or bool(res.get('cache_only'))
 
     priced = []
     for t, leg in zip(work, legs):
