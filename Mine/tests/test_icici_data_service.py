@@ -858,6 +858,46 @@ def test_option_range_with_a_failed_chunk_is_never_cached(monkeypatch):
     assert len(fetch()) == 1 and store == {}
 
 
+def _minutes_adapter(monkeypatch, empty_answer):
+    """historical_option_minutes over a Breeze that answers [] — a clean
+    "nothing here" when `empty_answer`, else a failed request."""
+    store, calls = {}, []
+    monkeypatch.setattr(ids, '_slice_cache_get', lambda k: store.get(k))
+    monkeypatch.setattr(ids, '_slice_cache_put', lambda k, v: store.__setitem__(k, v))
+    adapter = ids.IciciDataServiceAdapter.__new__(ids.IciciDataServiceAdapter)
+
+    def hist(*a, **k):
+        calls.append(a)
+        ids._HIST_ERROR.empty_answer = empty_answer
+        return []
+    adapter.historical_option = hist
+    return adapter, store, calls
+
+
+def test_an_expired_strike_breeze_has_nothing_for_is_asked_once(monkeypatch):
+    """Every OPT P&L Candle Breakout backtest re-asked each empty strike/day at
+    Breeze's ~90 a minute (2026-11-14: ~4 minutes of a 3-minute 2017-26 run)."""
+    from datetime import date
+    adapter, store, calls = _minutes_adapter(monkeypatch, empty_answer=True)
+    ask = lambda: adapter.historical_option_minutes('NIFTY', date(2017, 8, 31), 10350, 'PE',
+                                                    date(2017, 8, 7))
+    assert ask() == [] and list(store.values()) == [[]]
+    assert ask() == [] and len(calls) == 1
+
+
+def test_a_failed_or_still_listed_empty_answer_is_never_cached(monkeypatch):
+    from datetime import date
+    adapter, store, _ = _minutes_adapter(monkeypatch, empty_answer=False)
+    adapter.historical_option_minutes('NIFTY', date(2017, 8, 31), 10350, 'PE', date(2017, 8, 7))
+    assert store == {}
+    # Breeze serves no contract before its expiry: an empty answer then is not final.
+    adapter, store, _ = _minutes_adapter(monkeypatch, empty_answer=True)
+    today = datetime.now(ids.IST).date()
+    adapter.historical_option_minutes('NIFTY', today + timedelta(days=2), 25000, 'CE',
+                                      today - timedelta(days=1))
+    assert store == {}
+
+
 def _open_range_adapter(monkeypatch, answer):
     """An adapter whose only way out is `answer(start, end)`; the chunks asked for are in .asked."""
     adapter = ids.IciciDataServiceAdapter.__new__(ids.IciciDataServiceAdapter)

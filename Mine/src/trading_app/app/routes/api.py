@@ -4317,11 +4317,13 @@ def run_second_candle_optimise():
             # v8 (2026-11-14): every timeframe on real premiums, and the leg
             # cap in the key — a row prices its newest `cap` trades as BACKTEST
             # does, and that cap is 300 in market hours, 3,000 after.
+            # v9 (same evening): premiums read where the index traded the level
+            # inside the minute (second_candle_options._path_point), not mid-minute.
             from trading_app.Backtest import seconds_store
             f30, l30, n30 = seconds_store.span(symbol)
             return (f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}"
                     f"_{start_date_str}_{end_date_str}_{seconds_store.last_settled_day()}"
-                    f"_30s{f30}-{l30}-{n30}_cap{_sc_option_leg_cap()}_v8")
+                    f"_30s{f30}-{l30}-{n30}_cap{_sc_option_leg_cap()}_v9")
         cache_key = _board_key()
 
         # ── Serve from cache unless caller asked to recalculate ──────────────

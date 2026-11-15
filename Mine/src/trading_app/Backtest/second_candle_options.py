@@ -44,7 +44,15 @@ def _crossing_minute(minutes: Optional[pd.DataFrame], start: str, span_min: int,
     if minutes is None or minutes.empty or span_min <= 1:
         return None
     t0 = pd.Timestamp(start)
-    win = minutes[(minutes.index >= t0) & (minutes.index < t0 + pd.Timedelta(minutes=span_min))]
+    # A sorted index is sliced by binary search: the mask over every minute
+    # since 2017 (~900k) cost ~1.7 ms a call, 7.6 s of a 3-minute 2017-26 run.
+    idx = minutes.index
+    if idx.is_monotonic_increasing:
+        a = idx.searchsorted(t0, 'left')
+        b = idx.searchsorted(t0 + pd.Timedelta(minutes=span_min), 'left')
+        win = minutes.iloc[a:b]
+    else:
+        win = minutes[(idx >= t0) & (idx < t0 + pd.Timedelta(minutes=span_min))]
     if win.empty:
         return None
     hit = win[(win['low'] - 1e-9 <= price) & (price <= win['high'] + 1e-9)]
@@ -57,6 +65,33 @@ def _last_minute(start: str, span_min: int) -> str:
     return t.strftime('%Y-%m-%d %H:%M:00')
 
 
+def _path_point(minutes: Optional[pd.DataFrame], stamp: str, price: float) -> Optional[Dict[str, Any]]:
+    """Where on the 1-minute index bar holding `stamp` the index first stood at
+    `price`: its segment of open → first extreme → second extreme → close (low
+    first on an up minute, high first on a down one) and the share of it. None
+    without minutes or when the bar never reached the price."""
+    if minutes is None or minutes.empty or price is None:
+        return None
+    ts = pd.Timestamp(stamp[:19]).floor('min')
+    if getattr(minutes.index, 'tz', None) is not None:
+        ts = ts.tz_localize(minutes.index.tz)
+    try:
+        row = minutes.loc[ts]
+    except KeyError:
+        return None
+    if isinstance(row, pd.DataFrame):
+        row = row.iloc[-1]
+    o, h, l, c = (float(row[k]) for k in ('open', 'high', 'low', 'close'))
+    first = 'low' if c >= o else 'high'
+    pts = [o, l, h, c] if first == 'low' else [o, h, l, c]
+    price = float(price)
+    for k in range(3):
+        a, b = pts[k], pts[k + 1]
+        if min(a, b) - 1e-9 <= price <= max(a, b) + 1e-9:
+            return {'seg': k, 'frac': 0.0 if a == b else (price - a) / (b - a), 'first': first}
+    return None
+
+
 def leg_requests(trades: List[Dict[str, Any]], span_min: int,
                  minutes: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
     """Each index trade as attach_option_legs reads it: the minute it really
@@ -67,12 +102,16 @@ def leg_requests(trades: List[Dict[str, Any]], span_min: int,
         ent = _crossing_minute(minutes, t['entry_time'], span_min, t['entry_price'])
         if ent:
             r['entry_time'] = ent
+        # The premium is read where the index traded the level inside that
+        # minute (_path_point), not at the minute's middle.
+        r['entry_path'] = _path_point(minutes, r['entry_time'], t['entry_price'])
         reason = t.get('exit_reason')
         if reason in ('SL Hit', 'TG Hit'):
             r['intrabar_exit'] = True
             ext = _crossing_minute(minutes, t['exit_time'], span_min, t['exit_price'])
             if ext:
                 r['exit_time'] = ext
+            r['exit_path'] = _path_point(minutes, r['exit_time'], t['exit_price'])
         elif reason == 'EOD Exit':
             r['intrabar_exit'] = True
             if span_min > 1:

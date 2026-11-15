@@ -332,6 +332,9 @@ _CHUNK_DAYS = {'1minute': 2, '5minute': 10, '30minute': 60, '1day': 500}
 # historical_option_range's own windows: 17 calendar days hold at most 13
 # sessions = 975 five-minute bars, inside _BREEZE_MAX_ROWS.
 _RANGE_CHUNK_DAYS = {'5minute': 17}
+# An expired contract's empty Breeze answer is cached only once the contract
+# is this many days past expiry (historical_option_minutes).
+_EMPTY_SETTLE_DAYS = 3
 
 # NSE/BSE cash and derivatives both open at 09:15; anchoring the aggregation
 # there is what makes a 15-minute bar here line up with Kite's and with the
@@ -979,11 +982,24 @@ class IciciDataServiceAdapter:
             _HIST_ERROR.msg = None
             return cached
 
+        _HIST_ERROR.empty_answer = False
         bars = self.historical_option(root, expiry, strike, option_type,
                                       day.isoformat(), day.isoformat(), 'minute',
                                       exchange_code=exchange_code)
-        if bars and day < datetime.now(IST).date():
+        today = datetime.now(IST).date()
+        if bars and day < today:
             _slice_cache_put(ckey, bars)
+        elif (not bars and getattr(_HIST_ERROR, 'empty_answer', False)
+              and expiry < today - timedelta(days=_EMPTY_SETTLE_DAYS)):
+            # Breeze answered "nothing" ({'Success': [], 'Status': 200}) for an
+            # EXPIRED contract: there is nothing to come, so remember the [] as
+            # historical_option_range does. Until 2026-11-14 only bars were kept,
+            # and every OPT P&L backtest re-asked each empty strike/day at Breeze's
+            # ~90 a minute — a 3-minute 2017-26 run spent ~4 minutes on 300 of
+            # them (2017-19 strikes the walk probes, 2025 holes). A failed request
+            # (no empty_answer) and a contract still listed — Breeze serves none
+            # before expiry — are never cached.
+            _slice_cache_put(ckey, [])
         return bars or []
 
     def historical_option_range(self, root: str, expiry: dt_date, strike: float,

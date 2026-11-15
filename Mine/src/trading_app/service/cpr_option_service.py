@@ -484,7 +484,10 @@ def _option_minutes_fetcher(symbol: str) -> Callable[[Dict[str, Any], date], Lis
             symbol, date.fromisoformat(con['expiry']), con['strike'], con['option_type'],
             day, exchange_code=exchange)
         bars = cpr_bt._intraday_by_session(raw).get(day.isoformat(), [])
-        if not bars:
+        # Zerodha and Fyers list only running contracts — an expired one is
+        # Breeze's alone, and searching their instrument lists for it cost ~40 ms
+        # a miss (7.5 s of a 2017-26 Candle Breakout backtest on Breeze's holes).
+        if not bars and date.fromisoformat(con['expiry']) >= date.today():
             # Breeze serves a session's option candles only after the day has been
             # loaded overnight — the Update button's own session (2026-10-14) always
             # came back empty, "no option bars" — and it serves NO contract that is still
@@ -862,6 +865,32 @@ def _premium_stop(bars: List[Dict[str, Any]], entry: float, t_in: str, t_out: st
             carry['stop'] = stop
 
 
+def _path_read(b: Dict[str, Any], path: Dict[str, Any], option_type: str) -> float:
+    """The option's price where the INDEX stood at a fill inside the minute.
+
+    `path` places the fill on the index minute's own path, open → first extreme →
+    second extreme → close (low first on an up minute, high first on a down one):
+    {'seg': 0|1|2, 'frac': share of that segment, 'first': 'low'|'high'}. The
+    option is walked along the matching path of its own bar — a CE's low where the
+    index made its low, a PE's high there. Unlike the open→close `frac`, this
+    holds when a wick made the fill, which is how most breakouts and stops trade:
+    Candle Breakout read those mid-minute until 2026-11-14 and bought ~5 pts under
+    the breakout and sold ~5 pts short of the stop on average, which booked an
+    index loss of 2024 (-950 pts) as an option profit (+563)."""
+    call = str(option_type).upper() in ('CE', 'CALL')
+
+    def at(extreme):
+        if extreme == 'low':
+            return b['low'] if call else b['high']
+        return b['high'] if call else b['low']
+    first = path.get('first', 'low')
+    second = 'high' if first == 'low' else 'low'
+    pts = [b['open'], at(first), at(second), b['close']]
+    k = min(max(int(path.get('seg', 0)), 0), 2)
+    f = min(max(float(path.get('frac', 0.0)), 0.0), 1.0)
+    return pts[k] + f * (pts[k + 1] - pts[k])
+
+
 def legs_at(symbol: str, trades: List[Dict[str, Any]],
             premium: Optional[float] = None, span_min: int = 1,
             source: str = 'spot', trading_days: Optional[List[date]] = None,
@@ -946,19 +975,23 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
             leg.update(strike=con['strike'], option_type=con['option_type'], expiry=con['expiry'])
             b_in = bar_at(bars, t_in)
             b_out = bar_at(bars, t_out)
-            def _px(b, mid, frac=None):
+            def _px(b, mid, frac=None, path=None):
                 # `mid`: the trade filled somewhere inside this minute — its open/close average, or,
                 # with `frac` (where the index stood at the fill on its own open→close path), that
                 # share of the way from the option's open to its close
                 if not mid or b.get('open') is None:
                     return b['close']
+                if path and b.get('high') is not None and b.get('low') is not None:
+                    return _path_read(b, path, con['option_type'])
                 if frac is not None:
                     return b['open'] + float(frac) * (b['close'] - b['open'])
                 return (b['open'] + b['close']) / 2
             if b_in:
-                leg['entry'] = round(_px(b_in, t.get('entry_mid'), t.get('entry_frac')), 2)
+                leg['entry'] = round(_px(b_in, t.get('entry_mid'), t.get('entry_frac'),
+                                         t.get('entry_path')), 2)
             if b_out:
-                leg['exit'] = round(_px(b_out, t.get('exit_mid'), t.get('exit_frac')), 2)
+                leg['exit'] = round(_px(b_out, t.get('exit_mid'), t.get('exit_frac'),
+                                        t.get('exit_path')), 2)
             if sl_pct > 0 and leg['entry'] is not None and t_out:
                 hit = _premium_stop(bars, leg['entry'], t_in, t_out, sl_pct, tsl_x, tsl_y)
                 if hit:

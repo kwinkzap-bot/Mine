@@ -5062,13 +5062,27 @@ document.addEventListener('DOMContentLoaded', function() {
     function _scOptCols(isOpt) {
         const idxPts = r => r.index_pnl != null ? r.index_pnl : (isOpt ? null : r.total_pnl);
         const optPts = r => r.option_pnl != null ? r.option_pnl : (isOpt ? r.total_pnl : null);
-        const idxNet = r => { const v = idxPts(r); return v == null ? null : _scNetOf({ ...r, x: v }, 'x'); };
+        // On an OPT P&L board the order is the option, so the brokerage is the
+        // option's: the index ₹ there is its points × ₹/pt × lots, BEFORE
+        // brokerage. Until 2026-11-14 it had the option's brokerage taken off
+        // too, and a row with +2,609.8 index pts read −₹60,359 beside the
+        // option's +₹62,154 (2,233 trades × ₹103) — the minus came from the
+        // costs, not the index. On an index board the index ₹ stays net: it is
+        // that board's own ranking.
+        const idxNet = r => {
+            const v = idxPts(r);
+            if (v == null) return null;
+            if (!isOpt) return _scNetOf({ ...r, x: v }, 'x');
+            const { lots, lotValue } = _scOptMoney();
+            return v * lotValue * lots;
+        };
         const optNet = r => { const v = optPts(r); return v == null ? null : _scNetOf({ ...r, x: v }, 'x'); };
         const pnlCols = [
             { label: 'Index P&L (pts)', key: 'index_pnl',  fmt: r => _scPtsCell(idxPts(r)) },
-            { label: 'Index P&L (₹)',   key: isOpt ? 'index_net_inr' : 'net_pnl_inr', fmt: r => _scInrCell(idxNet(r)) },
+            { label: isOpt ? 'Index P&L (₹, gross)' : 'Index P&L (₹, net)',
+              key: isOpt ? 'index_net_inr' : 'net_pnl_inr', fmt: r => _scInrCell(idxNet(r)) },
             { label: 'Opt P&L (pts)',   key: 'option_pnl', fmt: r => _scPtsCell(optPts(r)) },
-            { label: 'Opt P&L (₹)',     key: isOpt ? 'net_pnl_inr' : 'option_net_inr', fmt: r => _scInrCell(optNet(r)) },
+            { label: 'Opt P&L (₹, net)', key: isOpt ? 'net_pnl_inr' : 'option_net_inr', fmt: r => _scInrCell(optNet(r)) },
         ];
         const derived = {
             index_pnl:      r => idxPts(r) ?? -Infinity,

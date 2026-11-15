@@ -285,3 +285,33 @@ def test_index_basis_is_not_booked_in_rupees(client):
     c, _ = client
     body = _post(c, compounding=True)
     assert body['success'] and 'server_rupees' not in body['summary']
+
+
+def test_a_wick_fill_is_read_where_the_index_traded_the_level_not_mid_minute():
+    """A breakout or stop is usually a wick: the minute reaches the level and
+    closes back. Read mid-minute (open/close average), a long bought ~5 pts under
+    its breakout and a stop sold ~5 pts short of it, which booked 2024's 1m
+    index loss (-950 pts) as an option profit (+563) on the board."""
+    m = pd.DataFrame({'open': [24000.0], 'high': [24030.0], 'low': [23990.0], 'close': [24005.0],
+                      'volume': [0]}, index=[pd.Timestamp('2026-10-05 09:30')])
+    # up minute: open 24000 → low 23990 → high 24030 → close 24005; 24020 is 3/4 up the low→high leg
+    p = sco._path_point(m, '2026-10-05 09:30:00', 24020.0)
+    assert p['first'] == 'low' and p['seg'] == 1 and p['frac'] == pytest.approx(0.75)
+    # 23995 is first met on the open→low leg, halfway
+    p = sco._path_point(m, '2026-10-05 09:30:00', 23995.0)
+    assert p['seg'] == 0 and p['frac'] == pytest.approx(0.5)
+    assert sco._path_point(m, '2026-10-05 09:30:00', 24100.0) is None
+
+    from trading_app.service.cpr_option_service import _path_read
+    bar = {'open': 250.0, 'high': 270.0, 'low': 240.0, 'close': 255.0}
+    # a CE walks open → its low → its high → close; 3/4 of 240→270 = 262.5, not the 252.5 mid
+    assert _path_read(bar, {'seg': 1, 'frac': 0.75, 'first': 'low'}, 'CE') == pytest.approx(262.5)
+    # a PE is at its HIGH where the index made its low: open → 270 → 240 → close
+    assert _path_read(bar, {'seg': 0, 'frac': 0.5, 'first': 'low'}, 'PE') == pytest.approx(260.0)
+
+
+def test_the_requests_carry_the_fill_path():
+    calls = []
+    sco.price_trades('NIFTY', [_trade()], 5, _minutes(), attach=_fake_attach(calls))
+    req = calls[0][1][0]
+    assert req['entry_path'] is not None and req['exit_path'] is not None

@@ -811,6 +811,9 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
                      'level': t.get('level', t['entry_price']), 'entry_time': ent,
                      'exit_time': out, 'exit_price': t['exit_price'],
                      'entry_mid': bool(t.get('intrabar_entry')), 'exit_mid': bool(t.get('intrabar_exit')),
+                     # A caller that knows where on the index minute's path the fill sat
+                     # (second_candle_options) — read there, wick fills included.
+                     'entry_path': t.get('entry_path'), 'exit_path': t.get('exit_path'),
                      # ...and where in that minute: the index's own open→close path puts the fill at
                      # the level. 13 Nov 2026 (tab 3) the 14:31 stop came at the minute's END (the
                      # index closed on its high, 25,104, the line 25,101.5): mid-minute read the PE

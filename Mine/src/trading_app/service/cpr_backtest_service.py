@@ -1203,8 +1203,10 @@ def _intraday_by_session(raw: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, 
         mins = stamp.hour * 60 + stamp.minute
         if mins < 9 * 60 + 15 or mins >= 15 * 60 + 30:
             continue
-        by.setdefault(stamp.strftime('%Y-%m-%d'), []).append({
-            'time': stamp.strftime('%H:%M'),
+        # Formatted by hand: strftime ran 5 M times (~5 s) in one 2017-26 OPT P&L
+        # Candle Breakout backtest, re-reading cached option days.
+        by.setdefault(f'{stamp.year:04d}-{stamp.month:02d}-{stamp.day:02d}', []).append({
+            'time': f'{stamp.hour:02d}:{mins % 60:02d}',
             'open': float(c['open']), 'high': float(c['high']),
             'low': float(c['low']), 'close': float(c['close']),
             'volume': float(c.get('volume') or 0),          # for the session VWAP the trade rule's stops can sit under
