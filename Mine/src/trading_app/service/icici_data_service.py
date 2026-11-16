@@ -1034,11 +1034,19 @@ class IciciDataServiceAdapter:
         if step is None:
             # Only the 5-minute window is sized here; anything else keeps the
             # shared chunking (and its in-memory chunk cache).
+            _HIST_ERROR.empty_answer = False
             bars = self.historical_option(root, expiry, strike, option_type,
                                           from_day.isoformat(), to_day.isoformat(), interval,
                                           exchange_code=exchange_code)
-            if bars and to_day < datetime.now(IST).date():
+            today = datetime.now(IST).date()
+            if bars and to_day < today:
                 _slice_cache_put(ckey, bars)
+            elif (not bars and getattr(_HIST_ERROR, 'empty_answer', False)
+                  and expiry < today - timedelta(days=_EMPTY_SETTLE_DAYS)):
+                # An expired strike Breeze answered "nothing" for (the Smart Wheel's
+                # strike ladder probes ones that were never listed): remember it,
+                # as the 5-minute path below does. A failed request is not cached.
+                _slice_cache_put(ckey, [])
             return bars or []
         code = master.stock_code(root, exchange_code)
         if not code:
@@ -1077,6 +1085,34 @@ class IciciDataServiceAdapter:
             _HIST_ERROR.msg = None
             if to_day < today:
                 _slice_cache_put(ckey, bars)
+        return bars
+
+    def historical_cash_daily(self, symbol: str, from_day: dt_date, to_day: dt_date,
+                              exchange_code: str = 'NSE') -> List[Dict[str, Any]]:
+        """A stock's daily NSE cash bars as they TRADED (Breeze's are not adjusted
+        for later splits or bonuses, which the per-stock files on disk are), so a
+        backtest can read which option strikes were listed on a past day.
+        Disk-cached once the range has closed; a range Breeze answered empty is
+        cached as [] too. One request per range up to _CHUNK_DAYS['1day']."""
+        ckey = f"{symbol.upper()}:cash:{exchange_code.upper()}:1day:{from_day.isoformat()}:{to_day.isoformat()}"
+        cached = _slice_cache_get(ckey)
+        if cached is not None:
+            _HIST_ERROR.msg = None
+            return cached
+        code = master.stock_code(symbol, exchange_code)
+        if not code:
+            _HIST_ERROR.msg = f"No ICICI stock_code for {symbol} on {exchange_code}"
+            return []
+        info = {
+            'root': symbol.upper(), 'stock_code': code, 'exchange_code': exchange_code.upper(),
+            'product_type': 'cash', 'expiry_date': '', 'right': '', 'strike_price': '',
+            'symbol': f"{symbol.upper()}:cash",
+        }
+        _HIST_ERROR.empty_answer = False
+        bars = self._history_chunk(info, '1day', from_day, to_day)
+        today = datetime.now(IST).date()
+        if to_day < today and (bars or getattr(_HIST_ERROR, 'empty_answer', False)):
+            _slice_cache_put(ckey, bars)
         return bars
 
     def historical_option_minute_closes(self, root: str, expiry: dt_date, strike: float,

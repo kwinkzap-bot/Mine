@@ -472,7 +472,7 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 263 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three and the Monthly RSI Breakout four (below, now with Find Best Params).
+The api blueprint is at 267 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params) and the Smart Wheel four (with Find Best Params).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
@@ -506,6 +506,47 @@ the `pcLots` row).
   Check a row on a range it was not swept on before trusting it. A test holds every board row equal to a direct run.
 
 Tests: `tests/test_hull_suite_engine.py`.
+
+## Smart Wheel backtest (NIFTY 50 stock options; `smart_wheel`)
+
+Added 2026-11-15 in the Mine group, from a video (Kundan Prajapati on Upsurge, youtube TVTvKDJ44Vs, Hindi; transcript via
+youtube-transcript-api). `Backtest/smart_wheel_engine.py` (pure), routes `/api/backtest/smart-wheel{,/status/<id>}`, params
+row `#smartWheelParamsRow` (`sw*` ids), results in the shared `#crResults` (+ `#bicYearGrid`, Equity Curve / P&L Breakdown as
+the RSI Breakout renders them), JS `runSmartWheel` / `renderSmartWheel`.
+
+* **Rule** (on daily closes): watchlist = NIFTY 50 stocks (`NIFTY50_SECTORS`, today's list) that have not fallen > 30 %
+  peak-to-trough in the last 5 years and are now ≥ 15 % under their all-time high; 5 at a time, one per sector. The session
+  after each monthly expiry, SELL that month's put ≥ 5 % under spot and under the 60-session low ("support"), if premium ×
+  qty ≥ 1 % of the ₹2 L per stock. A close at/under the put's breakeven → buy it back, buy the future, sell the ATM call
+  (next month's under 10 sessions left). Up: above the call's breakeven with ≤ 10 % of its premium left as time value
+  (`TIME_VALUE_LEFT`), or at its expiry → close both. Sideways: call expires → sell the next. Down: a close under
+  future entry − every call premium kept → sell the future, buy the call back. The video's "take delivery and wait" is not
+  modelled. Until the up-exit waited for the time value it closed at the bare call breakeven and lost money on most of them.
+* **Lot = `contract_value` (₹5 L) ÷ spot**, not NSE's real lot (not stored); the future is the stock less `carry_pct`
+  (0.5 %) a month.
+* **Premiums**: `prices='breeze'` reads each expired contract's real daily close (`historical_option_range(..., interval='day')`,
+  one request a contract, disk-cached; an expired strike Breeze answers empty is now cached as `[]` on that path too) —
+  `_sw_budget()` 400 requests in market hours, else 2,500, re-run carries on. **The stock files are split/bonus ADJUSTED**
+  (Reliance reads ₹655 in Feb 2020), so `BreezePrices` reads the unadjusted cash closes (`IciciAdapter.historical_cash_daily`,
+  new, one request a calendar year, cached) and moves every level onto the traded scale before asking for a strike, and every
+  premium back after. Strikes are probed on `strike_ladder` (fine step, then coarser; whole rupees only — Breeze takes an
+  integer strike). `prices='model'` = Black-Scholes on 20-session realised vol × `iv_mult` (1.2), no broker call.
+* **First run, model premiums only** (Breeze session expired that Sunday): 2015-01 → 2026-11, ₹10 L: 186 puts, 88.5 % won,
+  +₹10.3 L, CAGR 6.2 %, max DD 9.3 % (Mar 2020), PF 3.5; 38 run through, 14 stopped, worst −₹74.5 k (Reliance Mar 2020).
+  2021-24 trade little: the 15 %-off-high filter rarely passes in a bull run. **No real-premium run yet.**
+* **⚡ Find Best Params** (added the same evening): routes `/api/backtest/smart-wheel/optimise{,/status/<id>}`, panel
+  `#smartWheelOptimisePanel` / `#swOptGrid`, JS `runSwOptimise` / `applySwOptResult`. `SWEEP_GRID` = max fall (25-40) ×
+  under the high (10-25) × put distance (3-10) × support (off/20/60/120) × min premium (0.5-1.5) × `up_tv_pct` (10/25/50,
+  the up-exit's time value, now a box: "Up Exit: Time Value Left %") = 2,304 combos; money boxes and the premium source
+  come from the page. `board()` = union of the top 60 by CAGR ÷ DD, by CAGR and by the weaker half's CAGR (≥ 10 puts). On
+  **Breeze** it reads only contracts already on disk (`_sw_cached_fetchers()` with no state: never a request). A test
+  holds every sweep row equal to a direct `simulate` + `score` of its settings. ~65 s for 2015-20 on model premiums
+  (a run is ~0.05 s since `monthly_expiries` / the entry days use `bisect` — rebuilding a numpy date array per month
+  had made it 1.7 s). **It overfits**: 2015-20's top row (fall 40 · 15 % off high · put 10 % below · support 20 ·
+  premium 1.5 %) read CAGR 13.2 % / DD 2.9 % there (defaults 8.0 % / 9.3 %) but 6.5 % / 3.6 % on 2021-26, where the
+  defaults made 6.5 % / 3.0 %. Model premiums too, so read a board as a shortlist to try on Breeze, not an answer.
+
+Tests: `tests/test_smart_wheel_engine.py`.
 
 ## RSI 60-65 Breakout backtest — Day / Week / Month (stocks; `monthly_rsi_breakout`)
 

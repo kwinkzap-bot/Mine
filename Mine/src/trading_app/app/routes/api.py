@@ -10290,6 +10290,268 @@ def monthly_rsi_breakout_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+# ─── Smart Wheel (stock options) ─────────────────────────────────────────────
+# Sell a monthly put under support on a strong NIFTY 50 stock; if it is run
+# through, own the future and sell ATM calls against it. See
+# Backtest/smart_wheel_engine.py. Stock levels come from the per-stock daily files
+# on disk; premiums from Breeze (prices='breeze', the real closes of expired
+# contracts, disk-cached — a run spends at most _sw_budget() requests and a re-run
+# carries on from the cache) or from a Black-Scholes model (prices='model', no
+# broker call at all, so safe in market hours).
+_sw_tasks: dict = {}
+_sw_tasks_lock = threading.Lock()
+
+
+def _sw_budget() -> int:
+    """Breeze requests one Smart Wheel run may spend; the ~5,000/day is shared with
+    the live algos, so less in market hours."""
+    return 400 if _cr_in_market() else 2500
+
+
+def _sw_parse(data: dict):
+    from datetime import date as _date
+    from trading_app.Backtest.smart_wheel_engine import DEFAULTS, NIFTY50_SECTORS
+    start_d = _date.fromisoformat(str(data.get('start_date') or ''))
+    end_d = _date.fromisoformat(str(data.get('end_date') or ''))
+    if end_d < start_d:
+        raise ValueError('end_date is before start_date')
+    prices = str(data.get('prices', DEFAULTS['prices'])).lower()
+    if prices not in ('breeze', 'model'):
+        raise ValueError('prices must be breeze or model')
+    raw = data.get('symbols')
+    if isinstance(raw, str):
+        raw = re.split(r'[\s,]+', raw)
+    symbols = [s.strip().upper() for s in (raw or []) if s and s.strip()] or list(NIFTY50_SECTORS)
+    f = lambda k, lo, hi: _mrb_float(data, k, DEFAULTS[k], lo, hi)
+    p = {
+        'max_dd_pct': f('max_dd_pct', 0, 100), 'dd_years': f('dd_years', 0.5, 15),
+        'min_off_high_pct': f('min_off_high_pct', 0, 100), 'min_dist_pct': f('min_dist_pct', 0, 50),
+        'support_days': int(f('support_days', 0, 750)), 'min_prem_pct': f('min_prem_pct', 0, 20),
+        'capital_per_stock': f('capital_per_stock', 10_000, 1e9),
+        'contract_value': f('contract_value', 10_000, 1e9),
+        'max_positions': int(f('max_positions', 1, 50)),
+        'one_per_sector': bool(data.get('one_per_sector', DEFAULTS['one_per_sector'])),
+        'min_call_days': int(f('min_call_days', 0, 25)), 'carry_pct': f('carry_pct', 0, 5),
+        'brokerage': f('brokerage', 0, 10_000), 'iv_mult': f('iv_mult', 0.3, 5),
+        'up_tv_pct': f('up_tv_pct', 0, 100),
+    }
+    return start_d, end_d, prices, symbols, p
+
+
+@api_bp.route('/backtest/smart-wheel', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_smart_wheel_backtest_api():
+    """Start a Smart Wheel backtest; poll /backtest/smart-wheel/status/<task_id>.
+
+    Body: start_date, end_date; symbols (list or comma text, default today's NIFTY 50);
+    prices 'breeze' (default; real closes, needs the ICICI login) | 'model' (Black-Scholes on
+    20-session realised vol × iv_mult); max_dd_pct (30) over dd_years (5); min_off_high_pct (15);
+    min_dist_pct (5); support_days (60, 0 = off); min_prem_pct (1, of capital_per_stock);
+    capital_per_stock (₹2 L); contract_value (₹5 L of stock a lot); max_positions (5);
+    one_per_sector (true); min_call_days (10); carry_pct (0.5 a month); brokerage (₹20 an order);
+    iv_mult (1.2, model only); up_tv_pct (10: an up-move closes both legs once the call keeps
+    ≤ this % of its premium as time value)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        start_d, end_d, prices_kind, symbols, p = _sw_parse(request.get_json(silent=True) or {})
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': f'Bad parameters: {e}'}), 400
+    icici = None
+    if prices_kind == 'breeze':
+        icici = get_icici_adapter()
+        if icici is None:
+            return jsonify({'success': False,
+                            'error': 'Real premiums come from ICICI Direct, which is not logged in — '
+                                     'log in to ICICI, or set Premiums to Model.'}), 503
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': 0, 'stage': 'loading stocks', 'requests': 0}}
+    with _sw_tasks_lock:
+        _sw_tasks[task_id] = task
+
+    def _run():
+        from trading_app.Backtest import smart_wheel_engine as sw
+        try:
+            stocks, missing = _sw_load_stocks(symbols)
+            state = {'requests': 0, 'budget': _sw_budget(), 'over': 0}
+            fetch_option, fetch_cash = _sw_cached_fetchers(icici, state)
+            if prices_kind == 'breeze':
+                prices = sw.BreezePrices(stocks, fetch_option, fetch_cash)
+            else:
+                prices = sw.ModelPrices(stocks, p['iv_mult'])
+            task['progress']['stage'] = 'walking the sessions'
+
+            def progress(done, total):
+                task['progress'].update({'done': done, 'total': total, 'requests': state['requests']})
+
+            result = sw.simulate(stocks, prices, start_d, end_d, progress=progress, **p)
+            summary = sw.summarise(result, start_d, end_d)
+            summary.update({
+                'prices': prices_kind, 'symbols': len(symbols), 'symbols_missing': missing,
+                'params': {**p, 'prices': prices_kind},
+                'breeze_requests': state['requests'], 'breeze_budget': state['budget'],
+                'breeze_over_budget': state['over'],
+                'contracts': getattr(prices, 'contracts', 0), 'contracts_empty': getattr(prices, 'empty', 0),
+            })
+            logger.info('[SmartWheel] %s..%s %s: %d stocks -> %d trades, %d Breeze requests (%d over budget)',
+                        start_d, end_d, prices_kind, len(stocks), len(result['trades']),
+                        state['requests'], state['over'])
+            task['payload'] = {'trades': result['trades'], 'summary': summary}
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[SmartWheel] run failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'sw-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+@api_bp.route('/backtest/smart-wheel/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def smart_wheel_status(task_id):
+    """Poll a Smart Wheel backtest; the result is delivered once, then dropped."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _sw_tasks_lock:
+        task = _sw_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task['progress'], 'elapsed': elapsed})
+    with _sw_tasks_lock:
+        _sw_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
+def _sw_cached_fetchers(icici=None, state=None):
+    """Breeze fetchers for the Smart Wheel. With `state` (the backtest) a contract not
+    on disk is fetched until state['budget'] requests are spent; without it (Find Best
+    Params, thousands of runs) only what is already cached is read — never a request."""
+    from trading_app.service import icici_data_service as _ids
+
+    def _opt_key(sym, expiry, strike, right, a, b):
+        k = int(strike) if float(strike).is_integer() else strike
+        return (f"{sym}:{expiry.isoformat()}:{k}:{'call' if right == 'CE' else 'put'}"
+                f":day:r:{a.isoformat()}:{b.isoformat()}")
+
+    def _spend(call):
+        before = getattr(_ids._HIST_ERROR, 'requests', 0)
+        out = call()
+        state['requests'] += getattr(_ids._HIST_ERROR, 'requests', 0) - before
+        return out
+
+    def fetch_option(sym, expiry, strike, right, a, b):
+        cached = _ids._slice_cache_get(_opt_key(sym, expiry, strike, right, a, b))
+        if cached is not None or state is None or icici is None:
+            return cached or []
+        if state['requests'] >= state['budget']:
+            state['over'] += 1
+            return []
+        return _spend(lambda: icici.historical_option_range(sym, expiry, strike, right, a, b, interval='day'))
+
+    def fetch_cash(sym, a, b):
+        b = min(b, datetime.now().date())
+        cached = _ids._slice_cache_get(f"{sym}:cash:NSE:1day:{a.isoformat()}:{b.isoformat()}")
+        if cached is not None or state is None or icici is None:
+            return cached or []
+        if state['requests'] >= state['budget']:
+            state['over'] += 1
+            return []
+        return _spend(lambda: icici.historical_cash_daily(sym, a, b))
+
+    return fetch_option, fetch_cash
+
+
+def _sw_load_stocks(symbols):
+    from trading_app.Backtest import smart_wheel_engine as sw
+    from trading_app.Backtest.monthly_rsi_breakout_engine import clean_daily
+    from trading_app.filters.candle_store import _load_disk
+    stocks, missing = {}, []
+    for sym in symbols:
+        entry = _load_disk(sym)
+        df = None if entry is None else entry.get('df')
+        if df is None or df.empty:
+            missing.append(sym)
+            continue
+        stocks[sym] = sw.Stock(sym, clean_daily(df))
+    if not stocks:
+        raise RuntimeError('None of the stocks has a daily file on disk.')
+    return stocks, missing
+
+
+@api_bp.route('/backtest/smart-wheel/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_smart_wheel_optimise():
+    """Start a Smart Wheel Find Best Params sweep (smart_wheel_engine.SWEEP_GRID: max fall ×
+    distance under the high × put distance × support look-back × min premium × up-exit time
+    value, 2,304 combos) on the page's other boxes; poll /backtest/smart-wheel/optimise/status/<id>.
+    Premiums follow the page: 'model' needs no broker; 'breeze' reads ONLY contracts already
+    cached by backtest runs (no request — a contract not on disk is 'no premium'), so it
+    ranks on what the backtest has fetched."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        start_d, end_d, prices_kind, symbols, p = _sw_parse(request.get_json(silent=True) or {})
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': f'Bad parameters: {e}'}), 400
+    from trading_app.Backtest import smart_wheel_engine as sw
+    combos = len(sw.sweep_combos())
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'stage': 'loading', 'done': 0, 'total': combos}}
+    with _sw_tasks_lock:
+        _sw_tasks[task_id] = task
+
+    def _run():
+        try:
+            stocks, missing = _sw_load_stocks(symbols)
+            if prices_kind == 'breeze':
+                prices = sw.BreezePrices(stocks, *_sw_cached_fetchers())
+            else:
+                prices = sw.ModelPrices(stocks, p['iv_mult'])
+
+            def _progress(done, total):
+                task['progress'] = {'stage': 'scoring', 'done': done, 'total': total}
+
+            rows = sw.sweep(stocks, prices, start_d, end_d, base=p, progress=_progress)
+            results = sw.board(rows, min_trades=sw.SWEEP_MIN_TRADES, size=sw.SWEEP_BOARD)
+            logger.info('[SmartWheel] optimise %s..%s %s: %d stocks, %d combos -> %d on the board',
+                        start_d, end_d, prices_kind, len(stocks), len(rows), len(results))
+            task['payload'] = {
+                'total_combos_tested': len(rows), 'total': len(results), 'min_trades': sw.SWEEP_MIN_TRADES,
+                'prices': prices_kind, 'symbols': len(stocks), 'symbols_missing': missing,
+                'results': results, 'best': results[0] if results else None,
+            }
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[SmartWheel] optimise failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'sw-opt-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+@api_bp.route('/backtest/smart-wheel/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def smart_wheel_optimise_status(task_id):
+    """Poll a Smart Wheel Find Best Params sweep; delivered once, then dropped."""
+    return smart_wheel_status(task_id)
+
+
 @api_bp.route('/backtest/monthly-rsi-breakout/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth

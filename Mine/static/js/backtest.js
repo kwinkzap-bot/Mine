@@ -574,8 +574,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (bicOptPanel)   bicOptPanel.style.display   = 'none';
         const mrbOptPanel   = document.getElementById('monthlyRsiBreakoutOptimisePanel');
         if (mrbOptPanel)   mrbOptPanel.style.display   = 'none';
+        const swOptPanel    = document.getElementById('smartWheelOptimisePanel');
+        if (swOptPanel)    swOptPanel.style.display    = 'none';
         const mrbParamsRow  = document.getElementById('monthlyRsiBreakoutParamsRow');
         if (mrbParamsRow)  mrbParamsRow.style.display  = 'none';
+        const swParamsRow   = document.getElementById('smartWheelParamsRow');
+        if (swParamsRow)   swParamsRow.style.display   = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
         const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
         if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
@@ -606,7 +610,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'hilega_milega' || val === 'ma_htf' || val === 'hull_suite' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'smart_wheel' || val === 'hilega_milega' || val === 'ma_htf' || val === 'hull_suite' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -889,6 +893,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const wcbEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2017-01-01';
             if (wcbEnd) wcbEnd.value = localToday();
+        } else if (val === 'smart_wheel') {
+            if (swParamsRow) swParamsRow.style.display = 'grid';
+            // A NIFTY 50 portfolio on daily closes: the Stocks box replaces the
+            // Symbol box, and the timeframe is fixed by the rule.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            const swSym = document.getElementById('swSymbols');
+            if (swSym) swSym.placeholder = 'blank = today\'s NIFTY 50 (e.g. LT, RELIANCE, ICICIBANK)';
+            const swEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = '2020-01-01';
+            if (swEnd) swEnd.value = localToday();
         } else if (val === 'monthly_rsi_breakout') {
             if (mrbParamsRow) mrbParamsRow.style.display = 'grid';
             // A whole-market scan on monthly candles: the universe box replaces the
@@ -1001,7 +1016,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['hull_suite', 'monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators', 'atm_straddle'],
+        mine:    ['hull_suite', 'smart_wheel', 'monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators', 'atm_straddle'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
@@ -1255,6 +1270,14 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Credit', 'The net credit must be at least 4% of capital, or the week is skipped.'],
             ['Adjust', 'A short must not double, must not reach 0.30 delta, and one side\'s delta must not exceed twice the other\'s: that side (short + hedge) is closed and re-sold at 0.20. A short that has decayed 50% is rolled in to 0.20.'],
             ['Exit', '+1% / −1% of capital on the mark-to-market (5-minute closes), or next Friday 15:00. At 15:15 a profit of 0.8%+ or a loss of 0.9%+ is not carried overnight.']] },
+        smart_wheel: { sub: 'Sell monthly puts on beaten-down NIFTY 50 stocks; if run through, own the future and sell ATM calls', steps: [
+            ['Watchlist', 'NIFTY 50 stocks that have not fallen more than 30 % from a peak in the last 5 years, and are now at least 15 % under their all-time high. Five at a time, one per sector.'],
+            ['Put', 'The session after each monthly expiry: SELL that month\'s put at least 5 % under spot and under the lowest close of the last 60 sessions (the "support"). Only if premium × qty is at least 1 % of the ₹2 L set aside for the stock. Expires worthless → sell the next one.'],
+            ['Run through', 'A close at or under the put\'s breakeven (strike − premium): buy the put back, buy the stock future, sell the ATM call (next month\'s when fewer than 10 sessions are left).'],
+            ['Up', 'A close above the call\'s breakeven (strike + premium): close the future and the call together.'],
+            ['Sideways', 'The call expires: keep the future and sell the next ATM call. Every premium kept lowers the future\'s breakeven.'],
+            ['Down', 'A close under the future\'s breakeven (entry − every call premium kept): sell the future, buy the call back. The video would take delivery and wait; here a stop is a stop.'],
+            ['Prices', 'Daily closes. A lot is ₹5 L of stock; the future is the stock less 0.5 % a month carry. Premiums are Breeze\'s real closes of the expired contracts, or a Black-Scholes model on realised volatility.']] },
         monthly_rsi_breakout: { sub: 'F&O stocks whose monthly RSI closes 65-75, bought on a break of that candle\'s high, out on a 10 EMA break', steps: [
             ['Defaults', 'Swept on 2015-26 at ₹1 L: F&O stocks, RSI 65-75, a 10 EMA and 0.5 % risk beat the video\'s RSI 60-65 / 20 EMA / 1 % in 10 of 12 years. The video\'s numbers are still in the boxes\' notes.'],
             ['Timeframe', 'Month is the video\'s. Week or Day runs the same rule on those candles: read "month" below as "candle". The 5-a-month cap stays per calendar month.'],
@@ -1401,6 +1424,7 @@ document.addEventListener('DOMContentLoaded', function() {
         biweekly_iron_condor: 'a four-leg option position that is adjusted as it goes, not a single chart',
         swing_momentum: 'a monthly stock portfolio, not a single chart',
         monthly_rsi_breakout: 'a portfolio of stocks picked across the market each month, not a single chart',
+        smart_wheel: 'a portfolio of stock options and futures across NIFTY 50, not a single chart',
     };
     const BT_LOGIC_DAILY = ['ema_pullback', 'hilega_milega', 'weekly_cpr_breakout'];
     const BT_LOGIC_INTERVAL = { expiry_breakout: '60minute', thirty_min_fakeout: '5minute', second_candle: 'minute' };
@@ -1736,6 +1760,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (_strat === 'monthly_rsi_breakout') {
             await runMonthlyRsiBreakout();
+            return;
+        }
+        if (_strat === 'smart_wheel') {
+            await runSmartWheel();
             return;
         }
         // Also backgrounded: every F&O stock, minutes on a cold cache.
@@ -3121,6 +3149,184 @@ document.addEventListener('DOMContentLoaded', function() {
         renderEquityCurve(mrbTrades, true, 1, 1, s.capital || 100000);
         const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
         renderPeriodBreakdown(mrbTrades, true, 1, 1, activePeriod, true);
+
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = '';
+    }
+
+
+    // ── Smart Wheel — start + poll ─────────────────────────────────────
+    // Monthly stock puts → future + covered calls (smart_wheel_engine). Breeze
+    // prices are one request a contract, cached, so a long range is minutes cold.
+    function _swPayload() {
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        return {
+            start_date: document.getElementById('startDate')?.value,
+            end_date:   document.getElementById('endDate')?.value,
+            prices: document.getElementById('swPrices')?.value || 'breeze',
+            symbols: (document.getElementById('swSymbols')?.value || '').trim(),
+            max_dd_pct: num('swMaxDd', 30), dd_years: num('swDdYears', 5),
+            min_off_high_pct: num('swOffHigh', 15), min_dist_pct: num('swMinDist', 5),
+            support_days: num('swSupport', 60), min_prem_pct: num('swMinPrem', 1),
+            capital_per_stock: num('swCapital', 200000), contract_value: num('swContract', 500000),
+            max_positions: num('swMaxPos', 5),
+            one_per_sector: (document.getElementById('swSector')?.value || '1') === '1',
+            min_call_days: num('swMinCallDays', 10), carry_pct: num('swCarry', 0.5),
+            brokerage: num('swBrokerage', 20), iv_mult: num('swIvMult', 1.2),
+            up_tv_pct: num('swUpTv', 10),
+        };
+    }
+    function syncSwPrices() {
+        const fg = document.getElementById('swIvFg');
+        if (fg) fg.style.display = (document.getElementById('swPrices')?.value === 'model') ? '' : 'none';
+    }
+    document.getElementById('swPrices')?.addEventListener('change', syncSwPrices);
+    syncSwPrices();
+
+    async function runSmartWheel() {
+        const payload = _swPayload();
+        const title = `Running Smart Wheel (${payload.prices === 'model' ? 'model premiums' : 'Breeze premiums'})`;
+        const myRun = ++_crRun;
+        resultsArea.style.display = 'none';
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/smart-wheel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 1500));
+                if (myRun !== _crRun) return;
+                data = await (await fetch(`/api/backtest/smart-wheel/status/${taskId}`)).json();
+                if (myRun !== _crRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader(title, `${p.done || 0} / ${p.total || 0} sessions`
+                    + (payload.prices === 'breeze' ? ` · ${p.requests || 0} Breeze requests` : '')
+                    + ` · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            const s = data.summary || {};
+            if (s.breeze_over_budget) window.showNotification(
+                `Breeze budget reached (${s.breeze_requests} requests): ${s.breeze_over_budget} contracts left unpriced — run it again to carry on from the cache`, 'info');
+            if ((s.symbols_missing || []).length) window.showNotification(
+                `No daily file for ${s.symbols_missing.join(', ')}`, 'info');
+            renderSmartWheel(data);
+        } catch (err) {
+            if (myRun !== _crRun) return;
+            _hideOptLoader();
+            console.error('Smart Wheel error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderSmartWheel(data) {
+        const s = data.summary || {};
+        const ph = document.getElementById('btRightPlaceholder');
+        if (ph) ph.style.display = 'none';
+        const rupees = v => '₹' + Math.abs(Math.round(v || 0)).toLocaleString('en-IN');
+        const inr = v => (v >= 0 ? '+' : '−') + rupees(v);
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const r = s.by_reason || {};
+        const sk = s.skipped || {};
+        const fl = s.filtered || {};
+        const priced = s.prices === 'model' ? 'model premiums (an estimate)' : `Breeze closes · ${s.contracts || 0} contracts read, ${s.breeze_requests || 0} requests`;
+        const stats = document.getElementById('crStats');
+        if (stats) stats.innerHTML = [
+            card('Puts Sold', String(s.total_trades || 0), 'ac-blue',
+                 `${r['Put expired worthless'] || 0} expired worthless · ${s.assigned || 0} run through → future + ${s.calls_sold || 0} calls · ${s.open_trades || 0} open · ${priced}`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green',
+                 `${s.wins || 0} W / ${s.losses || 0} L · avg win ${inr(s.avg_win || 0)} · avg loss ${inr(s.avg_loss || 0)}`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `${rupees(s.capital)} → ${rupees(s.final_equity)} · ${pct(s.return_pct)} on the capital`),
+            card('CAGR', pct(s.cagr_pct), 'ac-blue', `${pct(s.avg_month_pct)} a month on average · ${s.losing_months || 0} losing months`),
+            card('Max Drawdown', { text: '−' + rupees(s.max_drawdown_rupees), cls: 'stat-val-red' }, 'ac-red',
+                 `${(s.max_drawdown_pct || 0).toFixed(1)}% on daily marked equity, ${s.max_drawdown_date || '—'} · worst trade ${inr(s.worst_trade || 0)}`),
+            card('Profit Factor', String(s.profit_factor ?? '—'), 'ac-blue',
+                 `best ${inr(s.best_trade || 0)} · ${rupees(s.total_charges)} costs, of which ${rupees(s.total_carry)} futures carry`),
+            card('After the Put', `${r['Breakout above the call — both closed'] || 0} up · ${r['Stop — future under its breakeven'] || 0} stopped`, 'ac-blue',
+                 `${r['Put settled in the money'] || 0} puts settled in the money without a breakeven close · up to ${s.max_covered || 0} futures held at once`),
+            card('Not Taken', String((sk.premium || 0) + (sk.no_quote || 0) + (sk.slots || 0) + (sk.sector || 0)), 'ac-blue',
+                 `${sk.premium || 0} premium too small · ${sk.no_quote || 0} no premium · ${sk.slots || 0} slots full · ${sk.sector || 0} sector taken · filtered out (stock-months): ${fl.near_high || 0} near high, ${fl.drawdown || 0} fell > ${s.params?.max_dd_pct ?? 30}%, ${fl.history || 0} short history`),
+        ].join('');
+        DataGrid.mountSortable('bicYearGrid', {
+            rows: s.by_year || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                { key: 'puts', label: 'Puts Sold', sortable: true },
+                { key: 'assigned', label: 'Run Through', sortable: true },
+                { key: 'closed', label: 'Closed', sortable: true },
+                { key: 'wins', label: 'Won', sortable: true },
+                { key: 'booked', label: 'Booked P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'end_equity', label: 'Year-end Equity', sortable: true, format: v => rupees(v) },
+                { key: 'return_pct', label: 'Return', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'max_dd_pct', label: 'Max DD', sortable: true, format: v => (v == null ? '—' : '−' + Number(v).toFixed(2) + '%') },
+            ],
+            empty: 'No years in this range',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        const bicYears = document.getElementById('bicYears');
+        if (bicYears) bicYears.style.display = '';
+        const px = v => (v == null ? '—' : Number(v).toFixed(2));
+        DataGrid.mountSortable('crGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'symbol', label: 'Stock', sortable: true, title: (v, r) => r.sector },
+                { key: 'entry_date', label: 'Put Sold', sortable: true },
+                { key: 'spot', label: 'Spot', sortable: true, format: px,
+                  title: (v, r) => `${r.off_high_pct}% under its high · ${r.dd5y_pct}% worst fall in the look-back` },
+                { key: 'put_strike', label: 'Put', sortable: true, format: (v, r) => `${px(v)} (−${r.put_dist_pct}%)` },
+                { key: 'put_premium', label: 'Premium', sortable: true, format: px },
+                { key: 'put_exit', label: 'Put Out', sortable: true, format: px },
+                { key: 'qty', label: 'Qty', sortable: true },
+                { key: 'fut_entry', label: 'Future', sortable: true, format: (v, r) => (v == null ? '—' : `${px(v)} → ${px(r.fut_exit)}`),
+                  title: (v, r) => (r.fut_date ? `bought ${r.fut_date}` : '') },
+                { key: 'n_calls', label: 'Calls', sortable: true,
+                  title: (v, r) => (r.calls || []).map(c => `${c.sold}: ${c.strike} CE ${c.expiry} @ ${px(c.premium)} → ${px(c.exit)}`).join('\n') },
+                { key: 'exit_date', label: 'Closed', sortable: true },
+                { key: 'reason', label: 'Outcome', sortable: true },
+                { key: 'put_pnl', label: 'Put P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'fut_pnl', label: 'Future P&L', sortable: true, format: v => (v ? DataGrid.inr(v) : '—'), tone: DataGrid.sign },
+                { key: 'call_pnl', label: 'Call P&L', sortable: true, format: v => (v ? DataGrid.inr(v) : '—'), tone: DataGrid.sign },
+                { key: 'charges', label: 'Costs', sortable: true, format: v => rupees(v) },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+            ],
+            empty: 'No put was sold in this range',
+            defaultSort: { key: 'entry_date', dir: 'desc' },
+        });
+
+        // Equity Curve + P&L Breakdown, as the RSI Breakout renders them (see there for
+        // why resultsArea is shown before the charts are built).
+        const resultsRow1 = document.getElementById('resultsRow1');
+        if (resultsRow1) resultsRow1.style.display = 'none';
+        if (resultsArea) resultsArea.style.display = '';
+        const swTrades = (data.trades || []).map(t => ({ ...t, entry_time: t.exit_date }));
+        _periodTrades = swTrades;
+        _periodIsMoney = true;
+        _periodLots = 1;
+        _periodLotValue = 1;
+        _periodUseDirectRupees = true;
+        renderEquityCurve(swTrades, true, 1, 1, s.capital || 1000000);
+        const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
+        renderPeriodBreakdown(swTrades, true, 1, 1, activePeriod, true);
 
         const crRes = document.getElementById('crResults');
         if (crRes) crRes.style.display = '';
@@ -5558,6 +5764,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'call_ratio') runCrOptimise(false);
         else if (strat === 'biweekly_iron_condor') runBicOptimise(false);
         else if (strat === 'monthly_rsi_breakout') runMrbOptimise();
+        else if (strat === 'smart_wheel') runSwOptimise();
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'hull_suite') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
@@ -7055,6 +7262,95 @@ document.addEventListener('DOMContentLoaded', function() {
             _hideOptLoader();
             done();
             console.error('RSI Breakout optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
+
+
+    // ── Smart Wheel — Find Best Params ─────────────────────────────────
+    // smart_wheel_engine.SWEEP_GRID (max fall × under the high × put distance × support ×
+    // min premium × up-exit time value, 2,304 combos) on the page's other boxes. Model
+    // premiums need no broker; Breeze reads only contracts the backtest has cached.
+    let _swOptRun = 0;
+    const SW_OPT_COLS = [
+        { label: '#',            key: null,               fmt: (r, i) => i + 1 },
+        { label: 'Max Fall',     key: 'max_dd_pct',       fmt: r => `${r.max_dd_pct}%` },
+        { label: 'Under High',   key: 'min_off_high_pct', fmt: r => `${r.min_off_high_pct}%` },
+        { label: 'Put Below',    key: 'min_dist_pct',     fmt: r => `${r.min_dist_pct}%` },
+        { label: 'Support',      key: 'support_days',     fmt: r => r.support_days ? `${r.support_days} d` : 'Off' },
+        { label: 'Min Prem',     key: 'min_prem_pct',     fmt: r => `${r.min_prem_pct}%` },
+        { label: 'Up Exit TV',   key: 'up_tv_pct',        fmt: r => `${r.up_tv_pct}%` },
+        { label: 'Puts',         key: 'total_trades',     fmt: r => r.total_trades },
+        { label: 'Win%',         key: 'win_rate',         fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Run Through',  key: 'assigned',         fmt: r => `${r.assigned} (${r.stops} stopped)` },
+        { label: 'CAGR',         key: 'cagr_pct',         fmt: r => _crPct(r.cagr_pct) },
+        { label: 'Max DD',       key: 'max_drawdown_pct', fmt: r => `<span class="pnl-negative">${(r.max_drawdown_pct ?? 0).toFixed(1)}%</span>` },
+        { label: 'CAGR÷DD',      key: 'cagr_dd',          fmt: r => (r.cagr_dd ?? 0).toFixed(2) },
+        { label: 'Worst Year',   key: 'worst_year_pct',   fmt: r => _crPct(r.worst_year_pct) },
+        { label: 'Losing Yrs',   key: 'losing_years',     fmt: r => r.losing_years },
+        { label: '1st Half',     key: 'first_half_cagr',  fmt: r => _crPct(r.first_half_cagr) },
+        { label: '2nd Half',     key: 'second_half_cagr', fmt: r => _crPct(r.second_half_cagr) },
+        { label: 'Worst Trade',  key: 'worst_trade',      fmt: r => _rs(r.worst_trade) },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees',   fmt: r => _rs(r.net_pnl_rupees) },
+        { label: '',             key: null,               fmt: () => '' },   // Use button
+    ];
+
+    function applySwOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('swMaxDd', String(r.max_dd_pct));
+        set('swOffHigh', String(r.min_off_high_pct));
+        set('swMinDist', String(r.min_dist_pct));
+        set('swSupport', String(r.support_days));
+        set('swMinPrem', String(r.min_prem_pct));
+        set('swUpTv', String(r.up_tv_pct));
+        if (window.showNotification) window.showNotification(
+            `Applied: max fall ${r.max_dd_pct}% · ${r.min_off_high_pct}% under the high · put ${r.min_dist_pct}% below `
+            + `· support ${r.support_days || 'off'} · premium ${r.min_prem_pct}% · up exit at ${r.up_tv_pct}% time value `
+            + `· CAGR ${r.cagr_pct}% · Max DD ${r.max_drawdown_pct}% — check it on another date range before trusting it`, 'success');
+    }
+
+    async function runSwOptimise() {
+        const panel    = document.getElementById('smartWheelOptimisePanel');
+        const optimBtn = document.getElementById('runOptimiseBtn');
+        const origText = optimBtn ? optimBtn.textContent : '';
+        if (optimBtn) { optimBtn.textContent = '⏳ Running…'; optimBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_swOptRun;
+        const done = () => { if (optimBtn) { optimBtn.textContent = origText; optimBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/smart-wheel/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_swPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _swOptRun) return;
+                data = await (await fetch(`/api/backtest/smart-wheel/optimise/status/${taskId}`)).json();
+                if (myRun !== _swOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Finding best params…', `${p.stage === 'scoring' ? 'scoring combos' : 'loading stocks'} · ${p.done || 0} / ${p.total || 0} · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            const metaEl = document.getElementById('swOptMeta');
+            if (metaEl) metaEl.textContent =
+                `${(data.total_combos_tested || 0).toLocaleString('en-IN')} combos · ${data.total} on the board `
+                + `(≥ ${data.min_trades} puts; best CAGR÷DD / CAGR / weaker half) · ${data.symbols} stocks · `
+                + (data.prices === 'model' ? 'model premiums' : 'Breeze premiums, cached contracts only');
+            _mountSingleOptGrid('swOptGrid', data.results || [], SW_OPT_COLS, 'cagr_dd', applySwOptResult);
+            if (panel) panel.style.display = '';
+        } catch (err) {
+            if (myRun !== _swOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('Smart Wheel optimise error:', err);
             window.showNotification(err.message || 'Optimisation failed', 'error');
         }
     }
