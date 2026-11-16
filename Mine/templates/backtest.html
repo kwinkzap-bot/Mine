@@ -2016,24 +2016,24 @@
                 <div class="form-group">
                     <label for="osCadence" title="Monthly: one trade a month on next month's monthly expiry. Weekly: one trade a week on the next weekly expiry (NIFTY weeklies exist from 2019-02-11).">Expiry</label>
                     <select id="osCadence">
-                        <option value="monthly" selected>Monthly</option>
-                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="weekly" selected>Weekly</option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label for="osEntryDay" title="Monthly: the day of each month the straddle is sold, on the NEXT monthly expiry at least 14 days out. Weekly: the day of each week, on the first weekly expiry after it. The session before it when that day is a holiday.">Entry Day</label>
                     <select id="osEntryDay">
-                        <option value="last_monday">Last Monday of month</option>
-                        <option value="last_tuesday">Last Tuesday of month</option>
-                        <option value="last_wednesday">Last Wednesday of month</option>
-                        <option value="last_thursday">Last Thursday of month</option>
-                        <option value="last_friday" selected>Last Friday of month</option>
-                        <option value="after_expiry">Day after monthly expiry</option>
+                        <option value="monday" selected>Monday</option>
+                        <option value="tuesday">Tuesday</option>
+                        <option value="wednesday">Wednesday</option>
+                        <option value="thursday">Thursday</option>
+                        <option value="friday">Friday</option>
+                        <option value="after_expiry">Day after weekly expiry</option>
                     </select>
                 </div>
                 <div class="form-group">
                     <label for="osSkipOneNight" title="Weekly only. Do not trade a week whose expiry is the very next session — a straddle held for one night carries the whole overnight gap on a small premium (Mon → Tue expiry since Sep 2025). 3-Feb-2026 opened 713 points up and lost 4½× the premium.">Skip one-night trades</label>
-                    <select id="osSkipOneNight" disabled>
+                    <select id="osSkipOneNight">
                         <option value="false" selected>No</option>
                         <option value="true">Yes (weekly)</option>
                     </select>
@@ -2056,17 +2056,17 @@
                 </div>
                 <div class="form-group">
                     <label for="osTarget" title="The whole straddle is bought back once its mark-to-market profit reaches this % of the premium collected (CE + PE sold).">Target % of Premium</label>
-                    <input type="number" id="osTarget" value="5" min="0.5" step="0.5">
+                    <input type="number" id="osTarget" value="50" min="0.5" step="0.5">
                 </div>
                 <div class="form-group">
                     <label for="osStop" title="The whole straddle is bought back once its mark-to-market loss reaches this % of the premium collected.">Stop % of Premium</label>
-                    <input type="number" id="osStop" value="5" min="0.5" step="0.5">
+                    <input type="number" id="osStop" value="25" min="0.5" step="0.5">
                 </div>
                 <div class="form-group">
                     <label for="osAdjust" title="What is done when NIFTY has moved Adjust At points from the centre (the sold strike, then each adjustment's new ATM). Checked on 5-minute closes, never on the expiry day.">Adjustment</label>
                     <select id="osAdjust">
-                        <option value="none" selected>None</option>
-                        <option value="roll_untested">Roll profit leg to new ATM</option>
+                        <option value="none">None</option>
+                        <option value="roll_untested" selected>Roll profit leg to new ATM</option>
                         <option value="recenter">Re-centre both legs at new ATM</option>
                         <option value="hedge">Buy losing side at new ATM (hedge)</option>
                         <option value="hedge_roll">Hedge losing side + roll profit leg</option>
@@ -2086,11 +2086,11 @@
                 </div>
                 <div class="form-group">
                     <label for="osLockAt" title="0 = off. Once the straddle's P&L has reached this % of the premium, a stop rests at Lock To % — a winner is not allowed to turn into a loser.">Profit Lock At %</label>
-                    <input type="number" id="osLockAt" value="0" min="0" step="5">
+                    <input type="number" id="osLockAt" value="25" min="0" step="5">
                 </div>
                 <div class="form-group">
                     <label for="osLockTo" title="Where the profit-lock stop rests once armed, % of the premium (0 = break-even). Must be below Lock At.">Lock To %</label>
-                    <input type="number" id="osLockTo" value="0" min="0" step="5">
+                    <input type="number" id="osLockTo" value="10" min="0" step="5">
                 </div>
                 <div class="form-group">
                     <label for="osLots" title="Lots per leg, × NIFTY's lot size.">Lots</label>
