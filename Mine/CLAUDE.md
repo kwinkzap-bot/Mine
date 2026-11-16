@@ -415,6 +415,14 @@ Load-bearing:
   candle whose low (high) trades through the previous candle's line, even if it closes back; a spike that
   reverses between two polls is invisible live, so `on_bar` also checks the closed candle's low/high against
   `stop_line` and exits at that close (`SuperTrend stop`) — same decision as the backtest, a few seconds late.
+* **…and at the close of the MINUTE, both sides, since 2026-11-16.** That day (tab 1, line 25,215.41) minute
+  11:46 dipped to 25,215.15 and closed 25,216.0; the 1 s poll never saw it, live sold at 11:47:05 (243.5 quote,
+  244.35 fill) while the backtest had sold at the line at 11:46 (249.55). Live now reads each closed 1-minute bar
+  while a touch-stop trade is open (`_minute_events` → `tb.on_minute`, today's minutes from the candles' own
+  provider, only the forming candle's) and sells after a minute whose low/high crossed the line. The backtest
+  books a crossing minute that **closes back** on the trade's side (`_wick_close`) at that minute's close,
+  stamped a minute later and priced as a close exit (246.7 that day); a minute that closes through the line is
+  still the level fill, mid-minute.
 * **Price is read only while something waits on it** — an armed setup's break candle, or an open trade
   under a `touch` stop (`_price_events`, polled at the chassis's 5 s). The chassis gained two hooks for
   this, `_price_events` and `_signal_text`, both no-ops for the other seven.

@@ -161,6 +161,52 @@ def test_a_wick_through_the_stop_that_the_poll_missed_exits_at_that_candles_clos
     assert tr[-1]['exit_reason'] == 'SuperTrend stop' and tr[-1]['exit_time'][:16] >= df.index[-1].strftime('%Y-%m-%d %H:%M')
 
 
+def _open_touch_trade(step=3):
+    """An open long under the 'touch' stop, its entry candle closed: (rows, day, trade, settings)."""
+    rows, _, _ = _touch_setup()
+    day = tb.new_day(DAY)
+    s = dict(S, stop_touch=1)
+    tb.on_bar(day, _bars(rows, step=step), s, bar_minutes=step)
+    t = day['trades'][0]
+    t['status'] = 'open'
+    rows.append((rows[-1][3], t['level'] + 2, rows[-1][3], t['level'] + 1.5))     # the entry candle
+    tb.on_bar(day, _bars(rows, step=step), s, bar_minutes=step)
+    return rows, day, t, s
+
+
+def test_a_minute_that_only_wicks_through_the_stop_is_booked_at_its_close_in_the_backtest():
+    """16 Nov 2026: minute 11:46 dipped 0.26 pt under the line and closed back above it. Live's poll never
+    saw it and sold after the minute; the backtest now books that minute's close, a minute later, priced
+    as a close exit. A minute that CLOSES through the line is still the level fill, mid-minute."""
+    rows, _, t, _ = _open_touch_trade(step=1)
+    sl, last = t['stop_line'], rows[-1][3]
+    for close, wick in ((sl + 0.3, True), (sl - 0.1, False)):
+        df = _bars(rows + [(last, last + 0.5, sl - 0.26, close)], step=1)
+        tr = StTouchBreakEngine(df, st_period=S['st_period'], st_mult=S['st_mult'], stop_mode='touch',
+                                modes='bounce', direction='long', outside_bar='first', minutes=df,
+                                bar_minutes=1).simulate()[-1]
+        assert tr['exit_reason'] == 'SuperTrend stop'
+        stamp = df.index[-1] + pd.Timedelta(minutes=1 if wick else 0)
+        assert tr['exit_time'] == stamp.strftime('%Y-%m-%d %H:%M:%S')
+        assert tr['exit_price'] == pytest.approx(close if wick else sl, abs=0.01)
+        assert tr['intrabar_exit'] is (not wick)
+
+
+def test_live_reads_each_closed_minute_and_exits_at_its_close_on_a_wick_through_the_stop():
+    rows, day, t, s = _open_touch_trade()
+    sl = t['stop_line']
+    start = t['entry_bar_start']                                   # the entry candle (already judged by on_bar)
+    stamp = lambda m: f"{DAY} {m // 60:02d}:{m % 60:02d}:00"       # noqa: E731
+    bar = lambda m, lo, cl: {'ts': stamp(m), 'high': sl + 3, 'low': lo, 'close': cl}   # noqa: E731
+    assert tb.on_minute(day, bar(start + 2, sl - 1, sl + 1), s) == []          # a minute of a closed candle
+    assert tb.on_minute(day, bar(start + 3, sl + 0.5, sl + 1), s) == []        # above the line
+    assert tb.on_minute(dict(day, last_minute=None), bar(start + 4, sl - 0.3, sl + 0.4),
+                        dict(s, stop_touch=0)) == []
+    ev = tb.on_minute(day, bar(start + 4, sl - 0.3, sl + 0.4), s)
+    assert len(ev) == 1 and ev[0]['reason'] == 'SuperTrend stop' and ev[0]['index_close'] == pytest.approx(sl + 0.4)
+    assert tb.on_minute(day, bar(start + 4, sl - 0.3, sl + 0.4), s) == []      # each minute is read once
+
+
 def test_it_arms_on_the_very_candles_the_backtest_enters_on():
     """The live read is the backtest's own touches(): every touch candle the backtest trades is armed."""
     rng = np.random.default_rng(11)
@@ -194,6 +240,10 @@ class _FakeAlgo(algo.SimpleTraderAlgo):
     def __init__(self, username, profile, frame):
         super().__init__(username, profile)
         self.frame, self.px, self.spot, self.alerts = frame, 250.0, 100.0, []      # the index sits below the setup's level
+        self.minutes = []                                                            # today's closed 1-minute bars
+
+    def _today_minutes(self, today):
+        return list(self.minutes)
 
     def _bars(self, today, now):
         cut = pd.Timestamp(now.replace(tzinfo=None)) - pd.Timedelta(minutes=self.spec.bar, seconds=5)
@@ -503,6 +553,36 @@ def test_a_through_setup_arms_the_side_that_breaks_through_the_line():
             assert t['risk'] == round(rows[-1][1] - rows[-1][2], 2)            # the touch candle's range
         else:
             assert not [e for e in ev if e['event'] == 'armed']
+
+
+def test_the_paper_thread_sells_after_a_minute_that_wicked_through_the_stop_unseen_by_the_poll(paper8):
+    paper8.update(ST8_MIN_BODY_PCT='0', ST8_OUTSIDE_BAR='first')
+    rows, _, _ = _touch_setup()
+    a = _FakeAlgo('u', algo.PROFILES[8], _bars(rows))
+    t0 = _bars(rows).index[-1] + pd.Timedelta(minutes=3)                    # the break candle's start
+    at = lambda ts, s=10: (ts + pd.Timedelta(seconds=s)).to_pydatetime().replace(tzinfo=IST)   # noqa: E731
+    a.tick(at(t0))
+    t = a.state['day']['trades'][0]
+    a.spot = t['level'] + 0.4
+    a.tick(at(t0, 70))
+    assert t['status'] == 'open'
+    rows.append((rows[-1][3], t['level'] + 2, rows[-1][3], t['level'] + 1.5))
+    a.frame = _bars(rows)
+    a.spot = t['level'] + 1.5
+    a.tick(at(t0 + pd.Timedelta(minutes=3)))                               # the entry candle closes
+    sl = t['stop_line']
+    assert t['status'] == 'open' and sl
+    a.spot = sl + 1                                                        # every poll reads above the line
+    wick = t0 + pd.Timedelta(minutes=4)
+    a.minutes = [{'date': (wick - pd.Timedelta(minutes=1)).tz_localize(IST), 'open': sl + 1, 'high': sl + 2,
+                  'low': sl + 0.5, 'close': sl + 1},
+                 {'date': wick.tz_localize(IST), 'open': sl + 1, 'high': sl + 1.2, 'low': sl - 0.26, 'close': sl + 0.6}]
+    a.tick(at(wick, 40))                                                   # the minute is still forming
+    assert t['status'] == 'open'
+    a.tick(at(wick + pd.Timedelta(minutes=1), 2))                          # it has closed: read, and out
+    assert t['status'] == 'closed' and t['result'] == 'SuperTrend stop'
+    assert t['exit_time'] == (wick + pd.Timedelta(minutes=1)).strftime('%H:%M')   # the backtest's stamp
+    assert t['index_exit'] == pytest.approx(a.spot, abs=0.05)                  # booked at the index it sold at
 
 
 def test_the_touch_stop_is_polled_every_second_near_its_line():

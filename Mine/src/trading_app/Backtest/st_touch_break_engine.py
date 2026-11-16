@@ -73,11 +73,13 @@ class StTouchBreakEngine:
         self.outside_bar = outside_bar if outside_bar in ('close', 'first') else 'close'
         self._minutes = minutes
         self._ind = None
-        self._m_ts = self._m_hi = self._m_lo = None
+        self._m_ts = self._m_hi = self._m_lo = self._m_cl = None
         if minutes is not None and len(minutes):
             self._m_ts = minutes.index.to_numpy(dtype='datetime64[ns]')
             self._m_hi = minutes['high'].to_numpy(dtype=float)
             self._m_lo = minutes['low'].to_numpy(dtype=float)
+            if 'close' in minutes:
+                self._m_cl = minutes['close'].to_numpy(dtype=float)
         self.st_period, self.st_mult = max(2, int(st_period)), float(st_mult)
         self.touch_tol = max(0.0, float(touch_tol_pct or 0)) / 100.0
         self.min_wick = min(1.0, max(0.0, float(min_wick_pct or 0) / 100.0))
@@ -164,6 +166,18 @@ class StTouchBreakEngine:
         seg = (self._m_hi[lo:hi] > level) if is_long else (self._m_lo[lo:hi] < level)
         hit = np.flatnonzero(seg)
         return pd.Timestamp(self._m_ts[lo + hit[0]]) if len(hit) else bar_ts
+
+    def _wick_close(self, minute_ts: pd.Timestamp, line: float, is_long: bool) -> Optional[float]:
+        """The close of the 1-minute bar `minute_ts` when it traded through `line` but closed back on
+        the trade's side of it (a wick the live poll cannot see); None otherwise or without minutes."""
+        if self._m_ts is None or self._m_cl is None:
+            return None
+        j = np.searchsorted(self._m_ts, np.datetime64(minute_ts, 'ns'), side='left')
+        if j >= len(self._m_ts) or self._m_ts[j] != np.datetime64(minute_ts, 'ns'):
+            return None
+        crossed = (self._m_lo[j] <= line) if is_long else (self._m_hi[j] >= line)
+        cl = float(self._m_cl[j])
+        return cl if crossed and ((cl > line) if is_long else (cl < line)) else None
 
     def _side_ok(self, is_long: bool, touch_kind) -> bool:
         """Can this row trade that side off a touch of that kind (direction and Bounce/Through)?"""
@@ -260,6 +274,7 @@ class StTouchBreakEngine:
             if after_ts and entry_ts.strftime('%Y-%m-%d %H:%M:%S') <= after_ts:
                 continue
             exit_ts = None
+            wick_exit = False
             exit_k, exit_px, reason = n - 1, c[n - 1], 'Still Open'
             for k in range(e, n):
                 if day_arr[k] != day_arr[e] or tmin[k] >= self.exit_cutoff:
@@ -272,6 +287,14 @@ class StTouchBreakEngine:
                     exit_k, exit_px, reason = k, (min(o[k], prev) if is_long else max(o[k], prev)), 'SuperTrend stop'
                     gapped = (o[k] <= prev) if is_long else (o[k] >= prev)
                     exit_ts = idx[k] if gapped else self._cross_minute(idx[k], prev, not is_long)
+                    wick = None if gapped else self._wick_close(exit_ts, prev, is_long)
+                    if wick is not None:
+                        # The minute only WICKED through the line and closed back on the trade's side.
+                        # Live polls the index (1 s near the line) and cannot see a sub-second dip, so
+                        # it reads the closed minute and sells at its close — booked the same here.
+                        # 16 Nov 2026 (tab 1): line 25,215.41, minute 11:46 low 25,215.15, close
+                        # 25,216.0; the backtest had sold at the line at 11:46, live at 11:47.
+                        exit_px, exit_ts, wick_exit = wick, exit_ts + pd.Timedelta(minutes=1), True
                     break
                 if trend[k] == -side:                      # the SuperTrend broke the other way
                     exit_k, exit_px, reason = k, c[k], 'SuperTrend flip'
@@ -305,7 +328,9 @@ class StTouchBreakEngine:
                 # A level / line fill happens INSIDE its minute (the index trades through the break
                 # level / the SuperTrend line), so the option leg is priced mid-minute, not at the close
                 # of the minute before — see attach_option_legs. A close entry is that minute-before close.
-                'intrabar_entry': not confirm, 'intrabar_exit': reason == 'SuperTrend stop',
+                # A wick exit is sold at its minute's close: priced like any close exit (the minute
+                # before its stamp), not mid-minute.
+                'intrabar_entry': not confirm, 'intrabar_exit': reason == 'SuperTrend stop' and not wick_exit,
             })
         return trades
 

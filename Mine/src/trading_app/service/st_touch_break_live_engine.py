@@ -247,6 +247,38 @@ def on_price(day: Dict[str, Any], ltp: Optional[float], hhmm: str, s: Dict[str, 
     return events
 
 
+def on_minute(day: Dict[str, Any], minute: Dict[str, Any], s: Dict[str, Any],
+              bar_minutes: int = 3) -> List[Dict[str, Any]]:
+    """A CLOSED 1-minute index bar (`ts` 'YYYY-MM-DD HH:MM:SS', `high`, `low`, `close`): with the
+    'touch' stop, an open trade whose line that minute traded through is out at the minute's close.
+
+    The 1 s poll cannot see a dip shorter than a second; the backtest's 1-minute bar does. 16 Nov 2026
+    (tab 1, line 25,215.41): minute 11:46 went to 25,215.15 and closed 25,216.0, every poll read above
+    the line, and live only sold at 11:47:05 (index 25,212, premium 243.5) when the index fell for real.
+    Reading the closed minute is the backtest's own decision, a second after it is known. Only the
+    minutes of the candle still forming are read: a closed candle was judged whole by `on_bar`.
+    Mutates `day`."""
+    ts = str(minute.get('ts') or '')[:19]
+    if not s.get('stop_touch') or ts[:10] != day['date'] or ts <= (day.get('last_minute') or ''):
+        return []
+    day['last_minute'] = ts
+    m = _hm(ts[11:16])
+    last_bar = day.get('last_bar')
+    if last_bar and last_bar[:10] == day['date'] and m < _hm(last_bar[11:16]) + bar_minutes:
+        return []
+    lo, hi, cl = minute.get('low'), minute.get('high'), minute.get('close')
+    events: List[Dict[str, Any]] = []
+    for t in day['trades']:
+        sl = t.get('stop_line')
+        if t['status'] != 'open' or not sl or m < t['entry_bar_start'] + bar_minutes:
+            continue
+        long = t['type'] == 'Long'
+        if (lo is not None and lo <= sl) if long else (hi is not None and hi >= sl):
+            events.append({'event': 'exit', 'trade': t, 'bar': None, 'index_close': float(cl if cl else sl),
+                           'reason': 'SuperTrend stop'})
+    return events
+
+
 def watching(day: Dict[str, Any], hhmm: str, s: Dict[str, Any], bar_minutes: int = 3) -> bool:
     """Is a price poll worth its request right now: a setup whose break candle is running, or an
     open trade under a 'touch' stop."""
@@ -259,5 +291,5 @@ def watching(day: Dict[str, Any], hhmm: str, s: Dict[str, Any], bar_minutes: int
     return False
 
 
-__all__ = ['new_day', 'option_type', 'on_bar', 'on_price', 'watching', 'engine_for', 'confirm_at_close',
+__all__ = ['new_day', 'option_type', 'on_bar', 'on_price', 'on_minute', 'watching', 'engine_for', 'confirm_at_close',
            'MAX_CHASE_RISK_FRAC']

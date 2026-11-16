@@ -32,6 +32,8 @@ import time as _time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 from trading_app.algo.st_bb_rsi import st_bb_rsi_algo as base
 from trading_app.algo.st_bb_rsi.st_bb_rsi_algo import (   # noqa: F401 — the route layer calls these by name
     StBbRsiAlgo, accounts, get_instance, load_history, mode, paper_lots, _flag, _hhmm, _now, _num, _uvar)
@@ -41,7 +43,8 @@ from trading_app.service import st_touch_break_live_engine as tb
 
 _DIR = os.path.dirname(__file__)
 _NEAR_PCT = 0.1                    # ST Touch Break: within this % of the touch-stop line the index is polled every second
-_OPTION_MINUTES_SECS = 20         # how often an open trade re-reads its option's 1-minute candles
+_MINUTE_TRIES = 10                # ST Touch Break: polls spent waiting for a closed minute the feed has not served yet
+_OPTION_MINUTES_SECS = 20        # how often an open trade re-reads its option's 1-minute candles
 _BACKSTOP_TRIES = 3               # moves of the resting SL-M onto the backtest's stop before it alerts and leaves it
 
 
@@ -163,11 +166,64 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         candle is running (or a 'touch' stop is armed), and never for the other seven strategies."""
         if self.spec.kind != 'tb' or not tb.watching(day, _hhmm(now), s, self.spec.bar):
             return []
+        events = self._minute_events(day, now, s)
+        if any(ev['event'] == 'exit' for ev in events):
+            return events
         spot = self._spot()
         if spot is None:
-            return []
+            return events
         self.state['spot'] = spot
-        return tb.on_price(day, spot, _hhmm(now), s, self.spec.bar)
+        return events + tb.on_price(day, spot, _hhmm(now), s, self.spec.bar)
+
+    def _minute_events(self, day, now, s) -> List[Dict[str, Any]]:
+        """With an open trade under a 'touch' stop, each 1-minute index bar is read once it has closed
+        (tried each poll for _MINUTE_TRIES polls while the feed is late) and its low/high checked against
+        the line — the dip the 1 s poll is too coarse to see. See tb.on_minute."""
+        if not s.get('stop_touch') or not any(t['status'] == 'open' and t.get('stop_line') for t in day['trades']):
+            return []
+        n = now.replace(tzinfo=None)
+        want = (n - timedelta(minutes=1, seconds=base._FEED_SECS)).replace(second=0, microsecond=0)
+        want_s = want.strftime('%Y-%m-%d %H:%M:%S')
+        if want_s[:10] != day['date'] or want_s <= (day.get('last_minute') or ''):
+            return []
+        tried = getattr(self, '_minute_tries', None)
+        if tried and tried[0] == want_s and tried[1] >= _MINUTE_TRIES:
+            return []
+        self._minute_tries = (want_s, (tried[1] + 1) if tried and tried[0] == want_s else 1)
+        try:
+            rows = self._today_minutes(n.date())
+        except Exception as e:                           # noqa: BLE001 — the poll and on_bar still guard the stop
+            logger.debug(f'[{self.p.tag}] 1-minute read failed: {e}')
+            return []
+        events: List[Dict[str, Any]] = []
+        for r in rows:
+            try:
+                stamp = pd.Timestamp(r.get('date'))
+            except (TypeError, ValueError):
+                continue
+            if stamp.tzinfo is not None:               # as _bars: the feed's wall-clock (IST) time
+                stamp = stamp.tz_localize(None)
+            ts = stamp.strftime('%Y-%m-%d %H:%M:%S')
+            if ts[:10] != day['date'] or ts > want_s or ts <= (day.get('last_minute') or ''):
+                continue
+            for ev in tb.on_minute(day, {'ts': ts, 'high': r.get('high'), 'low': r.get('low'),
+                                         'close': r.get('close')}, s, self.spec.bar):
+                ev['minute'] = ts
+                events.append(ev)
+            if events:
+                break
+        return events
+
+    def _today_minutes(self, today: date) -> List[Dict[str, Any]]:
+        """Today's 1-minute bars of the series the candles are built from (the same provider chain)."""
+        from trading_app.service import multichart_service as mc
+        adapter = mc.algo_provider(f'algo_{self.p.key}', self.username)
+        sym = (mc.future_symbol(adapter, self.spec.symbol) if self.spec.data == 'fut'
+               else mc.resolve_symbol(self.p.symbol))
+        if not sym:
+            return []
+        rows = adapter.historical_data(sym, today.isoformat(), today.isoformat(), 'minute', use_cache=False) or []
+        return sorted(rows, key=lambda r: str(r.get('date')))
 
     def _poll_wait(self, now) -> float:
         """ST Touch Break's touch stop (and an intrabar break level) is watched on the polled index:
