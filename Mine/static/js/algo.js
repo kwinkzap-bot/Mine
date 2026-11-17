@@ -330,6 +330,7 @@ function activeSetFilter(f) {
 
 function _activeRenderFiltered() {
     _activeEnsureFilter();
+    _cmpEnsureUi();
     const rows = _activeLast.rows.filter(_activeKeep);
     const trades = _activeLast.trades.filter(_activeKeep);
     _activeRender(rows);
@@ -500,6 +501,140 @@ function _activeRenderHistory(trades) {
               badge:  r => _ALGO_REASON_TONE[r] || _activeReasonTone(r) },
         ],
     });
+}
+
+// ── ⚖ Compare: today's live trades vs the Backtest page's logic on today's candles ──
+// GET /api/algo/compare-today/<key> per algo (service/live_vs_backtest.py): the algo's own
+// backtest engine, built with the live settings, run on today's candles, paired with what live
+// did. 2nd 30s Candle and 30-Min Fakeout have no replay here yet.
+const _CMP_KEYS = () => [
+    { key: 'cpr', label: 'CPR Logic' },
+    ...[1, 2, 3, 4, 5, 6, 7].map(n => ({ key: 'st' + n, label: `Simple Trader ${n}` })),
+    ...(window.MINE_TABS || [{ n: 8, tab: 'NIFTY - Both - 3m' }]).map((m, i) =>
+        ({ key: 'st' + m.n, label: `ST Touch Break · ${i + 1}. ${m.tab || ''}`.trim() })),
+];
+const _CMP_NOT_WIRED = ['2nd 30s Candle', '30-Min Fakeout'];
+const _CMP_STATUS = { match: ['Match', 'pos'], differs: ['Differs', 'warn'],
+                      live_only: ['Live only', 'neg'], backtest_only: ['Backtest only', 'neg'] };
+
+function _cmpEnsureUi() {
+    const anchor = document.getElementById('activeRefreshBtn');
+    if (anchor && !document.getElementById('activeCompareBtn')) {
+        const b = document.createElement('button');
+        b.className = 'ag-btn ag-btn-strikes';
+        b.id = 'activeCompareBtn';
+        b.title = "Run each algo's Backtest logic on today's candles with its live settings and compare entries / exits";
+        b.textContent = '⚖ Compare';
+        b.style.marginRight = '6px';
+        b.onclick = () => activeCompare(b);
+        anchor.parentNode.insertBefore(b, anchor);
+    }
+    if (!document.getElementById('activeCompareCard')) {
+        const hdr = document.querySelector('#algo-active-panel .ag-header');
+        if (!hdr) return;
+        const card = document.createElement('div');
+        card.className = 'ag-card';
+        card.id = 'activeCompareCard';
+        card.style.display = 'none';
+        card.innerHTML = `<div class="ag-card-hdr"><span class="ag-card-title">Live vs Backtest — Today</span>
+            <span class="dg-card-meta" id="activeCompareMeta" style="margin-left:auto"></span>
+            <button class="ag-btn" style="margin-left:8px" onclick="document.getElementById('activeCompareCard').style.display='none'">✕</button></div>
+            <div class="ag-card-body" id="activeCompareBody" style="padding:8px 12px"></div>`;
+        hdr.parentNode.insertBefore(card, hdr.nextSibling);
+    }
+}
+
+async function activeCompare(btn) {
+    _cmpEnsureUi();
+    const card = document.getElementById('activeCompareCard');
+    const body = document.getElementById('activeCompareBody');
+    const meta = document.getElementById('activeCompareMeta');
+    card.style.display = '';
+    if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+    const keys = _CMP_KEYS();
+    const results = new Array(keys.length);
+    let done = 0;
+    const draw = () => {
+        meta.textContent = done < keys.length ? `running… ${done}/${keys.length}` : `${keys.length} algos · ${new Date().toLocaleTimeString('en-IN')}`;
+        body.innerHTML = _cmpRender(keys, results);
+    };
+    draw();
+    // Four at a time: each one runs an engine and may price option legs through Breeze.
+    let next = 0;
+    const worker = async () => {
+        while (next < keys.length) {
+            const i = next++;
+            try {
+                const r = await fetch(`/api/algo/compare-today/${keys[i].key}`);
+                results[i] = await r.json().catch(() => ({ success: false, error: 'HTTP ' + r.status }));
+            } catch (e) { results[i] = { success: false, error: String(e) }; }
+            done++;
+            draw();
+        }
+    };
+    try { await Promise.all([worker(), worker(), worker(), worker()]); }
+    finally { if (btn) { btn.disabled = false; btn.classList.remove('busy'); } }
+}
+
+function _cmpEsc(v) {
+    return String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function _cmpRender(keys, results) {
+    const tally = { match: 0, differs: 0, live_only: 0, backtest_only: 0 };
+    const quiet = [], errors = [], blocks = [];
+    keys.forEach((k, i) => {
+        const r = results[i];
+        if (!r) { quiet.push(`${_cmpEsc(k.label)} <i>(running)</i>`); return; }
+        if (!r.success) { errors.push(`${_cmpEsc(k.label)}: ${_cmpEsc(r.error || 'failed')}`); return; }
+        Object.keys(tally).forEach(s => tally[s] += (r.summary || {})[s] || 0);
+        if (!(r.rows || []).length) { quiet.push(_cmpEsc(k.label)); return; }
+        blocks.push(_cmpBlock(k, r));
+    });
+    const chip = (n, s) => `<span class="dg-badge dg-badge--${_CMP_STATUS[s][1]}" style="margin-right:6px">${_CMP_STATUS[s][0]}: ${n}</span>`;
+    return `<div style="margin:4px 0 10px">${Object.entries(tally).map(([s, n]) => chip(n, s)).join('')}</div>`
+        + blocks.join('')
+        + (quiet.length ? `<div class="ag-empty" style="text-align:left;padding:6px 0">No trades live or in the backtest today: ${quiet.join(' · ')}</div>` : '')
+        + (errors.length ? `<div style="color:var(--ag-neg);font-size:12px;padding:4px 0">Could not compare — ${errors.join(' · ')}</div>` : '')
+        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. Not compared yet: ${_CMP_NOT_WIRED.join(', ')}. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
+}
+
+function _cmpBlock(k, r) {
+    const esc = DataGrid.escape || _cmpEsc;
+    const n2 = v => Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    // live / backtest in one cell; the backtest half only when it differs.
+    const pair = (get, fmt = v => v) => (_, x) => {
+        const a = get(x.live), b = get(x.backtest);
+        const A = a == null ? '—' : String(fmt(a)), B = b == null ? '—' : String(fmt(b));
+        return A === B ? esc(A) : `${esc(A)} <span style="opacity:.55">/ ${esc(B)}</span>`;
+    };
+    const opt = t => t && t.strike != null ? `${t.option_type} ${t.strike}` : null;
+    const why = x => x.diffs.length
+        ? x.diffs.map(d => `${d.field}: ${d.live} vs ${d.backtest}${d.gap != null ? ` (${d.gap})` : ''}`).join('; ')
+        : x.status === 'match' ? '—'
+        : x.status === 'live_only' ? 'Backtest took no trade near this entry'
+        : x.status === 'backtest_only' ? 'Live took no trade here' : '';
+    const grid = DataGrid.render({
+        rows: r.rows,
+        columns: [
+            { key: 'status', label: 'Status', format: v => _CMP_STATUS[v][0], badge: v => _CMP_STATUS[v][1] },
+            { label: 'Side', strong: true, format: (_, x) => (x.live || x.backtest).side,
+              tone: (_, x) => (x.live || x.backtest).side === 'BUY' ? 'pos' : 'neg' },
+            { label: 'Entry',     render: pair(t => t && t.entry_time) },
+            { label: 'Exit',      render: pair(t => t && t.exit_time) },
+            { label: 'Index In',  render: pair(t => t && t.index_entry, n2) },
+            { label: 'Index Out', render: pair(t => t && t.index_exit, n2) },
+            { label: 'Option',    render: pair(opt) },
+            { label: 'Prem In',   render: pair(t => t && t.entry_premium, n2) },
+            { label: 'Prem Out',  render: pair(t => t && t.exit_premium, n2) },
+            { label: 'Reason',    render: pair(t => t && (t.reason || t.status)) },
+            { label: 'Differences', format: (_, x) => why(x) },
+        ],
+    });
+    return `<div style="margin:12px 0 4px;font-weight:700">${esc(k.label)}
+            <span style="font-weight:400;font-size:11px;opacity:.7"> — ${esc(r.source || '')}${r.basis === 'index' ? ' · index only' : ''}</span>
+            ${r.warning ? `<span style="font-weight:400;font-size:11px;color:var(--ag-neg)"> · ${esc(r.warning)}</span>` : ''}</div>
+        ${grid}`;
 }
 
 // Reasons the newer algos write in words ("Target Hit", "SuperTrend stop", "SL").

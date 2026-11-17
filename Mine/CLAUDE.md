@@ -480,10 +480,27 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 270 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params).
+The api blueprint is at 271 rules (`tests/route_inventory.txt`): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## Active Trade tab — All / Live / Paper and ⚖ Compare (2026-11-17)
+
+The Active Trade tab on /algo reads every intraday algo, not only 2nd Candle: 30-Min Fakeout, CPR Logic,
+Simple Trader 1-7 and ST Touch Break 1-8, each through its own `open` / `done` reader in `static/js/algo.js`
+(`_ACTIVE_SOURCES`). The All / Live / Paper filter and the ⚖ Compare button are added from JS, not the template.
+
+**⚖ Compare** calls `GET /api/algo/compare-today/<key>` (`cpr`, `st1`-`st15`) per algo, four at a time.
+`service/live_vs_backtest.py` replays today through the algo's OWN backtest engine with the live settings —
+Simple Trader: `spec.cls(**engine_kwargs)`; ST Touch Break: `engine_for`'s numbers plus the 1-minute frame;
+option legs by `attach_option_legs` / `price_with_reentries`; CPR: `propose_all` as the sheet's Update — on the
+/backtest loaders' candles (`_sbr_load_bars`, or the continuous NIFTY future for specs 4/5), and pairs trades by
+side within 15 min (`match`). Under 1 min / 3 index pts / 2 premium pts is "the same". 2nd 30s Candle and
+30-Min Fakeout are not replayed yet (TMF's backtest target is the session extreme — hindsight — so its exits
+differ by design). First run (2026-11-17, index only): the four live trades (ST 1, 3, Touch Break 5, 6) all
+matched, no backtest-only trades. CPR on 2026-11-13 shows the documented 09:15-vs-09:20 decision gap.
+Tests: `tests/test_live_vs_backtest.py`.
 
 ## Sunshine Straddle backtest (NIFTY Mon/Tue + SENSEX Wed/Thu; `sunshine_straddle`)
 

@@ -2,6 +2,7 @@
 /algo	pages.algo	GET,HEAD,OPTIONS	True
 /api/active-contracts	api.get_active_contracts	GET,HEAD,OPTIONS	True
 /api/algo/<algo_key>/strike-mode	api.algo_strike_mode	GET,HEAD,OPTIONS,POST	True
+/api/algo/compare-today/<key>	api.algo_compare_today	GET,HEAD,OPTIONS	True
 /api/algo/cpr-logic/history	api.algo_cpr_history	GET,HEAD,OPTIONS	True
 /api/algo/cpr-logic/settings	api.algo_cpr_settings	OPTIONS,POST	True
 /api/algo/cpr-logic/start	api.algo_cpr_start	OPTIONS,POST	True

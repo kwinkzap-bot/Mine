@@ -15413,6 +15413,82 @@ for _n in _ST_SPECS:        # Simple Trader 1-7 and 8-15 = ST Touch Break (Mine)
     _register_stbb_routes(f'simple-trader-{_n}', 'NIFTY', f'st{_n}', simple=_n)
 
 
+def _compare_simple_minutes(spec, date_str):
+    """(minutes, candles_df, source) of today for a Simple Trader spec, read the way its /backtest
+    run reads them: the stored Fyers 1-minute index (tail through Zerodha-first), or the
+    continuous ICICI NIFTY future for the futures specs."""
+    import pandas as pd
+    if spec.data == 'fut' and spec.symbol == 'NIFTY':
+        from trading_app.Backtest.futures_minute_store import continuous_minutes
+        warm = (pd.Timestamp(date_str) - pd.Timedelta(days=45)).date()
+        minutes = continuous_minutes('NIFTY', warm, pd.Timestamp(date_str).date())
+        if minutes is None or minutes.empty:
+            raise LookupError('no NIFTY future candles for today')
+        return minutes, _sbr_bars(minutes, f'{spec.bar}minute', date_str)[0], 'ICICI NIFTY future'
+    fyers = get_fyers_adapter()
+    if fyers is None:
+        raise LookupError('Fyers is not logged in — the backtest reads its candles')
+    token = _sp_instrument_token(fyers, spec.symbol)
+    minutes, candles_df, _, _ = _sbr_load_bars(fyers, token, spec.symbol, date_str, date_str,
+                                               f'{spec.bar}minute', warmup_days=45)
+    if minutes is None:
+        raise LookupError('no candles for today')
+    return minutes, candles_df, _provider_tag(fyers)
+
+
+@api_bp.route('/algo/compare-today/<key>', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_compare_today(key) -> EndpointResponse:
+    """The Active Trade tab's ⚖ Compare: one live algo's trades today beside the Backtest page's
+    logic run on today's candles with that algo's settings (service/live_vs_backtest.py).
+    `key` is st1-st15 (Simple Trader 1-7, ST Touch Break 8-15) or cpr. `?price=0` skips the
+    option legs (index only, no Breeze request)."""
+    from trading_app.service import live_vs_backtest as lvb
+    username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+    date_str = datetime.now().strftime('%Y-%m-%d')
+    price = request.args.get('price', '1') != '0'
+    try:
+        if key == 'cpr':
+            from trading_app.algo.cpr_logic import cpr_algo as cpr
+            from trading_app.service import cpr_backtest_service as svc
+            try:
+                with open(cpr.STATE_FILE) as _f:
+                    state = json.load(_f)
+            except Exception:
+                state = {}
+            live = lvb.live_cpr(state, date_str)
+            bt = lvb.backtest_cpr(date_str, lambda s, a, b: svc.fetch_bars(s, a, b, fresh=True))
+            rows = lvb.match(live, bt)
+            return jsonify({'success': True, 'key': key, 'date': date_str, 'rows': rows,
+                            'summary': lvb.summary(rows), 'basis': 'index',
+                            'source': 'the /cpr-logic sheet rule (propose_all) on the 5-minute chart'})
+        if key.startswith('st') and key[2:].isdigit() and int(key[2:]) in _ST_SPECS:
+            from trading_app.algo.simple_trader import simple_trader_algo as sb
+            pr = sb.PROFILES[int(key[2:])]
+            spec = pr.spec
+            s = sb.settings(username, pr)
+            try:
+                with open(pr.state_file()) as _f:
+                    state = json.load(_f)
+            except Exception:
+                state = {}
+            live = lvb.live_simple(state, date_str)
+            minutes, candles_df, source = _compare_simple_minutes(spec, date_str)
+            got = lvb.backtest_simple(spec, s, minutes, candles_df, date_str, price=price)
+            rows = lvb.match(live, lvb.bt_rows_simple(got['trades']))
+            return jsonify({'success': True, 'key': key, 'date': date_str, 'rows': rows,
+                            'summary': lvb.summary(rows), 'basis': 'option' if got['priced'] else 'index',
+                            'warning': got['warning'], 'source': f'{spec.cls.__name__} on {source} {spec.bar}-min candles'})
+        return jsonify({'success': False, 'error': f'no backtest replay for {key}'}), 404
+    except LookupError as e:
+        return jsonify({'success': False, 'error': str(e)}), 503
+    except Exception as e:
+        logger.error(f'[compare-today/{key}] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/algo/ema-confluence/status', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
