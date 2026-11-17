@@ -233,6 +233,9 @@ _FIELDS = (  # (key, label, kind)
 )
 
 
+_FILL_FIELDS = {'Option entry', 'Option exit'}
+
+
 def _norm_reason(r: Any) -> str:
     s = str(r or '').lower()
     if 'target' in s:
@@ -272,7 +275,8 @@ def match(live: List[Dict[str, Any]], bt: List[Dict[str, Any]],
           tol: int = MATCH_TOLERANCE_MIN) -> List[Dict[str, Any]]:
     """Pair each live trade with the backtest trade of the same side nearest its entry (signal
     candle for one that never filled), within `tol` minutes. Rows: {'live', 'backtest', 'status',
-    'diffs'}; status is match / differs / live_only / backtest_only."""
+    'diffs'}; status is match / fill (same trade, only the option fill apart) / differs /
+    live_only / backtest_only."""
     used = set()
     rows = []
     for lv in sorted(live, key=lambda t: t.get('entry_time') or t.get('signal_bar') or ''):
@@ -294,7 +298,12 @@ def match(live: List[Dict[str, Any]], bt: List[Dict[str, Any]],
                          'diffs': [{'field': 'Live', 'live': lv['status'], 'backtest': 'traded'}]})
             continue
         d = _diffs(lv, b)
-        rows.append({'live': lv, 'backtest': b, 'status': 'differs' if d else 'match', 'diffs': d})
+        # Same side, minutes and index levels with only the option's price apart is the same
+        # decision filled differently (a market order seconds after the candle the backtest
+        # books, in a fast premium) — execution, not logic.
+        fill_only = d and all(x['field'] in _FILL_FIELDS for x in d)
+        rows.append({'live': lv, 'backtest': b, 'diffs': d,
+                     'status': 'fill' if fill_only else 'differs' if d else 'match'})
     for j, b in enumerate(bt):
         if j not in used:
             rows.append({'live': None, 'backtest': b, 'status': 'backtest_only', 'diffs': []})
@@ -303,7 +312,7 @@ def match(live: List[Dict[str, Any]], bt: List[Dict[str, Any]],
 
 
 def summary(rows: List[Dict[str, Any]]) -> Dict[str, int]:
-    out = {'match': 0, 'differs': 0, 'live_only': 0, 'backtest_only': 0}
+    out = {'match': 0, 'fill': 0, 'differs': 0, 'live_only': 0, 'backtest_only': 0}
     for r in rows:
         out[r['status']] += 1
     return out

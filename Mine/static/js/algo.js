@@ -514,7 +514,7 @@ const _CMP_KEYS = () => [
         ({ key: 'st' + m.n, label: `ST Touch Break · ${i + 1}. ${m.tab || ''}`.trim() })),
 ];
 const _CMP_NOT_WIRED = ['2nd 30s Candle', '30-Min Fakeout'];
-const _CMP_STATUS = { match: ['Match', 'pos'], differs: ['Differs', 'warn'],
+const _CMP_STATUS = { match: ['Match', 'pos'], fill: ['Fill differs', 'info'], differs: ['Logic differs', 'warn'],
                       live_only: ['Live only', 'neg'], backtest_only: ['Backtest only', 'neg'] };
 
 function _cmpEnsureUi() {
@@ -581,7 +581,7 @@ function _cmpEsc(v) {
 }
 
 function _cmpRender(keys, results) {
-    const tally = { match: 0, differs: 0, live_only: 0, backtest_only: 0 };
+    const tally = { match: 0, fill: 0, differs: 0, live_only: 0, backtest_only: 0 };
     const quiet = [], errors = [], blocks = [];
     keys.forEach((k, i) => {
         const r = results[i];
@@ -596,7 +596,7 @@ function _cmpRender(keys, results) {
         + blocks.join('')
         + (quiet.length ? `<div class="ag-empty" style="text-align:left;padding:6px 0">No trades live or in the backtest today: ${quiet.join(' · ')}</div>` : '')
         + (errors.length ? `<div style="color:var(--ag-neg);font-size:12px;padding:4px 0">Could not compare — ${errors.join(' · ')}</div>` : '')
-        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. Not compared yet: ${_CMP_NOT_WIRED.join(', ')}. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
+        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. <b>Fill differs</b> = same trade (side, minutes, index levels), only the option price apart: the backtest books the candle's close, live's market order fills seconds later. Not compared yet: ${_CMP_NOT_WIRED.join(', ')}. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
 }
 
 function _cmpBlock(k, r) {

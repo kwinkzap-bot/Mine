@@ -27,12 +27,21 @@ def test_a_late_exit_and_a_different_reason_are_named():
     assert next(d for d in row['diffs'] if d['field'] == 'Exit time')['gap'] == '26 min'
 
 
+def test_a_premium_only_gap_is_a_fill_difference_not_a_logic_one():
+    """17 Nov 2026, ST1: same 11:57 BUY, same index, exit and reason; the CE ran 238 -> 252 inside the
+    11:56 minute, the backtest booked its 245.65 close and live's order at 11:57:04 filled 251.55."""
+    (row,) = lvb.match([_lv()], [dict(_lv(), entry_premium=245.65, exit_premium=223.35)])
+    assert row['status'] == 'fill' and [d['field'] for d in row['diffs']] == ['Option entry']
+    (row,) = lvb.match([_lv()], [dict(_lv(), entry_premium=245.65, exit_time='13:05')])
+    assert row['status'] == 'differs'                  # a different minute is logic, whatever the premium
+
+
 def test_unpaired_trades_on_either_side_are_reported():
     live = [_lv(), _lv(side='SELL', entry_time='14:10')]
     bt = [_lv(entry_time='11:58'), _lv(side='BUY', entry_time='13:30')]
     rows = lvb.match(live, bt)
     assert [r['status'] for r in rows] == ['match', 'backtest_only', 'live_only']
-    assert lvb.summary(rows) == {'match': 1, 'differs': 0, 'live_only': 1, 'backtest_only': 1}
+    assert lvb.summary(rows) == {'match': 1, 'fill': 0, 'differs': 0, 'live_only': 1, 'backtest_only': 1}
 
 
 def test_a_side_never_pairs_with_the_other_side():

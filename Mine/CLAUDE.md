@@ -496,11 +496,19 @@ Simple Trader 1-7 and ST Touch Break 1-8, each through its own `open` / `done` r
 Simple Trader: `spec.cls(**engine_kwargs)`; ST Touch Break: `engine_for`'s numbers plus the 1-minute frame;
 option legs by `attach_option_legs` / `price_with_reentries`; CPR: `propose_all` as the sheet's Update — on the
 /backtest loaders' candles (`_sbr_load_bars`, or the continuous NIFTY future for specs 4/5), and pairs trades by
-side within 15 min (`match`). Under 1 min / 3 index pts / 2 premium pts is "the same". 2nd 30s Candle and
+side within 15 min (`match`). Under 1 min / 3 index pts / 2 premium pts is "the same"; a pair apart only on
+the option's price is `fill` (execution: the backtest books the candle's close, live's market order fills seconds
+later), not a logic difference. 2nd 30s Candle and
 30-Min Fakeout are not replayed yet (TMF's backtest target is the session extreme — hindsight — so its exits
 differ by design). First run (2026-11-17, index only): the four live trades (ST 1, 3, Touch Break 5, 6) all
 matched, no backtest-only trades. CPR on 2026-11-13 shows the documented 09:15-vs-09:20 decision gap.
-Tests: `tests/test_live_vs_backtest.py`.
+**What its first real run found (2026-11-17)** — live candles now keep only 09:15-15:29
+(`StBbRsiAlgo._bars`, every Simple Trader / ST Touch Break thread): Zerodha and Fyers serve the NIFTY future's
+15:30-15:39 closing-session minutes, which made the 16th's close 25,321 (backtest: 25,300 at 15:29), put R1 14 pts
+higher, and ST4/ST5 missed the 09:15 BUY their backtests took. ST1/ST3's entry (251.55 vs 245.65: the CE ran
+238 → 252 inside the 11:56 minute) and Touch Break 6's exit (its 5 s polls missed a 1-pt touch tab 5 caught at
+13:50:46; the minute check sold at 13:51:03 into a falling PE) are fills, not logic.
+Tests: `tests/test_live_vs_backtest.py`, `test_simple_trader_live.py::test_the_futures_closing_session_is_not_part_of_the_day`.
 
 ## Sunshine Straddle backtest (NIFTY Mon/Tue + SENSEX Wed/Thu; `sunshine_straddle`)
 

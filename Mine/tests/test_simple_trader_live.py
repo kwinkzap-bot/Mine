@@ -373,6 +373,24 @@ def test_a_candle_without_its_last_minute_is_not_closed(monkeypatch):
     assert list(a._bars(now.date(), now).index.strftime('%H:%M')) == ['09:15']
 
 
+def test_the_futures_closing_session_is_not_part_of_the_day(monkeypatch):
+    """17 Nov 2026, ST4/ST5: the NIFTY future's 15:30-15:39 closing-session minutes made the
+    16th close 25,321 instead of the 15:29 bar's 25,300, R1 14 pts higher than the backtest's,
+    and the 09:15 BUY the backtest took was never signalled live."""
+    a = algo.SimpleTraderAlgo('u', algo.PROFILES[4])                    # 5-minute candles on the future
+    mins = pd.date_range('2026-11-16 15:20', '2026-11-16 15:39', freq='1min')
+    rows = [{'date': t, 'open': 25300.0, 'high': 25305.0, 'low': 25295.0,
+             'close': 25321.0 if t.hour * 60 + t.minute >= 930 else 25300.0, 'volume': 1} for t in mins]
+    rows.insert(0, {'date': pd.Timestamp('2026-11-16 09:10'), 'open': 25200.0, 'high': 25200.0,
+                    'low': 25200.0, 'close': 25200.0, 'volume': 1})   # a pre-open print
+    monkeypatch.setattr(a, '_history_rows', lambda adapter, today: rows)
+    now = pd.Timestamp('2026-11-17 09:00:00').to_pydatetime().replace(tzinfo=IST)
+    bars = a._bars(now.date(), now)
+    assert list(bars.index.strftime('%H:%M')) == ['15:20', '15:25']
+    assert bars['close'].iloc[-1] == 25300.0                          # the 15:29 close, as the backtest's
+    assert bars['open'].iloc[0] == 25300.0                            # nothing from before 09:15
+
+
 def _picker(monkeypatch, ladder, closes):
     a = algo.SimpleTraderAlgo('u', algo.PROFILES[6])
     a.state = {'day': {'trades': []}, 'log': []}

@@ -292,6 +292,13 @@ class StBbRsiAlgo:
         # api._sbr_load_bars): a bar after 15:15 spanning > 0.3 % is not real.
         late = (m.index.hour * 60 + m.index.minute) >= 15 * 60 + 15
         m = m[~(late & ((m['high'] - m['low']) > 0.003 * m['close']))]
+        # Only the 09:15-15:29 session. Zerodha / Fyers serve the F&O closing session's minutes
+        # (15:30-15:39) for a FUTURE; read into the last candle they moved the day's close, and
+        # with it the next day's pivots — the backtest (ICICI's continuous future, Quantman's
+        # candles) ends at 15:29. On 2026-11-17 the 15:39 close (25,321 vs 25,300) put R1 14 pts
+        # higher, and Simple Trader 4 and 5 missed the 09:15 BUY their backtests took.
+        mins = m.index.hour * 60 + m.index.minute
+        m = m[(mins >= 9 * 60 + 15) & (mins < 15 * 60 + 30)]
         anchor = pd.Timedelta(hours=9, minutes=15)
         key = (m.index - anchor).floor(f'{self._bar_minutes()}min') + anchor
         bars = m.groupby(key).agg(open=('open', 'first'), high=('high', 'max'), low=('low', 'min'),
