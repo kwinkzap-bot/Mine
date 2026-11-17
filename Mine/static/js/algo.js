@@ -1,4 +1,4 @@
-/* algo.js — Algo page: Active Trade + 2nd Candle + 30-Min Fakeout + CPR Logic + EMA Confluence + Swing Momentum tabs */
+/* algo.js — Algo page: Active Trade (2nd Candle, TMF, CPR, Simple Trader, ST Touch Break) + 2nd Candle + 30-Min Fakeout + CPR Logic + EMA Confluence + Swing Momentum tabs */
 'use strict';
 
 let _scStatusTimer     = null;
@@ -110,10 +110,175 @@ function _algoNetInrTip(t) {
            `Stamp ₹${p.stamp.toFixed(2)} · SEBI ₹${p.sebi.toFixed(2)}`;
 }
 
-// ── Active Trade tab (all live option algos consolidated) ─────────────────────
-// Each source shares the same status shape: { active, state.active_trade, live }.
+// ── Active Trade tab (every intraday live algo consolidated) ─────────────────
+// The algos keep their books in different shapes — 2nd Candle a single
+// `active_trade` on one lot, 30-Min Fakeout a per-stock map of cash
+// positions, CPR Logic / Simple Trader / ST Touch Break a day's trade list
+// with one leg per account — so each source names an `open` and a `done`
+// reader that turn its own status / history into the two shapes this tab
+// draws. Everything below them reads only those shapes.
+//
+//   open row: {label, mode, direction, instrument, entrySpot, liveSpot, sl,
+//              target, entryPx, ltp, pnl, entryTime}
+//   done row: {label, mode, direction, instrument, entryTime, exitTime, sortKey,
+//              entryPx, exitPx, pts, gross, charges, net, tip, reason}
+
+const _ACTIVE_LOT = _NIFTY_LOT_SIZE;
+
+// "12:39" (CPR / Simple Trader) or an ISO stamp (2nd Candle / TMF) → a sortable
+// local ISO string for today's trades.
+function _activeIso(v) {
+    if (v == null || v === '') return '';
+    const s = String(v);
+    return /^\d{1,2}:\d{2}(:\d{2})?$/.test(s) ? _activeTodayStr() + 'T' + s.padStart(5, '0') : s;
+}
+
+function _activeClock(v) {
+    const iso = _activeIso(v);
+    return iso ? _fmtTimeOnly(iso) : '—';
+}
+
+const _activeDir = v => {
+    const d = String(v || '').toLowerCase();
+    return (d === 'buy' || d === 'long') ? 'BUY' : (d === 'sell' || d === 'short') ? 'SELL' : (v || '—');
+};
+
+// One trade's per-account legs → quantity-weighted entry / exit / LTP, and the
+// summed booked or marked ₹. A paper leg carries lots but no qty.
+function _activeLegs(t) {
+    const legs = Object.values((t && t.legs) || {});
+    const qty = l => Number(l.qty) || (Number(l.lots) || 1) * _ACTIVE_LOT;
+    const avg = key => {
+        let num = 0, den = 0;
+        legs.forEach(l => { if (l[key] != null) { num += Number(l[key]) * qty(l); den += qty(l); } });
+        return den ? +(num / den).toFixed(2) : null;
+    };
+    const anyMtm = legs.some(l => l.mtm != null || l.pnl != null);
+    return {
+        legs, qty,
+        entry: avg('entry'), exit: avg('exit'), ltp: avg('ltp'),
+        mtm: anyMtm ? legs.reduce((a, l) => a + Number(l.pnl != null ? l.pnl : (l.mtm || 0)), 0) : null,
+    };
+}
+
+// Zerodha option charges for every leg of a booked trade, summed.
+function _activeLegCharges(legs, qty) {
+    return legs.reduce((a, l) => {
+        if (l.entry == null || l.exit == null) return a;
+        const p = ZerodhaCharges.breakdownForTrade({ segment: 'option', entry: l.entry, exit: l.exit, qty: qty(l) });
+        return a + (p ? p.total : 0);
+    }, 0);
+}
+
+function _activeDoneRow(src, d) {
+    const net = d.gross == null ? null : d.gross - (d.charges || 0);
+    return Object.assign({ label: src.label, mode: d.mode || src.mode || 'live', sortKey: _activeIso(d.exitTime || d.entryTime) },
+        d, { net, tip: d.tip || (d.gross != null && d.charges
+            ? `Gross ${DataGrid.inr(d.gross)} − charges ₹${Number(d.charges).toFixed(2)}` : '') });
+}
+
+// ── per-algo readers ──
+function _scOpen(src, data) {
+    const trade = data && data.active && data.state ? data.state.active_trade : null;
+    if (!trade) return [];
+    const live = data.live || null;
+    return [{
+        label: src.label, mode: src.mode, direction: trade.direction,
+        instrument: `${trade.option_type ?? ''} ${trade.strike ?? '—'}`.trim(),
+        entrySpot: trade.entry_spot, liveSpot: live ? live.spot : undefined,
+        sl: trade.sl_level, target: trade.target_level,
+        entryPx: live && live.opt_entry_price != null ? live.opt_entry_price : trade.opt_entry_price,
+        ltp: live ? live.opt_current_price : undefined,
+        pnl: _activeOpenPnlInr(trade, live) ?? undefined,
+        entryTime: trade.entry_time ? _fmtTimeOnly(trade.entry_time) : '—',
+    }];
+}
+
+function _scDone(src, t) {
+    const pts = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+        ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+    return _activeDoneRow(src, {
+        direction: t.direction, instrument: `${t.option_type ?? ''} ${t.strike ?? '—'}`.trim(),
+        entryTime: t.entry_time, exitTime: t.exit_time,
+        entryPx: t.opt_entry_price, exitPx: t.opt_exit_price, pts,
+        gross: t.opt_pnl_inr != null ? Number(t.opt_pnl_inr) : null,
+        charges: _algoCharges(t), tip: _algoNetInrTip(t), reason: t.reason,
+    });
+}
+
+function _tmfOpen(src, data) {
+    const stocks = (data && data.stocks) || {};
+    return Object.entries(stocks).filter(([, s]) => s.phase === 'in_position').map(([sym, s]) => {
+        const long = String(s.direction).toLowerCase() === 'long';
+        const pnl = s.ltp != null && s.entry_price != null && s.qty
+            ? (Number(s.ltp) - Number(s.entry_price)) * Number(s.qty) * (long ? 1 : -1) : undefined;
+        return {
+            label: src.label, mode: s.mode || (data && data.mode) || 'live', direction: _activeDir(s.direction),
+            instrument: `${sym} × ${s.qty ?? '—'}`, sl: s.sl_level, target: s.target_level,
+            entryPx: s.entry_price, ltp: s.ltp, pnl,
+            entryTime: s.entry_time ? _fmtTimeOnly(s.entry_time) : '—',
+        };
+    });
+}
+
+function _tmfDone(src, t) {
+    const short = _activeDir(t.direction) === 'SELL';
+    const parts = t.entry_price != null && t.exit_price != null && t.qty
+        ? ZerodhaCharges.breakdownForTrade({ segment: 'equity_intraday', entry: t.entry_price,
+                                              exit: t.exit_price, qty: t.qty, short }) : null;
+    return _activeDoneRow(src, {
+        mode: t.mode || 'live', direction: _activeDir(t.direction), instrument: `${t.symbol} × ${t.qty ?? '—'}`,
+        entryTime: t.entry_time, exitTime: t.exit_time, entryPx: t.entry_price, exitPx: t.exit_price,
+        pts: t.entry_price != null && t.exit_price != null
+            ? +((t.exit_price - t.entry_price) * (short ? -1 : 1)).toFixed(2) : null,
+        gross: t.pnl != null ? Number(t.pnl) : null, charges: parts ? parts.total : 0, reason: t.reason,
+    });
+}
+
+// CPR Logic, Simple Trader and ST Touch Break: a day's trade list, one leg per account.
+function _legsOpen(src, data) {
+    const st = (data && data.state) || {};
+    const trades = (st.day && st.day.trades) || [];
+    return trades.filter(t => t.status === 'open').map(t => {
+        const L = _activeLegs(t);
+        const cpr = src.kind === 'cpr';
+        return {
+            label: src.label, mode: t.mode || 'paper', direction: _activeDir(cpr ? t.trade : t.type),
+            instrument: t.option ? `${t.option.type} ${t.option.strike}` : '—',
+            entrySpot: cpr ? t.fill : t.index_entry, liveSpot: st.spot,
+            sl: cpr ? t.sl : t.stop_line, target: cpr ? t.target : undefined,
+            entryPx: L.entry, ltp: L.ltp ?? undefined, pnl: L.mtm ?? undefined,
+            entryTime: _activeClock(cpr ? t.fill_time : t.entry_time),
+        };
+    });
+}
+
+function _legsDone(src, t) {
+    const L = _activeLegs(t);
+    const charges = t.charges != null ? Number(t.charges) : _activeLegCharges(L.legs, L.qty);
+    return _activeDoneRow(src, {
+        mode: t.mode, direction: _activeDir(t.side), instrument: `${t.option_type ?? ''} ${t.strike ?? '—'}`.trim(),
+        entryTime: src.kind === 'cpr' ? t.fill_time : t.entry_time, exitTime: t.exit_time,
+        entryPx: L.entry, exitPx: L.exit,
+        pts: L.entry != null && L.exit != null ? +(L.exit - L.entry).toFixed(2) : null,
+        gross: t.pnl != null ? Number(t.pnl) : null, charges, reason: t.result,
+    });
+}
+
 const _ACTIVE_SOURCES = [
-    { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history',     mode: 'paper' },
+    { label: '2nd 30s Candle', url: '/api/algo/sc/status', histUrl: '/api/algo/sc/history',
+      mode: 'paper', open: _scOpen, done: _scDone },
+    { label: '30-Min Fakeout', url: '/api/algo/thirty-min-fakeout/status',
+      histUrl: '/api/algo/thirty-min-fakeout/history', open: _tmfOpen, done: _tmfDone },
+    { label: 'CPR Logic', kind: 'cpr', url: '/api/algo/cpr-logic/status', histUrl: '/api/algo/cpr-logic/history',
+      open: _legsOpen, done: _legsDone },
+    ...[1, 2, 3, 4, 5, 6, 7].map(n => ({
+        label: `Simple Trader ${n}`, url: `/api/algo/simple-trader-${n}/status`,
+        histUrl: `/api/algo/simple-trader-${n}/history`, open: _legsOpen, done: _legsDone, simple: n })),
+    // ST Touch Break shows the same serial (1-8) and tab name as its /algo sub-tab and its alerts.
+    ...(window.MINE_TABS || [{ n: 8, tab: 'NIFTY - Both - 3m' }]).map((m, i) => ({
+        label: `ST Touch Break · ${i + 1}. ${m.tab || ''}`.trim(), url: `/api/algo/simple-trader-${m.n}/status`,
+        histUrl: `/api/algo/simple-trader-${m.n}/history`, open: _legsOpen, done: _legsDone })),
 ];
 
 
@@ -125,42 +290,78 @@ function _activeTodayStr() {
         String(d.getDate()).padStart(2, '0');
 }
 
-function _activeFetchAll(btn) {
-    if (btn) { btn.disabled = true; btn.classList.add('busy'); }
-    const statusReqs = _ACTIVE_SOURCES.map(s =>
-        fetch(s.url)
-            .then(r => r.json())
-            .then(data => ({ src: s, data }))
-            .catch(() => ({ src: s, data: null }))
-    );
-    const histReqs = _ACTIVE_SOURCES.map(s =>
-        fetch(s.histUrl)
-            .then(r => r.json())
-            .then(data => ({ src: s, trades: (data && data.trades) || [] }))
-            .catch(() => ({ src: s, trades: [] }))
-    );
-    Promise.all([Promise.all(statusReqs), Promise.all(histReqs)]).then(([statuses, histories]) => {
-        const rows = [];
-        statuses.forEach(({ src, data }) => {
-            const trade = data && data.active && data.state ? data.state.active_trade : null;
-            if (trade) rows.push({ label: src.label, mode: src.mode, trade, live: data.live || null });
-        });
+// ── All / Live / Paper filter ──
+// Every card on the tab — the P&L tiles, Active Trades and Executed Trades —
+// reads the same filtered set. The choice is a per-browser convenience.
+let _activeFilter = (() => {
+    try { return localStorage.getItem('algo_active_filter') || 'all'; } catch { return 'all'; }
+})();
+let _activeLast = { rows: [], trades: [] };
 
-        // Completed trades from every algo, today only, newest exit first.
+const _activeIsPaper = r => String(r.mode || 'live').toLowerCase() === 'paper';
+const _activeKeep = r => _activeFilter === 'all' || (_activeFilter === 'paper') === _activeIsPaper(r);
+
+// The buttons are put in the header from here, so the page needs no new template.
+function _activeEnsureFilter() {
+    if (document.getElementById('activeModeFilter')) return;
+    const anchor = document.getElementById('activeRefreshBtn');
+    if (!anchor || !anchor.parentNode) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'rtp-period-tabs';
+    wrap.id = 'activeModeFilter';
+    wrap.style.marginRight = '8px';
+    wrap.innerHTML = [['all', 'All'], ['live', 'Live'], ['paper', 'Paper']].map(([k, t]) =>
+        `<button class="rtp-period-tab" data-filter="${k}" onclick="activeSetFilter('${k}')">${t}</button>`).join('');
+    anchor.parentNode.insertBefore(wrap, anchor);
+    _activeSyncFilterBtns();
+}
+
+function _activeSyncFilterBtns() {
+    document.querySelectorAll('#activeModeFilter .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.filter === _activeFilter));
+}
+
+function activeSetFilter(f) {
+    _activeFilter = ['all', 'live', 'paper'].includes(f) ? f : 'all';
+    try { localStorage.setItem('algo_active_filter', _activeFilter); } catch { /* per-browser only */ }
+    _activeSyncFilterBtns();
+    _activeRenderFiltered();
+}
+
+function _activeRenderFiltered() {
+    _activeEnsureFilter();
+    const rows = _activeLast.rows.filter(_activeKeep);
+    const trades = _activeLast.trades.filter(_activeKeep);
+    _activeRender(rows);
+    _activeRenderHistory(trades);
+    _activeRenderPnl(rows, trades);
+}
+
+function _activeFetchAll(btn) {
+    _activeEnsureFilter();
+    if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+    const getJson = url => fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
+    const reqs = _ACTIVE_SOURCES.map(s =>
+        Promise.all([getJson(s.url), getJson(s.histUrl)]).then(([data, hist]) => ({ src: s, data, hist })));
+    Promise.all(reqs).then(results => {
         const today = _activeTodayStr();
-        const todayTrades = [];
-        histories.forEach(({ src, trades }) => {
-            trades.forEach(t => {
+        const rows = [], todayTrades = [];
+        results.forEach(({ src, data, hist }) => {
+            // A Simple Trader tab is named for its strategy (status `strategy`).
+            const s = src.simple && data && data.strategy
+                ? Object.assign({}, src, { label: `Simple Trader ${src.simple} · ${data.strategy}` }) : src;
+            try { rows.push(...s.open(s, data)); } catch (e) { console.warn('[active]', s.label, e); }
+            ((hist && hist.trades) || []).forEach(t => {
                 const d = t.date || (t.entry_time ? String(t.entry_time).slice(0, 10) : '');
-                if (d === today) todayTrades.push({ label: src.label, mode: src.mode, ...t });
+                if (d !== today) return;
+                try { todayTrades.push(s.done(s, t)); } catch (e) { console.warn('[active]', s.label, e); }
             });
         });
-        todayTrades.sort((a, b) =>
-            String(b.exit_time || b.entry_time || '').localeCompare(String(a.exit_time || a.entry_time || '')));
+        // Newest exit first.
+        todayTrades.sort((a, b) => String(b.sortKey).localeCompare(String(a.sortKey)));
 
-        _activeRender(rows);
-        _activeRenderHistory(todayTrades);
-        _activeRenderPnl(rows, todayTrades);
+        _activeLast = { rows, trades: todayTrades };
+        _activeRenderFiltered();
         document.getElementById('activeLastUpd').textContent =
             new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }).finally(() => {
@@ -174,6 +375,13 @@ function _activeFetchAll(btn) {
     });
 }
 
+const _activeModeCol = {
+    key: 'mode', label: 'Mode',
+    format: m => (m || 'live').toLowerCase() === 'paper' ? 'Paper' : 'Live',
+    badge:  m => (m || 'live').toLowerCase() === 'paper' ? 'warn' : 'pos',
+};
+const _activeDirCol = { key: 'direction', label: 'Direction', strong: true, tone: d => d === 'BUY' ? 'pos' : 'neg' };
+
 function _activeRender(rows) {
     const badge    = document.getElementById('activeBadge');
     const badgeTxt = document.getElementById('activeBadgeText');
@@ -184,44 +392,29 @@ function _activeRender(rows) {
         ? `${rows.length} active trade${rows.length > 1 ? 's' : ''}`
         : 'No active trades';
 
-    // Rows here are {label, mode, trade, live} rather than flat trades, so the
-    // columns read through `row` instead of a key. '…' means the live poll has
-    // not answered yet — distinct from '—', which the grid uses for "no value".
-    const openPnl = r => _activeOpenPnlInr(r.trade, r.live);
+    // '…' means the live price has not answered yet — distinct from '—',
+    // which the grid uses for "no value" (a level this algo does not have).
+    const px  = v => v == null ? '—' : '₹' + _num(v);
+    const ltp = v => v === undefined ? '…' : px(v);
 
     body.innerHTML = DataGrid.render({
         rows,
         empty: 'No active trades',
         columns: [
-            { label: 'Logic Type', strong: true, format: (_, r) => r.label },
-            // `key` matters: DataGrid draws a dash, not a badge, for a blank value.
-            { key: 'mode', label: 'Mode',
-              format: (_, r) => (r.mode || 'live').toLowerCase() === 'paper' ? 'Paper' : 'Live',
-              badge:  (_, r) => (r.mode || 'live').toLowerCase() === 'paper' ? 'warn' : 'pos' },
-            { label: 'Direction', strong: true,
-              format: (_, r) => r.trade.direction ?? '—',
-              tone:   (_, r) => r.trade.direction === 'BUY' ? 'pos' : 'neg' },
-            { label: 'Option',
-              format: (_, r) => `${r.trade.option_type ?? ''} ${r.trade.strike ?? '—'}`.trim() },
-            { label: 'Entry Spot', format: (_, r) => '₹' + _num(r.trade.entry_spot) },
-            { label: 'Live Spot',  format: (_, r) => r.live ? '₹' + _num(r.live.spot) : '…' },
-            { label: 'SL Level', tone: 'warn', format: (_, r) => '₹' + _num(r.trade.sl_level) },
-            { label: 'Target',   tone: 'pos',  format: (_, r) => '₹' + _num(r.trade.target_level) },
-            { label: 'Opt Entry ₹', format: (_, r) => {
-                const v = r.live && r.live.opt_entry_price != null
-                    ? r.live.opt_entry_price : r.trade.opt_entry_price;
-                return v != null ? '₹' + _num(v) : '—';
-            } },
-            { label: 'Opt LTP ₹', format: (_, r) => {
-                const v = r.live ? r.live.opt_current_price : null;
-                return v != null ? '₹' + _num(v) : '…';
-            } },
-            // Long option position → P&L = (LTP − entry premium) × lot size.
-            { label: 'Opt P&L (₹)', strong: true,
-              format: (_, r) => { const v = openPnl(r); return v == null ? '…' : DataGrid.inr(v); },
-              tone:   (_, r) => DataGrid.sign(openPnl(r)) },
-            { label: 'Entry Time',
-              format: (_, r) => r.trade.entry_time ? _fmtTime(r.trade.entry_time) : '—' },
+            { key: 'label', label: 'Logic Type', strong: true },
+            _activeModeCol,
+            _activeDirCol,
+            { key: 'instrument', label: 'Instrument' },
+            { label: 'Entry Spot', format: (_, r) => px(r.entrySpot) },
+            { label: 'Live Spot',  format: (_, r) => r.entrySpot == null ? '—' : ltp(r.liveSpot) },
+            { label: 'SL Level', tone: 'warn', format: (_, r) => px(r.sl) },
+            { label: 'Target',   tone: 'pos',  format: (_, r) => px(r.target) },
+            { label: 'Entry ₹',  format: (_, r) => px(r.entryPx) },
+            { label: 'LTP ₹',    format: (_, r) => ltp(r.ltp) },
+            { label: 'P&L (₹)', strong: true,
+              format: (_, r) => r.pnl == null ? '…' : DataGrid.inr(r.pnl),
+              tone:   (_, r) => r.pnl == null ? '' : DataGrid.sign(r.pnl) },
+            { key: 'entryTime', label: 'Entry Time' },
         ],
     });
 }
@@ -232,20 +425,17 @@ function _activeRenderPnl(rows, todayTrades) {
     const netEl   = document.getElementById('activePnlNet');
     if (!statsEl) return;
 
-    const done = todayTrades.filter(t => t.opt_pnl_inr != null);
-    let realised = 0, wins = 0, losses = 0;
+    const done = todayTrades.filter(t => t.net != null);
+    let realised = 0, wins = 0, losses = 0, charges = 0;
     done.forEach(t => {
-        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
-        realised += inr;
-        if (inr >= 0) wins++; else losses++;
+        realised += t.net;             // ₹ net of round-trip charges
+        charges  += t.charges || 0;
+        if (t.net >= 0) wins++; else losses++;
     });
 
-    // Unrealised ₹ across currently open trades: (LTP − entry) × lot size.
+    // Unrealised ₹ across currently open trades.
     let unrealised = 0, openWithLive = 0;
-    rows.forEach(({ trade, live }) => {
-        const inr = _activeOpenPnlInr(trade, live);
-        if (inr != null) { unrealised += inr; openWithLive++; }
-    });
+    rows.forEach(r => { if (r.pnl != null) { unrealised += r.pnl; openWithLive++; } });
 
     const total  = realised + unrealised;
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
@@ -258,7 +448,7 @@ function _activeRenderPnl(rows, todayTrades) {
         { label: 'Wins',               value: wins,   cls: 'ag-pos' },
         { label: 'Losses',             value: losses, cls: 'ag-neg' },
         { label: 'Open Trades',        value: rows.length },
-        { label: 'Charges (₹)',        value: done.length ? '-₹' + Math.round(_algoChargesTotal(done)).toLocaleString('en-IN') : '—', cls: done.length ? 'ag-neg' : '' },
+        { label: 'Charges (₹)',        value: done.length ? '-₹' + Math.round(charges).toLocaleString('en-IN') : '—', cls: done.length ? 'ag-neg' : '' },
     ];
 
     statsEl.innerHTML = tiles.map(t =>
@@ -286,41 +476,38 @@ function _activeRenderHistory(trades) {
     if (countEl) countEl.textContent = trades.length
         ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    // Points are stored on newer trades; older rows only carry the two prices.
-    const optPts = t => t.opt_pnl_pts ?? (
-        t.opt_exit_price != null && t.opt_entry_price != null
-            ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-
     body.innerHTML = DataGrid.render({
         rows:  trades,
         empty: 'No trades executed today',
         columns: [
             { key: 'label',     label: 'Logic Type', strong: true },
-            { key: 'mode',      label: 'Mode',
-              format: m => (m || 'live').toLowerCase() === 'paper' ? 'Paper' : 'Live',
-              badge:  m => (m || 'live').toLowerCase() === 'paper' ? 'warn' : 'pos' },
-            { key: 'direction', label: 'Direction', strong: true,
-              tone: d => d === 'BUY' ? 'pos' : 'neg' },
-            { label: 'Option',
-              format: (_, t) => `${t.option_type ?? ''} ${t.strike ?? '—'}`.trim() },
-            { key: 'entry_time', label: 'Entry Time',
-              format: v => v ? _fmtTimeOnly(v) : '—' },
-            { key: 'exit_time',  label: 'Exit Time',
-              format: v => v ? _fmtTimeOnly(v) : '—' },
-            { key: 'opt_entry_price', label: 'Opt Entry', format: DataGrid.rupees },
-            { key: 'opt_exit_price',  label: 'Opt Exit',  format: DataGrid.rupees },
-            { label: 'Opt Pts', strong: true,
-              format: (_, t) => DataGrid.points(optPts(t)),
-              tone:   (_, t) => DataGrid.sign(optPts(t)) },
-            { key: 'opt_pnl_inr', label: 'Net Opt P&L (Bro)', strong: true,
-              format: (_, t) => _algoNetInrCell(t),
-              tone:   (_, t) => t.opt_pnl_inr == null ? '' : DataGrid.sign(_algoNetInr(t)),
-              title:  (_, t) => _algoNetInrTip(t) },
+            _activeModeCol,
+            _activeDirCol,
+            { key: 'instrument', label: 'Instrument' },
+            { key: 'entryTime', label: 'Entry Time', format: v => _activeClock(v) },
+            { key: 'exitTime',  label: 'Exit Time',  format: v => _activeClock(v) },
+            { key: 'entryPx',   label: 'Entry ₹', format: DataGrid.rupees },
+            { key: 'exitPx',    label: 'Exit ₹',  format: DataGrid.rupees },
+            { key: 'pts', label: 'Pts', strong: true,
+              format: v => DataGrid.points(v), tone: v => DataGrid.sign(v) },
+            { key: 'net', label: 'Net P&L (Bro)', strong: true,
+              format: (v, t) => v == null ? '—' : DataGrid.inr(v) +
+                  (t.charges ? ` (-₹${Math.round(t.charges).toLocaleString('en-IN')})` : ''),
+              tone:   v => v == null ? '' : DataGrid.sign(v),
+              title:  (_, t) => t.tip || '' },
             { key: 'reason', label: 'Reason',
               format: r => (r || '').replace(/_/g, ' '),
-              badge:  r => _ALGO_REASON_TONE[r] || 'neutral' },
+              badge:  r => _ALGO_REASON_TONE[r] || _activeReasonTone(r) },
         ],
     });
+}
+
+// Reasons the newer algos write in words ("Target Hit", "SuperTrend stop", "SL").
+function _activeReasonTone(r) {
+    const s = String(r || '').toLowerCase();
+    if (/target|profit/.test(s)) return 'pos';
+    if (/\bsl\b|stop|backstop/.test(s)) return 'neg';
+    return 'neutral';
 }
 
 // Exit reasons → grid badge tones. TARGET reads as a win, SL as a loss;
