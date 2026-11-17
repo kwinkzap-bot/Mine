@@ -99,6 +99,16 @@ document.addEventListener('DOMContentLoaded', function() {
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
+    // The latest session that has candles: today from 09:15 IST on a weekday,
+    // else the weekday before (a holiday is not known here — it just lists none).
+    function lastSessionLocal() {
+        const ist = new Date(Date.now() + (330 + new Date().getTimezoneOffset()) * 60000);
+        const d = new Date(ist.getFullYear(), ist.getMonth(), ist.getDate());
+        if (ist.getHours() * 60 + ist.getMinutes() < 9 * 60 + 15) d.setDate(d.getDate() - 1);
+        while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
     // N days back, in the browser's own timezone — same reason as localToday().
     function daysAgoLocal(n) {
         const d = new Date();
@@ -664,11 +674,13 @@ document.addEventListener('DOMContentLoaded', function() {
             // the selected Start/End Date range and Timeframe.
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
-            // Defaults to today only — the range is still editable, and a
-            // wider one lists every past signal in it.
+            // Defaults to the latest session only — today once the market has
+            // opened, else the last weekday (before 09:15 today has no candles
+            // and the scan was coming back empty). The range is still editable,
+            // and a wider one lists every past signal in it.
             const endDateInput = document.getElementById('endDate');
-            if (startDateInput) startDateInput.value = localToday();
-            if (endDateInput)   endDateInput.value   = localToday();
+            if (startDateInput) startDateInput.value = lastSessionLocal();
+            if (endDateInput)   endDateInput.value   = lastSessionLocal();
 
         } else if (val === 'thirty_min_fakeout') {
             if (tmfParamsRow) tmfParamsRow.style.display = 'grid';
@@ -3979,7 +3991,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // alone. Group headers are click-to-collapse.
         function renderRows(rows) {
             if (rows.length === 0) {
-                return '<tr><td colspan="5" style="text-align:center;padding:16px;">No signals in this range</td></tr>';
+                return '<tr><td colspan="5" style="text-align:center;padding:16px;">No signals in this range' + (document.getElementById('endDate')?.value > lastSessionLocal() && document.getElementById('startDate')?.value > lastSessionLocal() ? ` — no session has traded in it yet; the last one was ${lastSessionLocal()}` : '') + '</td></tr>';
             }
             const groups = new Map();
             for (const r of rows) {

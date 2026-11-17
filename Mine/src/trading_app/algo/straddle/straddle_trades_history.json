@@ -1,0 +1,60 @@
+[
+  {
+    "id": "str-2026-11-16",
+    "mode": "paper",
+    "cadence": "weekly",
+    "entry_day": "monday",
+    "date": "2026-11-16",
+    "entry_time": "2026-11-16 15:15:02",
+    "expiry": "2026-11-17",
+    "exit_time": "2026-11-17 10:18:13",
+    "reason": "Stop loss",
+    "spot": 25220.05,
+    "strike": 25200,
+    "premium": 178.55,
+    "points": -51.4,
+    "pct": -28.79,
+    "params": {
+      "target_pct": 50.0,
+      "stop_pct": 25.0,
+      "adjust": "roll_untested",
+      "adjust_pts": 200.0,
+      "max_adjust": 2,
+      "wings": 0,
+      "lock_at": 25.0,
+      "lock_to": 10.0
+    },
+    "adjusts": [],
+    "legs": [
+      {
+        "right": "CE",
+        "strike": 25200,
+        "side": -1,
+        "entry": 109.55,
+        "exit": 223.0,
+        "tsym": "NIFTY26N1725200CE"
+      },
+      {
+        "right": "PE",
+        "strike": 25200,
+        "side": -1,
+        "entry": 69.0,
+        "exit": 6.95,
+        "tsym": "NIFTY26N1725200PE"
+      }
+    ],
+    "accounts": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": 65,
+        "gross": -3341.0,
+        "brokerage": 200.0,
+        "pnl": -3541.0,
+        "failed": null,
+        "unconfirmed": null
+      }
+    },
+    "pnl": -3541.0
+  }
+]

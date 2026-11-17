@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "MANAPPURAM",
+    "direction": "BUY",
+    "mode": "paper",
+    "qty": 3000,
+    "lot_size": 3000,
+    "entry_price": 324.6,
+    "exit_price": 300.75,
+    "spot_entry_price": 323.45,
+    "spot_exit_price": 301.5,
+    "sl_price": 301.55,
+    "target_price": 355.8,
+    "pnl": -71550.0,
+    "reason": "SL",
+    "signal_date": "2026-11-04",
+    "entry_time": "2026-11-05T09:15:27.608835",
+    "exit_time": "2026-11-17T10:33:40.260405",
+    "date": "2026-11-17"
+  },
+  {
     "symbol": "TATASTEEL",
     "direction": "SELL",
     "mode": "paper",
