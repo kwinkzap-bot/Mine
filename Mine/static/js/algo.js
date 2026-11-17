@@ -555,7 +555,20 @@ async function activeCompare(btn) {
     const results = new Array(keys.length);
     let done = 0;
     const draw = () => {
-        meta.textContent = done < keys.length ? `running… ${done}/${keys.length}` : `${keys.length} algos · ${new Date().toLocaleTimeString('en-IN')}`;
+        const status = done < keys.length ? `running… ${done}/${keys.length}` : `${keys.length} algos · ${new Date().toLocaleTimeString('en-IN')}`;
+        // Totals across the algos priced in ₹ (index-only ones are in points and not added in).
+        const tot = { unit: 'inr', live: { v: 0, open: 0 }, bt: { v: 0, open: 0 } };
+        let pts = null;
+        keys.forEach((k, i) => {
+            const r = results[i];
+            if (!r || !r.success || !(r.rows || []).length) return;
+            const p = _cmpPnl(k, r);
+            const into = p.unit === 'inr' ? tot : (pts = pts || { unit: 'pts', live: { v: 0, open: 0 }, bt: { v: 0, open: 0 } });
+            into.live.v += p.live.v; into.live.open += p.live.open; into.bt.v += p.bt.v;
+        });
+        meta.innerHTML = `<span style="opacity:.75">${status}</span>`
+            + `<span style="margin-left:14px;font-size:12px" title="1 lot per trade, before charges">${_cmpPnlHtml(tot, true)}</span>`
+            + (pts && (pts.live.v || pts.bt.v) ? `<span style="font-size:12px;opacity:.85"> · index ${_cmpPnlHtml(pts, true)}</span>` : '');
         body.innerHTML = _cmpRender(keys, results);
     };
     draw();
@@ -580,6 +593,46 @@ function _cmpEsc(v) {
     return String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+// Live and backtest P&L of one algo's rows, on the same footing: 1 lot, before charges. With the
+// backtest priced on the option (r.basis 'option') both sides are ₹ = (premium out − in) × lot —
+// every leg here is a BOUGHT option. Index-only (CPR, or no Breeze) both sides are index points.
+const _CMP_SENSEX = new Set(['st6', 'st7']);
+function _cmpPnl(k, r) {
+    const lot = _CMP_SENSEX.has(k.key) ? 20 : _NIFTY_LOT_SIZE;
+    const opt = r.basis === 'option';
+    const one = t => {
+        if (!t) return null;
+        if (opt) return t.entry_premium != null && t.exit_premium != null
+            ? (t.exit_premium - t.entry_premium) * lot : null;
+        if (t.index_entry == null || t.index_exit == null) return null;
+        return (t.index_exit - t.index_entry) * (t.side === 'SELL' ? -1 : 1);
+    };
+    const sum = side => {
+        let v = 0, n = 0, open = 0;
+        (r.rows || []).forEach(x => {
+            const t = x[side];
+            if (!t) return;
+            const p = one(t);
+            if (p == null) { if (t.status === 'open') open++; return; }
+            v += p; n++;
+        });
+        return { v, n, open };
+    };
+    return { unit: opt ? 'inr' : 'pts', live: sum('live'), bt: sum('backtest') };
+}
+
+function _cmpFmt(v, unit) {
+    if (unit === 'pts') return (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
+    return (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+}
+
+function _cmpPnlHtml(p, big) {
+    const col = v => v > 0 ? 'var(--ag-pos)' : v < 0 ? 'var(--ag-neg)' : 'inherit';
+    const part = (label, s) => `<span style="margin-left:${big ? 14 : 12}px;white-space:nowrap">${label}
+        <b style="color:${col(s.v)}">${_cmpFmt(s.v, p.unit)}</b>${s.open ? ` <span style="opacity:.6">(+${s.open} open)</span>` : ''}</span>`;
+    return part('Live', p.live) + part('Backtest', p.bt);
+}
+
 function _cmpRender(keys, results) {
     const tally = { match: 0, fill: 0, differs: 0, live_only: 0, backtest_only: 0 };
     const quiet = [], errors = [], blocks = [];
@@ -596,7 +649,7 @@ function _cmpRender(keys, results) {
         + blocks.join('')
         + (quiet.length ? `<div class="ag-empty" style="text-align:left;padding:6px 0">No trades live or in the backtest today: ${quiet.join(' · ')}</div>` : '')
         + (errors.length ? `<div style="color:var(--ag-neg);font-size:12px;padding:4px 0">Could not compare — ${errors.join(' · ')}</div>` : '')
-        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. <b>Fill differs</b> = same trade (side, minutes, index levels), only the option price apart: the backtest books the candle's close, live's market order fills seconds later. Not compared yet: ${_CMP_NOT_WIRED.join(', ')}. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
+        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. <b>Fill differs</b> = same trade (side, minutes, index levels), only the option price apart: the backtest books the candle's close, live's market order fills seconds later. P&L (top right) is 1 lot per trade before charges, on the same premiums the table shows. Not compared yet: ${_CMP_NOT_WIRED.join(', ')}. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
 }
 
 function _cmpBlock(k, r) {
@@ -631,9 +684,11 @@ function _cmpBlock(k, r) {
             { label: 'Differences', format: (_, x) => why(x) },
         ],
     });
-    return `<div style="margin:12px 0 4px;font-weight:700">${esc(k.label)}
+    return `<div style="margin:12px 0 4px;font-weight:700;display:flex;align-items:baseline;flex-wrap:wrap;gap:4px">
+            <span>${esc(k.label)}
             <span style="font-weight:400;font-size:11px;opacity:.7"> — ${esc(r.source || '')}${r.basis === 'index' ? ' · index only' : ''}</span>
-            ${r.warning ? `<span style="font-weight:400;font-size:11px;color:var(--ag-neg)"> · ${esc(r.warning)}</span>` : ''}</div>
+            ${r.warning ? `<span style="font-weight:400;font-size:11px;color:var(--ag-neg)"> · ${esc(r.warning)}</span>` : ''}</span>
+            <span style="margin-left:auto;font-size:12px;font-weight:500" title="1 lot per trade, before charges">${_cmpPnlHtml(_cmpPnl(k, r))}</span></div>
         ${grid}`;
 }
 
