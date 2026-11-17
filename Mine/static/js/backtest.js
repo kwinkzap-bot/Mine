@@ -580,6 +580,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (mrbParamsRow)  mrbParamsRow.style.display  = 'none';
         const swParamsRow   = document.getElementById('smartWheelParamsRow');
         if (swParamsRow)   swParamsRow.style.display   = 'none';
+        const ssParamsRow   = document.getElementById('sunshineStraddleParamsRow');
+        if (ssParamsRow)   ssParamsRow.style.display   = 'none';
+        const ssOptPanel    = document.getElementById('sunshineStraddleOptimisePanel');
+        if (ssOptPanel)    ssOptPanel.style.display    = 'none';
         const osOptPanel    = document.getElementById('optionSellingOptimisePanel');
         const sbrOptPanel   = document.getElementById('stBbRsiOptimisePanel');
         if (sbrOptPanel)   sbrOptPanel.style.display   = 'none';
@@ -610,7 +614,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'smart_wheel' || val === 'hilega_milega' || val === 'ma_htf' || val === 'hull_suite' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'swing_momentum' || val === 'second_candle' || val === 'option_breakout' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'weekly_cpr_breakout' || val === 'atm_straddle' || val === 'call_ratio' || val === 'biweekly_iron_condor' || val === 'monthly_rsi_breakout' || val === 'smart_wheel' || val === 'sunshine_straddle' || val === 'hilega_milega' || val === 'ma_htf' || val === 'hull_suite' || SIMPLE_STRATS.includes(val)) ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -893,6 +897,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const wcbEnd = document.getElementById('endDate');
             if (startDateInput) startDateInput.value = '2017-01-01';
             if (wcbEnd) wcbEnd.value = localToday();
+        } else if (val === 'sunshine_straddle') {
+            if (ssParamsRow) ssParamsRow.style.display = 'grid';
+            // NIFTY + SENSEX on 1-minute option bars: no Symbol / Timeframe.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            const ssEnd = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = '2024-01-01';
+            if (ssEnd) ssEnd.value = localToday();
         } else if (val === 'smart_wheel') {
             if (swParamsRow) swParamsRow.style.display = 'grid';
             // A NIFTY 50 portfolio on daily closes: the Stocks box replaces the
@@ -1016,7 +1028,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
-        mine:    ['hull_suite', 'smart_wheel', 'monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators'],
+        mine:    ['sunshine_straddle', 'hull_suite', 'smart_wheel', 'monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'atm_straddle'],
         success: ['option_breakout', 'expiry_breakout'],
         testing: ['weekly_cpr_breakout', 'hilega_milega', 'ma_htf', 'call_ratio'],
@@ -1270,6 +1282,14 @@ document.addEventListener('DOMContentLoaded', function() {
             ['Credit', 'The net credit must be at least 4% of capital, or the week is skipped.'],
             ['Adjust', 'A short must not double, must not reach 0.30 delta, and one side\'s delta must not exceed twice the other\'s: that side (short + hedge) is closed and re-sold at 0.20. A short that has decayed 50% is rolled in to 0.20.'],
             ['Exit', '+1% / −1% of capital on the mark-to-market (5-minute closes), or next Friday 15:00. At 15:15 a profit of 0.8%+ or a loss of 0.9%+ is not carried overnight.']] },
+        sunshine_straddle: { sub: 'Intraday ATM straddles in the two hours premiums decay most: NIFTY Mon/Tue, SENSEX Wed/Thu', steps: [
+            ['Days', 'NIFTY on Monday and Tuesday, SENSEX on Wednesday and Thursday, on the weekly expiry running that day — each index\'s 1 DTE and 0 DTE since Sep 2025. No Friday.'],
+            ['Hedge', 'A minute before each entry, BUY a CE and a PE 20 strikes out of the money (the video: OTM 20 or the ~₹5 option), for margin. Sold at the window\'s exit.'],
+            ['Entry', 'SELL the ATM CE and ATM PE: NIFTY at 09:22 and 14:27, SENSEX at 09:22 and 13:35.'],
+            ['Stop', 'Each short leg on its own: +50 % of its premium. A stopped leg closes alone; the other stays.'],
+            ['Exit', 'NIFTY 10:16 and 15:14; SENSEX 10:30 and 15:14.'],
+            ['Lock', 'SENSEX: once the window is ₹2,000 a lot up, ₹750 is locked; every ₹20 more lifts it ₹10. Out at the first minute close at or under it.'],
+            ['Prices', 'Each contract\'s own 1-minute bars (Breeze). A stop fills at its level, or the minute\'s open on a gap. Today\'s lots (65 / 20) for every year; ₹20 an order plus STT, exchange, GST and stamp.']] },
         smart_wheel: { sub: 'Sell monthly puts on beaten-down NIFTY 50 stocks; if run through, own the future and sell ATM calls', steps: [
             ['Watchlist', 'NIFTY 50 stocks that have not fallen more than 30 % from a peak in the last 5 years, and are now at least 15 % under their all-time high. Five at a time, one per sector.'],
             ['Put', 'The session after each monthly expiry: SELL that month\'s put at least 5 % under spot and under the lowest close of the last 60 sessions (the "support"). Only if premium × qty is at least 1 % of the ₹2 L set aside for the stock. Expires worthless → sell the next one.'],
@@ -1425,6 +1445,7 @@ document.addEventListener('DOMContentLoaded', function() {
         swing_momentum: 'a monthly stock portfolio, not a single chart',
         monthly_rsi_breakout: 'a portfolio of stocks picked across the market each month, not a single chart',
         smart_wheel: 'a portfolio of stock options and futures across NIFTY 50, not a single chart',
+        sunshine_straddle: 'two-leg option windows on NIFTY and SENSEX, not a single chart',
     };
     const BT_LOGIC_DAILY = ['ema_pullback', 'hilega_milega', 'weekly_cpr_breakout'];
     const BT_LOGIC_INTERVAL = { expiry_breakout: '60minute', thirty_min_fakeout: '5minute', second_candle: 'minute' };
@@ -1760,6 +1781,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (_strat === 'monthly_rsi_breakout') {
             await runMonthlyRsiBreakout();
+            return;
+        }
+        if (_strat === 'sunshine_straddle') {
+            await runSunshineStraddle();
             return;
         }
         if (_strat === 'smart_wheel') {
@@ -3332,6 +3357,178 @@ document.addEventListener('DOMContentLoaded', function() {
         if (crRes) crRes.style.display = '';
     }
 
+    // ── Sunshine Straddle — start + poll ───────────────────────────────
+    // NIFTY Mon/Tue + SENSEX Wed/Thu ATM straddles in two windows a day
+    // (sunshine_straddle_engine). ~4 Breeze requests a window cold, cached after.
+    function _ssPayload() {
+        const num = (id, d) => { const v = parseFloat(document.getElementById(id)?.value); return Number.isFinite(v) ? v : d; };
+        const txt = id => (document.getElementById(id)?.value || '').trim();
+        const win = id => { const m = txt(id).match(/^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})$/);
+                            const pad = t => t.padStart(5, '0');
+                            return m ? [pad(m[1]), pad(m[2])] : ['', '']; };
+        const [nfAmIn, nfAmOut] = win('ssNfAm'), [nfPmIn, nfPmOut] = win('ssNfPm');
+        const [sxAmIn, sxAmOut] = win('ssSxAm'), [sxPmIn, sxPmOut] = win('ssSxPm');
+        const trail = document.getElementById('ssTrail')?.value || 'sx';
+        return {
+            start_date: document.getElementById('startDate')?.value,
+            end_date:   document.getElementById('endDate')?.value,
+            schedule: document.getElementById('ssSchedule')?.value || 'weekdays',
+            nf_on: txt('ssNfDays') !== '' || document.getElementById('ssSchedule')?.value === 'dte',
+            sx_on: txt('ssSxDays') !== '' || document.getElementById('ssSchedule')?.value === 'dte',
+            nf_days: txt('ssNfDays'), sx_days: txt('ssSxDays'),
+            nf_am_in: nfAmIn, nf_am_out: nfAmOut, nf_pm_in: nfPmIn, nf_pm_out: nfPmOut,
+            sx_am_in: sxAmIn, sx_am_out: sxAmOut, sx_pm_in: sxPmIn, sx_pm_out: sxPmOut,
+            sl_pct: num('ssSl', 50),
+            nf_hedge_strikes: num('ssNfHedge', 20), sx_hedge_strikes: num('ssSxHedge', 20),
+            nf_lots: num('ssNfLots', 1), sx_lots: num('ssSxLots', 1),
+            nf_trail: trail === 'both' || trail === 'nf', sx_trail: trail === 'both' || trail === 'sx',
+            trail_at: num('ssTrailAt', 2000), trail_lock: num('ssTrailLock', 750),
+            trail_step: num('ssTrailStep', 20), trail_by: num('ssTrailBy', 10),
+            brokerage: num('ssBrokerage', 20),
+            taxes: (document.getElementById('ssTaxes')?.value || '1') === '1',
+            capital: num('ssCapital', 300000),
+        };
+    }
+
+    async function runSunshineStraddle() {
+        const payload = _ssPayload();
+        const title = 'Running Sunshine Straddle';
+        const myRun = ++_crRun;
+        resultsArea.style.display = 'none';
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = 'none';
+        const btTradesSec = document.getElementById('btTradesSection');
+        const periodSec   = document.getElementById('periodBreakdownSection');
+        if (btTradesSec) btTradesSec.style.display = 'none';
+        if (periodSec)   periodSec.style.display   = 'none';
+        _showOptLoader(title, 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/sunshine-straddle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Backtest failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 1500));
+                if (myRun !== _crRun) return;
+                data = await (await fetch(`/api/backtest/sunshine-straddle/status/${taskId}`)).json();
+                if (myRun !== _crRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader(title, `${p.stage || ''} · ${p.done || 0} / ${p.total || 0} days`
+                    + ` · ${p.requests || 0} Breeze requests · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Backtest failed');
+            const s = data.summary || {};
+            if (s.breeze_over_budget) window.showNotification(
+                `Breeze budget reached (${s.breeze_requests} requests): ${s.breeze_over_budget} windows left out — run it again to carry on from the cache`, 'info');
+            renderSunshineStraddle(data);
+        } catch (err) {
+            if (myRun !== _crRun) return;
+            _hideOptLoader();
+            console.error('Sunshine Straddle error:', err);
+            window.showNotification(err.message || 'Backtest failed', 'error');
+            const ph = document.getElementById('btRightPlaceholder');
+            if (ph) ph.style.display = '';
+        }
+    }
+
+    function renderSunshineStraddle(data) {
+        const s = data.summary || {};
+        const ph = document.getElementById('btRightPlaceholder');
+        if (ph) ph.style.display = 'none';
+        const rupees = v => '₹' + Math.abs(Math.round(v || 0)).toLocaleString('en-IN');
+        const inr = v => (v >= 0 ? '+' : '−') + rupees(v);
+        const pct = v => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(2) + '%');
+        const card = (lbl, val, cls, sub) => `<div class="stat-card ${cls || ''}">
+            <span class="stat-card__lbl">${lbl}</span>
+            <span class="stat-card__val ${val.cls || ''}">${val.text ?? val}</span>
+            ${sub ? `<small>${sub}</small>` : ''}</div>`;
+        const tone = v => ({ text: inr(v), cls: v >= 0 ? 'stat-val-green' : 'stat-val-red' });
+        const r = s.by_reason || {};
+        const win = (s.by_window || []).map(w => `${w.window} ${inr(w.net)}`).join(' · ');
+        const skipTxt = Object.entries(s.skip_reasons || {}).map(([k, v]) => `${v} ${k}`).join(' · ');
+        const stats = document.getElementById('crStats');
+        if (stats) stats.innerHTML = [
+            card('Windows Traded', String(s.total_trades || 0), 'ac-blue',
+                 `${s.days_planned || 0} index-days · ${s.skipped || 0} windows not priced${skipTxt ? ' (' + skipTxt + ')' : ''} · ${s.breeze_requests || 0} Breeze requests`),
+            card('Win Rate', `${(s.win_rate || 0).toFixed(1)}%`, 'ac-green',
+                 `${s.wins || 0} W / ${s.losses || 0} L · avg win ${inr(s.avg_win || 0)} · avg loss ${inr(s.avg_loss || 0)}`),
+            card('Net P&L', tone(s.total_pnl_rupees || 0), 'ac-blue',
+                 `gross ${inr(s.gross || 0)} − ${rupees(s.total_charges)} brokerage + taxes · ${pct(s.return_pct)} on ${rupees(s.capital)}`),
+            card('Per Year', pct(s.annual_pct), 'ac-blue',
+                 `${s.losing_months || 0} losing months of ${s.months || 0} · worst month ${inr(s.worst_month || 0)}`),
+            card('Max Drawdown', { text: '−' + rupees(s.max_drawdown_rupees), cls: 'stat-val-red' }, 'ac-red',
+                 `on daily closed P&L, ${s.max_drawdown_date || '—'} · Calmar ${s.calmar ?? '—'} · worst window ${inr(s.worst_trade || 0)}`),
+            card('Profit Factor', String(s.profit_factor ?? '—'), 'ac-blue', `best window ${inr(s.best_trade || 0)}`),
+            card('Exits', `${s.leg_stops || 0} leg stops`, 'ac-blue',
+                 Object.entries(r).map(([k, v]) => `${v} ${k}`).join(' · ')),
+            card('By Window', '', 'ac-blue', win || '—'),
+        ].join('');
+        DataGrid.mountSortable('bicYearGrid', {
+            rows: s.by_year || [],
+            columns: [
+                { key: 'year', label: 'Year', sortable: true },
+                { key: 'trades', label: 'Windows', sortable: true },
+                { key: 'wins', label: 'Won', sortable: true },
+                { key: 'nifty', label: 'NIFTY', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'sensex', label: 'SENSEX', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'charges', label: 'Costs', sortable: true, format: v => rupees(v) },
+                { key: 'net', label: 'Net P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'return_pct', label: 'Return', sortable: true, format: pct, tone: DataGrid.sign },
+                { key: 'losing_months', label: 'Losing Months', sortable: true },
+            ],
+            empty: 'No years in this range',
+            defaultSort: { key: 'year', dir: 'asc' },
+        });
+        const bicYears = document.getElementById('bicYears');
+        if (bicYears) bicYears.style.display = '';
+        const px = v => (v == null ? '—' : Number(v).toFixed(2));
+        DataGrid.mountSortable('crGrid', {
+            rows: data.trades || [],
+            columns: [
+                { key: 'date', label: 'Date', sortable: true },
+                { key: 'index', label: 'Index', sortable: true, title: (v, r) => `expiry ${r.expiry}` },
+                { key: 'window', label: 'Window', sortable: true, format: (v, r) => `${v} ${r.entry_time}-${r.exit_time}` },
+                { key: 'dte', label: 'DTE', sortable: true },
+                { key: 'strike', label: 'ATM', sortable: true, title: (v, r) => `spot ${px(r.spot)}` },
+                { key: 'ce_entry', label: 'CE', sortable: true, format: (v, r) => `${px(v)} → ${px(r.ce_exit)}` },
+                { key: 'pe_entry', label: 'PE', sortable: true, format: (v, r) => `${px(v)} → ${px(r.pe_exit)}` },
+                { key: 'hedge_cost', label: 'Hedges', sortable: true, format: px,
+                  title: (v, r) => (r.legs || []).filter(g => g.side === 'buy').map(g => `${g.name} ${g.strike}: ${px(g.entry)} → ${px(g.exit)}`).join('\n') },
+                { key: 'reason', label: 'Exit', sortable: true,
+                  title: (v, r) => (r.legs || []).filter(g => g.side === 'sell').map(g => `${g.name}: ${g.why} ${g.exit_time}`).join('\n')
+                                   + (r.peak_lot != null ? `\npeak ₹${r.peak_lot}/lot` + (r.lock_lot != null ? ` · lock ₹${r.lock_lot}` : '') : '') },
+                { key: 'gross', label: 'Gross', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+                { key: 'charges', label: 'Costs', sortable: true, format: v => rupees(v) },
+                { key: 'pnl_rupees', label: 'Net P&L', sortable: true, format: v => DataGrid.inr(v), tone: DataGrid.sign },
+            ],
+            empty: 'No window was traded in this range',
+            defaultSort: { key: 'date', dir: 'desc' },
+        });
+
+        // Equity Curve + P&L Breakdown, as the Smart Wheel renders them.
+        const resultsRow1 = document.getElementById('resultsRow1');
+        if (resultsRow1) resultsRow1.style.display = 'none';
+        if (resultsArea) resultsArea.style.display = '';
+        const ssTrades = (data.trades || []).map(t => ({ ...t, entry_time: `${t.date} ${t.entry_time}` }));
+        _periodTrades = ssTrades;
+        _periodIsMoney = true;
+        _periodLots = 1;
+        _periodLotValue = 1;
+        _periodUseDirectRupees = true;
+        renderEquityCurve(ssTrades, true, 1, 1, s.capital || 300000);
+        const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
+        renderPeriodBreakdown(ssTrades, true, 1, 1, activePeriod, true);
+
+        const crRes = document.getElementById('crResults');
+        if (crRes) crRes.style.display = '';
+    }
+
     // ── Weekly CPR Breakout — start + poll ─────────────────────────────
     // Two Fyers daily requests per stock plus whatever 1-minute tail is not on
     // disk yet: a minute or two warm, several cold. The server answers with a
@@ -3513,6 +3710,21 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(tick, 1500);
     }
 
+    // Every Find Best Params board shows its max drawdown in rupees: the
+    // engine's points × ₹/pt (lot value) × lots, from that board's own lot boxes.
+    // The sort key stays the points field — the multiplier is the same for every
+    // row, so the order is unchanged.
+    function _ddRsCell(pts, lots, lotValue) {
+        if (pts == null) return '<span class="pnl-negative">—</span>';
+        const v = Math.abs(pts) * (lotValue || 0) * (lots || 1);
+        return `<span class="pnl-negative" title="${Math.abs(pts).toFixed(1)} pts × ₹${lotValue}/pt × ${lots} lot${lots === 1 ? '' : 's'}">-₹${Math.round(v).toLocaleString('en-IN')}</span>`;
+    }
+    function _pcOptMoney() {
+        const lots     = Math.max(1, parseInt(document.getElementById('pcLots')?.value || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('pcLotValue')?.value || 65));
+        return { lots, lotValue };
+    }
+
     // ── 30-Sec Option Breakout — Find Best Params ───────────────────────
     // Sweeps range candle # × SL:Target × SL buffer × legs on the one timeframe
     // this strategy has. The sessions are the same ones a plain run walks and
@@ -3540,7 +3752,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _obOptMoney(); const v = _obOptNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
         { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _obOptMoney(); const b = _obOptBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
         { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: 'Max DD (₹)',    key: 'max_drawdown',  fmt: r => { const { lots, lotValue } = _obOptMoney(); return _ddRsCell(r.max_drawdown, lots, lotValue); } },
         { label: '',              key: null,            fmt: () => '' },   // Use button
     ];
 
@@ -5194,7 +5406,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Rolls',         key: 'rolls',          fmt: r => r.rolls != null ? r.rolls : '—' },
         { label: 'Net P&L (pts)', key: 'total_pnl',      fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
         { label: 'Prof. Factor',  key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD (₹)',    key: 'max_drawdown_rupees', fmt: r => r.max_drawdown_rupees != null ? `<span class="pnl-negative">-₹${Math.round(Math.abs(r.max_drawdown_rupees)).toLocaleString('en-IN')}</span>` : `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: 'Max DD (₹)',    key: 'max_drawdown_rupees', fmt: r => r.max_drawdown_rupees != null ? `<span class="pnl-negative">-₹${Math.round(Math.abs(r.max_drawdown_rupees)).toLocaleString('en-IN')}</span>` : _ddRsCell(r.max_drawdown, Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1)), Math.max(1, parseFloat(document.getElementById('emaLotValue')?.value || 65))) },
         { label: '',              key: null,            fmt: () => '' },
     ];
 
@@ -5310,7 +5522,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _scOptMoney(); const v = _scOptNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
         { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _scOptMoney(); const b = _scOptBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
         { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
-        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: 'Max DD (₹)',    key: 'max_drawdown',  fmt: r => { const { lots, lotValue } = _scOptMoney(); return _ddRsCell(r.max_drawdown, lots, lotValue); } },
         { label: '',              key: null,            fmt: () => '' },   // Use button
     ];
 
@@ -5765,6 +5977,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'biweekly_iron_condor') runBicOptimise(false);
         else if (strat === 'monthly_rsi_breakout') runMrbOptimise();
         else if (strat === 'smart_wheel') runSwOptimise();
+        else if (strat === 'sunshine_straddle') runSsOptimise();
         else if (strat === 'simpler_trader') runSbrOptimise(true);
         else if (strat === 'hilega_milega' || strat === 'ma_htf' || strat === 'hull_suite') runSbrOptimise(false, strat);
         else if (SIMPLE_STRATS.includes(strat)) runSbrOptimise(false, strat);
@@ -5812,7 +6025,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'Recent 30% (pts)', key: 'recent_pnl', fmt: r => `<span class="${r.recent_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${r.recent_pnl >= 0 ? '+' : ''}${(r.recent_pnl ?? 0).toFixed(0)}</span>` },
         { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) + (r.option ? ` <b title="On the option with your SL / TSL — the figure the BACKTEST shows">(option ${r.option.profit_factor.toFixed(2)})</b>` : '') },
         { label: 'Index PF', key: 'index_pf', fmt: r => r.index_pf != null ? r.index_pf.toFixed(2) : '' },
-        { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
+        { label: 'Max DD (₹)', key: 'max_drawdown', fmt: r => { const { lots, lotValue } = _pcOptMoney(); return _ddRsCell(r.max_drawdown || 0, lots, lotValue); } },
         { label: '',           key: null,            fmt: () => '' },   // Use button
     ];
 
@@ -5901,7 +6114,7 @@ document.addEventListener('DOMContentLoaded', function() {
             ...retDd,
             { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
             { label: 'Index PF', key: 'index_pf', fmt: r => r.index_pf != null ? r.index_pf.toFixed(2) : '' },
-            { label: 'Max DD (pts)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">${Math.round(Math.abs(r.max_drawdown || 0)).toLocaleString('en-IN')}</span>` },
+            { label: 'Max DD (₹)', key: 'max_drawdown', fmt: r => { const { lots, lotValue } = _pcOptMoney(); return _ddRsCell(r.max_drawdown || 0, lots, lotValue); } },
             { label: '', key: null, fmt: () => '' },   // Use button
         ];
     }
@@ -6050,7 +6263,7 @@ document.addEventListener('DOMContentLoaded', function() {
             { label: 'Max DD', key: 'max_dd_rs', fmt: r => `<span class="pnl-negative">₹${Math.round(Math.abs(r.max_dd_rs || 0)).toLocaleString('en-IN')}</span> <small>(${Math.abs(r.max_drawdown || 0).toFixed(1)} pts)</small>` },
         ];
         const withRs = (cols) => cols.length && rsCols.length
-            ? [...cols.filter(c => c.label !== 'Max DD (pts)').slice(0, -1), ...rsCols, cols[cols.length - 1]] : cols;
+            ? [...cols.filter(c => c.key !== 'max_drawdown').slice(0, -1), ...rsCols, cols[cols.length - 1]] : cols;
         // The page's own settings, scored the same way, pinned as row ★ so the board can be
         // read against the run the user already trusts (the sweep has no SL/TSL, see note).
         const cur = data.current;
@@ -7351,6 +7564,96 @@ document.addEventListener('DOMContentLoaded', function() {
             _hideOptLoader();
             done();
             console.error('Smart Wheel optimise error:', err);
+            window.showNotification(err.message || 'Optimisation failed', 'error');
+        }
+    }
+
+    // ── Sunshine Straddle — Find Best Params ───────────────────────────
+    // sunshine_straddle_engine.SWEEP_GRID: stop % × each window on/off and its exit ×
+    // profit lock level and which index uses it (34,181 combos) at the page's entry
+    // times. Reads only the option sessions the backtest has cached — never Breeze.
+    let _ssOptRun = 0;
+    const _ssWin = v => v ? v.replace('-', '→') : '<span style="opacity:.5">off</span>';
+    const SS_OPT_COLS = [
+        { label: '#',            key: null,                  fmt: (r, i) => i + 1 },
+        { label: 'NIFTY AM',     key: 'nf_am',               fmt: r => _ssWin(r.nf_am) },
+        { label: 'NIFTY PM',     key: 'nf_pm',               fmt: r => _ssWin(r.nf_pm) },
+        { label: 'SENSEX AM',    key: 'sx_am',               fmt: r => _ssWin(r.sx_am) },
+        { label: 'SENSEX PM',    key: 'sx_pm',               fmt: r => _ssWin(r.sx_pm) },
+        { label: 'Stop',         key: 'sl_pct',              fmt: r => r.sl_pct ? `${r.sl_pct}%` : 'None' },
+        { label: 'Lock',         key: 'trail_at',            fmt: r => r.trail_at == null ? 'Off'
+              : `${r.nf_trail && r.sx_trail ? 'Both' : (r.nf_trail ? 'NIFTY' : 'SENSEX')} ₹${r.trail_at}→₹${r.trail_lock}` },
+        { label: 'Windows',      key: 'total_trades',        fmt: r => r.total_trades },
+        { label: 'Win%',         key: 'win_rate',            fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+        { label: 'Net P&L (₹)',  key: 'net_pnl_rupees',      fmt: r => _rs(r.net_pnl_rupees) },
+        { label: 'Max DD (₹)',   key: 'max_drawdown_rupees', fmt: r => `<span class="pnl-negative">₹${Math.round(r.max_drawdown_rupees || 0).toLocaleString('en-IN')}</span>` },
+        { label: 'Net÷DD',       key: 'net_dd',              fmt: r => (r.net_dd ?? 0).toFixed(2) },
+        { label: 'Prof. Factor', key: 'profit_factor',       fmt: r => (r.profit_factor ?? 0).toFixed(2) },
+        { label: '1st Half',     key: 'first_half',          fmt: r => _rs(r.first_half) },
+        { label: '2nd Half',     key: 'second_half',         fmt: r => _rs(r.second_half) },
+        { label: 'Losing Months', key: 'losing_months',      fmt: r => `${r.losing_months} / ${r.months}` },
+        { label: 'Worst Month',  key: 'worst_month',         fmt: r => _rs(r.worst_month) },
+        { label: '',             key: null,                  fmt: () => '' },   // Use button
+    ];
+
+    function applySsOptResult(r) {
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('ssNfAm', r.nf_am || '');
+        set('ssNfPm', r.nf_pm || '');
+        set('ssSxAm', r.sx_am || '');
+        set('ssSxPm', r.sx_pm || '');
+        set('ssSl', String(r.sl_pct));
+        set('ssTrail', r.nf_trail && r.sx_trail ? 'both' : (r.nf_trail ? 'nf' : (r.sx_trail ? 'sx' : 'none')));
+        if (r.trail_at != null) { set('ssTrailAt', String(r.trail_at)); set('ssTrailLock', String(r.trail_lock)); }
+        if (window.showNotification) window.showNotification(
+            `Applied: stop ${r.sl_pct || 'none'}% · lock ${r.trail_at == null ? 'off' : '₹' + r.trail_at + ' → ₹' + r.trail_lock}`
+            + ` · net ₹${Math.round(r.net_pnl_rupees).toLocaleString('en-IN')} · DD ₹${Math.round(r.max_drawdown_rupees).toLocaleString('en-IN')}`
+            + ' — check it on a range it was not swept on before trusting it', 'success');
+    }
+
+    async function runSsOptimise() {
+        const panel    = document.getElementById('sunshineStraddleOptimisePanel');
+        const optimBtn = document.getElementById('runOptimiseBtn');
+        const origText = optimBtn ? optimBtn.textContent : '';
+        if (optimBtn) { optimBtn.textContent = '⏳ Running…'; optimBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+        const myRun = ++_ssOptRun;
+        const done = () => { if (optimBtn) { optimBtn.textContent = origText; optimBtn.disabled = false; } };
+        _showOptLoader('Finding best params…', 'Starting…');
+        try {
+            const resp = await fetch('/api/backtest/sunshine-straddle/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(_ssPayload()),
+            });
+            let data = await resp.json();
+            if (!data.success || !data.task_id) throw new Error(data.error || 'Optimisation failed');
+            const taskId = data.task_id;
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                if (myRun !== _ssOptRun) return;
+                data = await (await fetch(`/api/backtest/sunshine-straddle/status/${taskId}`)).json();
+                if (myRun !== _ssOptRun) return;
+                if (data.status !== 'running') break;
+                const p = data.progress || {};
+                _showOptLoader('Finding best params…', `${p.stage || ''} · ${p.done || 0} / ${p.total || 0} windows · ${data.elapsed || 0}s`);
+            }
+            _hideOptLoader();
+            done();
+            if (!data.success || data.status === 'error') throw new Error(data.error || 'Optimisation failed');
+            const metaEl = document.getElementById('ssOptMeta');
+            if (metaEl) metaEl.textContent =
+                `${(data.total_combos_tested || 0).toLocaleString('en-IN')} combos · ${data.total} on the board `
+                + `(≥ ${data.min_trades} windows; best net÷DD / net / weaker half) · ${data.windows} windows on cached contracts`
+                + (data.unpriced ? `, ${data.unpriced} not cached (run the backtest over this range to fetch them)` : '')
+                + ` · halves split at ${data.mid_day || '—'}`;
+            _mountSingleOptGrid('ssOptGrid', data.results || [], SS_OPT_COLS, 'net_dd', applySsOptResult);
+            if (panel) panel.style.display = '';
+        } catch (err) {
+            if (myRun !== _ssOptRun) return;
+            _hideOptLoader();
+            done();
+            console.error('Sunshine Straddle optimise error:', err);
             window.showNotification(err.message || 'Optimisation failed', 'error');
         }
     }

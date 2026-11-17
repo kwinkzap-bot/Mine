@@ -4,8 +4,19 @@
     {
       "name": "trading-app",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "cd '/Users/kavinkumar/Mine/Mine' && python3 main.py"],
+      "runtimeArgs": [
+        "-c",
+        "cd '/Users/kavinkumar/Mine/Mine' && python3 main.py"
+      ],
       "port": 5000
+    },
+    {
+      "name": "backtest-harness",
+      "runtimeExecutable": "/Users/kavinkumar/Mine/.venv/bin/python",
+      "runtimeArgs": [
+        "/private/tmp/claude-501/-Users-kavinkumar--claude-spares-spare-vwNWDU/c7c552fe-9292-47cd-a781-a4ff087967b3/scratchpad/harness.py"
+      ],
+      "port": 5057
     }
   ]
 }

@@ -39,6 +39,7 @@
                 <option value="ma_htf">📈 MA Cross + HTF</option>
                 <option value="hull_suite" selected>〰️ Hull Suite (HMA 200 / 100 / 50 break)</option>
                 <option value="weekly_cpr_breakout">📐 Weekly CPR Breakout</option>
+                <option value="sunshine_straddle">🌅 Sunshine Straddle — NIFTY Mon/Tue + SENSEX Wed/Thu, 2 windows</option>
                 <option value="smart_wheel">🛞 Smart Wheel — Stock Put / Covered Call (NIFTY 50)</option>
                 <option value="monthly_rsi_breakout">🗓️ RSI Breakout — Day / Week / Month (Stocks, EMA exit)</option>
                 <option value="simpler_trader">🎓 1. BB PP ST RSI WR + SL (Quantman)</option>
@@ -2405,6 +2406,99 @@
                     <input type="number" id="mrbBrokerage" value="20" min="0" step="1">
                 </div>
             </div>
+            <div id="sunshineStraddleParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="ssSchedule" title="Weekdays (the video): NIFTY on the days in NIFTY Days, SENSEX on SENSEX Days, the weekly expiry running that day. Since Sep 2025 (NIFTY expires Tuesday, SENSEX Thursday) Mon/Tue and Wed/Thu are each index's 1 DTE and 0 DTE; before that the same weekdays were further from expiry. Expiry day + day before: each index on its own 0 and 1 DTE whatever weekday they fall on.">Days</label>
+                    <select id="ssSchedule">
+                        <option value="weekdays" selected>Fixed weekdays (video)</option>
+                        <option value="dte">Expiry day + day before</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="ssNfDays" title="Weekdays NIFTY is traded under Fixed weekdays: mon,tue,wed,thu,fri. Blank = NIFTY off. The video: Monday and Tuesday; never Friday.">NIFTY Days</label>
+                    <input type="text" id="ssNfDays" value="mon,tue">
+                </div>
+                <div class="form-group">
+                    <label for="ssSxDays" title="Weekdays SENSEX is traded under Fixed weekdays. Blank = SENSEX off. The video: Wednesday and Thursday.">SENSEX Days</label>
+                    <input type="text" id="ssSxDays" value="wed,thu">
+                </div>
+                <div class="form-group">
+                    <label for="ssSl" title="Each short leg's own stop, % above ITS premium (the video: 50). A stopped leg closes alone; the other leg stays to the window's exit. 0 = no stop.">Stop % per Leg</label>
+                    <input type="number" id="ssSl" value="50" min="0" max="500" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="ssNfAm" title="NIFTY morning window, entry-exit (HH:MM-HH:MM). The hedges are bought one minute before the entry. The video: 09:22-10:16. Blank = off.">NIFTY AM</label>
+                    <input type="text" id="ssNfAm" value="09:22-10:16">
+                </div>
+                <div class="form-group">
+                    <label for="ssNfPm" title="NIFTY afternoon window. The video: sell 'at 2:27', out at close; 15:14 is his own alternative to sitting through the cash settlement. Blank = off.">NIFTY PM</label>
+                    <input type="text" id="ssNfPm" value="14:27-15:14">
+                </div>
+                <div class="form-group">
+                    <label for="ssSxAm" title="SENSEX morning window. The video: 09:22-10:30. Blank = off.">SENSEX AM</label>
+                    <input type="text" id="ssSxAm" value="09:22-10:30">
+                </div>
+                <div class="form-group">
+                    <label for="ssSxPm" title="SENSEX afternoon window. The video: 13:35 to close (15:14). Blank = off.">SENSEX PM</label>
+                    <input type="text" id="ssSxPm" value="13:35-15:14">
+                </div>
+                <div class="form-group">
+                    <label for="ssNfHedge" title="NIFTY hedges: a CE and a PE this many strikes (50 pts each) from the ATM, bought a minute before each entry and sold at the window's exit. The video: OTM 20, for the margin benefit. 0 = none.">NIFTY Hedge Strikes OTM</label>
+                    <input type="number" id="ssNfHedge" value="20" min="0" max="60" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ssSxHedge" title="SENSEX hedges, strikes of 100 pts from the ATM. The video buys the ~₹5 options; 20 strikes (2,000 pts) is about there at 0-1 DTE. 0 = none.">SENSEX Hedge Strikes OTM</label>
+                    <input type="number" id="ssSxHedge" value="20" min="0" max="60" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ssNfLots" title="NIFTY lots, at today's lot of 65 for every year.">NIFTY Lots</label>
+                    <input type="number" id="ssNfLots" value="1" min="1" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ssSxLots" title="SENSEX lots, at today's lot of 20 for every year.">SENSEX Lots</label>
+                    <input type="number" id="ssSxLots" value="1" min="1" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ssTrail" title="The video's 'advanced rule' is for SENSEX: once a window's mark-to-market (all legs, ₹ a lot, on minute closes) reaches Lock From, Lock At is locked, and every further Step lifts the lock by Lift. The window closes at the first minute close at or under the lock.">Profit Lock On</label>
+                    <select id="ssTrail">
+                        <option value="sx" selected>SENSEX only (video)</option>
+                        <option value="both">NIFTY + SENSEX</option>
+                        <option value="nf">NIFTY only</option>
+                        <option value="none">Off</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="ssTrailAt" title="₹ a lot of profit that arms the lock. The video: 2,000.">Lock From ₹/lot</label>
+                    <input type="number" id="ssTrailAt" value="2000" min="0" step="100">
+                </div>
+                <div class="form-group">
+                    <label for="ssTrailLock" title="₹ a lot locked once armed. The video: 750.">Lock At ₹/lot</label>
+                    <input type="number" id="ssTrailLock" value="750" min="0" step="50">
+                </div>
+                <div class="form-group">
+                    <label for="ssTrailStep" title="Every this much more profit (₹ a lot)… The video: 20.">Step ₹/lot</label>
+                    <input type="number" id="ssTrailStep" value="20" min="0" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="ssTrailBy" title="…lifts the lock by this much. The video: 10.">Lift ₹/lot</label>
+                    <input type="number" id="ssTrailBy" value="10" min="0" step="5">
+                </div>
+                <div class="form-group">
+                    <label for="ssBrokerage" title="₹ per order. Each window sends 8 orders with hedges (4 legs in and out), 4 without.">Brokerage ₹ per Order</label>
+                    <input type="number" id="ssBrokerage" value="20" min="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="ssTaxes" title="STT on the sell side (0.1 % of premium, 0.0625 % before Oct 2024), exchange charges, SEBI fee, stamp duty and GST, as the video adds 'taxes'.">Taxes</label>
+                    <select id="ssTaxes">
+                        <option value="1" selected>On</option>
+                        <option value="0">Off</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="ssCapital" title="Only for the % figures. The video quotes ~₹33 L of margin for its portfolio; a hedged 1-lot straddle on each index needs well under ₹3 L.">Capital ₹</label>
+                    <input type="number" id="ssCapital" value="300000" min="10000" step="10000">
+                </div>
+            </div>
             <div id="smartWheelParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="swPrices" title="Breeze: each expired contract's real daily close from ICICI (needs the ICICI login; one request a contract, cached on disk — a run spends at most 2,500 requests after hours, 400 in market hours, and a re-run carries on from the cache). Model: Black-Scholes on the stock's 20-session realised volatility × IV Multiple — an estimate, no broker call.">Premiums</label>
@@ -2727,6 +2821,19 @@
                 </div>
                 <div class="opt-table-wrap">
                     <div id="bicOptGrid"></div>
+                </div>
+            </div>
+
+            <!-- Sunshine Straddle Find Best Params (sunshine_straddle_engine.SWEEP_GRID) -->
+            <div id="sunshineStraddleOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">🌅 Sunshine Straddle Best Params</h4>
+                    </div>
+                    <small id="ssOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="ssOptGrid"></div>
                 </div>
             </div>
 

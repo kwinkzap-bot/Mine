@@ -10290,6 +10290,270 @@ def monthly_rsi_breakout_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
 
 
+# ─── Sunshine Straddle (NIFTY Mon/Tue + SENSEX Wed/Thu, two windows a day) ──
+# Backtest/sunshine_straddle_engine.py. Index minutes from the local store, premiums
+# from each contract's own 1-minute bars (Breeze, disk-cached per contract-session).
+# A run spends at most _ss_budget() Breeze requests; a window whose contract is
+# neither cached nor affordable is skipped and counted, and a re-run carries on.
+_ss_tasks: dict = {}
+_ss_tasks_lock = threading.Lock()
+
+
+class _SsBudgetSpent(Exception):
+    """This run's Breeze budget is spent and the contract-session is not on disk."""
+
+
+def _ss_budget() -> int:
+    return 400 if _cr_in_market() else 2500
+
+
+_SS_HHMM = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+def _ss_parse(data: dict):
+    from datetime import date as _date
+    from trading_app.Backtest.sunshine_straddle_engine import DEFAULTS, parse_days
+    start_d = _date.fromisoformat(str(data.get('start_date') or ''))
+    end_d = _date.fromisoformat(str(data.get('end_date') or ''))
+    if end_d < start_d:
+        raise ValueError('end_date is before start_date')
+    f = lambda k, lo, hi: _mrb_float(data, k, DEFAULTS[k], lo, hi)
+    p = {'schedule': 'dte' if str(data.get('schedule', 'weekdays')).lower() == 'dte' else 'weekdays'}
+    for key in ('nf', 'sx'):
+        p[f'{key}_on'] = bool(data.get(f'{key}_on', True))
+        days = parse_days(data.get(f'{key}_days', DEFAULTS[f'{key}_days']))
+        p[f'{key}_days'] = ','.join(('mon', 'tue', 'wed', 'thu', 'fri')[d] for d in days)
+        for win in ('am', 'pm'):
+            for side in ('in', 'out'):
+                k = f'{key}_{win}_{side}'
+                v = str(data.get(k, DEFAULTS[k]) or '').strip()
+                if v and not _SS_HHMM.match(v):
+                    raise ValueError(f'{k} must be HH:MM')
+                p[k] = v
+        p[f'{key}_hedge_strikes'] = int(f(f'{key}_hedge_strikes', 0, 60))
+        p[f'{key}_lots'] = int(f(f'{key}_lots', 1, 100))
+        p[f'{key}_trail'] = bool(data.get(f'{key}_trail', DEFAULTS[f'{key}_trail']))
+    p.update({
+        'sl_pct': f('sl_pct', 0, 500), 'trail_at': f('trail_at', 0, 1e7), 'trail_lock': f('trail_lock', 0, 1e7),
+        'trail_step': f('trail_step', 0, 1e6), 'trail_by': f('trail_by', 0, 1e6),
+        'brokerage': f('brokerage', 0, 1000), 'taxes': bool(data.get('taxes', True)),
+        'capital': f('capital', 10_000, 1e10),
+    })
+    return start_d, end_d, p
+
+
+@api_bp.route('/backtest/sunshine-straddle', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_sunshine_straddle_backtest_api():
+    """Start a Sunshine Straddle backtest; poll /backtest/sunshine-straddle/status/<task_id>.
+
+    Body: start_date, end_date; schedule 'weekdays' (nf_days 'mon,tue', sx_days 'wed,thu')
+    | 'dte' (each index on its expiry day and the session before); per index (nf_ / sx_):
+    on, am_in/am_out/pm_in/pm_out (HH:MM, blank = window off), hedge_strikes (20, 0 = none),
+    lots (1), trail (SENSEX on); sl_pct (50, per short leg); trail_at / trail_lock /
+    trail_step / trail_by (₹ a lot: 2000 / 750 / 20 / 10); brokerage (₹20 an order);
+    taxes (true); capital (₹3 L, for % only)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        start_d, end_d, p = _ss_parse(request.get_json(silent=True) or {})
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': f'Bad parameters: {e}'}), 400
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': 0, 'stage': 'reading the index', 'requests': 0}}
+    with _ss_tasks_lock:
+        _ss_tasks[task_id] = task
+
+    def _run():
+        try:
+            out = _ss_backtest(start_d, end_d, p, task['progress'])
+            task['payload'] = out
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[Sunshine] run failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'ss-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+def _ss_inputs(start_d, end_d, p, state):
+    """(plan, sessions, spot_for, fetch_for) for a run: index minutes from the store, each
+    index's weekly expiry calendar, and option fetchers spending `state`'s Breeze budget."""
+    from datetime import date
+    from trading_app.Backtest import sunshine_straddle_engine as ss
+    from trading_app.service import cpr_option_service as cos
+    from trading_app.service import cpr_backtest_service as cpr_bt
+    from trading_app.service import icici_data_service as _ids
+    from trading_app.service.expiry_calendar import expiry_on_or_after
+    from trading_app.Backtest.st_bb_rsi_engine import _listed_expiries
+
+    spots, cals, fetchers = {}, {}, {}
+    for idx in ('NIFTY', 'SENSEX'):
+        if not p.get('nf_on' if idx == 'NIFTY' else 'sx_on', True):
+            continue
+        spots[idx] = cos._spot_minutes(idx, start_d - timedelta(days=7), end_d)
+        cal = sorted({date.fromisoformat(d) for d in spots[idx]})
+        if idx == 'NIFTY' and cal:
+            cal = sorted(set(cal) | set(_listed_expiries(idx, max(cal))))
+        cals[idx] = cal
+        try:
+            live = cos._option_minutes_fetcher(idx)
+        except cos.OptionDataUnavailable:
+            live = None
+        fetchers[idx] = _ss_fetcher(idx, live, state, cpr_bt, _ids)
+    sessions = sorted(set().union(*[set(date.fromisoformat(d) for d in s) for s in spots.values()]) or [])
+
+    def expiry_for(idx, day):
+        if day < cos.WEEKLY_SINCE.get(idx, date.min):
+            return None
+        return expiry_on_or_after(day, cals[idx], 'weekly', lambda d: cos.expiry_weekday(idx, d))
+
+    plan = ss.plan_days(sessions, start_d, end_d, p, expiry_for)
+    plan = [x for x in plan if x[1] in spots and x[0].isoformat() in spots[x[1]]]
+    return (plan, sessions, lambda idx, d: ss.index_bars(spots[idx].get(d.isoformat(), [])),
+            lambda idx: fetchers[idx])
+
+
+def _ss_backtest(start_d, end_d, p, progress=None, budget=None):
+    """The whole run, outside Flask, so a script can drive it too."""
+    from trading_app.Backtest import sunshine_straddle_engine as ss
+
+    progress = progress if progress is not None else {}
+    state = {'requests': 0, 'budget': _ss_budget() if budget is None else budget, 'over': 0}
+    plan, sessions, spot_for, fetch_for = _ss_inputs(start_d, end_d, p, state)
+    progress.update({'stage': 'pricing the straddles', 'total': len(plan)})
+
+    def prog(done, total):
+        progress.update({'done': done, 'total': total, 'requests': state['requests']})
+
+    res = ss.simulate(plan, sessions, spot_for, fetch_for, p, progress=prog)
+    summary = ss.summarise(res['trades'], p['capital'], start_d, end_d)
+    reasons = {}
+    for s in res['skipped']:
+        r = 'Breeze budget spent' if '_SsBudgetSpent' in s['reason'] else (
+            'not cached, no Breeze session' if 'OptionCacheMiss' in s['reason'] else
+            re.sub(r' \d+ at \d\d:\d\d$', '', s['reason']).replace('no premium for', 'no Breeze bars for'))
+        reasons[r] = reasons.get(r, 0) + 1
+    summary.update({'params': p, 'skipped': len(res['skipped']), 'skip_reasons': reasons,
+                    'breeze_requests': state['requests'], 'breeze_budget': state['budget'],
+                    'breeze_over_budget': state['over'], 'days_planned': len(plan),
+                    'lot_sizes': {k: v['lot'] for k, v in ss.INDICES.items()}})
+    logger.info('[Sunshine] %s..%s: %d day-index plans -> %d windows, %d skipped, %d Breeze requests (%d over)',
+                start_d, end_d, len(plan), len(res['trades']), len(res['skipped']),
+                state['requests'], state['over'])
+    return {'trades': res['trades'], 'skipped': res['skipped'][-500:], 'summary': summary}
+
+
+@api_bp.route('/backtest/sunshine-straddle/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_sunshine_straddle_optimise():
+    """Start a Sunshine Straddle Find Best Params sweep; poll /backtest/sunshine-straddle/status/<id>.
+
+    Same body as the backtest. Sweeps sunshine_straddle_engine.SWEEP_GRID (stop % × every
+    window on/off and its exit × profit lock level and which index uses it, 34,181 combos) at
+    the page's entry times, hedges, lots and costs. Reads only option sessions already on disk
+    — never a Breeze request — so run the backtest over the range first."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        start_d, end_d, p = _ss_parse(request.get_json(silent=True) or {})
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': f'Bad parameters: {e}'}), 400
+    p = {**p, 'nf_on': True, 'sx_on': True}
+    min_trades = int(_mrb_float(request.get_json(silent=True) or {}, 'min_trades', 20, 1, 100000))
+
+    task_id = uuid.uuid4().hex[:12]
+    task = {'status': 'running', 'started': _time.time(),
+            'progress': {'done': 0, 'total': 0, 'stage': 'reading the index'}}
+    with _ss_tasks_lock:
+        _ss_tasks[task_id] = task
+
+    def _run():
+        from trading_app.Backtest import sunshine_straddle_engine as ss
+        try:
+            state = {'requests': 0, 'budget': 0, 'over': 0}      # cache only: never a request
+            plan, sessions, spot_for, fetch_for = _ss_inputs(start_d, end_d, p, state)
+            task['progress']['stage'] = 'running every window'
+
+            def prog(done, total):
+                task['progress'].update({'done': done, 'total': total})
+
+            res = ss.sweep(plan, sessions, spot_for, fetch_for, p, progress=prog)
+            rows = ss.board(res['rows'], min_trades=min_trades)
+            logger.info('[Sunshine] sweep %s..%s: %d windows (%d not cached) -> %d combos, %d on the board',
+                        start_d, end_d, res['windows'], res['unpriced'], len(res['rows']), len(rows))
+            task['payload'] = {'results': rows, 'total': len(rows), 'total_combos_tested': len(res['rows']),
+                               'min_trades': min_trades, 'windows': res['windows'], 'unpriced': res['unpriced'],
+                               'days': res['days'], 'first_day': res['first_day'], 'mid_day': res['mid_day'],
+                               'last_day': res['last_day']}
+            task['status'] = 'complete'
+        except Exception as e:
+            logger.error(f"[Sunshine] sweep failed: {e}", exc_info=True)
+            task['error'] = str(e)
+            task['status'] = 'error'
+
+    threading.Thread(target=_run, name=f'ss-opt-{task_id}', daemon=True).start()
+    return jsonify({'success': True, 'status': 'running', 'task_id': task_id, 'progress': task['progress']})
+
+
+def _ss_fetcher(idx, live, state, cpr_bt, _ids):
+    """fetch(con, day) for one index: the disk cache first, then Breeze while the run's
+    budget lasts. `live` None = no Breeze session (cache only)."""
+    from datetime import date
+    from trading_app.service import cpr_option_service as cos
+
+    def fetch(con, day):
+        expiry = date.fromisoformat(con['expiry'])
+        if expiry < date.today():
+            raw = _ids.cached_option_minutes(idx, expiry, con['strike'], con['option_type'], day)
+            if raw is not None:
+                return cpr_bt._intraday_by_session(raw).get(day.isoformat(), [])
+            if live is None or getattr(live, 'cache_only', False):
+                raise cos.OptionCacheMiss('not cached and Breeze is not connected')
+            if state['requests'] >= state['budget']:
+                state['over'] += 1
+                raise _SsBudgetSpent('Breeze budget spent')
+        if live is None:
+            raise cos.OptionCacheMiss('no option source')
+        before = getattr(_ids._HIST_ERROR, 'requests', 0)
+        try:
+            return live(con, day)
+        finally:
+            state['requests'] += getattr(_ids._HIST_ERROR, 'requests', 0) - before
+
+    return fetch
+
+
+@api_bp.route('/backtest/sunshine-straddle/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def sunshine_straddle_status(task_id):
+    """Poll a Sunshine Straddle backtest; the result is delivered once, then dropped."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _ss_tasks_lock:
+        task = _ss_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    elapsed = int(_time.time() - task['started'])
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task['progress'], 'elapsed': elapsed})
+    with _ss_tasks_lock:
+        _ss_tasks.pop(task_id, None)
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'elapsed': elapsed, **task['payload']})
+
+
 # ─── Smart Wheel (stock options) ─────────────────────────────────────────────
 # Sell a monthly put under support on a strong NIFTY 50 stock; if it is run
 # through, own the future and sell ATM calls against it. See

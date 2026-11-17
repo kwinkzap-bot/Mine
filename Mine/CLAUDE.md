@@ -480,10 +480,42 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 267 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params) and the Smart Wheel four (with Find Best Params).
+The api blueprint is at 270 rules (`tests/route_inventory.txt`): the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## Sunshine Straddle backtest (NIFTY Mon/Tue + SENSEX Wed/Thu; `sunshine_straddle`)
+
+Added 2026-11-16 in the Mine group, from a video (Darshan Rathod, Lemon, "Sunshine & Sunset trading system",
+youtube 6qpMm393xKg, Hindi; the crude-oil half is not modelled — no MCX data here). `Backtest/sunshine_straddle_engine.py`
+(pure), routes `/api/backtest/sunshine-straddle{,/optimise,/status/<id>}` (the sweep polls the backtest's status
+route), params row `#sunshineStraddleParamsRow` (`ss*` ids), results in the shared `#crResults`, sweep panel
+`#sunshineStraddleOptimisePanel`, JS `runSunshineStraddle` / `runSsOptimise` / `applySsOptResult`.
+
+* **Rule**: on NIFTY Mon/Tue and SENSEX Wed/Thu (or each index's own 0/1 DTE, the Days box), the weekly running that
+  day: buy a CE + PE `hedge_strikes` (20) out a minute before the entry, sell the ATM CE + PE, a +50 % stop on each
+  short leg alone, out at the window's exit. NIFTY 09:22→10:16, 14:27→15:14; SENSEX 09:22→10:30, 13:35→15:14 (the
+  video's last exit is 15:30/15:35; 15:14 is his own alternative). SENSEX profit lock: at ₹2,000 a lot of MTM lock
+  ₹750, +₹10 per ₹20 more, out at the first minute close at/under it.
+* **Prices**: each contract's own 1-minute bars (`historical_option_minutes`, disk-cached per contract-session); a
+  price "at" HH:MM is the close of the minute before; a stop fills at its level (the open on a gap). Today's lots
+  (NIFTY 65, SENSEX 20) for every year. Charges: ₹20 an order + STT / exchange / SEBI / stamp / GST.
+* **Breeze**: ~4 contract-sessions a window cold; a run spends at most `_ss_budget()` (400 in market hours, else 2,500)
+  and a re-run carries on. **Breeze has no SENSEX option bars for Jan-May 2024** (cached as `[]`): those windows are
+  "no Breeze bars". 2024-01 → 2026-11 was warmed on 2026-11-16.
+* **⚡ Find Best Params**: `SWEEP_GRID` = stop (0-100 %) × each of the four windows off or one of its exits (AM
+  10:00-11:00, PM 15:00-15:25) × profit lock off / on NIFTY / SENSEX / both at four levels = 34,181 distinct combos,
+  at the page's entry times, hedges, lots and costs. A window's P&L depends only on (stop, its exit, its lock), so each
+  window instance is run once per such key and a combo is a sum of four daily vectors (~20 s for 18 months). **Cache
+  only — never a Breeze request**: run the backtest over a range first. A test holds every sweep row equal to
+  `simulate` + `summarise` of its own settings. `board` collapses rows whose lock never armed.
+* **First real run** (2024-01 → 2026-11-13, video defaults, 1 lot each): 1,044 windows, 53 % win, gross +₹1.80 L,
+  costs ₹2.23 L, **net −₹42.5 k**, DD ₹65.3 k, PF 0.91; 2024 −₹5.9 k, 2025 −₹50.6 k, 2026 +₹13.9 k. NIFTY AM −₹15.8 k
+  and SENSEX PM −₹28.1 k carry the loss. The sweep's best (in-sample): NIFTY PM to 15:25 + SENSEX AM to 11:00, stop
+  100 %, no lock — 521 windows, +₹60.4 k, DD ₹9.9 k, +₹36.9 k / +₹23.5 k by half. Not checked out of sample.
+
+Tests: `tests/test_sunshine_straddle_engine.py`.
 
 ## Hull Suite System backtest (NIFTY, the /backtest default; `hull_suite`)
 
