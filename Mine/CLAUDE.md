@@ -480,10 +480,52 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 271 rules (`tests/route_inventory.txt`): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params).
+The api blueprint is at 274 rules (`tests/route_inventory.txt`): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params); the Value screener three (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## Value screener (/scanners Value tab, 2026-11-19)
+
+`service/value_screen.py`, routes `/api/scanners/value{,/refresh,/status/<id>}`, JS `static/js/value_screen.js`,
+tab markup in `templates/cpr_filter.html`. **A snapshot, not a strategy**: the sources serve only today's fundamentals,
+so it cannot be backtested. No broker call — safe in market hours.
+
+* **Source = Screener.in first, Yahoo fallback** (since the evening of 2026-11-19; `service/screener_in.py`, one company
+  page per stock, consolidated else standalone, paced 1.1 s across threads, robots.txt allows `/company/`). Yahoo's
+  `Ticker.info` is the REPORTED TTM, one-offs included — Crompton's ₹700 Cr write-off read as a loss (no P/E), Dalmia P/E
+  59.8 vs 29.9 — and left ~35 of NIFTY 500 without ROE / growth. Screener's P/E is on profit before exceptional items (EPS
+  = price ÷ P/E), peers are NSE's basic industry ("Private Sector Bank", "NBFC"), own P/E comes from its 12 years of
+  split-adjusted EPS (`eps_steps`: annual from FY end + 60 d, quarterly trailing-four from quarter end + 45 d; a year more
+  than 5× the recent level — a pre-merger shell, Dalmia FY17 8,800 — is dropped), EV/EBITDA = (mcap + borrowings) ÷ TTM
+  operating profit (no cash line, so cash-rich names read slightly dear), growth = 3-year compounded profit growth.
+  Each row carries `source`. `start_refresh` resolves `fetch_one` at call time (a bound default once let a route test reach Yahoo).
+
+* **GET never fetches**; it scores the `value_fundamentals` cache (`oi_data.db`, 24 h). **💎 Fetch** (POST /refresh) runs one
+  background task at a time over the stale part (shift-click = all); F&O ≈ 220 stocks × ~3 Yahoo calls, a few minutes cold.
+* **Score** = mean percentile (100 = cheapest of the stocks shown) of up to six readings, needing 3: P/E vs peers, P/E vs its
+  own ~4-yr median, EV/EBITDA vs peers, FCF yield, PEG; financials (Yahoo sector "Financial Services") take P/B vs peers instead
+  of EV/EBITDA and FCF. **Peers = the Yahoo industry when it has 3 stocks, else the sector** — the sector alone put PSU banks
+  (P/E ~6) against insurers (40+) and every bank read as deep value.
+* **Quality gates** (page boxes ROE / D/E; cash ≥ 0.8 × profit; earnings growth > 0) are shown per row, pass = every gate it
+  has data for and at least two. Financials skip D/E and cash conversion.
+* **Own P/E** = median of daily close (`data/stocks/*.pkl`, split-adjusted; the files mix 00:00/05:30 stamps, deduped) over the
+  TTM EPS in force (`watchlist_service._eps_steps`, which drops a series that disagrees with today's EPS); needs a year of days.
+* **Yahoo units** (fallback only): `debtToEquity` is %, `dividendYield` already %. **INFY / HCLTECH file in USD** while quoted in INR, so Yahoo's
+  EV/EBITDA (916) and FCF ÷ market cap are nonsense: dropped when `financialCurrency != currency`.
+* **Fair value = EPS × the lower of peer P/E and own P/E**; **Buy below** = fair × (1 − Margin box, default 20 %, `mos`); green
+  when the price is at/under it (`in_buy_zone`, the "Buy zone only" box). Price is Yahoo's as of the fetch, not live.
+* **Ranking** (`rate`, 2026-11-19 evening): Very Best = score ≥ 70 + passes quality + price ≤ Buy below + 4+ readings;
+  Good = score ≥ 60 + quality + price ≤ fair; Expensive = score < 30 or 20 %+ over fair; Avoid = loss-maker or 2+ failed
+  gates; Not rated = < 3 readings; else Fair. Upside > 150 % is capped at Fair (one-off profit / bad data). `rank` = tier,
+  then score; `rating_why` lists why it is not a tier higher. The 🔍 box filters symbol or company name client-side.
+* Graham number / margin of safety are shown, not scored (22.5 = P/E 15 × P/B 1.5, far under Indian multiples).
+
+* **Universes: F&O · NIFTY 500 · All NSE** (`all` = `stock_list_store.EQUITY_LIST_FILE`, 2,657). Fundamentals cached **7 days** (`CACHE_TTL`);
+  `screen` re-prices every row from the local daily file (`latest_close`, memoised on mtime → `reprice`: P/E, P/B, mcap,
+  EV/EBITDA, yield follow the close; a close older than the fetch is ignored). All cold ≈ 2 h at Screener's pace.
+Tests: `tests/test_value_screen.py` (pure scorer, scratch sqlite, fake fetcher, routes on the bare route app),
+`tests/test_screener_in.py` (a synthetic page laid out like Screener's).
 
 ## Active Trade tab — All / Live / Paper and ⚖ Compare (2026-11-17)
 

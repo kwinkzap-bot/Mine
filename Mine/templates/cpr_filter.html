@@ -24,6 +24,9 @@
         <button class="scanner-tab-btn" data-tab="weekly-open" onclick="switchScannerTab('weekly-open')">
             <span class="tab-icon">🎯</span> W CPR Open
         </button>
+        <button class="scanner-tab-btn" data-tab="value" onclick="switchScannerTab('value')">
+            <span class="tab-icon">💎</span> Value
+        </button>
     </div>
 
     <!-- Right side: High IV Controls (visible when the High IV tab is active) -->
@@ -86,6 +89,38 @@
         <input type="date" id="weeklyOpenDateFilter" class="date-picker" title="Session date — its open and first 1-hour candle are checked">
         <button id="weeklyOpenRefreshBtn" class="refresh-btn" title="Re-scan from Fyers">
             <span class="refresh-icon">🎯</span> W CPR Open
+        </button>
+    </div>
+
+    <!-- Right side: Value controls. The gates re-score what is cached (no
+         fetch); the button fetches whatever is older than a day from Yahoo. -->
+    <div id="value-header-controls" class="header-controls-container"
+        style="display: none; gap: 8px; align-items: center;">
+        <input type="search" id="valueSearch" class="value-search" placeholder="🔍 Symbol or name"
+               autocomplete="off" spellcheck="false" title="Filter the grid as you type (symbol or company name)">
+        <select id="valueUniverse" class="date-picker tf-picker" title="Which stocks to screen">
+            <option value="fno" selected>F&amp;O stocks</option>
+            <option value="nifty500">NIFTY 500</option>
+            <option value="all">All NSE stocks</option>
+        </select>
+        <label class="value-gate" title="Quality gate: return on equity at least this %">
+            ROE ≥ <input type="number" id="valueMinRoe" value="15" min="0" max="100" step="1">%
+        </label>
+        <label class="value-gate" title="Quality gate: debt ÷ equity at most this (not applied to banks / NBFCs)">
+            D/E ≤ <input type="number" id="valueMaxDe" value="0.5" min="0" max="10" step="0.1">
+        </label>
+        <label class="value-gate" title="Buy price = fair value less this %. Fair value = EPS × the lower of the peer and own-history P/E">
+            Margin <input type="number" id="valueMos" value="20" min="0" max="80" step="5">%
+        </label>
+        <label class="value-gate" title="Show only stocks trading at or under their buy price">
+            <input type="checkbox" id="valueBuyOnly"> Buy zone only
+        </label>
+        <label class="value-gate" title="Show only stocks that pass every quality gate they have data for">
+            <input type="checkbox" id="valueQualityOnly"> Quality only
+        </label>
+        <button id="valueRefreshBtn" class="refresh-btn"
+                title="Fetch fundamentals older than a day from Yahoo (shift-click re-fetches everything)">
+            <span class="refresh-icon">💎</span> Fetch
         </button>
     </div>
 </div>
@@ -242,6 +277,31 @@
     </div>
     <div id="weeklyOpenFootnote"></div>
 </div>
+<!-- Value — a fundamentals snapshot from Yahoo, scored against its own sector
+     and its own P/E history. Not backtestable (Yahoo serves today's figures
+     only). See service/value_screen.py. -->
+<div id="value-scanner-content" style="display: none;">
+    <div class="results-row">
+        <div id="valueResults" class="results results-hidden results-block">
+            <div class="dg-card">
+                <div class="dg-card-hdr">
+                    <span class="dg-card-title">💎 Value — cheap against sector &amp; own history</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="valueCount">(0)</span>
+                    <span class="dg-card-meta" id="valueStatus"></span>
+                </div>
+                <div id="valueGrid"></div>
+            </div>
+        </div>
+    </div>
+    <div id="valueFootnote" class="value-footnote">
+        <b>Score</b> = mean percentile (100 = cheapest of the stocks shown) of up to six readings:
+        P/E vs peers · P/E vs its own ~4-yr median · EV/EBITDA vs peers · FCF yield · PEG ·
+        (banks/NBFCs: P/B vs peers instead of EV/EBITDA and FCF). Needs 3 of them. Peers = its
+        industry among the stocks shown, or its sector when the industry has fewer than 3.
+        <b>Quality</b> = ROE, D/E, operating cash ≥ 0.8 × profit, earnings growth &gt; 0 — hover ✓/✗ for each.
+        <b>Graham MoS</b> = (√(22.5 × EPS × book/share) − price) ÷ that value; few Indian stocks clear it.
+        Source: Screener.in (Yahoo only for stocks Screener has no page for), fundamentals refreshed weekly, price = last close from the app’s daily stock file; today’s figures only, so this cannot be backtested. It is a list of annual reports to read, not a buy list. <b>Fair value</b> = EPS × the lower of peer and own P/E; <b>Buy below</b> = fair value less the Margin.</div>
+</div>
 {# Candle chart popup, opened by clicking a Narrow CPR scanner row. Same
    component the Watchlist grid opens — see templates/_candle_modal.html. #}
 {% include "_candle_modal.html" %}
@@ -259,6 +319,7 @@
 <script src="{{ url_for('static', filename='js/components/candle-modal.js') }}?v={{ sv('js/components/candle-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/cpr_filter.js') }}?v={{ sv('js/cpr_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
+<script src="{{ url_for('static', filename='js/value_screen.js') }}?v={{ sv('js/value_screen.js') }}"></script>
 <script>
     /**
      * Premium Tab switcher function for merged scanner page
@@ -273,6 +334,7 @@
             'ema':        { content: 'ema-scanner-content',        controls: 'ema-header-controls' },
             'narrow-cpr': { content: 'narrow-cpr-scanner-content', controls: 'narrow-cpr-header-controls' },
             'weekly-open': { content: 'weekly-open-scanner-content', controls: 'weekly-open-header-controls' },
+            'value':      { content: 'value-scanner-content',      controls: 'value-header-controls' },
         };
         if (!sections[tab]) tab = 'cpr';
 
@@ -292,13 +354,16 @@
         if (tab === 'weekly-open' && typeof initWeeklyOpenOnce === 'function') {
             initWeeklyOpenOnce();
         }
+        if (tab === 'value' && typeof initValueScreenOnce === 'function') {
+            initValueScreenOnce();
+        }
     }
 
     // Auto-detect tab from URL search parameters on load
     document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
-        if (tabParam === 'ema' || tabParam === 'narrow-cpr' || tabParam === 'weekly-open') {
+        if (tabParam === 'ema' || tabParam === 'narrow-cpr' || tabParam === 'weekly-open' || tabParam === 'value') {
             switchScannerTab(tabParam);
         } else {
             switchScannerTab('cpr');

@@ -17,6 +17,14 @@
         "/private/tmp/claude-501/-Users-kavinkumar--claude-spares-spare-vwNWDU/c7c552fe-9292-47cd-a781-a4ff087967b3/scratchpad/harness.py"
       ],
       "port": 5057
+    },
+    {
+      "name": "value-harness",
+      "runtimeExecutable": "/Users/kavinkumar/Mine/.venv/bin/python",
+      "runtimeArgs": [
+        "/private/tmp/claude-501/-Users-kavinkumar--claude-spares-spare-R9ho7I/9d8803b0-94c1-417f-a527-5529059260ac/scratchpad/value_harness.py"
+      ],
+      "port": 5058
     }
   ]
 }

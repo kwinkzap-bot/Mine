@@ -777,3 +777,59 @@ body.dark-theme .iv-very-high,
 body.forest-theme .iv-very-high {
     color: #f43f5e !important;
 }
+
+/* ── Value tab (static/js/value_screen.js) ─────────────────────────── */
+.value-gate {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 12px; color: var(--scan-text); white-space: nowrap;
+}
+.value-gate input[type="number"] {
+    width: 52px; padding: 4px 6px; font-size: 12px;
+    border: 1px solid var(--scan-border); border-radius: 6px;
+    background: var(--scan-bg); color: var(--scan-text);
+}
+.value-footnote {
+    margin: 10px 4px 24px; font-size: 12px; line-height: 1.6;
+    color: var(--scan-th-text); max-width: 1100px;
+}
+/* A grid item, so min-width:auto would grow the card to the table's width and clip
+   it; 0 lets .dg-scroll scroll the 20 columns instead. */
+#valueResults { min-width: 0; }
+#valueStatus { font-size: 12px; color: var(--scan-th-text); margin-left: 8px; }
+#valueGrid .value-gate-fail { opacity: 0.55; }
+@media (max-width: 768px) {
+    #value-header-controls { flex-wrap: wrap; }
+}
+
+/* Value tab: symbol search + Ranking badges */
+.value-search {
+    width: 170px;
+    padding: 5px 8px;
+    border: 1px solid var(--border-color, #cfd8e3);
+    border-radius: 6px;
+    font-size: 13px;
+    background: var(--input-bg, #fff);
+    color: inherit;
+}
+.value-rating {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.value-rating--best  { background: #1e8e3e; color: #fff; }
+.value-rating--good  { background: #d5f0dc; color: #17692f; }
+.value-rating--fair  { background: #eef1f5; color: #4a5568; }
+.value-rating--dear  { background: #fdecd6; color: #9a5b00; }
+.value-rating--avoid { background: #fbe0e0; color: #b3261e; }
+.value-rating--none  { background: transparent; color: #8a94a3; font-weight: 400; }
+body.dark-theme .value-rating--good  { background: #1c3d26; color: #8fe0a6; }
+body.dark-theme .value-rating--fair  { background: #2a313b; color: #c3cad4; }
+body.dark-theme .value-rating--dear  { background: #3d2c14; color: #f2b866; }
+body.dark-theme .value-rating--avoid { background: #42201f; color: #f19a94; }
+body.dark-theme .value-search { background: #1e2530; border-color: #3a4352; }
+@media (max-width: 768px) {
+    .value-search { width: 100%; }
+}

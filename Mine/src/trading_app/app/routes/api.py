@@ -2651,6 +2651,63 @@ def get_tpo_single_print_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'TPO single-print scanner error: {str(e)}'}), 500
 
 
+# ====================== VALUE SCREENER ======================
+# The /scanners Value tab (service/value_screen.py). Yahoo fundamentals only,
+# no broker call, so it is safe in market hours. GET scores what is cached
+# and never fetches; POST /refresh fetches the stale part in a thread.
+
+def _value_universe(raw) -> str:
+    kind = str(raw or 'fno').lower()
+    return kind if kind in ('fno', 'nifty500', 'all') else 'fno'
+
+
+def _value_gates(args) -> dict:
+    from trading_app.service.value_screen import DEFAULT_GATES
+    out = {}
+    for key, (lo, hi) in {'min_roe': (0, 100), 'max_de': (0, 10), 'min_cash_conv': (0, 5), 'mos': (0, 80)}.items():
+        try:
+            out[key] = min(max(float(args.get(key, DEFAULT_GATES[key])), lo), hi)
+        except (TypeError, ValueError):
+            out[key] = DEFAULT_GATES[key]
+    return out
+
+
+@api_bp.route('/scanners/value', methods=['GET'])
+@limiter.exempt
+def value_screen_results() -> EndpointResponse:
+    from trading_app.service import value_screen
+    try:
+        return jsonify(value_screen.screen(_value_universe(request.args.get('universe')),
+                                           _value_gates(request.args)))
+    except Exception as e:
+        logger.error(f"[ValueScreen] screen failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'Value screen error: {e}'}), 500
+
+
+@api_bp.route('/scanners/value/refresh', methods=['POST'])
+@limiter.exempt
+def value_screen_refresh() -> EndpointResponse:
+    from trading_app.service import value_screen
+    data = request.get_json(silent=True) or {}
+    try:
+        task = value_screen.start_refresh(_value_universe(data.get('universe')),
+                                          force=bool(data.get('force')))
+        return jsonify({'success': True, 'task': task})
+    except Exception as e:
+        logger.error(f"[ValueScreen] refresh failed to start: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'Value refresh error: {e}'}), 500
+
+
+@api_bp.route('/scanners/value/status/<task_id>', methods=['GET'])
+@limiter.exempt
+def value_screen_status(task_id: str) -> EndpointResponse:
+    from trading_app.service import value_screen
+    task = value_screen.task_status(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Unknown task'}), 404
+    return jsonify({'success': True, 'task': task})
+
+
 # ====================== NOTIFICATIONS ======================
 
 @api_bp.route('/notifications', methods=['GET'])
