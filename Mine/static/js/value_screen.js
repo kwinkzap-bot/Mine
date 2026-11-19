@@ -137,6 +137,8 @@
         if (q) {
             shown = shown.filter((r) => r.symbol.includes(q) || (r.company || '').toUpperCase().includes(q));
         }
+        const maxPrice = parseFloat($('valueMaxPrice').value);
+        if (maxPrice > 0) shown = shown.filter((r) => r.price != null && r.price < maxPrice);
         $('valueCount').textContent = `(${shown.length})`;
         DataGrid.mountSortable(grid, {
             rows: shown,
@@ -244,6 +246,7 @@
         $('valueQualityOnly').addEventListener('change', render);
         $('valueBuyOnly').addEventListener('change', render);
         $('valueSearch').addEventListener('input', render);
+        $('valueMaxPrice').addEventListener('input', render);
         $('valueGrid').addEventListener('click', (e) => {
             const link = e.target.closest('[data-candle]');
             if (!link || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;

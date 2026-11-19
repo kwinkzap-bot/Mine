@@ -518,10 +518,10 @@ so it cannot be backtested. No broker call — safe in market hours.
 * **Ranking** (`rate`, 2026-11-19 evening): Very Best = score ≥ 70 + passes quality + price ≤ Buy below + 4+ readings;
   Good = score ≥ 60 + quality + price ≤ fair; Expensive = score < 30 or 20 %+ over fair; Avoid = loss-maker or 2+ failed
   gates; Not rated = < 3 readings; else Fair. Upside > 150 % is capped at Fair (one-off profit / bad data). `rank` = tier,
-  then score; `rating_why` lists why it is not a tier higher. The 🔍 box filters symbol or company name client-side.
+  then score; `rating_why` lists why it is not a tier higher. The 🔍 box filters symbol or company name client-side. The ₹ Price below box (`valueMaxPrice`) keeps rows whose price is under it (empty = any).
 * Graham number / margin of safety are shown, not scored (22.5 = P/E 15 × P/B 1.5, far under Indian multiples).
 
-* **Universes: F&O · NIFTY 500 · All NSE** (`all` = `stock_list_store.EQUITY_LIST_FILE`, 2,657). Fundamentals cached **7 days** (`CACHE_TTL`);
+* **Universes: F&O · NIFTY 500 · All NSE** (All NSE is the page default) (`all` = `stock_list_store.EQUITY_LIST_FILE`, 2,657). Fundamentals cached **7 days** (`CACHE_TTL`);
   `screen` re-prices every row from the local daily file (`latest_close`, memoised on mtime → `reprice`: P/E, P/B, mcap,
   EV/EBITDA, yield follow the close; a close older than the fetch is ignored). All cold ≈ 2 h at Screener's pace.
 Tests: `tests/test_value_screen.py` (pure scorer, scratch sqlite, fake fetcher, routes on the bare route app),

@@ -98,10 +98,13 @@
         style="display: none; gap: 8px; align-items: center;">
         <input type="search" id="valueSearch" class="value-search" placeholder="🔍 Symbol or name"
                autocomplete="off" spellcheck="false" title="Filter the grid as you type (symbol or company name)">
+        <input type="number" id="valueMaxPrice" class="value-search value-maxprice" placeholder="₹ Price below"
+               min="0" step="any" inputmode="decimal"
+               title="Show only stocks whose current price is below this amount (₹). Empty = any price.">
         <select id="valueUniverse" class="date-picker tf-picker" title="Which stocks to screen">
-            <option value="fno" selected>F&amp;O stocks</option>
+            <option value="fno">F&amp;O stocks</option>
             <option value="nifty500">NIFTY 500</option>
-            <option value="all">All NSE stocks</option>
+            <option value="all" selected>All NSE stocks</option>
         </select>
         <label class="value-gate" title="Quality gate: return on equity at least this %">
             ROE ≥ <input type="number" id="valueMinRoe" value="15" min="0" max="100" step="1">%

@@ -830,6 +830,7 @@ body.dark-theme .value-rating--fair  { background: #2a313b; color: #c3cad4; }
 body.dark-theme .value-rating--dear  { background: #3d2c14; color: #f2b866; }
 body.dark-theme .value-rating--avoid { background: #42201f; color: #f19a94; }
 body.dark-theme .value-search { background: #1e2530; border-color: #3a4352; }
+.value-search.value-maxprice { width: 120px; }
 @media (max-width: 768px) {
-    .value-search { width: 100%; }
+    .value-search, .value-search.value-maxprice { width: 100%; }
 }
