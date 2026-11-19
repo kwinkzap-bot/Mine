@@ -39692,8 +39692,26 @@
       "reason": "09:15 candle opened at 25,277 and closed at PDH/R1 25,338-25,362 (25,344) \u2014 a 91-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 24.2 pts (0.096%), 09:15 candle O 25277.3 H 25358.05 L 25267.3 C 25344.1 | Trade by rule: 09:15 candle opened at 25,277 and closed at PDH/R1 25,338-25,362 (25,344) \u2014 a 91-pt candle, too big to enter over, and 09:20 red \u2014 no buy; no retest of PDH/R1 after a break by 14:15 \u2014 no trade"
+    },
+    {
+      "date": "2026-11-18",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Asc",
+      "first_candle": "Candle green near CPR",
+      "boxes": "Small",
+      "trade": null,
+      "entry": null,
+      "target": null,
+      "sl": null,
+      "result": null,
+      "pnl": null,
+      "reason": "Price above the weekly CPR (25,132-25,140) but below the daily CPR (25,384-25,386): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade",
+      "setup_time": null,
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 2.0 pts (0.008%), 09:15 candle O 25323.15 H 25390.8 L 25291.95 C 25358.05 | Trade by rule: price above the weekly CPR (25,132-25,140) but below the daily CPR (25,384-25,386): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade"
     }
   ],
-  "extended_at": "2026-11-17 17:27",
+  "extended_at": "2026-11-19 08:57",
   "backfilled_from": "2018-01-01"
 }
