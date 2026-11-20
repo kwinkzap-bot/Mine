@@ -55,6 +55,22 @@
             .join('\n') || 'Not enough data';
     }
 
+    const STRENGTH_LABEL = {
+        sales_3y: 'Sales growth, 3-yr CAGR ≥ 10%', profit_3y: 'Profit growth, 3-yr CAGR ≥ 10%',
+        roe_3y: 'ROE, 3-yr average ≥ 15%', q_sales: 'Latest quarter sales up on a year ago',
+        q_profit: 'Latest quarter profit up on a year ago',
+        steady: 'No loss in 5 years and profit up in 3 of the last 5',
+    };
+    const STRENGTH_CLASS = { Strong: 'best', Average: 'fair', Weak: 'avoid' };
+    const STRENGTH_RANK = { Strong: 3, Average: 2, Weak: 1 };
+
+    function strengthTitle(row) {
+        const checks = row.strength_checks || {};
+        const lines = Object.keys(STRENGTH_LABEL).filter((k) => k in checks).map((k) => [k, checks[k]])
+            .map(([k, v]) => `${v === null ? '·' : v ? '✓' : '✗'} ${STRENGTH_LABEL[k] || k}${v === null ? ' (no data)' : ''}`);
+        return lines.join('\n') || 'No growth data';
+    }
+
     const RATING_CLASS = { 5: 'best', 4: 'good', 3: 'fair', 2: 'dear', 1: 'avoid', 0: 'none' };
 
     const COLUMNS = [
@@ -65,7 +81,8 @@
             render: (_v, r) => `<span class="value-rating value-rating--${RATING_CLASS[r.rating_tier] || 'none'}">` +
                 `${r.rank}. ${DataGrid.escape(r.rating || '')}</span>`,
             title: (_v, r) => (r.rating_why || []).join('\n'),
-            thTitle: 'Very Best = score ≥ 70, passes every quality check, price at or under Buy below, 4+ readings.\n' +
+            thTitle: 'Very Best = score ≥ 70, passes every quality check, Strength = Strong,\n' +
+                'price at or under Buy below, 4+ readings.\n' +
                 'Good = score ≥ 60, passes quality, price under fair value.\n' +
                 'Fair = in between · Expensive = score < 30 or price 20 %+ over fair value ·\n' +
                 'Avoid = loss-making or fails 2+ quality checks · Not rated = too little data.\n' +
@@ -84,6 +101,15 @@
           format: num(0), title: (_v, r) => scoreTitle(r),
           tone: (v) => (v == null ? 'muted' : v >= 70 ? 'pos' : v <= 30 ? 'neg' : ''),
           thTitle: 'Mean percentile of the readings this stock has (100 = cheapest).\nHover a cell for each one.' },
+        { key: 'strength', label: 'Strength', sortable: true, align: 'center',
+          sortValue: (r) => (STRENGTH_RANK[r.strength] || 0) * 10 + (r.strength_passed || 0),
+          render: (v, r) => (v ? `<span class="value-rating value-rating--${STRENGTH_CLASS[v]}">${v} ` +
+              `${r.strength_passed}/${r.strength_readable}</span>` : '<span class="value-rating value-rating--none">—</span>'),
+          title: (_v, r) => strengthTitle(r),
+          thTitle: 'Is the business still growing? Six checks: sales and profit 3-yr growth ≥ 10%,\n' +
+              '3-yr ROE ≥ 15%, latest quarter sales and profit up on a year ago, no loss in 5 years.\n' +
+              'Strong = at most one fails · Weak = fewer than half pass · needs 4 with data.\n' +
+              'A Weak stock is never rated above Fair. Hover a cell for each check.' },
         { key: 'quality', label: 'Quality', sortable: true, align: 'center',
           render: (v) => (v ? '✓' : '✗'), title: (_v, r) => gateTitle(r),
           tone: (v) => (v ? 'pos' : 'muted') },
@@ -122,6 +148,18 @@
           title: (_v, r) => ({ '3y': '3-year compounded profit growth', ttm: 'Last 12 months (no 3-year figure)',
                                quarter: "Yahoo's latest quarter, year on year" }[r.growth_basis] || ''),
           thTitle: 'Compounded profit growth over 3 years (Screener); hover a cell for the basis.' },
+        { key: 'sales_g3', label: 'Sales 3y', sortable: true, align: 'right', format: pct(0), tone: DataGrid.sign,
+          thTitle: 'Sales growth, compounded over 3 years (Screener).' },
+        { key: 'q_sales_yoy', label: 'Qtr sales', sortable: true, align: 'right', format: pct(0), tone: DataGrid.sign,
+          thTitle: 'Latest quarter sales against the same quarter a year before.' },
+        { key: 'q_profit_yoy', label: 'Qtr profit', sortable: true, align: 'right', format: pct(0), tone: DataGrid.sign,
+          title: (_v, r) => (r.q_profit_yoy_prev != null ? `Quarter before: ${r.q_profit_yoy_prev.toFixed(0)}% YoY` : ''),
+          thTitle: 'Latest quarter profit against the same quarter a year before.\nHover a cell for the quarter before.' },
+        { key: 'roe_3y', label: 'ROE 3y', sortable: true, align: 'right', format: pct(0),
+          thTitle: 'Average return on equity over 3 years (Screener).' },
+        { key: 'ret_1y', label: '1y return', sortable: true, align: 'right', format: pct(0), tone: DataGrid.sign,
+          title: (_v, r) => (r.ret_3y != null ? `3-year CAGR: ${r.ret_3y.toFixed(1)}%` : ''),
+          thTitle: "Share price change over the last year, from the app's daily file.\nHover a cell for the 3-year yearly rate." },
         { key: 'div_yield', label: 'Div', sortable: true, align: 'right', format: pct(2) },
         { key: 'margin', label: 'Graham MoS', sortable: true, align: 'right', format: pct(0),
           tone: DataGrid.sign, title: (_v, r) => (r.graham ? `Graham number ${r.graham.toFixed(1)}` : 'Loss-making or no book value') },
@@ -133,6 +171,7 @@
         const grid = $('valueGrid');
         let shown = $('valueQualityOnly').checked ? rows.filter((r) => r.quality) : rows;
         if ($('valueBuyOnly').checked) shown = shown.filter((r) => r.in_buy_zone);
+        if ($('valueStrongOnly').checked) shown = shown.filter((r) => r.strength === 'Strong');
         const q = $('valueSearch').value.trim().toUpperCase();
         if (q) {
             shown = shown.filter((r) => r.symbol.includes(q) || (r.company || '').toUpperCase().includes(q));
@@ -245,6 +284,7 @@
         ['valueMinRoe', 'valueMaxDe', 'valueMos'].forEach((id) => $(id).addEventListener('change', load));
         $('valueQualityOnly').addEventListener('change', render);
         $('valueBuyOnly').addEventListener('change', render);
+        $('valueStrongOnly').addEventListener('change', render);
         $('valueSearch').addEventListener('input', render);
         $('valueMaxPrice').addEventListener('input', render);
         $('valueGrid').addEventListener('click', (e) => {

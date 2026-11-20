@@ -39710,8 +39710,26 @@
       "reason": "Price above the weekly CPR (25,132-25,140) but below the daily CPR (25,384-25,386): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade",
       "setup_time": null,
       "note": "Analysis added from the chart (Fyers 5-min): CPR 2.0 pts (0.008%), 09:15 candle O 25323.15 H 25390.8 L 25291.95 C 25358.05 | Trade by rule: price above the weekly CPR (25,132-25,140) but below the daily CPR (25,384-25,386): BUY only on a close above the daily CPR \u2014 never closed above it by 11:00 \u2014 no trade"
+    },
+    {
+      "date": "2026-11-19",
+      "price_vs_daily": "Below",
+      "price_vs_hourly": "Above",
+      "cpr_type": "Narrow",
+      "cpr_direction": "Dec",
+      "first_candle": "In decision candle(doji) near S3(cam)",
+      "boxes": "Small",
+      "trade": "BUY",
+      "entry": 25294.0,
+      "target": 25365.0,
+      "sl": 25228.0,
+      "result": "Target",
+      "pnl": 71.0,
+      "reason": "above the weekly CPR, under the daily one; 09:55 candle closed above the daily CPR 25,241-25,266 at 25,280; target R1 25,365",
+      "setup_time": "09:55",
+      "note": "Analysis added from the chart (Fyers 5-min): CPR 25.6 pts (0.101%), 09:15 candle O 25186.8 H 25255.6 L 25151.5 C 25199.15 | Trade by rule: above the weekly CPR, under the daily one; 09:55 candle closed above the daily CPR 25,241-25,266 at 25,280; target R1 25,365; chart replay Target 10:00 -> 12:00, target reached at 11:55 and locked (stop to the target), out at 12:00, P&L +71"
     }
   ],
-  "extended_at": "2026-11-19 08:57",
+  "extended_at": "2026-11-19 20:43",
   "backfilled_from": "2018-01-01"
 }

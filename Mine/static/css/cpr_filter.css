@@ -834,3 +834,9 @@ body.dark-theme .value-search { background: #1e2530; border-color: #3a4352; }
 @media (max-width: 768px) {
     .value-search, .value-search.value-maxprice { width: 100%; }
 }
+
+/* Value tab: a long list, so the grid takes most of the screen
+   (the other Scanner grids keep their 400px cap). */
+#valueResults .dg-scroll {
+    max-height: max(400px, calc(100vh - 230px));
+}

@@ -117,7 +117,9 @@ def test_fair_value_uses_the_lower_pe_and_the_margin_sets_the_buy_price():
 
 def _row(**kw):
     base = {'pe': 15.0, 'value_score': 80.0, 'n_factors': 5, 'quality': True, 'upside': 40.0,
-            'in_buy_zone': True, 'gates': {'roe': True, 'de': True, 'cash': True, 'growth': True}}
+            'in_buy_zone': True, 'gates': {'roe': True, 'de': True, 'cash': True, 'growth': True},
+            'strength': 'Strong', 'strength_passed': 6, 'strength_readable': 6,
+            'strength_checks': {k: True for k in vs.STRENGTH}}
     base.update(kw)
     return base
 
@@ -136,6 +138,9 @@ def _row(**kw):
     ({'pe': None}, 1),                                           # loss-maker
     ({'gates': {'roe': False, 'de': False}, 'quality': False}, 1),
     ({'value_score': None}, 0),
+    ({'strength': 'Average'}, 4),                                # cheap but growth only average
+    ({'strength': None}, 4),                                     # too little growth data for the top
+    ({'strength': 'Weak'}, 3),                                   # cheap because it is shrinking
 ])
 def test_rating_tiers(kw, tier):
     r = vs.rate(_row(**kw))
@@ -148,6 +153,42 @@ def test_rating_reasons_measure_against_fair_value():
     # Upside -20 % = fair is 80 % of the price, so the price is 25 % over fair value.
     assert 'Price 25% above fair value' in vs.rate(_row(upside=-20.0, in_buy_zone=False))['rating_why']
     assert 'Price 0.3% above fair value' in vs.rate(_row(upside=-0.3, in_buy_zone=False))['rating_why']
+
+
+def test_strength_reads_growth_and_track_record():
+    strong = {'sales_g3': 15, 'profit_g3': 20, 'roe_3y': 18, 'q_sales_yoy': 8, 'q_profit_yoy': 12,
+              'profit_up_years': 4, 'profit_years': 5, 'loss_5y': False}
+    st = vs.strength(strong)
+    assert st['label'] == 'Strong' and st['passed'] == 6
+    # one miss is still Strong; shrinking sales and profit is not
+    assert vs.strength({**strong, 'q_profit_yoy': -22})['label'] == 'Strong'
+    weak = vs.strength({**strong, 'sales_g3': 2, 'profit_g3': -5, 'q_sales_yoy': -3, 'q_profit_yoy': -40})
+    assert weak['label'] == 'Weak'
+    assert vs.strength({**strong, 'q_sales_yoy': -1, 'q_profit_yoy': -1})['label'] == 'Average'
+    # a loss in the last five years fails "steady" however many years grew
+    assert vs.strength({**strong, 'loss_5y': True})['checks']['steady'] is False
+    # a Yahoo record has only the quarter: too little to judge
+    assert vs.strength({'q_sales_yoy': 5, 'q_profit_yoy': 5})['label'] is None
+
+
+def test_a_weak_stock_says_which_growth_checks_failed():
+    row = _row(strength='Weak', strength_passed=2, strength_readable=6,
+               strength_checks={**{k: True for k in vs.STRENGTH}, 'sales_3y': False, 'profit_3y': False,
+                                'q_sales': False, 'q_profit': False})
+    why = ' '.join(vs.rate(row)['rating_why'])
+    assert 'Fundamentals weak: 2 of 6' in why and 'Sales growth, 3-yr CAGR ≥ 10.0%' in why
+
+
+def test_returns_from_the_daily_file():
+    days = pd.date_range('2022-11-01', '2026-11-19', freq='B')
+    closes = pd.Series(100.0, index=days)
+    closes[days >= pd.Timestamp('2025-11-19')] = 150.0
+    closes.iloc[-1] = 120.0
+    out = vs._returns(closes, 120.0)
+    assert out['ret_1y'] == pytest.approx(-20.0)       # 150 a year ago → 120
+    assert out['ret_3y'] == pytest.approx((1.2 ** (1 / 3) - 1) * 100)
+    short = vs._returns(closes[-100:], 120.0)
+    assert short['ret_1y'] is None and short['ret_3y'] is None
 
 
 def test_rows_are_ranked_best_tier_first():

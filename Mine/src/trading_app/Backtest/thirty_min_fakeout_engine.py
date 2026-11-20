@@ -77,8 +77,13 @@ class ThirtyMinFakeoutEngine:
         use_entry_buffer: bool = True,
         use_body_filter: bool = True,
         use_c2_close_filter: bool = True,
+        target_rule: str = 'session',
     ):
         self.df = df.copy()
+        # 'session' (the Backtest page): the day's full session Low/High —
+        # hindsight. 'to_entry' (the live algo's _compute_target): the session
+        # Low/High up to the entry, clamped past the entry, or no target at all.
+        self.target_rule = target_rule
         self.exit_hour = exit_hour
         self.exit_minute = exit_minute
         self.enable_long = enable_long
@@ -107,7 +112,8 @@ class ThirtyMinFakeoutEngine:
         trades = []
         for day_df, thirty in iter_days_with_candles(self.df):
             t = _run_day(day_df, thirty, cutoff, self.enable_long, self.enable_short,
-                         self.use_entry_buffer, self.use_body_filter, self.use_c2_close_filter)
+                         self.use_entry_buffer, self.use_body_filter, self.use_c2_close_filter,
+                         target_rule=self.target_rule)
             if t is not None:
                 trades.append(t)
 
@@ -217,7 +223,8 @@ def _detect_setup(c1, c2, c3, enable_long: bool, enable_short: bool,
 
 
 def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool,
-             use_entry_buffer: bool = True, use_body_filter: bool = True, use_c2_close_filter: bool = True):
+             use_entry_buffer: bool = True, use_body_filter: bool = True, use_c2_close_filter: bool = True,
+             target_rule: str = 'session'):
     """day_df: one day's 1-min bars, already sorted. thirty: that same
     day's 30-min candles (from iter_days_with_candles) — resampling
     happens once per day upstream and is reused across combos, not
@@ -277,6 +284,18 @@ def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_lon
     if entry is None:
         return None
 
+    if target_rule == 'to_entry':
+        # The live algo's target (tmf_algo._compute_target): the extreme of the
+        # session before the entry minute, never less favourable than the entry
+        # itself — None (no target; SL and the cutoff only) when that leaves no room.
+        before = day_df[day_df.index < entry_ts]
+        if direction == 'short':
+            lv = min(float(before['low'].min()), entry) if not before.empty else entry
+            target_level = lv if lv < entry else None
+        else:
+            lv = max(float(before['high'].max()), entry) if not before.empty else entry
+            target_level = lv if lv > entry else None
+
     setup = {
         'direction': direction, 'entry': entry, 'entry_ts': entry_ts,
         'sl_level': sl_level, 'target_level': target_level,
@@ -301,12 +320,12 @@ def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_lon
         if direction == 'short':
             if h >= sl_level:
                 return _make_trade(setup, watch.index[pos], sl_level, entry - sl_level, 'SL Hit')
-            if l <= target_level:
+            if target_level is not None and l <= target_level:
                 return _make_trade(setup, watch.index[pos], target_level, entry - target_level, 'Target Hit')
         else:
             if l <= sl_level:
                 return _make_trade(setup, watch.index[pos], sl_level, sl_level - entry, 'SL Hit')
-            if h >= target_level:
+            if target_level is not None and h >= target_level:
                 return _make_trade(setup, watch.index[pos], target_level, target_level - entry, 'Target Hit')
 
     # Data ran out before the cutoff/SL/Target — close at the last available bar.
@@ -335,7 +354,7 @@ def _make_trade(setup, exit_ts, exit_price, pnl, exit_reason):
         'entry_price':   round(entry, 2),
         'exit_price':    round(exit_price, 2),
         'sl_price':      round(setup['sl_level'], 2),
-        'target_price':  round(setup['target_level'], 2),
+        'target_price':  None if setup['target_level'] is None else round(setup['target_level'], 2),
         'pnl':           round(pnl, 2),
         'result':        'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
         'exit_reason':   exit_reason,

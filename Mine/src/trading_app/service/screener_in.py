@@ -185,6 +185,46 @@ def has_accounts(page: str) -> bool:
     return any(v for v in _row(rows, 'EPS in Rs', 'Net Profit'))
 
 
+def yoy(series: List[Optional[float]], back: int = 0) -> Optional[float]:
+    """% change of a quarter against the same quarter a year before
+    (``back`` quarters from the latest). A base at or under zero has no
+    meaningful %: a loss turned into a profit reads +100, the reverse -100."""
+    i = len(series) - 1 - back
+    if i - 4 < 0:
+        return None
+    now, base = series[i], series[i - 4]
+    if now is None or base is None:
+        return None
+    if base <= 0:
+        return 100.0 if now > 0 else (-100.0 if now < base else None)
+    return (now / base - 1) * 100
+
+
+def growth_record(sales_g: Dict[str, Optional[float]], profit_g: Dict[str, Optional[float]],
+                  roe_box: Dict[str, Optional[float]], q_sales: List[Optional[float]],
+                  q_profit: List[Optional[float]], fy_profit: List[Optional[float]]) -> Dict[str, Any]:
+    """The growth / track-record fields the Strength check reads.
+    ``fy_profit`` is the full fiscal years only (no TTM column)."""
+    last5 = [v for v in fy_profit[-6:] if v is not None]
+    ups = sum(1 for a, b in zip(last5, last5[1:]) if b > a)
+    return {
+        'sales_g3': sales_g.get('3 Years'),
+        'sales_g5': sales_g.get('5 Years'),
+        'sales_ttm': sales_g.get('TTM'),
+        'profit_g3': profit_g.get('3 Years'),
+        'profit_g5': profit_g.get('5 Years'),
+        'roe_3y': roe_box.get('3 Years'),
+        'q_sales_yoy': yoy(q_sales),
+        'q_profit_yoy': yoy(q_profit),
+        'q_profit_yoy_prev': yoy(q_profit, 1),
+        # of the last five fiscal years: how many grew profit on the year
+        # before, and whether any was a loss
+        'profit_up_years': ups if len(last5) >= 4 else None,
+        'profit_years': max(len(last5) - 1, 0),
+        'loss_5y': any(v <= 0 for v in last5[-5:]) if last5 else None,
+    }
+
+
 def parse_page(symbol: str, page: str) -> Dict[str, Any]:
     """One Screener page → the Value screener's record (same keys as Yahoo's)."""
     top = top_ratios(page)
@@ -216,7 +256,12 @@ def parse_page(symbol: str, page: str) -> Dict[str, Any]:
     g3 = g.get('3 Years') if g.get('3 Years') is not None else g.get('TTM')
 
     sector = cls[1] if len(cls) > 1 else (cls[0] if cls else None)
+    sg = growth(page, 'Compounded Sales Growth')
+    roe_box = growth(page, 'Return on Equity')
+    _qc, qt = table(page, 'quarters')
     return {
+        **growth_record(sg, g, roe_box, _row(qt, 'Sales', 'Revenue'), _row(qt, 'Net Profit'),
+                        profit[:-1] if len(profit) > 1 else profit),
         'symbol': symbol,
         'source': 'screener',
         'company': _text(name.group(1)) if name else None,
@@ -279,6 +324,9 @@ def fetch_page(symbol: str) -> str:
     """The consolidated page, or the standalone one when there are no
     consolidated accounts."""
     page = _get(BASE.format(sym=symbol, view='consolidated/'))
-    if has_accounts(page):
+    # Some consolidated pages carry the accounts but a blank top-ratios list
+    # (BANDHANBNK, 2026-11-19: no price, no P/E), which used to send the
+    # stock to Yahoo; the standalone page has them.
+    if has_accounts(page) and top_ratios(page).get('Current Price') is not None:
         return page
     return _get(BASE.format(sym=symbol, view=''))

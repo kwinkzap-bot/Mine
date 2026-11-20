@@ -519,6 +519,16 @@ so it cannot be backtested. No broker call — safe in market hours.
   Good = score ≥ 60 + quality + price ≤ fair; Expensive = score < 30 or 20 %+ over fair; Avoid = loss-maker or 2+ failed
   gates; Not rated = < 3 readings; else Fair. Upside > 150 % is capped at Fair (one-off profit / bad data). `rank` = tier,
   then score; `rating_why` lists why it is not a tier higher. The 🔍 box filters symbol or company name client-side. The ₹ Price below box (`valueMaxPrice`) keeps rows whose price is under it (empty = any).
+* **Strength** (2026-11-19 night, at the user's ask — "strong fundamentals with YoY and growth" instead of a 200-day
+  average): `strength()` = six pass/fail checks from Screener's page (`screener_in.growth_record`): sales and profit 3-yr
+  CAGR ≥ 10 %, 3-yr ROE ≥ 15 %, latest quarter sales and profit up on the same quarter a year before (`yoy`), and no loss
+  in 5 fiscal years with profit up in 3 of the last 5. Strong = ≤ 1 fail and ≥ 4 pass; Weak = under half; needs 4 readable
+  (a Yahoo row has only the two quarter readings, so it is never Strong). **Very Best needs Strong; Weak caps at Fair.**
+  Why: on the first full fetch 32 of the 36 Very Best stocks were under their 200-day average (median −22 % on the year) —
+  cheap because shrinking. Columns Strength / Sales 3y / Qtr sales / Qtr profit / ROE 3y / 1y return (`_returns`, from the
+  daily file, 3-yr CAGR on hover); the "Strong only" box. No forecasts: free sources have none, so "future growth" is the
+  latest quarters, not an estimate. A consolidated page with blank top ratios (BANDHANBNK) now falls back to standalone
+  rather than to Yahoo. The grid is `max(400px, 100vh − 230px)` tall.
 * Graham number / margin of safety are shown, not scored (22.5 = P/E 15 × P/B 1.5, far under Indian multiples).
 
 * **Universes: F&O · NIFTY 500 · All NSE** (All NSE is the page default) (`all` = `stock_list_store.EQUITY_LIST_FILE`, 2,657). Fundamentals cached **7 days** (`CACHE_TTL`);
@@ -533,16 +543,26 @@ The Active Trade tab on /algo reads every intraday algo, not only 2nd Candle: 30
 Simple Trader 1-7 and ST Touch Break 1-8, each through its own `open` / `done` reader in `static/js/algo.js`
 (`_ACTIVE_SOURCES`). The All / Live / Paper filter and the ⚖ Compare button are added from JS, not the template.
 
-**⚖ Compare** calls `GET /api/algo/compare-today/<key>` (`cpr`, `st1`-`st15`) per algo, four at a time.
+**⚖ Compare** calls `GET /api/algo/compare-today/<key>` (`sc`, `tmf`, `cpr`, `st1`-`st15`) per algo, four at a time.
 `service/live_vs_backtest.py` replays today through the algo's OWN backtest engine with the live settings —
 Simple Trader: `spec.cls(**engine_kwargs)`; ST Touch Break: `engine_for`'s numbers plus the 1-minute frame;
 option legs by `attach_option_legs` / `price_with_reentries`; CPR: `propose_all` as the sheet's Update — on the
 /backtest loaders' candles (`_sbr_load_bars`, or the continuous NIFTY future for specs 4/5), and pairs trades by
 side within 15 min (`match`). Under 1 min / 3 index pts / 2 premium pts is "the same"; a pair apart only on
 the option's price is `fill` (execution: the backtest books the candle's close, live's market order fills seconds
-later), not a logic difference. 2nd 30s Candle and
-30-Min Fakeout are not replayed yet (TMF's backtest target is the session extreme — hindsight — so its exits
-differ by design). First run (2026-11-17, index only): the four live trades (ST 1, 3, Touch Break 5, 6) all
+later), not a logic difference. **2nd 30s Candle and 30-Min Fakeout since 2026-11-19** (every entry
+on the tab is compared now): `sc` runs `SecondCandleBacktestEngine` with `sc_state.json`'s params on today's Fyers
+30-second NIFTY bars and reads the leg off the running weekly's **Fyers** 30-second bars (`price_sc_fyers`: the
+strike nearest ₹250 at the entry bar, walked out from ATM, one Fyers request a strike; each premium read where the
+index crossed inside its 30-second bar) — Fyers here only, at the user's ask; the Backtest page still prices on
+Breeze (`_sc_price_real`). On 2026-11-19 it picked 25000 CE, live's strike, in 6 requests; `tmf` runs
+`ThirtyMinFakeoutEngine` per stock in `tmf_state.json` with its `TMF_SYMBOL_DEFAULTS` combo and the live
+`TMF_EXIT_*` cutoff, with **`target_rule='to_entry'`** — the live target (session extreme before the entry minute,
+clamped past the entry, else none), new on the engine, default `'session'` so the Backtest page is unchanged. TMF
+rows pair by symbol too, read prices against 0.1 % of the stock's own price (`px_tol`), and total in ₹ at each
+leg's own qty (`basis: 'equity'`). First run (2026-11-19): TMF 4 of 6 match; HCLTECH / TECHM differ on entry — the
+backtest takes the 10:45 bar, live's scan only sees the setup at 10:46 and fills 2-3 pts worse. SC: same 09:16 BUY,
+target 3.85 pts apart (backtest risk off the 09:16:00 bar's gap open, live off the range high). First run (2026-11-17, index only): the four live trades (ST 1, 3, Touch Break 5, 6) all
 matched, no backtest-only trades. CPR on 2026-11-13 shows the documented 09:15-vs-09:20 decision gap.
 **What its first real run found (2026-11-17)** — live candles now keep only 09:15-15:29
 (`StBbRsiAlgo._bars`, every Simple Trader / ST Touch Break thread): Zerodha and Fyers serve the NIFTY future's
@@ -550,7 +570,7 @@ matched, no backtest-only trades. CPR on 2026-11-13 shows the documented 09:15-v
 higher, and ST4/ST5 missed the 09:15 BUY their backtests took. ST1/ST3's entry (251.55 vs 245.65: the CE ran
 238 → 252 inside the 11:56 minute) and Touch Break 6's exit (its 5 s polls missed a 1-pt touch tab 5 caught at
 13:50:46; the minute check sold at 13:51:03 into a falling PE) are fills, not logic.
-Tests: `tests/test_live_vs_backtest.py`, `test_simple_trader_live.py::test_the_futures_closing_session_is_not_part_of_the_day`.
+Tests: `tests/test_live_vs_backtest.py` (SC/TMF too), `test_simple_trader_live.py::test_the_futures_closing_session_is_not_part_of_the_day`.
 
 ## Sunshine Straddle backtest (NIFTY Mon/Tue + SENSEX Wed/Thu; `sunshine_straddle`)
 

@@ -103,6 +103,31 @@ def test_a_bank_reads_borrowing_and_is_financial():
     assert vs.score([r])[0]['gates']['de'] is None
 
 
+def test_growth_and_track_record():
+    r = si.parse_page('CROMPTON', page())
+    assert r['sales_g3'] == 6 and r['profit_g3'] == -10
+    # Sep 2026 profit -163 against ... the quarters table has only EPS here, so no YoY
+    assert r['q_profit_yoy'] is None
+    # FY24 564 → FY25 -231 → FY26 500: one rise in two, and a loss
+    assert r['profit_up_years'] is None and r['loss_5y'] is True
+
+
+def test_a_consolidated_page_without_a_price_falls_back_to_standalone(monkeypatch):
+    blank = page().replace('<span class="number">220</span>', '<span class="number"></span>')
+    seen = []
+    monkeypatch.setattr(si, '_get', lambda url: seen.append(url) or (blank if 'consolidated' in url else page()))
+    assert si.top_ratios(si.fetch_page('BANDHANBNK'))['Current Price'] == 220
+    assert len(seen) == 2 and not seen[1].endswith('consolidated/')
+
+
+def test_quarter_yoy():
+    q = [100, 110, 90, 120, 130, 99]
+    assert si.yoy(q) == pytest.approx(-10.0)            # 99 against 110
+    assert si.yoy(q, 1) == pytest.approx(30.0)          # 130 against 100
+    assert si.yoy([-5, 1, 1, 1, 8]) == 100.0            # a loss turned to profit
+    assert si.yoy([1, 1, 1]) is None
+
+
 def test_eps_steps_annual_then_quarterly_ttm():
     steps = dict(si.eps_steps(page()))
     assert steps[datetime(2024, 5, 30)] == 8.64            # FY24 known 60 days after 31 Mar

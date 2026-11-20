@@ -13,6 +13,13 @@ Backtest-page run uses, built the way the live thread builds it —
 * **CPR Logic**: ``cpr_trade_rule.propose_all`` on the session's 5-minute chart, as the
   /cpr-logic sheet's Update button replays a session (``cpr_backtest_service.chart_rows``).
   Index points only: CPR decides and exits on NIFTY levels.
+* **2nd 30s Candle**: ``SecondCandleBacktestEngine`` with the live params (``sc_state.json``)
+  on the session's 30-second NIFTY bars; the option leg is read off the running weekly's own
+  Fyers 30-second bars (``price_sc_fyers``) — here only; the Backtest page prices it on Breeze.
+* **30-Min Fakeout**: ``ThirtyMinFakeoutEngine`` per stock with that stock's
+  ``TMF_SYMBOL_DEFAULTS`` combo and the live cutoff, on its 1-minute bars — with
+  ``target_rule='to_entry'``, the live target (the session extreme up to the entry), since the
+  Backtest page's full-session target is hindsight and would differ on every trade by design.
 
 The data loaders are the caller's (the route hands in the /backtest loaders), so this module
 runs on whatever the Backtest page would read and is tested without a broker.
@@ -238,7 +245,7 @@ _FILL_FIELDS = {'Option entry', 'Option exit'}
 
 def _norm_reason(r: Any) -> str:
     s = str(r or '').lower()
-    if 'target' in s:
+    if 'target' in s or s.startswith('tg'):      # 2nd Candle's backtest books 'TG Hit', live 'TARGET'
         return 'target'
     if 'time' in s or 'eod' in s or 'square' in s:
         return 'time'
@@ -251,7 +258,11 @@ def _norm_reason(r: Any) -> str:
 
 def _diffs(lv: Dict[str, Any], bt: Dict[str, Any]) -> List[Dict[str, Any]]:
     out = []
+    # A stock row carries its own tolerance (a share of its price) and reads 'Price', not 'Index'.
+    px_tol = lv.get('px_tol') or bt.get('px_tol')
     for key, label, kind in _FIELDS:
+        if px_tol and kind == 'index':
+            label = label.replace('Index', 'Price')
         a, b = lv.get(key), bt.get(key)
         if a is None or b is None:
             continue
@@ -261,7 +272,7 @@ def _diffs(lv: Dict[str, Any], bt: Dict[str, Any]) -> List[Dict[str, Any]]:
                 out.append({'field': label, 'live': a, 'backtest': b, 'gap': f'{gap} min'})
         elif kind in ('index', 'premium'):
             gap = float(a) - float(b)
-            if abs(gap) > (INDEX_TOL if kind == 'index' else PREMIUM_TOL):
+            if abs(gap) > ((px_tol or INDEX_TOL) if kind == 'index' else PREMIUM_TOL):
                 out.append({'field': label, 'live': a, 'backtest': b, 'gap': round(gap, 2)})
         elif kind == 'reason':
             if _norm_reason(a) != _norm_reason(b):
@@ -283,7 +294,8 @@ def match(live: List[Dict[str, Any]], bt: List[Dict[str, Any]],
         t0 = _mins(lv.get('entry_time') or lv.get('signal_bar'))
         best, gap = None, None
         for j, b in enumerate(bt):
-            if j in used or b['side'] != lv['side'] or t0 is None or not b.get('entry_time'):
+            if (j in used or b['side'] != lv['side'] or t0 is None or not b.get('entry_time')
+                    or b.get('symbol') != lv.get('symbol')):
                 continue
             g = abs(_mins(b['entry_time']) - t0)
             if g <= tol and (gap is None or g < gap):
@@ -307,7 +319,8 @@ def match(live: List[Dict[str, Any]], bt: List[Dict[str, Any]],
     for j, b in enumerate(bt):
         if j not in used:
             rows.append({'live': None, 'backtest': b, 'status': 'backtest_only', 'diffs': []})
-    rows.sort(key=lambda r: (r['live'] or r['backtest']).get('entry_time') or '')
+    rows.sort(key=lambda r: ((r['live'] or r['backtest']).get('entry_time') or '',
+                             (r['live'] or r['backtest']).get('symbol') or ''))
     return rows
 
 
@@ -318,4 +331,236 @@ def summary(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     return out
 
 
-__all__ = ['live_simple', 'live_cpr', 'backtest_simple', 'bt_rows_simple', 'backtest_cpr', 'match', 'summary']
+# ── 2nd 30s Candle ───────────────────────────────────────────────────────────
+
+def live_sc(history: List[Dict[str, Any]], state: Dict[str, Any], date_str: str) -> List[Dict[str, Any]]:
+    """Today's 2nd 30s Candle trades off its history (closed) and state (the one still open)."""
+    out = []
+    for t in history or []:
+        if str(t.get('date') or str(t.get('entry_time', ''))[:10]) != date_str:
+            continue
+        out.append({
+            'status': 'closed', 'mode': 'paper' if t.get('paper') else 'live', 'side': _side(t.get('direction')),
+            'entry_time': _hhmm(t.get('entry_time')), 'exit_time': _hhmm(t.get('exit_time')),
+            'index_entry': t.get('entry_spot'), 'index_exit': t.get('exit_spot'),
+            'sl': t.get('sl_level'), 'target': t.get('target_level'),
+            'strike': t.get('strike'), 'option_type': t.get('option_type'),
+            'entry_premium': t.get('opt_entry_price'), 'exit_premium': t.get('opt_exit_price'),
+            'reason': t.get('reason'),
+        })
+    a = (state or {}).get('active_trade')
+    if a and str(a.get('entry_time', ''))[:10] == date_str:
+        out.append({
+            'status': 'open', 'side': _side(a.get('direction')), 'entry_time': _hhmm(a.get('entry_time')),
+            'exit_time': None, 'index_entry': a.get('entry_spot'), 'index_exit': None,
+            'strike': a.get('strike'), 'option_type': a.get('option_type'),
+            'entry_premium': a.get('opt_entry_price'), 'exit_premium': None, 'reason': None,
+        })
+    return out
+
+
+def backtest_sc(candles: List[Dict[str, Any]], params: Dict[str, Any], date_str: str,
+                strike_step: float = 50.0, price_fn: Optional[Callable] = None) -> Dict[str, Any]:
+    """The Candle Breakout backtest's run of today with the live params. `price_fn(trades)` →
+    (priced, notes) is the route's _sc_price_real; without it (or if it fails) index only."""
+    import pandas as pd
+    from trading_app.Backtest.second_candle_engine import SecondCandleBacktestEngine
+    if not candles:
+        raise LookupError(f'no 30-second NIFTY bars for {date_str}')
+    eng = SecondCandleBacktestEngine(
+        df=pd.DataFrame(candles), candle_index=int(params.get('candle_index', 2)),
+        rr_ratio=float(params.get('rr_ratio', 3.0)), exit_hour=int(params.get('exit_hour', 15)),
+        exit_minute=int(params.get('exit_minute', 25)), enable_long=bool(params.get('enable_long', True)),
+        enable_short=bool(params.get('enable_short', True)), option_pnl=False, strike_step=strike_step)
+    trades, _ = eng.run()
+    trades = [t for t in trades if str(t['entry_time'])[:10] == date_str]
+    out = {'trades': trades, 'priced': False, 'warning': None}
+    if price_fn is None or not trades:
+        return out
+    try:
+        priced, notes = price_fn(trades)
+        if priced:
+            out.update(trades=priced, priced=True)
+        if notes:
+            out['warning'] = ' '.join(notes)
+    except Exception as e:      # no ICICI session: the index trade still compares
+        logger.warning(f'[compare] SC option pricing failed: {e}')
+        out['warning'] = f'Option premiums unavailable ({e}); index only'
+    return out
+
+
+def _bars_by_time(bars: List[Dict[str, Any]]):
+    """{naive IST Timestamp: bar} of Kite-shaped candles (date may be tz-aware or a string)."""
+    import pandas as pd
+    out = {}
+    for b in bars or []:
+        ts = pd.Timestamp(b.get('date'))
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert('Asia/Kolkata').tz_localize(None)
+        out[ts] = b
+    return out
+
+
+def _at(by_time, ts):
+    """The bar stamped `ts`, else the last one before it."""
+    if ts in by_time:
+        return by_time[ts]
+    before = [t for t in by_time if t <= ts]
+    return by_time[max(before)] if before else None
+
+
+def _read(opt_bar, idx_bar, level):
+    """The option's price inside its 30-second bar where the index stood at `level`: that share of
+    the way from the option bar's open to its close (as the index went from open to close), else
+    the bar's open/close mid — attach_option_legs' _cross_frac, on 30-second bars."""
+    o, c = float(opt_bar['open']), float(opt_bar['close'])
+    frac = None
+    if idx_bar is not None and level is not None:
+        io, ic = float(idx_bar['open']), float(idx_bar['close'])
+        if io != ic and min(io, ic) <= float(level) <= max(io, ic):
+            frac = (float(level) - io) / (ic - io)
+    return round(o + (c - o) * (0.5 if frac is None else frac), 2)
+
+
+def price_sc_fyers(trades: List[Dict[str, Any]], index_bars: List[Dict[str, Any]],
+                   fetch_option: Callable[[float, str], List[Dict[str, Any]]],
+                   step: float = 50.0, premium: float = 250.0, max_steps: int = 15) -> Dict[str, Any]:
+    """2nd 30s Candle trades priced on the running weekly's own 30-second bars (Fyers), for the
+    Compare tab only. The strike is the one nearest `premium` at the entry bar (the backtest's
+    ≈₹250 rule), walked out from ATM; `fetch_option(strike, 'CE'|'PE')` → that contract's
+    30-second bars today. Returns {'trades', 'unpriced'}."""
+    import pandas as pd
+    idx = _bars_by_time(index_bars)
+    cache: Dict[tuple, Any] = {}
+
+    def bars(k, ot):
+        if (k, ot) not in cache:
+            cache[(k, ot)] = _bars_by_time(fetch_option(k, ot))
+        return cache[(k, ot)]
+
+    out, unpriced = [], 0
+    for t in trades:
+        ot = 'CE' if str(t.get('type')).lower() in ('long', 'buy') else 'PE'
+        t_in, t_out = pd.Timestamp(str(t['entry_time'])), pd.Timestamp(str(t['exit_time']))
+        i_in, i_out = _at(idx, t_in), _at(idx, t_out)
+        otm = step if ot == 'CE' else -step          # the cheaper direction
+        k = round(float(t['entry_price']) / step) * step
+
+        def prem(strike):
+            b = _at(bars(strike, ot), t_in)
+            return None if b is None else _read(b, i_in, t['entry_price'])
+        seen = {}
+        p = prem(k)
+        for _ in range(max_steps):
+            if p is None:
+                break
+            seen[k] = p
+            nxt = k + otm if p > premium else k - otm
+            if nxt in seen:
+                break
+            pn = prem(nxt)
+            if pn is None:
+                break
+            seen[nxt] = pn
+            if (p - premium) * (pn - premium) <= 0:      # straddled the target
+                break
+            k, p = nxt, pn
+        if not seen:
+            unpriced += 1
+            out.append(t)
+            continue
+        strike = min(seen, key=lambda x: abs(seen[x] - premium))
+        ob_out = _at(bars(strike, ot), t_out)
+        out.append(dict(t, strike=int(strike), option_type=ot, entry_premium=seen[strike],
+                        exit_premium=None if ob_out is None else _read(ob_out, i_out, t['exit_price'])))
+    return {'trades': out, 'unpriced': unpriced}
+
+
+def bt_rows_sc(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{
+        'side': _side(t.get('type')),
+        'entry_time': _hhmm(t.get('entry_time')), 'exit_time': _hhmm(t.get('exit_time')),
+        'index_entry': t.get('entry_price'), 'index_exit': t.get('exit_price'),
+        'sl': t.get('sl_price'), 'target': t.get('target_price'),
+        'strike': t.get('strike'), 'option_type': t.get('option_type'),
+        'entry_premium': t.get('entry_premium'), 'exit_premium': t.get('exit_premium'),
+        'reason': t.get('exit_reason'),
+    } for t in trades]
+
+
+# ── 30-Min Fakeout (stocks) ──────────────────────────────────────────────────
+
+TMF_PX_TOL_PCT = 0.1     # a stock price this % apart is the same price read a few seconds apart
+
+
+def _px_tol(px: Any) -> Optional[float]:
+    return round(float(px) * TMF_PX_TOL_PCT / 100, 2) if px else None
+
+
+def live_tmf(history: List[Dict[str, Any]], date_str: str) -> List[Dict[str, Any]]:
+    """Today's 30-Min Fakeout trades (one row per stock leg) off its history file."""
+    out = []
+    for t in history or []:
+        if str(t.get('date') or str(t.get('entry_time', ''))[:10]) != date_str:
+            continue
+        out.append({
+            'symbol': t.get('symbol'), 'status': 'closed', 'mode': t.get('mode'), 'side': _side(t.get('direction')),
+            'entry_time': _hhmm(t.get('entry_time')), 'exit_time': _hhmm(t.get('exit_time')),
+            'index_entry': t.get('entry_price'), 'index_exit': t.get('exit_price'),
+            'sl': t.get('sl_price'), 'target': t.get('target_price'), 'qty': t.get('qty'),
+            'reason': t.get('reason'), 'px_tol': _px_tol(t.get('entry_price')),
+        })
+    return out
+
+
+def backtest_tmf(symbols: List[str], load_minutes: Callable[[str], Any], date_str: str,
+                 exit_hour: int = 15, exit_minute: int = 5, capital: float = 100000.0,
+                 workers: int = 8) -> Dict[str, Any]:
+    """Every stock live scans, through ThirtyMinFakeoutEngine with that stock's own combo and the
+    live cutoff, on today's 1-minute bars (`load_minutes(symbol)` → DataFrame or None)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from trading_app.Backtest.thirty_min_fakeout_engine import ThirtyMinFakeoutEngine
+    from trading_app.Backtest.tmf_symbol_universe import TMF_SYMBOL_DEFAULTS, TMF_EQUITY_LEVERAGE
+
+    def one(sym):
+        combo = TMF_SYMBOL_DEFAULTS.get(sym)
+        if not combo:
+            return [], None
+        df = load_minutes(sym)
+        if df is None or df.empty:
+            return [], sym
+        trades, _ = ThirtyMinFakeoutEngine(
+            df=df, exit_hour=exit_hour, exit_minute=exit_minute,
+            enable_long=combo['direction'] != 'short', enable_short=combo['direction'] != 'long',
+            use_entry_buffer=combo['use_entry_buffer'], use_body_filter=combo['use_body_filter'],
+            use_c2_close_filter=combo['use_c2_close_filter'], target_rule='to_entry').run()
+        for t in trades:
+            t['symbol'] = sym
+            t['qty'] = max(1, int((capital * TMF_EQUITY_LEVERAGE) // t['entry_price'])) if t['entry_price'] > 0 else 1
+        return trades, None
+
+    trades, missing = [], []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for got, miss in ex.map(one, symbols):
+            trades += got
+            if miss:
+                missing.append(miss)
+    trades = [t for t in trades if str(t['entry_time'])[:10] == date_str]
+    trades.sort(key=lambda t: (t['entry_time'], t['symbol']))
+    warn = (f"{len(missing)} stock(s) had no 1-minute bars today: {', '.join(sorted(missing)[:8])}"
+            f"{'…' if len(missing) > 8 else ''}") if missing else None
+    return {'trades': trades, 'warning': warn, 'scanned': len(symbols) - len(missing)}
+
+
+def bt_rows_tmf(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{
+        'symbol': t.get('symbol'), 'side': _side(t.get('type')),
+        'entry_time': _hhmm(t.get('entry_time')), 'exit_time': _hhmm(t.get('exit_time')),
+        'index_entry': t.get('entry_price'), 'index_exit': t.get('exit_price'),
+        'sl': t.get('sl_price'), 'target': t.get('target_price'), 'qty': t.get('qty'),
+        'reason': t.get('exit_reason'), 'px_tol': _px_tol(t.get('entry_price')),
+    } for t in trades]
+
+
+__all__ = ['live_simple', 'live_cpr', 'backtest_simple', 'bt_rows_simple', 'backtest_cpr', 'match', 'summary',
+           'live_sc', 'backtest_sc', 'bt_rows_sc', 'price_sc_fyers', 'live_tmf', 'backtest_tmf', 'bt_rows_tmf']

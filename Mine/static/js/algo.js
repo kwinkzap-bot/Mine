@@ -506,14 +506,15 @@ function _activeRenderHistory(trades) {
 // ── ⚖ Compare: today's live trades vs the Backtest page's logic on today's candles ──
 // GET /api/algo/compare-today/<key> per algo (service/live_vs_backtest.py): the algo's own
 // backtest engine, built with the live settings, run on today's candles, paired with what live
-// did. 2nd 30s Candle and 30-Min Fakeout have no replay here yet.
+// did. 30-Min Fakeout is per stock (basis 'equity': ₹ = points × the leg's own qty).
 const _CMP_KEYS = () => [
+    { key: 'sc', label: '2nd 30s Candle' },
+    { key: 'tmf', label: '30-Min Fakeout' },
     { key: 'cpr', label: 'CPR Logic' },
     ...[1, 2, 3, 4, 5, 6, 7].map(n => ({ key: 'st' + n, label: `Simple Trader ${n}` })),
     ...(window.MINE_TABS || [{ n: 8, tab: 'NIFTY - Both - 3m' }]).map((m, i) =>
         ({ key: 'st' + m.n, label: `ST Touch Break · ${i + 1}. ${m.tab || ''}`.trim() })),
 ];
-const _CMP_NOT_WIRED = ['2nd 30s Candle', '30-Min Fakeout'];
 const _CMP_STATUS = { match: ['Match', 'pos'], fill: ['Fill differs', 'info'], differs: ['Logic differs', 'warn'],
                       live_only: ['Live only', 'neg'], backtest_only: ['Backtest only', 'neg'] };
 
@@ -599,9 +600,11 @@ function _cmpEsc(v) {
 const _CMP_SENSEX = new Set(['st6', 'st7']);
 function _cmpPnl(k, r) {
     const lot = _CMP_SENSEX.has(k.key) ? 20 : _NIFTY_LOT_SIZE;
-    const opt = r.basis === 'option';
+    const opt = r.basis === 'option', eq = r.basis === 'equity';
     const one = t => {
         if (!t) return null;
+        if (eq) return t.index_entry != null && t.index_exit != null && t.qty
+            ? (t.index_exit - t.index_entry) * (t.side === 'SELL' ? -1 : 1) * t.qty : null;
         if (opt) return t.entry_premium != null && t.exit_premium != null
             ? (t.exit_premium - t.entry_premium) * lot : null;
         if (t.index_entry == null || t.index_exit == null) return null;
@@ -618,7 +621,7 @@ function _cmpPnl(k, r) {
         });
         return { v, n, open };
     };
-    return { unit: opt ? 'inr' : 'pts', live: sum('live'), bt: sum('backtest') };
+    return { unit: opt || eq ? 'inr' : 'pts', live: sum('live'), bt: sum('backtest') };
 }
 
 function _cmpFmt(v, unit) {
@@ -649,7 +652,7 @@ function _cmpRender(keys, results) {
         + blocks.join('')
         + (quiet.length ? `<div class="ag-empty" style="text-align:left;padding:6px 0">No trades live or in the backtest today: ${quiet.join(' · ')}</div>` : '')
         + (errors.length ? `<div style="color:var(--ag-neg);font-size:12px;padding:4px 0">Could not compare — ${errors.join(' · ')}</div>` : '')
-        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. <b>Fill differs</b> = same trade (side, minutes, index levels), only the option price apart: the backtest books the candle's close, live's market order fills seconds later. P&L (top right) is 1 lot per trade before charges, on the same premiums the table shows. Not compared yet: ${_CMP_NOT_WIRED.join(', ')}. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
+        + `<div style="font-size:11px;opacity:.7;padding-top:6px">Each cell reads live, then <span style="opacity:.55">/ backtest</span> where the two differ. <b>Fill differs</b> = same trade (side, minutes, index levels), only the option price apart: the backtest books the candle's close, live's market order fills seconds later. P&L (top right) is 1 lot per trade before charges, on the same premiums the table shows. 30-Min Fakeout is per stock at each leg's own quantity, on live's target (the session high/low up to the entry — the Backtest page's full-session target is hindsight); a price under 0.1 % apart counts as the same. A difference under 1 min, 3 index pts or 2 premium pts counts as the same.</div>`;
 }
 
 function _cmpBlock(k, r) {
@@ -667,19 +670,29 @@ function _cmpBlock(k, r) {
         : x.status === 'match' ? '—'
         : x.status === 'live_only' ? 'Backtest took no trade near this entry'
         : x.status === 'backtest_only' ? 'Live took no trade here' : '';
+    const eq = r.basis === 'equity';
+    const head = [
+        { key: 'status', label: 'Status', format: v => _CMP_STATUS[v][0], badge: v => _CMP_STATUS[v][1] },
+        ...(eq ? [{ label: 'Stock', strong: true, format: (_, x) => (x.live || x.backtest).symbol }] : []),
+        { label: 'Side', strong: true, format: (_, x) => (x.live || x.backtest).side,
+          tone: (_, x) => (x.live || x.backtest).side === 'BUY' ? 'pos' : 'neg' },
+        { label: 'Entry',     render: pair(t => t && t.entry_time) },
+        { label: 'Exit',      render: pair(t => t && t.exit_time) },
+        { label: eq ? 'Price In' : 'Index In',   render: pair(t => t && t.index_entry, n2) },
+        { label: eq ? 'Price Out' : 'Index Out', render: pair(t => t && t.index_exit, n2) },
+    ];
+    const tail = eq ? [
+        { label: 'SL',     render: pair(t => t && t.sl, n2) },
+        { label: 'Target', render: pair(t => t && t.target, n2) },
+        { label: 'Qty',    render: pair(t => t && t.qty) },
+    ] : [
+        { label: 'Option',    render: pair(opt) },
+        { label: 'Prem In',   render: pair(t => t && t.entry_premium, n2) },
+        { label: 'Prem Out',  render: pair(t => t && t.exit_premium, n2) },
+    ];
     const grid = DataGrid.render({
         rows: r.rows,
-        columns: [
-            { key: 'status', label: 'Status', format: v => _CMP_STATUS[v][0], badge: v => _CMP_STATUS[v][1] },
-            { label: 'Side', strong: true, format: (_, x) => (x.live || x.backtest).side,
-              tone: (_, x) => (x.live || x.backtest).side === 'BUY' ? 'pos' : 'neg' },
-            { label: 'Entry',     render: pair(t => t && t.entry_time) },
-            { label: 'Exit',      render: pair(t => t && t.exit_time) },
-            { label: 'Index In',  render: pair(t => t && t.index_entry, n2) },
-            { label: 'Index Out', render: pair(t => t && t.index_exit, n2) },
-            { label: 'Option',    render: pair(opt) },
-            { label: 'Prem In',   render: pair(t => t && t.entry_premium, n2) },
-            { label: 'Prem Out',  render: pair(t => t && t.exit_premium, n2) },
+        columns: [...head, ...tail,
             { label: 'Reason',    render: pair(t => t && (t.reason || t.status)) },
             { label: 'Differences', format: (_, x) => why(x) },
         ],
@@ -688,7 +701,7 @@ function _cmpBlock(k, r) {
             <span>${esc(k.label)}
             <span style="font-weight:400;font-size:11px;opacity:.7"> — ${esc(r.source || '')}${r.basis === 'index' ? ' · index only' : ''}</span>
             ${r.warning ? `<span style="font-weight:400;font-size:11px;color:var(--ag-neg)"> · ${esc(r.warning)}</span>` : ''}</span>
-            <span style="margin-left:auto;font-size:12px;font-weight:500" title="1 lot per trade, before charges">${_cmpPnlHtml(_cmpPnl(k, r))}</span></div>
+            <span style="margin-left:auto;font-size:12px;font-weight:500" title="${eq ? 'Each leg at its own quantity' : '1 lot per trade'}, before charges">${_cmpPnlHtml(_cmpPnl(k, r))}</span></div>
         ${grid}`;
 }
 

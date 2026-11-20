@@ -115,6 +115,9 @@
         <label class="value-gate" title="Buy price = fair value less this %. Fair value = EPS × the lower of the peer and own-history P/E">
             Margin <input type="number" id="valueMos" value="20" min="0" max="80" step="5">%
         </label>
+        <label class="value-gate" title="Show only stocks whose business is still growing (Strength = Strong: at most one of the six growth checks fails)">
+            <input type="checkbox" id="valueStrongOnly"> Strong only
+        </label>
         <label class="value-gate" title="Show only stocks trading at or under their buy price">
             <input type="checkbox" id="valueBuyOnly"> Buy zone only
         </label>

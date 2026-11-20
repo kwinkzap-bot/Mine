@@ -249,6 +249,7 @@ def score(records: List[Dict[str, Any]], gate_cfg: Optional[Dict[str, float]] = 
 
         gt = gates(r, g)
         applied = [v for v in gt.values() if v is not None]
+        st = strength(r)
         rows.append({
             'symbol': r['symbol'],
             'company': r.get('company'),
@@ -288,6 +289,20 @@ def score(records: List[Dict[str, Any]], gate_cfg: Optional[Dict[str, float]] = 
             # could be — a row with no data is not "quality".
             'quality': bool(applied) and len(applied) >= 2 and all(applied),
             'fetched_at': r.get('fetched_at'),
+            'strength': st['label'],
+            'strength_checks': st['checks'],
+            'strength_passed': st['passed'],
+            'strength_readable': st['readable'],
+            'sales_g3': _finite(r.get('sales_g3')),
+            'profit_g3': _finite(r.get('profit_g3')),
+            'roe_3y': _finite(r.get('roe_3y')),
+            'q_sales_yoy': _finite(r.get('q_sales_yoy')),
+            'q_profit_yoy': _finite(r.get('q_profit_yoy')),
+            'q_profit_yoy_prev': _finite(r.get('q_profit_yoy_prev')),
+            'profit_up_years': r.get('profit_up_years'),
+            'loss_5y': r.get('loss_5y'),
+            'ret_1y': _finite(r.get('ret_1y')),
+            'ret_3y': _finite(r.get('ret_3y')),
         })
 
     for name, higher in FACTORS.items():
@@ -308,6 +323,62 @@ def score(records: List[Dict[str, Any]], gate_cfg: Optional[Dict[str, float]] = 
     for i, row in enumerate(rows, 1):
         row['rank'] = i
     return rows
+
+
+# ── strength: growth and track record ────────────────────────────────────
+
+# Each reading passes or fails; None = no data. Cheap is not enough: a stock
+# is usually cheap because it is falling, and these tell a business that is
+# still growing from one whose profits are going away.
+STRENGTH = {
+    'sales_3y':   ('Sales growth, 3-yr CAGR ≥ {}%', 10.0),
+    'profit_3y':  ('Profit growth, 3-yr CAGR ≥ {}%', 10.0),
+    'roe_3y':     ('ROE, 3-yr average ≥ {}%', 15.0),
+    'q_sales':    ('Latest quarter sales up on a year ago', None),
+    'q_profit':   ('Latest quarter profit up on a year ago', None),
+    'steady':     ('No loss in 5 years and profit up in {} of the last 5', 3),
+}
+STRENGTH_MIN_READINGS = 4
+
+
+def strength(r: Dict[str, Any]) -> Dict[str, Any]:
+    """{'checks': {name: True/False/None}, 'passed', 'readable', 'label'}.
+    Strong = at most one failed and at least four passed; Weak = fewer than
+    half passed; Average otherwise; None = under four readable."""
+    def at_least(field, th):
+        v = _finite(r.get(field))
+        return None if v is None else v >= th
+    def up(field):
+        v = _finite(r.get(field))
+        return None if v is None else v > 0
+    ups, years, loss = r.get('profit_up_years'), r.get('profit_years'), r.get('loss_5y')
+    steady = None
+    if ups is not None and loss is not None and years:
+        steady = (not loss) and ups >= min(STRENGTH['steady'][1], years)
+    checks = {
+        'sales_3y': at_least('sales_g3', STRENGTH['sales_3y'][1]),
+        'profit_3y': at_least('profit_g3', STRENGTH['profit_3y'][1]),
+        'roe_3y': at_least('roe_3y', STRENGTH['roe_3y'][1]),
+        'q_sales': up('q_sales_yoy'),
+        'q_profit': up('q_profit_yoy'),
+        'steady': steady,
+    }
+    read = [v for v in checks.values() if v is not None]
+    passed = sum(read)
+    if len(read) < STRENGTH_MIN_READINGS:
+        label = None
+    elif passed >= len(read) - 1 and passed >= 4:
+        label = 'Strong'
+    elif passed * 2 >= len(read):
+        label = 'Average'
+    else:
+        label = 'Weak'
+    return {'checks': checks, 'passed': passed, 'readable': len(read), 'label': label}
+
+
+def strength_text(name: str) -> str:
+    text, th = STRENGTH[name]
+    return text.format(th) if th is not None else text
 
 
 # ── rating ───────────────────────────────────────────────────────────────
@@ -344,7 +415,12 @@ def rate(row: Dict[str, Any]) -> Dict[str, Any]:
         why.append(f"Upside {ups:.0f}% looks too good — check for a one-off profit or bad data")
     if not row.get('quality'):
         why.append('Fails a quality check' + (f" ({', '.join(fails)})" if fails else ' (too little data)'))
-    good = score_v >= GOOD_SCORE and row.get('quality') and ups is not None and ups >= 0 and not suspect
+    st = row.get('strength')
+    weak = st == 'Weak'
+    if weak:
+        why.append(_strength_why(row, 'Weak'))
+    good = (score_v >= GOOD_SCORE and row.get('quality') and ups is not None and ups >= 0
+            and not suspect and not weak)
     if not good:
         if score_v < GOOD_SCORE:
             why.append(f"Score {score_v:.0f} (Good needs {GOOD_SCORE})")
@@ -356,11 +432,14 @@ def rate(row: Dict[str, Any]) -> Dict[str, Any]:
         return _rating(3, why)
 
     best = (score_v >= VERY_BEST_SCORE and row.get('in_buy_zone')
-            and row.get('n_factors', 0) >= MIN_FACTORS_BEST)
+            and row.get('n_factors', 0) >= MIN_FACTORS_BEST and st == 'Strong')
     if best:
         disc = (1 - 1 / (1 + ups / 100)) * 100      # price below fair value, as a share of fair value
-        return _rating(5, [f"Score {score_v:.0f}, passes quality, price {disc:.0f}% under fair value "
-                           f"({ups:.0f}% upside)"])
+        return _rating(5, [f"Score {score_v:.0f}, passes quality, strong growth "
+                           f"({row.get('strength_passed')}/{row.get('strength_readable')} checks), "
+                           f"price {disc:.0f}% under fair value ({ups:.0f}% upside)"])
+    if st != 'Strong':
+        why.append(_strength_why(row, st))
     if score_v < VERY_BEST_SCORE:
         why.append(f"Score {score_v:.0f} (Very Best needs {VERY_BEST_SCORE})")
     if not row.get('in_buy_zone'):
@@ -368,6 +447,15 @@ def rate(row: Dict[str, Any]) -> Dict[str, Any]:
     if row.get('n_factors', 0) < MIN_FACTORS_BEST:
         why.append(f"Only {row.get('n_factors')} readings (Very Best needs {MIN_FACTORS_BEST})")
     return _rating(4, why)
+
+
+def _strength_why(row: Dict[str, Any], label: Optional[str]) -> str:
+    if label is None:
+        return (f"Too little growth data ({row.get('strength_readable', 0)} of {len(STRENGTH)} checks; "
+                f"Very Best needs {STRENGTH_MIN_READINGS} and Strong)")
+    failed = [strength_text(k) for k, v in (row.get('strength_checks') or {}).items() if v is False]
+    return (f"Fundamentals {label.lower()}: {row.get('strength_passed')} of {row.get('strength_readable')} "
+            f"growth checks pass" + (f" — fails: {'; '.join(failed)}" if failed else ''))
 
 
 def _rating(tier: int, why: List[str]) -> Dict[str, Any]:
@@ -478,7 +566,15 @@ def _record_from_info(symbol: str, info: Dict[str, Any]) -> Dict[str, Any]:
         'earnings_growth': _finite(info.get('earningsGrowth')),
         'market_cap': _finite(info.get('marketCap')),
         'div_yield': _finite(info.get('dividendYield')),    # Yahoo: already %
+        # the latest quarter against the same quarter a year before
+        'q_sales_yoy': _pct(info.get('revenueGrowth')),
+        'q_profit_yoy': _pct(info.get('earningsQuarterlyGrowth')),
     }
+
+
+def _pct(v: Any) -> Optional[float]:
+    v = _finite(v)
+    return None if v is None else v * 100
 
 
 def _own_pe(symbol: str, steps) -> Optional[Dict[str, float]]:
@@ -669,9 +765,33 @@ def latest_close(symbol: str) -> Optional[Dict[str, Any]]:
         df = entry['df']
         close = _pos(df['close'].iloc[-1])
         if close:
-            val = {'close': close, 'date': df.index[-1].strftime('%Y-%m-%d')}
+            val = {'close': close, 'date': df.index[-1].strftime('%Y-%m-%d'),
+                   **_returns(df['close'], close)}
     _close_memo[symbol] = (mtime, val)
     return val
+
+
+def _returns(closes, last: float) -> Dict[str, Optional[float]]:
+    """Price return over 1 year and the 3-year CAGR, %, from the daily file
+    (its index mixes 00:00 and 05:30 stamps for one day, so it is read by
+    calendar date)."""
+    import pandas as pd
+    try:
+        c = closes.astype(float)
+        c.index = pd.DatetimeIndex(c.index).normalize()
+        c = c[~c.index.duplicated(keep='last')]
+        end = c.index[-1]
+    except Exception:
+        return {'ret_1y': None, 'ret_3y': None}
+
+    def back(years):
+        then = c[c.index <= end - pd.DateOffset(years=years)]
+        if then.empty or then.index[-1] < end - pd.DateOffset(years=years, days=10):
+            return None
+        return _pos(then.iloc[-1])
+    one, three = back(1), back(3)
+    return {'ret_1y': (last / one - 1) * 100 if one else None,
+            'ret_3y': ((last / three) ** (1 / 3) - 1) * 100 if three else None}
 
 
 def reprice(rec: Dict[str, Any], quote: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -680,6 +800,8 @@ def reprice(rec: Dict[str, Any], quote: Optional[Dict[str, Any]]) -> Dict[str, A
     statements do not. A close from before the fetch is ignored (the fetched
     price is newer)."""
     out = dict(rec)
+    if quote:
+        out['ret_1y'], out['ret_3y'] = quote.get('ret_1y'), quote.get('ret_3y')
     old = _pos(rec.get('price'))
     if not quote or not old:
         return out

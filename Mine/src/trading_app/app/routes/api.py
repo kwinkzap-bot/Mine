@@ -15493,6 +15493,92 @@ def _compare_simple_minutes(spec, date_str):
     return minutes, candles_df, _provider_tag(fyers)
 
 
+def _compare_read_json(path, default):
+    try:
+        with open(path) as _f:
+            return json.load(_f)
+    except Exception:
+        return default
+
+
+def _compare_sc(lvb, username, date_str, price):
+    """2nd 30s Candle: the Candle Breakout backtest (30-second NIFTY bars, live params from
+    sc_state.json) beside today's live trade, its legs priced as that backtest prices them."""
+    from trading_app.algo.second_candle import second_candle_algo as sca
+    from trading_app.Backtest.seconds_history import fetch_seconds_history
+    state = _compare_read_json(os.path.join(os.path.dirname(sca.__file__), 'sc_state.json'), {})
+    hist = _compare_read_json(os.path.join(os.path.dirname(sca.__file__), 'sc_trades_history.json'), [])
+    if isinstance(hist, dict):
+        hist = hist.get('trades', [])
+    params = sca.normalise_params(state.get('params'))
+    live = lvb.live_sc(hist, state, date_str)
+    fyers = get_fyers_adapter(username)
+    if fyers is None:
+        raise LookupError('Fyers is not logged in — the backtest reads its 30-second candles')
+    token = _SC_INDEX_TOKENS['NIFTY']
+    candles, note = fetch_seconds_history(fyers, token, date_str, date_str, interval='30second', user=username)
+    candles = [c for c in (candles or []) if str(c.get('date'))[:10] == date_str]
+    price_fn = None
+    if price:
+        # Fyers 30-second bars of the running weekly — this Compare row only (the Backtest page
+        # prices on Breeze). One request per strike looked at.
+        def fetch_option(strike, option_type):
+            sym = fyers.find_option_symbol('NIFTY', strike, option_type)
+            if not sym:
+                return []
+            return fyers.historical_data(sym, date_str, date_str, '30second') or []
+
+        def price_fn(trades):
+            got = lvb.price_sc_fyers(trades, candles, fetch_option, step=_opt_strike_step('NIFTY'))
+            notes = ([f"{got['unpriced']} leg(s) had no Fyers 30-second option bars — index only"]
+                     if got['unpriced'] else [])
+            return got['trades'], notes      # an unpriced leg stays, on the index
+    got = lvb.backtest_sc(candles, params, date_str, strike_step=_opt_strike_step('NIFTY'), price_fn=price_fn)
+    rows = lvb.match(live, lvb.bt_rows_sc(got['trades']))
+    side = 'both' if params['enable_long'] and params['enable_short'] else 'long' if params['enable_long'] else 'short'
+    return {'success': True, 'key': 'sc', 'date': date_str, 'rows': rows, 'summary': lvb.summary(rows),
+            'basis': 'option' if got['priced'] else 'index', 'warning': got['warning'] or note,
+            'source': (f"SecondCandleBacktestEngine on fyers 30-second candles, option on fyers 30-second bars · candle {params['candle_index']}, "
+                       f"1:{params['rr_ratio']:g}, {side}, out {params['exit_hour']:02d}:{params['exit_minute']:02d}")}
+
+
+def _compare_tmf(lvb, username, date_str):
+    """30-Min Fakeout: every stock live scans, through the backtest engine with its own combo and
+    the live cutoff, on today's 1-minute bars; the target is live's (session extreme to the entry)."""
+    from trading_app.algo.thirty_min_fakeout import tmf_algo
+    from trading_app.Backtest.tmf_symbol_universe import TMF_STOCK_UNIVERSE
+    from trading_app.Backtest.minute_candle_store import get_minute_history
+    from trading_app.app.utils.user_env import UserEnvManager
+    hist = _compare_read_json(tmf_algo.HISTORY_FILE, [])
+    if isinstance(hist, dict):
+        hist = hist.get('trades', [])
+    live = lvb.live_tmf(hist, date_str)
+    state = _compare_read_json(tmf_algo.STATE_FILE, {})
+    symbols = list((state.get('stocks') or {}).keys()) if state.get('date') == date_str else []
+    symbols = symbols or list(TMF_STOCK_UNIVERSE)
+    def _v(k, d):
+        return (UserEnvManager.get_user_var(username, k) or d).strip() or d
+    exit_hour, exit_minute = int(_v('TMF_EXIT_HOUR', '15')), int(_v('TMF_EXIT_MINUTE', '5'))
+    capital = float(_v('TMF_CAPITAL_PER_TRADE', '100000'))
+    provider = get_data_provider(context='backtest')
+    if provider is None:
+        raise LookupError('no data provider — the backtest reads 1-minute stock candles')
+    tag = _provider_tag(provider)
+    sym_provider = tag != 'kite'
+
+    def load(sym):
+        tok = f'NSE:{sym}-EQ' if sym_provider else sym
+        return get_minute_history(provider, tok, sym, date_str, date_str, provider_tag=tag, retain=False)
+
+    got = lvb.backtest_tmf(symbols, load, date_str, exit_hour, exit_minute, capital,
+                           workers=15 if tag == 'fyers' else 8)
+    rows = lvb.match(live, lvb.bt_rows_tmf(got['trades']))
+    return {'success': True, 'key': 'tmf', 'date': date_str, 'rows': rows, 'summary': lvb.summary(rows),
+            'basis': 'equity', 'warning': got['warning'],
+            'source': (f"ThirtyMinFakeoutEngine on {tag} 1-minute candles, {got['scanned']} stocks, each on its own "
+                       f"combo, out {exit_hour:02d}:{exit_minute:02d}, live's target (session extreme up to the entry)")}
+
+
 @api_bp.route('/algo/compare-today/<key>', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -15500,7 +15586,8 @@ def _compare_simple_minutes(spec, date_str):
 def algo_compare_today(key) -> EndpointResponse:
     """The Active Trade tab's ⚖ Compare: one live algo's trades today beside the Backtest page's
     logic run on today's candles with that algo's settings (service/live_vs_backtest.py).
-    `key` is st1-st15 (Simple Trader 1-7, ST Touch Break 8-15) or cpr. `?price=0` skips the
+    `key` is st1-st15 (Simple Trader 1-7, ST Touch Break 8-15), cpr, sc (2nd 30s Candle) or tmf
+    (30-Min Fakeout). `?price=0` skips the
     option legs (index only, no Breeze request)."""
     from trading_app.service import live_vs_backtest as lvb
     username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
@@ -15538,6 +15625,10 @@ def algo_compare_today(key) -> EndpointResponse:
             return jsonify({'success': True, 'key': key, 'date': date_str, 'rows': rows,
                             'summary': lvb.summary(rows), 'basis': 'option' if got['priced'] else 'index',
                             'warning': got['warning'], 'source': f'{spec.cls.__name__} on {source} {spec.bar}-min candles'})
+        if key == 'sc':
+            return jsonify(_compare_sc(lvb, username, date_str, price))
+        if key == 'tmf':
+            return jsonify(_compare_tmf(lvb, username, date_str))
         return jsonify({'success': False, 'error': f'no backtest replay for {key}'}), 404
     except LookupError as e:
         return jsonify({'success': False, 'error': str(e)}), 503
