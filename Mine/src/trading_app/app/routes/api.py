@@ -4365,7 +4365,7 @@ def run_second_candle_optimise():
         # cache entries — one would otherwise serve the other's leaderboard.
         basis_key = 'opt' if option_pnl else 'idx'
 
-        def _board_key():
+        def _board_key(cap=None, end=None):
             # v5: keyed on everything the board's numbers depend on — the date
             # range, the newest settled session, and the 30-second sessions on
             # disk — so it can never answer for bars a BACKTEST would not run
@@ -4379,13 +4379,44 @@ def run_second_candle_optimise():
             from trading_app.Backtest import seconds_store
             f30, l30, n30 = seconds_store.span(symbol)
             return (f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_{basis_key}"
-                    f"_{start_date_str}_{end_date_str}_{seconds_store.last_settled_day()}"
-                    f"_30s{f30}-{l30}-{n30}_cap{_sc_option_leg_cap()}_v9")
+                    f"_{start_date_str}_{end or end_date_str}_{seconds_store.last_settled_day()}"
+                    f"_30s{f30}-{l30}-{n30}_cap{cap or _sc_option_leg_cap()}_v9")
         cache_key = _board_key()
 
+        def _full_board_key(cache):
+            """In market hours the leg cap is 300, so a board built then prices
+            only each row's newest 300 trades (2026-11-24: 291 of ~1,560 on the
+            30s board). A board built after hours on the SAME sessions — same
+            30-second span, same newest settled day; today's session is in
+            neither until it closes — is the full one, so it answers instead.
+            Its end date may be any day from the settled one to this request's."""
+            from trading_app.Backtest import seconds_store
+            if _sc_option_leg_cap() >= _SC_OPTION_LEGS_MAX:
+                return None
+            ends = [end_date_str]
+            try:
+                d = datetime.strptime(str(seconds_store.last_settled_day())[:10], '%Y-%m-%d').date()
+                last = datetime.strptime(end_date_str[:10], '%Y-%m-%d').date()
+                while d <= last:
+                    ends.append(d.strftime('%Y-%m-%d'))
+                    d += timedelta(days=1)
+            except ValueError:
+                pass
+            for e in reversed(ends):
+                k = _board_key(cap=_SC_OPTION_LEGS_MAX, end=e)
+                if k in cache:
+                    return k
+            return None
+
         # ── Serve from cache unless caller asked to recalculate ──────────────
-        if not recalculate:
-            cache = _load_opt_cache()
+        # A full after-hours board of the same sessions is served even on
+        # Recalculate in market hours: a rebuild then could only make the
+        # 300-trades-a-row copy of it.
+        cache = _load_opt_cache()
+        full_key = _full_board_key(cache)
+        if full_key:
+            cache_key = full_key
+        if full_key or not recalculate:
             if cache_key in cache:
                 entry = cache[cache_key]
                 # The 30-second backfill's progress is today's, not the cached run's.
@@ -4395,6 +4426,8 @@ def run_second_candle_optimise():
                                      session.get('username'))
                     note = _sc_backfill_note(symbol)
                     tfs = [dict(g, note=note) if g.get('tf_label') == '30s' else g for g in tfs]
+                tfs = [dict(g, note=' · '.join(x for x in (g.get('note'), g.get('cap_note')) if x))
+                       if g.get('cap_note') else g for g in tfs]
                 return jsonify({
                     'success':            True,
                     'from_cache':         True,
@@ -4477,10 +4510,18 @@ def run_second_candle_optimise():
                     top_by_pnl = sorted(
                         profitable, key=lambda r: r.get('total_pnl', 0), reverse=True
                     )[:10]
+                    cap_note = None
+                    left_out = max((r.get('unpriced') or 0 for r in top_by_pnl), default=0)
+                    if real and left_out > 100 and _sc_option_leg_cap() < _SC_OPTION_LEGS_MAX:
+                        cap_note = (f'Market hours: each row is priced on its newest '
+                                    f'{_sc_option_leg_cap()} trades only ({left_out:,} older ones '
+                                    f'left out). The full board is built after 15:45.')
                     tf_groups.append({
                         'tf_label': tf_label,
                         'tf_min':   tf_min,
                         'interval': interval_str,
+                        'note':     cap_note,
+                        'cap_note': cap_note,
                         # 'recorded' = booked on real option candles, as BACKTEST;
                         # 'model' = Black-Scholes (the minute boards on OPT P&L).
                         'option_source': (('recorded' if real else 'model')
@@ -4534,7 +4575,7 @@ def run_second_candle_optimise():
                             if g['tf_label'] == '30s':
                                 g['from'] = str(sec_candles[0]['date'])[:10]
                                 g['to'] = str(sec_candles[-1]['date'])[:10]
-                                g['note'] = sec_note
+                                g['note'] = ' · '.join(x for x in (sec_note, g.get('cap_note')) if x)
                     logger.info("[2ndCandle OPT] %s 30s swept (%d bars), %.1fs into the run",
                                 symbol, len(sec_candles or []), _time.time() - t0)
                 except Exception as sec_exc:

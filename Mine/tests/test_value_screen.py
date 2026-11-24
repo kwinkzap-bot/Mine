@@ -286,7 +286,7 @@ def test_refresh_fetches_only_what_is_stale(scratch_db):
 
     def fake(sym):
         calls.append(sym)
-        return None if sym == 'BAD' else {**rec(sym), 'fetched_at': time.time()}
+        return None if sym == 'BAD' else {**rec(sym), 'fetched_at': time.time(), 'q_sales_yoy': None}
 
     t = _wait(vs.start_refresh('fno', fetch=fake, symbols=['A', 'B', 'BAD'])['id'])
     assert t['done'] == 3 and t['failed'] == 1
@@ -301,6 +301,15 @@ def test_refresh_fetches_only_what_is_stale(scratch_db):
     calls.clear()
     _wait(vs.start_refresh('fno', force=True, fetch=fake, symbols=['A', 'B'])['id'])
     assert sorted(calls) == ['A', 'B']
+
+
+def test_a_record_without_growth_fields_is_stale():
+    now = time.time()
+    fresh = {**rec('A'), 'fetched_at': now, 'q_sales_yoy': None}
+    assert not vs.is_stale(fresh, now)
+    assert vs.is_stale({**rec('A'), 'fetched_at': now}, now)          # cached before the Strength check
+    assert vs.is_stale({**fresh, 'fetched_at': now - vs.CACHE_TTL - 1}, now)
+    assert vs.is_stale(None, now)
 
 
 def test_screen_scores_the_cache_and_never_fetches(scratch_db, monkeypatch):

@@ -64,6 +64,12 @@
     const STRENGTH_CLASS = { Strong: 'best', Average: 'fair', Weak: 'avoid' };
     const STRENGTH_RANK = { Strong: 3, Average: 2, Weak: 1 };
 
+    // growth_data comes from the server since the restart that added it; an
+    // older server's row reads as not fetched when it has no check at all.
+    function notFetched(r) {
+        return r.growth_data === false || (r.growth_data === undefined && !r.strength_readable);
+    }
+
     function strengthTitle(row) {
         const checks = row.strength_checks || {};
         const lines = Object.keys(STRENGTH_LABEL).filter((k) => k in checks).map((k) => [k, checks[k]])
@@ -104,8 +110,10 @@
         { key: 'strength', label: 'Strength', sortable: true, align: 'center',
           sortValue: (r) => (STRENGTH_RANK[r.strength] || 0) * 10 + (r.strength_passed || 0),
           render: (v, r) => (v ? `<span class="value-rating value-rating--${STRENGTH_CLASS[v]}">${v} ` +
-              `${r.strength_passed}/${r.strength_readable}</span>` : '<span class="value-rating value-rating--none">—</span>'),
-          title: (_v, r) => strengthTitle(r),
+              `${r.strength_passed}/${r.strength_readable}</span>`
+              : `<span class="value-rating value-rating--none">${notFetched(r) ? 'not fetched' : '—'}</span>`),
+          title: (_v, r) => (!notFetched(r) ? strengthTitle(r)
+              : 'Cached before the growth checks existed — 💎 Fetch fills it in (it counts as out of date).'),
           thTitle: 'Is the business still growing? Six checks: sales and profit 3-yr growth ≥ 10%,\n' +
               '3-yr ROE ≥ 15%, latest quarter sales and profit up on a year ago, no loss in 5 years.\n' +
               'Strong = at most one fails · Weak = fewer than half pass · needs 4 with data.\n' +

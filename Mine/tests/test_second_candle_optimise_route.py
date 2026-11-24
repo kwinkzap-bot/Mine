@@ -472,3 +472,31 @@ def test_a_30s_row_is_not_cut_by_the_pricers_ceiling(env, monkeypatch):
         assert (s['total_trades'], s['win_rate'], s['max_drawdown']) == \
                (row['total_trades'], row['win_rate'], row['max_drawdown'])
         assert s['total_pnl'] == pytest.approx(row['total_pnl'], abs=0.01)
+
+
+def test_market_hours_serves_the_full_after_hours_board_of_the_same_sessions(env, monkeypatch):
+    """2026-11-24: a board built at 14:37 priced each row's newest 300 trades
+    (cap 300 in market hours) and read 291 trades where last night's board on
+    the same sessions read 1,549. In market hours that full board answers —
+    even on Recalculate, and for a later end date, since today's session is in
+    neither until it closes."""
+    from trading_app.Backtest import seconds_store
+    client, _, _, _ = env
+    monkeypatch.setattr(api, '_sc_option_leg_cap', lambda: api._SC_OPTION_LEGS_MARKET)
+    monkeypatch.setattr(seconds_store, 'span', lambda sym: ('2020-07-17', '2026-11-23', 1569))
+    monkeypatch.setattr(seconds_store, 'last_settled_day', lambda: '2026-11-23')
+    monkeypatch.setattr(api, '_sc_backfill_30s', lambda *a, **k: None)
+    monkeypatch.setattr(api, '_sc_backfill_note', lambda sym: 'backfill note')
+    full = {'symbol': 'NIFTY', 'interval': 'multi-TF', 'total_combos_tested': 300,
+            'best': None, 'cached_at': '2026-11-23 20:32', 'pnl_basis': 'option',
+            'timeframes': [{'tf_label': '30s', 'results': [{'total_trades': 1549}]}]}
+    key = ('NIFTY_sc_multiTF_1525_opt_2017-01-01_2026-11-23_2026-11-23'
+           '_30s2020-07-17-2026-11-23-1569_cap3000_v9')
+    monkeypatch.setattr(api, '_load_opt_cache', lambda: {key: full})
+    for recalc in (False, True):
+        body = client.post('/api/backtest/second-candle/optimise', json={
+            'symbol': 'NIFTY', 'start_date': '2017-01-01', 'end_date': '2026-11-24',
+            'exit_hour': 15, 'exit_minute': 25, 'option_pnl': True,
+            'recalculate': recalc}).get_json()
+        assert body['from_cache'] and body['cached_at'] == '2026-11-23 20:32'
+        assert body['timeframes'][0]['results'][0]['total_trades'] == 1549

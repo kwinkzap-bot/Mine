@@ -290,6 +290,7 @@ def score(records: List[Dict[str, Any]], gate_cfg: Optional[Dict[str, float]] = 
             'quality': bool(applied) and len(applied) >= 2 and all(applied),
             'fetched_at': r.get('fetched_at'),
             'strength': st['label'],
+            'growth_data': has_growth(r),
             'strength_checks': st['checks'],
             'strength_passed': st['passed'],
             'strength_readable': st['readable'],
@@ -680,6 +681,20 @@ def _running() -> Optional[Dict[str, Any]]:
     return next((t for t in _tasks.values() if t['status'] == 'running'), None)
 
 
+def has_growth(rec: Dict[str, Any]) -> bool:
+    """A record fetched since the Strength check (2026-11-19 night) carries
+    the growth fields; both sources set ``q_sales_yoy``, even to None."""
+    return 'q_sales_yoy' in rec
+
+
+def is_stale(rec: Optional[Dict[str, Any]], now: float) -> bool:
+    """Missing, older than CACHE_TTL, or fetched before the growth fields
+    existed (so 💎 Fetch fills them without a shift-click)."""
+    if not rec:
+        return True
+    return now - (rec.get('fetched_at') or 0) > CACHE_TTL or not has_growth(rec)
+
+
 def start_refresh(kind: str, force: bool = False,
                   fetch: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
                   symbols: Optional[List[str]] = None) -> Dict[str, Any]:
@@ -694,7 +709,7 @@ def start_refresh(kind: str, force: bool = False,
         syms = symbols if symbols is not None else universe(kind)
         cached = read_cache(syms)
         now = time.time()
-        todo = [s for s in syms if force or now - (cached.get(s, {}).get('fetched_at') or 0) > CACHE_TTL]
+        todo = [s for s in syms if force or is_stale(cached.get(s), now)]
         task = {'id': uuid.uuid4().hex[:12], 'status': 'running', 'universe': kind,
                 'total': len(todo), 'done': 0, 'failed': 0, 'started': now}
         _tasks[task['id']] = task
