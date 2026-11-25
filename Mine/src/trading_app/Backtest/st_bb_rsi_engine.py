@@ -772,7 +772,8 @@ def _index_close_at(minutes: Optional[pd.DataFrame], stamp: str) -> Optional[flo
 def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float = 250.0,
                        bar_minutes: int = 5, progress=None, calendar=None,
                        sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0,
-                       index_minutes: Optional[pd.DataFrame] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                       index_minutes: Optional[pd.DataFrame] = None,
+                       cache_only: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Re-price each index trade on the ≈`premium` CE. Returns (priced trades,
     info). A priced trade keeps its index move in `index_*` and carries the
     premium points in `pnl`; a trade whose leg could not be priced is dropped
@@ -839,7 +840,8 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
     results = []
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
         futures = [pool.submit(cos.legs_at, symbol, ch, premium=premium, span_min=1,
-                               trading_days=calendar, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y)
+                               trading_days=calendar, sl_pct=sl_pct, tsl_x=tsl_x, tsl_y=tsl_y,
+                               **({'cache_only': True} if cache_only else {}))
                    for ch in chunks]
         for n, fut in enumerate(futures, 1):
             results.append(fut.result())

@@ -257,5 +257,116 @@
     "charges": 103.0,
     "net": -2446.25,
     "unconfirmed": null
+  },
+  {
+    "date": "2026-11-25",
+    "n": 1,
+    "mode": "live",
+    "side": "Long",
+    "signal_bar": "2026-11-25 10:09:00",
+    "signal": {
+      "rsi": null,
+      "close": 25735.0,
+      "level": 25741.75,
+      "touch_high": 25741.75,
+      "touch_low": 25721.1,
+      "supertrend": 25722.96
+    },
+    "index_entry": 25773.7,
+    "entry_time": "10:15",
+    "index_exit": 25904.25,
+    "exit_time": "11:28",
+    "result": "SuperTrend stop",
+    "strike": 25750,
+    "option_type": "CE",
+    "legs": {
+      "1": {
+        "name": "Saranya (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 251.1,
+        "exit": 363.15,
+        "pnl": 7283.25,
+        "exit_reason": null
+      }
+    },
+    "pnl": 7283.25,
+    "charges": 103.0,
+    "net": 7180.25,
+    "unconfirmed": null
+  },
+  {
+    "date": "2026-11-25",
+    "n": 3,
+    "mode": "live",
+    "side": "Long",
+    "signal_bar": "2026-11-25 11:33:00",
+    "signal": {
+      "rsi": null,
+      "close": 25911.65,
+      "level": 25918.95,
+      "touch_high": 25918.95,
+      "touch_low": 25898.9,
+      "supertrend": 25905.09
+    },
+    "index_entry": 25922.45,
+    "entry_time": "11:39",
+    "index_exit": 25915.55,
+    "exit_time": "11:56",
+    "result": "SuperTrend stop",
+    "strike": 25950,
+    "option_type": "CE",
+    "legs": {
+      "1": {
+        "name": "Saranya (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 257.5,
+        "exit": 247.8,
+        "pnl": -630.5,
+        "exit_reason": null
+      }
+    },
+    "pnl": -630.5,
+    "charges": 103.0,
+    "net": -733.5,
+    "unconfirmed": null
+  },
+  {
+    "date": "2026-11-25",
+    "n": 5,
+    "mode": "live",
+    "side": "Long",
+    "signal_bar": "2026-11-25 14:30:00",
+    "signal": {
+      "rsi": null,
+      "close": 25743.1,
+      "level": 25746.0,
+      "touch_high": 25746.0,
+      "touch_low": 25724.4,
+      "supertrend": 25724.4
+    },
+    "index_entry": 25764.4,
+    "entry_time": "14:36",
+    "index_exit": 25722.85,
+    "exit_time": "14:41",
+    "result": "SuperTrend stop",
+    "strike": 25750,
+    "option_type": "CE",
+    "legs": {
+      "1": {
+        "name": "Saranya (Kite)",
+        "lots": 1,
+        "qty": 65,
+        "entry": 255.95,
+        "exit": 234.0,
+        "pnl": -1426.75,
+        "exit_reason": null
+      }
+    },
+    "pnl": -1426.75,
+    "charges": 103.0,
+    "net": -1529.75,
+    "unconfirmed": null
   }
 ]

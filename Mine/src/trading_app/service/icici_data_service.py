@@ -1165,8 +1165,8 @@ class IciciDataServiceAdapter:
 
     def historical_option_window(self, root: str, expiry: dt_date, strike: float,
                                  option_type: str, day: dt_date, index: int,
-                                 bar_seconds: int = 30, exchange_code: str = 'NFO'
-                                 ) -> List[Dict[str, Any]]:
+                                 bar_seconds: int = 30, exchange_code: str = 'NFO',
+                                 cache_only: bool = False) -> List[Dict[str, Any]]:
         """ONE slice of one option's session, aggregated to `bar_seconds`.
 
         historical_option fetches all 25 slices before it returns anything.
@@ -1218,6 +1218,8 @@ class IciciDataServiceAdapter:
         if cached is not None:
             _HIST_ERROR.msg = None
             return cached
+        if cache_only:                 # a caller that must not spend a Breeze request
+            return []
 
         _HIST_ERROR.msg = None
         rows = self._history_chunk(info, '1second', w_start, w_end)

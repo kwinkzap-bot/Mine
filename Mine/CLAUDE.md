@@ -1092,6 +1092,18 @@ The cache is still only invalidated by a save, so a **hand edit** of
 
 Tests: `tests/test_user_env_reads.py`.
 
+## Candle Breakout — option legs in market hours (2026-11-24)
+
+`_sc_price_real` (api.py) is the one path the BACKTEST and the Find Best Params board price
+through. Only the newest `_sc_option_leg_cap()` trades (300 in market hours, 3,000 after) may
+spend Breeze requests; **the older ones are priced from the disk cache alone**
+(`cache_only=True` through `price_trades` → `attach_option_legs` → `legs_at`, and
+`historical_option_window(cache_only=True)` for the 30s second-reads), never dropped. Until then a
+market-hours 30s backtest read 291 trades where the board read 1,547. In market hours the board
+also serves a full after-hours board of the same sessions (`_full_board_key`), even on Recalculate.
+Checked on real cache: row 2 · 1:2.5 · both re-priced cache-only = 1,547 trades, +4,215.68 pts,
+PF 1.34, DD 475.92 — the board's numbers exactly.
+
 ## CPR Logic page — option legs
 
 The CPR Manual vs Chart grid lives on **`/cpr-logic`** (`templates/cpr_logic.html`,

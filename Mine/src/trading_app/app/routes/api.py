@@ -3952,7 +3952,7 @@ def _sc_bars(symbol, interval, start_date_str, end_date_str, fyers, backfill=Fal
     return seconds_store.records(df), minutes_df, ('  ·  '.join(notes) or None)
 
 
-def _sc_refine_30s(symbol, priced):
+def _sc_refine_30s(symbol, priced, cache_only=False):
     """second_candle_options.refine_on_30s against Breeze: the option's and the
     index's 1-second data, one 15-minute slice a request, disk-cached once
     settled (the option through historical_option_window, the index here)."""
@@ -3969,7 +3969,8 @@ def _sc_refine_30s(symbol, priced):
     def fetch_option(expiry, strike, option_type, day, index):
         return adapter.historical_option_window(symbol, date.fromisoformat(str(expiry)[:10]),
                                                 strike, option_type, day, index,
-                                                bar_seconds=1, exchange_code=exchange)
+                                                bar_seconds=1, exchange_code=exchange,
+                                                **({'cache_only': True} if cache_only else {}))
 
     def fetch_index(day, index):
         windows = ics._session_windows(day)
@@ -3980,6 +3981,8 @@ def _sc_refine_30s(symbol, priced):
         rows = ics._slice_cache_get(key)
         if rows is not None:
             return rows
+        if cache_only:
+            return []
         rows, _ = adapter.historical_seconds_range(token, w0, w1, max_requests=1)
         if rows and w1 < datetime.now(ics.IST):
             ics._slice_cache_put(key, rows)
@@ -4003,23 +4006,54 @@ def _sc_price_real(symbol, interval, trades, index_minutes, sessions, cap, progr
     crossing-second re-read (_sc_refine_30s)."""
     from trading_app.Backtest.second_candle_options import price_trades
     span_min = _SC_MIN_TF.get(interval, 1)
-    priced, info = price_trades(symbol, trades, span_min, index_minutes,
-                                calendar=sessions, max_legs=cap, progress=progress)
+    # Only the newest `cap` trades may spend Breeze requests (300 in market
+    # hours, out of the 5,000 a day the live algos share). The older ones are
+    # still priced — from the disk cache alone, where every settled leg an
+    # after-hours run or board has read already sits. Until 2026-11-24 they
+    # were dropped: a market-hours 30s BACKTEST read 291 trades where the
+    # board (built after hours) read 1,549 for the same settings.
+    k = max(0, len(trades) - cap) if cap is not None else 0
+    old, new = trades[:k], trades[k:]
+    n_old = len(old)
+
+    def _prog_new(d, t):
+        if progress:
+            progress(n_old + d, n_old + t)
+    priced_old, info_old = ([], {'unpriced': 0, 'truncated': 0, 'index_trades': 0})
+    if old:
+        priced_old, info_old = price_trades(symbol, old, span_min, index_minutes,
+                                            calendar=sessions, progress=progress,
+                                            cache_only=True)
+    priced, info = price_trades(symbol, new, span_min, index_minutes,
+                                calendar=sessions, progress=_prog_new)
+    counts = {'second': 0, 'bar': 0, 'minute': 0, 'repicked': 0}
+    if interval == '30second':
+        for part, kw in ((priced_old, {'cache_only': True}), (priced, {})):
+            if part:
+                got, c = _sc_refine_30s(symbol, part, **kw)
+                part[:] = got
+                counts = {k: counts.get(k, 0) + c.get(k, 0) for k in set(counts) | set(c)}
+    priced = priced_old + priced
+    info = dict(info, index_trades=len(trades),
+                unpriced=info['unpriced'] + info_old['unpriced'],
+                truncated=info['truncated'] + info_old['truncated'],
+                from_cache_only=n_old)
     notes = []
-    if interval == '30second' and priced:
-        priced, counts = _sc_refine_30s(symbol, priced)
-        if counts['minute'] or counts['bar']:
-            notes.append(
-                f"Premiums of {counts['second']} of {len(priced)} legs read at the second "
-                f"the index crossed the level; {counts['bar']} on the option's 30-second "
-                f"bar (no index seconds) and {counts['minute']} on 1-minute candles "
-                f"(no ICICI 1-second option data).")
+    if priced and (counts['minute'] or counts['bar']):
+        notes.append(
+            f"Premiums of {counts['second']} of {len(priced)} legs read at the second "
+            f"the index crossed the level; {counts['bar']} on the option's 30-second "
+            f"bar (no index seconds) and {counts['minute']} on 1-minute candles "
+            f"(no ICICI 1-second option data).")
     if info['unpriced'] or info['truncated']:
         notes.append(
             f"{info['index_trades']} index trades: {info['unpriced']} had no option "
-            f"candles and {info['truncated']} older ones were not priced "
-            f"(at most {cap} a run{' in market hours' if cap < _SC_OPTION_LEGS_MAX else ''}); "
-            f"they are left out of the totals.")
+            f"candles"
+            + (f" ({n_old} older ones were read from the disk cache only, in market hours — "
+               f"run it after 15:45 to fetch any not cached yet)" if n_old else '')
+            + (f" and {info['truncated']} were past the {_SC_OPTION_LEGS_MAX:,}-leg limit"
+               if info['truncated'] else '')
+            + "; they are left out of the totals.")
     return priced, info, notes
 
 
@@ -4203,7 +4237,7 @@ def run_second_candle_backtest_api():
         cap = _sc_option_leg_cap()
         task_id = uuid.uuid4().hex
         task = {'status': 'running', 'started': _time.time(),
-                'progress': {'done': 0, 'total': min(len(trades), cap)}}
+                'progress': {'done': 0, 'total': len(trades)}}
         with _sbr_tasks_lock:
             _sbr_tasks[task_id] = task
 
@@ -4290,7 +4324,7 @@ def _sc_rows_on_real_premiums(symbol, rows, candles, interval, index_minutes,
             exit_hour=exit_hour, exit_minute=exit_minute,
             enable_long=el, enable_short=es, option_pnl=False,
             strike_step=_opt_strike_step(symbol)).run()
-        work = trades[-cap:] if cap else trades
+        work = trades     # every trade, as BACKTEST prices them (older ones cache-only in market hours)
         per_row.append((r, trades, work))
         for t in work:
             union.setdefault(_sc_trade_key(t), t)
@@ -4309,8 +4343,10 @@ def _sc_rows_on_real_premiums(symbol, rows, candles, interval, index_minutes,
             done_before = i
             prog = (None if progress is None else
                     (lambda d, t, _o=done_before: progress(_o + d, len(todo))))
+            # Breeze only for the union's newest `cap` legs; the rest cache-only.
+            live = min(len(chunk), max(0, i + len(chunk) - (len(todo) - cap)))
             got, _, _ = _sc_price_real(symbol, interval, chunk, index_minutes, sessions,
-                                       len(chunk), progress=prog)
+                                       live, progress=prog)
             priced.extend(got)
     except Exception as e:                 # no ICICI login / Breeze down
         logger.warning('[2ndCandle OPT] real premiums unavailable (%s) — %s board '
@@ -4513,9 +4549,9 @@ def run_second_candle_optimise():
                     cap_note = None
                     left_out = max((r.get('unpriced') or 0 for r in top_by_pnl), default=0)
                     if real and left_out > 100 and _sc_option_leg_cap() < _SC_OPTION_LEGS_MAX:
-                        cap_note = (f'Market hours: each row is priced on its newest '
-                                    f'{_sc_option_leg_cap()} trades only ({left_out:,} older ones '
-                                    f'left out). The full board is built after 15:45.')
+                        cap_note = (f'Market hours: older legs are read from the disk cache only '
+                                    f'and {left_out:,} of a row\'s trades are not cached yet, so '
+                                    f'they are left out. The full board is built after 15:45.')
                     tf_groups.append({
                         'tf_label': tf_label,
                         'tf_min':   tf_min,

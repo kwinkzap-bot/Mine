@@ -127,7 +127,7 @@ def price_trades(symbol: str, trades: List[Dict[str, Any]], span_min: int,
                  calendar: Optional[Iterable] = None, max_legs: Optional[int] = None,
                  premium: float = PREMIUM,
                  progress: Optional[Callable[[int, int], None]] = None,
-                 attach=None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                 attach=None, cache_only: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """(priced trades, info). Newest `max_legs` trades are priced; the rest and
     any leg with no candles are dropped and counted (info['truncated'],
     info['unpriced'])."""
@@ -137,7 +137,8 @@ def price_trades(symbol: str, trades: List[Dict[str, Any]], span_min: int,
     truncated = len(trades) - len(work)
     reqs = leg_requests(work, span_min, minutes)
     legs, info = attach(symbol, reqs, premium, 1, progress,
-                        calendar=sorted(set(calendar)) if calendar else None)
+                        calendar=sorted(set(calendar)) if calendar else None,
+                        **({'cache_only': True} if cache_only else {}))
     priced = []
     for leg in legs:
         t = work[leg['_k']]

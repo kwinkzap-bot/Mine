@@ -924,8 +924,13 @@ def _path_read(b: Dict[str, Any], path: Dict[str, Any], option_type: str) -> flo
 def legs_at(symbol: str, trades: List[Dict[str, Any]],
             premium: Optional[float] = None, span_min: int = 1,
             source: str = 'spot', trading_days: Optional[List[date]] = None,
-            sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0) -> Dict[str, Any]:
+            sl_pct: float = 0.0, tsl_x: float = 0.0, tsl_y: float = 0.0,
+            cache_only: bool = False) -> Dict[str, Any]:
     """Price one option leg per trade in `trades`.
+
+    `cache_only` reads expired contracts from the disk cache alone — never a
+    Breeze request — as when Breeze has no session (OptionCacheMiss leaves a
+    trade unpriced). Market-hours backtests use it for their older trades.
 
     `sl_pct` / `tsl_x` / `tsl_y` put a stop on the PREMIUM (Quantman's leg stop-loss and
     trailing SL): the stop rests `sl_pct` % under the entry premium and, for every
@@ -955,7 +960,8 @@ def legs_at(symbol: str, trades: List[Dict[str, Any]],
     if len(trades) > MAX_TRADES:
         raise ValueError(f'{len(trades)} trades asked for; {MAX_TRADES} is the limit per request')
 
-    fetch_option = _option_minutes_fetcher(symbol)        # fail before any fetch
+    fetch_option = (_cached_option_minutes_fetcher(symbol, OPTION_EXCHANGE.get(symbol.upper(), 'NFO'))
+                    if cache_only else _option_minutes_fetcher(symbol))   # fail before any fetch
     cache_only = bool(getattr(fetch_option, 'cache_only', False))
     days = sorted({date.fromisoformat(t['date']) for t in trades})
     # A caller pricing many chunks reads the calendar ONCE and hands it in: every

@@ -56,5 +56,91 @@
       }
     },
     "pnl": -3541.0
+  },
+  {
+    "id": "str-2026-11-23",
+    "mode": "paper",
+    "cadence": "weekly",
+    "entry_day": "monday",
+    "date": "2026-11-23",
+    "entry_time": "2026-11-23 15:15:00",
+    "expiry": "2026-12-01",
+    "exit_time": "2026-11-25 10:56:34",
+    "reason": "Stop loss",
+    "spot": 25366.4,
+    "strike": 25350,
+    "premium": 506.45,
+    "points": -127.8,
+    "pct": -25.23,
+    "params": {
+      "target_pct": 50.0,
+      "stop_pct": 25.0,
+      "adjust": "roll_untested",
+      "adjust_pts": 200.0,
+      "max_adjust": 2,
+      "wings": 0,
+      "lock_at": 25.0,
+      "lock_to": 10.0
+    },
+    "adjusts": [
+      {
+        "at": "2026-11-25 09:20:00",
+        "spot": 25725.55,
+        "strike": 25750,
+        "closed": [
+          [
+            "PE",
+            25350
+          ]
+        ],
+        "opened": [
+          [
+            "PE",
+            25750,
+            -1,
+            241.05
+          ]
+        ]
+      }
+    ],
+    "legs": [
+      {
+        "right": "CE",
+        "strike": 25350,
+        "side": -1,
+        "entry": 264.0,
+        "exit": 627.15,
+        "tsym": "NIFTY26D0125350CE"
+      },
+      {
+        "right": "PE",
+        "strike": 25350,
+        "side": -1,
+        "entry": 242.45,
+        "exit": 90.8,
+        "tsym": "NIFTY26D0125350PE"
+      },
+      {
+        "right": "PE",
+        "strike": 25750,
+        "side": -1,
+        "entry": 241.05,
+        "exit": 157.35,
+        "tsym": "NIFTY26D0125750PE"
+      }
+    ],
+    "accounts": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": 65,
+        "gross": -8307.0,
+        "brokerage": 300.0,
+        "pnl": -8607.0,
+        "failed": null,
+        "unconfirmed": null
+      }
+    },
+    "pnl": -8607.0
   }
 ]
