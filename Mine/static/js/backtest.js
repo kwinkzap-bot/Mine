@@ -1113,6 +1113,42 @@ document.addEventListener('DOMContentLoaded', function() {
         const g = new Option('🌀 Hull Suite ★', HS_GROUP);
         if (after) after.after(g); else strategyStatusSelect.appendChild(g);
     }
+    // Every backtest that also runs as an algo on /algo carries a marker on its label, and its tooltip names the
+    // tab (2026-11-26). Paper or live is that tab's own toggle; the marker only says the algo exists there.
+    // The plain Hull Suite entry is not marked: only its three ★ rows run.
+    const LIVE_ALGO_MARK = '  ⚡ LA';            // LA = Live Algo (the tooltip spells out the /algo tab)
+    const ON_ALGO = {
+        second_candle: '2nd 30s Candle (paper only)', thirty_min_fakeout: '30-Min Fakeout',
+        swing_momentum: 'Swing Momentum (Live Watch)', ema_pullback: 'EMA Confluence', atm_straddle: 'ATM Straddle',
+        simpler_trader: 'Simple Trader 1', st_ema_rsi_cci: 'Simple Trader 2', st_rsi_pp_bb: 'Simple Trader 3',
+        st_rsi_pp_bb_fut: 'Simple Trader 4', st_rsi_cci_wr_pp_bb_fut: 'Simple Trader 5',
+        st_rsi_cpr_bb_sx: 'Simple Trader 6', st_rsi_cpr_bb_wr_sx: 'Simple Trader 7',
+    };
+    if (strategySelect) {
+        const mine = window.MINE_LIVE_TABS || [];
+        [...strategySelect.options].forEach(opt => {
+            let tab = null;
+            if (opt.dataset.stbRow) {
+                const i = mine.findIndex(t => String(t.n) === opt.dataset.stbRow);
+                tab = `ST Touch Break · ${i + 1}. ${(mine[i] || {}).tab || ''}`;
+            } else if (opt.dataset.hsRow) {
+                const i = HS_ROWS.findIndex(t => String(t.n) === opt.dataset.hsRow);
+                tab = `Hull Suite · ${i + 1}. ${HS_ROWS[i].tab}`;
+            } else tab = ON_ALGO[opt.value] || null;
+            if (!tab || opt.dataset.liveAlgo) return;
+            opt.dataset.liveAlgo = tab;
+            opt.text += LIVE_ALGO_MARK;
+            opt.title = `Runs live on /algo → ${tab}`;
+        });
+    }
+    if (strategyStatusSelect) {             // the two groups whose every entry is a live algo
+        [...strategyStatusSelect.options].forEach(o => {
+            if ((o.value === STB_GROUP || o.value === HS_GROUP) && !o.text.includes('⚡')) {
+                o.text += '  ⚡';
+                o.title = 'Every entry in this group runs live on /algo';
+            }
+        });
+    }
     const _allStrategyOptions = strategySelect
         ? Array.from(strategySelect.options)
         : [];
@@ -1198,6 +1234,29 @@ document.addEventListener('DOMContentLoaded', function() {
         stbApplySymbol(sym, STB_PREMIUM);
     }
     setInterval(syncStbSymbol, 400);
+
+    // Hull Suite: the symbol sets the Option Premium ≈ box (its choices and default — NIFTY 250, BANKNIFTY 300,
+    // SENSEX 500) and the Lot Value (the symbol's lot size). Re-set only when the symbol changes, so a hand-picked
+    // premium or lot sticks; a 🌀 ★ row (NIFTY) still sets its own 250.
+    const HS_PREMIUMS = {
+        DEFAULT:   { list: [150, 200, 250, 300], def: 250 },
+        BANKNIFTY: { list: [200, 250, 300, 400, 500], def: 300 },
+        SENSEX:    { list: [300, 400, 500, 650, 800], def: 500 },
+    };
+    let _hsKey = null;
+    function syncHsSymbol() {
+        if (!strategySelect || strategySelect.value !== 'hull_suite' || !symbolSearch) { _hsKey = null; return; }
+        const sym = (symbolSearch.value || '').trim().toUpperCase();
+        if (!sym || sym === ALL_STOCKS || sym === _hsKey) return;
+        _hsKey = sym;
+        const cfg = HS_PREMIUMS[sym.includes('BANKNIFTY') ? 'BANKNIFTY' : sym.includes('SENSEX') ? 'SENSEX' : 'DEFAULT'];
+        const prem = document.getElementById('hsPremium');
+        if (prem) prem.innerHTML = cfg.list.map(v => `<option value="${v}"${v === cfg.def ? ' selected' : ''}>${v}</option>`).join('');
+        const lot = document.getElementById('pcLotValue');
+        if (lot && lotSizeBySymbol[sym]) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
+        else if (lot && !Object.keys(lotSizeBySymbol).length) _hsKey = null;   // lot sizes not loaded yet: next poll
+    }
+    setInterval(syncHsSymbol, 400);
 
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
@@ -6284,7 +6343,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 + ' · ★ = your current settings on that timeframe'
                 + (cur && !inSweep ? ` · on your own ${SBR_TF_LABEL[cur.timeframe] || cur.timeframe}: ${cur.total_trades} trades, `
                        + `${(cur.win_rate ?? 0).toFixed(0)}% win, PF ${(cur.profit_factor || 0).toFixed(2)}` : '')
-                + (held.length ? ` · same in every row: ${held.join(' · ')}` : '');
+                + (held.length ? ` · same in every row: ${held.join(' · ')}` : '')
+                // trades whose option candles Breeze has not served yet (a cold symbol): those rows are partial
+                + (data.option_cache && data.option_cache.left
+                    ? ` · ⚠ ${data.option_cache.left.toLocaleString('en-IN')} of ${data.option_cache.trades.toLocaleString('en-IN')} trades `
+                      + `not priced yet (Breeze budget — ${data.option_cache.fetched} fetched this run, newest first); run again to carry on`
+                    : '');
         }
         // The container is also the single-grid boards' element: its once-wired Use listener
         // must not apply a row of an older board, and ☰ Columns re-renders these grids instead.
@@ -7170,7 +7234,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     : p.board ? `${p.board === 'positional' ? 'Positional' : 'Intraday'}`
                     + (p.timeframe ? ` ${SBR_TF_LABEL[p.timeframe] || p.timeframe}` : '') + ' · '
                     : (p.timeframe ? `${SBR_TF_LABEL[p.timeframe] || p.timeframe} · ` : '');
-                _showOptLoader('Finding best params…', p.stage === 'pricing'
+                _showOptLoader('Finding best params…', p.stage === 'fetching option candles'
+                    ? `fetching option candles from Breeze (newest first) · ${p.done} / ${p.total} trades · ${data.elapsed || 0}s`
+                    : p.stage === 'pricing'
                     ? `${where}pricing the best on the option · ${p.done} / ${p.total}${p.legs_total ? ` (row ${p.legs_done} / ${p.legs_total} legs)` : ''} · ${data.elapsed || 0}s`
                     : (p.total ? `${where}${p.done} / ${p.total} combos · ${data.elapsed || 0}s` : `reading candles · ${data.elapsed || 0}s`));
             }

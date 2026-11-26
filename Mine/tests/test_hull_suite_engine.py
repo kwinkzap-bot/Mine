@@ -283,3 +283,28 @@ def test_each_timeframe_board_is_priced_on_its_own_chart(monkeypatch):
         assert res['current']['timeframe'] == page_tf and 'book' in res['current']
         for b in res['tf_boards']:
             assert b['basis'] == 'option' and {r['timeframe'] for r in b['results']} == {b['timeframe']}
+
+
+def test_a_cold_symbols_option_candles_are_fetched_once_newest_first_and_capped(monkeypatch):
+    """26 Nov 2026, BANKNIFTY (nothing cached): each of the 33 board rows priced its own 1-2 thousand trades live
+    and the first row sat at 0 for 20 minutes. Now the rows' trades are pooled, the cold ones fetched once, the
+    newest `cap` of them, and every row is priced from the cache."""
+    from trading_app.Backtest import hull_suite_optimise as hso
+    mk = lambda d: {'entry_time': f'2026-01-{d:02d} 10:00:00', 'exit_time': f'2026-01-{d:02d} 11:00:00',  # noqa: E731
+                    'type': 'Long', 'entry_price': 100.0 + d}
+    cached = {mk(d)['entry_time'] for d in (1, 2)}
+    live = []
+
+    def fake_legs(symbol, trades, premium, mpb, *a, cache_only=False, **k):
+        if cache_only:
+            return [t for t in trades if t['entry_time'] in cached], {}
+        live.extend(t['entry_time'] for t in trades)
+        cached.update(t['entry_time'] for t in trades)
+        return trades, {}
+    monkeypatch.setattr(hso, 'attach_option_legs', fake_legs)
+    rows = [([mk(d) for d in range(1, 9)], 5), ([mk(d) for d in range(4, 12)], 5)]     # shared days 4-8
+    got = hso.warm_option_cache('BANKNIFTY', rows, 300, [], None, cap=4)
+    assert got == {'trades': 11, 'cold': 9, 'fetched': 4, 'left': 5}
+    assert sorted(live, reverse=True) == [mk(d)['entry_time'] for d in (11, 10, 9, 8)]    # newest first, once each
+    assert hso.cold_leg_cap(__import__('datetime').datetime(2026, 11, 26, 11, 0)) == hso.COLD_LEGS_MARKET
+    assert hso.cold_leg_cap(__import__('datetime').datetime(2026, 11, 26, 18, 0)) == hso.COLD_LEGS_AFTER

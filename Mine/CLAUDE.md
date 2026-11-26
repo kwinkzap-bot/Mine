@@ -491,6 +491,10 @@ backtest trades is armed live, and the same per row for 9-16).
 
 ## Hull Suite live algo (/algo Hull Suite tab, 2026-11-26)
 
+**/backtest marks what runs on /algo** (2026-11-26): `ON_ALGO` in `backtest.js` (plus every 🧲 / 🌀 ★ row) appends
+`⚡ LA` (Live Algo) to the option and names the tab in its tooltip; the 🧲 and 🌀 groups get `⚡`. A new live algo whose
+backtest has its own option must be added to `ON_ALGO` by hand.
+
 The /backtest 🌀 Hull Suite ★ group's three rows run live on NIFTY options — the **Hull Suite** top tab on /algo,
 one sub-tab each, like ST Touch Break. **Paper by default; the live order path has never been exercised.** They are
 **strategies 16-18 of the Simple Trader chassis** (`simple_trader_live_engine._hull`, kind `'hs'`, `HULL_TABS`; flags
@@ -670,6 +674,12 @@ the `pcLots` row).
   its 2024-26 top row (slow 300 / medium 100 / fast 20, pullback 24 bars, 2 R, breakeven at 1 R, 1 a day) read
   PF 1.53, +4,725 pts there, but PF 1.02, +316 pts on 2018-23, where the plain defaults made PF 1.17, +2,010.
   Check a row on a range it was not swept on before trusting it. A test holds every board row equal to a direct run.
+  **Option candles are fetched once per board, newest first, capped** (2026-11-26, `warm_option_cache`): the 33
+  rows' trades are pooled, a cache-only pass finds the cold ones, the newest `cold_leg_cap()` (150 in market hours,
+  800 after) go to Breeze, then every row is priced from the cache (`verify_on_option(cache_only=True)`). The board's
+  meta line says how many are still unpriced; a re-run carries on. Before, each row priced its own trades live —
+  BANKNIFTY (nothing cached) sat at "0 / …" for 20 min on the first row. BANKNIFTY is priced on its MONTHLY expiry
+  throughout (`EXPIRY_CADENCE`), SENSEX on weeklies from 2023-05-15; Breeze has little SENSEX option data before mid-2024.
 * **🌀 Hull Suite ★ group (2026-11-26)**: a strategy-picker group of three rows the user ticked on the 🧩 Combined popup
   (#14 5m 300/100/20 1:2 BE 1R; #21 / #29 15m 300/50/20 no target, break within 2 / 5). `HS_ROWS` in `backtest.js`,
   options value `hull_suite` told apart by `data-hs-row` (as the 🧲 group's `data-stb-row`); picking one fills the form

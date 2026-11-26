@@ -324,14 +324,78 @@ def _combined(boards: List[Dict[str, Any]], current: Optional[Dict[str, Any]], p
             'page_timeframe': page_tf, 'timeframes': [b['timeframe'] for b in boards], 'tf_boards': boards}
 
 
+COLD_LEGS_MARKET = 150     # option legs a board may fetch from Breeze in market hours (5,000/day shared with the algos)
+COLD_LEGS_AFTER = 800      # ...and after hours (~2-4 requests a leg); a re-run carries on from the cache
+
+
+def cold_leg_cap(now=None) -> int:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = now or datetime.now(ZoneInfo('Asia/Kolkata'))
+    hm = now.hour * 60 + now.minute
+    return COLD_LEGS_MARKET if now.weekday() < 5 and 9 * 60 <= hm < 15 * 60 + 45 else COLD_LEGS_AFTER
+
+
+def _trade_key(t):
+    return (t['entry_time'], t['type'], round(float(t['entry_price']), 2), t['exit_time'])
+
+
+def warm_option_cache(symbol: str, lists, premium: float, calendar, minutes: Optional[pd.DataFrame],
+                      cap: int, progress: Optional[Callable] = None) -> Dict[str, int]:
+    """Fetch the option candles every board row will read, ONCE and newest first. `lists` is
+    [(trades, bar_minutes)] over all rows — they share most trades. A cache-only pass finds the cold
+    ones; the newest `cap` of those go to Breeze, the rest stay cold until a later run. Every row is
+    then priced from the cache alone. Until 2026-11-26 each of the 33 rows priced its own 1-2 thousand
+    trades live: a symbol with nothing cached (BANKNIFTY) spent 20 minutes on the first row."""
+    union: Dict[Any, Any] = {}
+    for trades, bar in lists:
+        for t in trades:
+            union.setdefault(_trade_key(t), (t, bar))
+    by_bar: Dict[int, List[Dict[str, Any]]] = {}
+    for t, bar in union.values():
+        by_bar.setdefault(bar, []).append(t)
+    cold = []
+    for bar, ts in by_bar.items():
+        priced, _ = attach_option_legs(symbol, [dict(t) for t in ts], premium or None, bar, None,
+                                       calendar=calendar, index_minutes=minutes, cache_only=True)
+        got = {_trade_key(p) for p in priced}
+        cold += [(t, bar) for t in ts if _trade_key(t) not in got]
+    cold.sort(key=lambda x: x[0]['entry_time'], reverse=True)
+    todo = cold[:max(0, int(cap))]
+    for k in range(0, len(todo), 40):
+        if progress:
+            progress(k, len(todo))
+        part = todo[k:k + 40]
+        for bar in {b for _, b in part}:
+            attach_option_legs(symbol, [dict(t) for t, b in part if b == bar], premium or None, bar, None,
+                               calendar=calendar, index_minutes=minutes)
+    if progress:
+        progress(len(todo), len(todo))
+    return {'trades': len(union), 'cold': len(cold), 'fetched': len(todo), 'left': len(cold) - len(todo)}
+
+
 def verify_timeframes(res: Dict[str, Any], bars_for: Callable[[str], Optional[pd.DataFrame]],
                       data: Dict[str, Any], symbol: str, calendar, start_date: str,
-                      minutes: Optional[pd.DataFrame] = None, progress: Optional[Callable] = None) -> None:
+                      minutes: Optional[pd.DataFrame] = None, progress: Optional[Callable] = None,
+                      cold_cap: Optional[int] = None) -> None:
     """`verify_on_option` on each timeframe's board, on its own chart, then the combined rows rebuilt.
-    The page's settings on a timeframe outside the sweep are priced on their own."""
+    The page's settings on a timeframe outside the sweep are priced on their own. The option candles
+    are fetched first for every row at once (`warm_option_cache`, at most `cold_cap` cold legs), then
+    every row is priced from the cache."""
     boards = res['tf_boards']
     cur = res.get('current')
     lone = cur is not None and not any(b.get('current') is cur for b in boards)
+    cap = cold_leg_cap() if cold_cap is None else cold_cap
+    lists = []
+    for b in boards:
+        lists += _row_trades(b, bars_for(b['timeframe']), data, tf_minutes(b['timeframe']), start_date,
+                             minutes, len(b['results']), bars_for)
+    if lone:
+        lists += _row_trades({'results': [], 'current': cur}, bars_for(cur['timeframe']), data,
+                             tf_minutes(cur['timeframe']), start_date, minutes, 0, bars_for)
+    warm = warm_option_cache(symbol, lists, float(data.get('premium') or 0), calendar, minutes, cap,
+                             progress=(lambda k, m: progress(k, m, stage='fetching option candles'))
+                             if progress else None)
     steps = len(boards) + (1 if lone else 0)
     for n, b in enumerate(boards):
         tick = ((lambda k, m, n=n, tf=b['timeframe']: progress(n * 100 + int(100 * k / max(1, m)),
@@ -339,24 +403,46 @@ def verify_timeframes(res: Dict[str, Any], bars_for: Callable[[str], Optional[pd
                 if progress else None)
         verify_on_option(b, bars_for(b['timeframe']), data, tf_minutes(b['timeframe']), symbol, calendar,
                          start_date, minutes=minutes, progress=tick, shortlist=len(b['results']),
-                         bars_for=bars_for)
+                         bars_for=bars_for, cache_only=True)
     if lone:
         tf = cur['timeframe']
         one = {'results': [], 'current': cur, 'swept': res['swept'], 'recent_from': res.get('recent_from', '')}
         verify_on_option(one, bars_for(tf), data, tf_minutes(tf), symbol, calendar, start_date,
-                         minutes=minutes, bars_for=bars_for)
+                         minutes=minutes, bars_for=bars_for, cache_only=True)
         cur = one['current']
     else:
         cur = next((b['current'] for b in boards if b['timeframe'] == res.get('page_timeframe')), None)
     page_tf = res.get('page_timeframe', '')
     res.update(_combined(boards, cur, page_tf), basis='option',
-               verified=sum(b.get('verified', 0) for b in boards))
+               verified=sum(b.get('verified', 0) for b in boards), option_cache=warm)
+
+
+def _row_trades(res, df, data, minutes_per_bar, start_date, minutes, shortlist, bars_for):
+    """[(trades, bar_minutes)] of the rows `verify_on_option` would price on this board."""
+    engines: Dict[Any, Any] = {}
+
+    def engine_for(row):
+        tf = row.get('timeframe') if bars_for is not None else None
+        if tf not in engines:
+            e = (build(bars_for(tf), data, tf_minutes(tf), minutes) if tf
+                 else build(df, data, minutes_per_bar, minutes))
+            _memo(e)
+            engines[tf] = e
+        return engines[tf], (tf_minutes(tf) if tf else minutes_per_bar)
+    out = []
+    rows = ([res['current']] if res.get('current') is not None else []) + list(res['results'][:shortlist])
+    for row in rows:
+        eng, bar = engine_for(row)
+        apply_row(eng, row)
+        out.append((_trades(eng, start_date), bar))
+    return out
 
 
 def verify_on_option(res: Dict[str, Any], df: pd.DataFrame, data: Dict[str, Any], minutes_per_bar: int,
                      symbol: str, calendar, start_date: str, minutes: Optional[pd.DataFrame] = None,
                      progress: Optional[Callable] = None, shortlist: int = BOARD_ROWS,
-                     bars_for: Optional[Callable[[str], Optional[pd.DataFrame]]] = None) -> None:
+                     bars_for: Optional[Callable[[str], Optional[pd.DataFrame]]] = None,
+                     cache_only: bool = False) -> None:
     """Re-price the current settings and the best index rows on the option as the run does and
     replace res['results'] / res['current'] with those figures, re-ranked. Each row keeps its
     index figures as index_pnl / index_pf. With `bars_for`, a row carrying a `timeframe` is
@@ -392,7 +478,8 @@ def verify_on_option(res: Dict[str, Any], df: pd.DataFrame, data: Dict[str, Any]
         if progress:
             progress(n - 1, len(todo))
         priced, info = attach_option_legs(symbol, trades, premium or None, engine_for(row)[1], None,
-                                          calendar=calendar, index_minutes=minutes)
+                                          calendar=calendar, index_minutes=minutes,
+                                          **({'cache_only': True} if cache_only else {}))
         out = {k: row[k] for k in names if k in row}
         out.update(summarise(priced))
         out.update(rupee_card(priced, data, info.get('lot')))

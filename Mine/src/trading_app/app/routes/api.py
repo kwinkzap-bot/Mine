@@ -5977,7 +5977,7 @@ def _run_hull_suite_optimise(data):
                 try:
                     hso.verify_timeframes(res, bars_for, data, symbol, sorted(set(minutes.index.date)),
                                           start_date_str, minutes=minutes,
-                                          progress=lambda k, n, **kw: _progress(k, n, stage='pricing', **kw))
+                                          progress=lambda k, n, **kw: _progress(k, n, **{'stage': 'pricing', **kw}))
                 except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
                     logger.warning('[HULL OPT] option verification failed: %s', e)
                     res['option_error'] = str(e)
