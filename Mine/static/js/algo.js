@@ -519,6 +519,7 @@ const _CMP_KEYS = () => [
     ...[1, 2, 3, 4, 5, 6, 7].map(n => ({ key: 'st' + n, label: `Simple Trader ${n}` })),
     ...(window.MINE_TABS || [{ n: 8, tab: 'NIFTY - Both - 3m' }]).map((m, i) =>
         ({ key: 'st' + m.n, label: `ST Touch Break · ${i + 1}. ${m.tab || ''}`.trim() })),
+    ...(window.HULL_TABS || []).map((m, i) => ({ key: 'st' + m.n, label: `Hull Suite · ${i + 1}. ${m.tab || ''}`.trim() })),
 ];
 const _CMP_STATUS = { match: ['Match', 'pos'], fill: ['Fill differs', 'info'], differs: ['Logic differs', 'warn'],
                       live_only: ['Live only', 'neg'], backtest_only: ['Backtest only', 'neg'] };

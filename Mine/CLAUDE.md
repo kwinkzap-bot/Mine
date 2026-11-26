@@ -466,7 +466,11 @@ setups are fixed in the spec (`fixed['modes'|'entry_end'|'exit_cutoff']`), not s
   `attach_option_legs` → `_cross_frac` → `legs_at`'s `entry_frac` / `exit_frac`; every Simple Trader-style
   backtest that prices options shares it). When the level lies between the index minute's open and close,
   the option is read that share of the way from its own open to close; otherwise (a wick) it stays the
-  open/close mid. Tab 3's 2026-11-13 14:31 stop: index 25,092.95 → 25,104 against a 25,101.48 line, PE
+  open/close mid. **Superseded 2026-11-26**: every intrabar leg is now read on the minute's PATH (open → first
+  extreme → second extreme → close, `second_candle_options._path_point` → `cpr_option_service._path_read`, the
+  Candle Breakout's reading), wick fills included — Touch Break 2's 09:45 entry that day was a dip to the level:
+  mid-minute 247.93, path 257.18, live 256.6. Compare's 2nd 30s Candle `_read` does the same on 30-second bars
+  (entry 236.8 → 242.72, live 242.6). Boards / saved rows priced before then read wick fills mid-minute. Tab 3's 2026-11-13 14:31 stop: index 25,092.95 → 25,104 against a 25,101.48 line, PE
   254.65 → 243.50 — mid 249.6, now 246.3, live filled 244.75. What is left between a backtest row and live
   is the 1-minute data against the 5 s poll, and fills (Kite slippage); a day the app was down (11-09) has
   a backtest trade and no live one.
@@ -512,7 +516,7 @@ one sub-tab each, like ST Touch Break. **Paper by default; the live order path h
 * **Replayed on Fyers 1-minute NIFTY 2025-01 → 2026-11** (poll at the level): 17 = 262/262 trades, 18 = 266/266,
   same entry minute, reason and exit minute; 16 = 295/298 — the rest are days two setups waited at once, where the
   backtest books them in signal order (hindsight) and live takes the one that breaks first.
-* Not in ⚖ Compare yet.
+* In ⚖ Compare (`live_vs_backtest.backtest_simple`'s `hs` branch: the live engine's construction + the 1-minute walk).
 
 Tests: `tests/test_hull_suite_live.py` (live = backtest on synthetic minutes, each decision, the paper thread end to end).
 
@@ -574,7 +578,11 @@ The Active Trade tab on /algo reads every intraday algo, not only 2nd Candle: 30
 Simple Trader 1-7 and ST Touch Break 1-8, each through its own `open` / `done` reader in `static/js/algo.js`
 (`_ACTIVE_SOURCES`). The All / Live / Paper filter and the ⚖ Compare button are added from JS, not the template.
 
-**⚖ Compare** calls `GET /api/algo/compare-today/<key>` (`sc`, `tmf`, `cpr`, `st1`-`st15`) per algo, four at a time.
+**⚖ Compare** calls `GET /api/algo/compare-today/<key>` (`sc`, `tmf`, `cpr`, `st1`-`st18`; Hull Suite since 2026-11-26)
+per algo, four at a time. **30-Min Fakeout is replayed on the feed live reads** (`ALGO_TMF_DATA_PROVIDER`, context
+`('algo_tmf', 'backtest')`, since 2026-11-26): on ICICI candles HDFCAMC's 09:15 low read 2,662.3 vs Fyers' 2,657.4 and
+its 11:06 SELL showed "live only". After both fixes, 26 Nov: TMF 2/2, Touch Break 2 match; what is left is fills —
+a close-confirmed entry bought 1 s after the close into a running option (259.2 close → 261.6-262.15 filled), fast exits ±3.
 `service/live_vs_backtest.py` replays today through the algo's OWN backtest engine with the live settings —
 Simple Trader: `spec.cls(**engine_kwargs)`; ST Touch Break: `engine_for`'s numbers plus the 1-minute frame;
 option legs by `attach_option_legs` / `price_with_reentries`; CPR: `propose_all` as the sheet's Update — on the

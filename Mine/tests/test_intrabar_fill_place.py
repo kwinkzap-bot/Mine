@@ -35,8 +35,11 @@ def test_the_stop_exit_is_priced_where_the_index_reached_the_line(monkeypatch):
                                        calendar=[date(2026, 11, 13)], index_minutes=IDX)
     t = priced[0]
     assert t['entry_premium'] == 242.45                           # a close entry: the minute before's close
-    frac = (25101.48 - 25092.95) / (25104.0 - 25092.95)
-    assert t['exit_premium'] == round(254.65 + frac * (243.5 - 254.65), 2)     # 246.04, not mid 249.08
+    # read on the minute's path (since 2026-11-26): up minute, open → low 25,090.6 → high 25,104 → close, the
+    # line 81 % up the low→high leg, where the PE went from its 258.55 high to its 243.5 low: 246.33 (live 244.75;
+    # the open→close share read 246.04, mid-minute 249.08)
+    frac = (25101.48 - 25090.6) / (25104.0 - 25090.6)
+    assert t['exit_premium'] == round(258.55 + frac * (243.5 - 258.55), 2)
     # with no index minutes the leg falls back to the minute's mid, as before
     priced, _ = sbr.attach_option_legs('NIFTY', [dict(trade)], premium=None, bar_minutes=5,
                                        calendar=[date(2026, 11, 13)], index_minutes=None)

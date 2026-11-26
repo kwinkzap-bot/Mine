@@ -15652,7 +15652,11 @@ def _compare_tmf(lvb, username, date_str):
         return (UserEnvManager.get_user_var(username, k) or d).strip() or d
     exit_hour, exit_minute = int(_v('TMF_EXIT_HOUR', '15')), int(_v('TMF_EXIT_MINUTE', '5'))
     capital = float(_v('TMF_CAPITAL_PER_TRADE', '100000'))
-    provider = get_data_provider(context='backtest')
+    # The feed the live algo itself reads (ALGO_TMF_DATA_PROVIDER, else the default): the same minutes, so the
+    # same opening range. 26 Nov 2026 the backtest's ICICI candles put HDFCAMC's 09:15 low at 2,662.3 where live's
+    # Fyers ones had 2,657.4 (live's target) — 22 of the first 112 minutes differed — and its 11:06 SELL read
+    # "live only" though the engine on Fyers candles takes it at the same minute.
+    provider = get_data_provider(user=username, context=('algo_tmf', 'backtest'))
     if provider is None:
         raise LookupError('no data provider — the backtest reads 1-minute stock candles')
     tag = _provider_tag(provider)
@@ -15678,7 +15682,7 @@ def _compare_tmf(lvb, username, date_str):
 def algo_compare_today(key) -> EndpointResponse:
     """The Active Trade tab's ⚖ Compare: one live algo's trades today beside the Backtest page's
     logic run on today's candles with that algo's settings (service/live_vs_backtest.py).
-    `key` is st1-st15 (Simple Trader 1-7, ST Touch Break 8-15), cpr, sc (2nd 30s Candle) or tmf
+    `key` is st1-st18 (Simple Trader 1-7, ST Touch Break 8-15, Hull Suite 16-18), cpr, sc (2nd 30s Candle) or tmf
     (30-Min Fakeout). `?price=0` skips the
     option legs (index only, no Breeze request)."""
     from trading_app.service import live_vs_backtest as lvb

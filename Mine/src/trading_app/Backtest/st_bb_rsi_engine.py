@@ -808,13 +808,23 @@ def attach_option_legs(symbol: str, trades: List[Dict[str, Any]], premium: float
         ent = t['entry_time'][11:16] if t.get('intrabar_entry') else _prior_minute(t['entry_time'])
         out = exit_minute(t)
         day = t['entry_time'][:10]
+        # Where on the index minute's own path (open → first extreme → second extreme → close) the fill sat,
+        # so a WICK fill is read where the option stood then, not mid-minute (the Candle Breakout's reading,
+        # second_candle_options._path_point). 26 Nov 2026 (ST Touch Break 2, 09:45): NIFTY 25,750.7 → dip to
+        # 25,733.5 → 25,739.8 against a 25,734.6 level; the PE was 244.05 → 258 high → 251.8. Mid-minute read
+        # 247.93, the path read is 257.18; live quoted 255.95 there and filled 256.6.
+        from trading_app.Backtest.second_candle_options import _path_point
+        ent_path = t.get('entry_path') or (_path_point(index_minutes, f'{day} {ent}:00', t['entry_price'])
+                                           if t.get('intrabar_entry') else None)
+        out_path = t.get('exit_path') or (_path_point(index_minutes, f"{t['exit_time'][:10]} {out}:00", t['exit_price'])
+                                          if t.get('intrabar_exit') and out else None)
         reqs.append({'key': n, 'date': day, 'side': 'BUY' if t.get('type') != 'Short' else 'SELL',
                      'level': t.get('level', t['entry_price']), 'entry_time': ent,
                      'exit_time': out, 'exit_price': t['exit_price'],
                      'entry_mid': bool(t.get('intrabar_entry')), 'exit_mid': bool(t.get('intrabar_exit')),
                      # A caller that knows where on the index minute's path the fill sat
                      # (second_candle_options) — read there, wick fills included.
-                     'entry_path': t.get('entry_path'), 'exit_path': t.get('exit_path'),
+                     'entry_path': ent_path, 'exit_path': out_path,
                      # ...and where in that minute: the index's own open→close path puts the fill at
                      # the level. 13 Nov 2026 (tab 3) the 14:31 stop came at the minute's END (the
                      # index closed on its high, 25,104, the line 25,101.5): mid-minute read the PE

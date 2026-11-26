@@ -210,8 +210,10 @@ def test_sc_legs_priced_on_fyers_30s_bars_at_the_strike_nearest_250():
     got = lvb.price_sc_fyers([t], idx, fetch)
     (p,) = got['trades']
     assert p['strike'] == 25150 and p['option_type'] == 'CE'           # 235 at the cross (25100: 267)
-    assert p['entry_premium'] == 235.0                                   # half-way through its bar
-    assert p['exit_premium'] == 275.0                                    # index half-way 25240 → 25260
+    # read on the bar's own path (open → low → high → close on an up bar), as the backtest reads a fill:
+    # 25,195 is 7/12 of the 25,188 → 25,200 leg, where the CE went 229 → 242
+    assert p['entry_premium'] == round(229 + 7 / 12 * 13, 2)
+    assert p['exit_premium'] == round(269 + 12 / 17 * 13, 2)             # 25,250 on 25,238 → 25,255; CE 269 → 282
     assert got['unpriced'] == 0 and all(o == 'CE' for _, o in calls)
 
 

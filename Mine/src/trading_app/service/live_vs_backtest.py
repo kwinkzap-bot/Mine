@@ -147,6 +147,12 @@ def backtest_simple(spec, s: Dict[str, Any], minutes, candles_df, date_str: str,
             direction=live.direction, stop_mode=live.stop_mode,
             entry_start=m['entry_start'], entry_end=m['entry_end'], exit_cutoff=m['exit_cutoff'],
             max_trades_per_day=live.max_trades_per_day, minutes=minutes, bar_minutes=spec.bar)
+    elif spec.kind == 'hs':
+        # Hull Suite: the live engine's own construction (hull_suite_live_engine.engine_for) with the 1-minute
+        # frame the backtest walks inside each candle — the /backtest/hull-suite run's.
+        from trading_app.service import hull_suite_live_engine as hsl
+        eng = hsl.engine_for(candles_df, m, spec.bar)
+        eng.minutes = eng._frame(minutes)
     else:
         eng = spec.cls(candles_df, **sim.engine_kwargs(spec, m))
     trades, _ = eng.run()
@@ -409,11 +415,24 @@ def _at(by_time, ts):
     return by_time[max(before)] if before else None
 
 
-def _read(opt_bar, idx_bar, level):
-    """The option's price inside its 30-second bar where the index stood at `level`: that share of
-    the way from the option bar's open to its close (as the index went from open to close), else
-    the bar's open/close mid — attach_option_legs' _cross_frac, on 30-second bars."""
+def _read(opt_bar, idx_bar, level, option_type=None):
+    """The option's price inside its 30-second bar where the index stood at `level`. With the option
+    type: walked along the index bar's own path (open → first extreme → second extreme → close) and the
+    option's matching one — the backtest's reading (cpr_option_service._path_read), right for a wick
+    fill too. Without it: that share of the way from the option bar's open to its close, else the mid."""
     o, c = float(opt_bar['open']), float(opt_bar['close'])
+    if option_type and idx_bar is not None and level is not None and opt_bar.get('high') is not None:
+        from trading_app.service.cpr_option_service import _path_read
+        io, ih, il, ic = (float(idx_bar[k]) for k in ('open', 'high', 'low', 'close'))
+        first = 'low' if ic >= io else 'high'
+        pts = [io, il, ih, ic] if first == 'low' else [io, ih, il, ic]
+        lv = float(level)
+        for k in range(3):
+            a, b = pts[k], pts[k + 1]
+            if min(a, b) - 1e-9 <= lv <= max(a, b) + 1e-9:
+                bar = {x: float(opt_bar[x]) for x in ('open', 'high', 'low', 'close')}
+                return round(_path_read(bar, {'seg': k, 'frac': 0.0 if a == b else (lv - a) / (b - a),
+                                              'first': first}, option_type), 2)
     frac = None
     if idx_bar is not None and level is not None:
         io, ic = float(idx_bar['open']), float(idx_bar['close'])
@@ -448,7 +467,7 @@ def price_sc_fyers(trades: List[Dict[str, Any]], index_bars: List[Dict[str, Any]
 
         def prem(strike):
             b = _at(bars(strike, ot), t_in)
-            return None if b is None else _read(b, i_in, t['entry_price'])
+            return None if b is None else _read(b, i_in, t['entry_price'], ot)
         seen = {}
         p = prem(k)
         for _ in range(max_steps):
@@ -472,7 +491,7 @@ def price_sc_fyers(trades: List[Dict[str, Any]], index_bars: List[Dict[str, Any]
         strike = min(seen, key=lambda x: abs(seen[x] - premium))
         ob_out = _at(bars(strike, ot), t_out)
         out.append(dict(t, strike=int(strike), option_type=ot, entry_premium=seen[strike],
-                        exit_premium=None if ob_out is None else _read(ob_out, i_out, t['exit_price'])))
+                        exit_premium=None if ob_out is None else _read(ob_out, i_out, t['exit_price'], ot)))
     return {'trades': out, 'unpriced': unpriced}
 
 
