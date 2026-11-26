@@ -1,5 +1,24 @@
 [
   {
+    "symbol": "LODHA",
+    "direction": "BUY",
+    "mode": "paper",
+    "qty": 625,
+    "lot_size": 625,
+    "entry_price": 1216.4,
+    "exit_price": 1257.7,
+    "spot_entry_price": 1157.2,
+    "spot_exit_price": 1251.3,
+    "sl_price": 1091.9,
+    "target_price": 1249.78,
+    "pnl": 25812.5,
+    "reason": "TARGET",
+    "signal_date": "2026-09-30",
+    "entry_time": "2026-11-18T12:00:05.644320",
+    "exit_time": "2026-11-26T13:48:02.468344",
+    "date": "2026-11-26"
+  },
+  {
     "symbol": "TRENT",
     "direction": "BUY",
     "mode": "paper",

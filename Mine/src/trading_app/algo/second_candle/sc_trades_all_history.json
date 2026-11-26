@@ -1,5 +1,27 @@
 [
   {
+    "date": "2026-11-26",
+    "direction": "SELL",
+    "entry_spot": 25793.85,
+    "exit_spot": 25851.3,
+    "pnl_pts": -57.45,
+    "reason": "SL",
+    "entry_time": "2026-11-26T09:16:03.287906",
+    "entry_spot_live": 25790.5,
+    "exit_time": "2026-11-26T09:16:43.970953",
+    "strike": 25850,
+    "option_type": "PE",
+    "lot_size": 65,
+    "sl_level": 25851.3,
+    "target_level": 25650.22,
+    "opt_entry_price": 242.6,
+    "opt_exit_price": 205.9,
+    "opt_pnl_pts": -36.7,
+    "opt_pnl_inr": -2385.5,
+    "broker_entries": [],
+    "paper": true
+  },
+  {
     "date": "2026-11-25",
     "direction": "BUY",
     "entry_spot": 25747.7,

@@ -203,3 +203,83 @@ def test_sweep_rows_equal_a_direct_run_of_their_own_settings(monkeypatch):
         sm = summarise(eng.simulate())
         assert (sm['total_trades'], sm['total_pnl'], sm['profit_factor']) == \
                (r['total_trades'], r['total_pnl'], r['profit_factor'])
+
+
+def _resample(mins, n):
+    a = pd.Timedelta(hours=9, minutes=15)
+    k = (mins.index - a).floor(f'{n}min') + a
+    return mins.groupby(k).agg(open=('open', 'first'), high=('high', 'max'),
+                               low=('low', 'min'), close=('close', 'last'))
+
+
+def test_timeframe_sweep_ranks_every_chart_together_and_rows_equal_a_direct_run(monkeypatch):
+    from trading_app.Backtest import hull_suite_optimise as hso
+    from trading_app.Backtest.st_bb_rsi_engine import summarise
+    monkeypatch.setattr(hso, 'GRID', [('slow_len', (40, 60)), ('medium_len', (20,)), ('fast_len', (10,)),
+                                      ('pullback_bars', (0,)), ('max_wait', (3,)), ('rr', (1.5, 0.0))])
+    monkeypatch.setattr(hso, 'NAMES', [n for n, _ in hso.GRID])
+    monkeypatch.setattr(hso, 'WALK', [('direction', ('both', 'long'))])
+    monkeypatch.setattr(hso, 'MIN_TRADES', 1)
+    mins = _wave_days()
+    charts = {'3minute': _resample(mins, 3), '5minute': _resample(mins, 5)}
+    page = {'slow_len': 40, 'medium_len': 20, 'fast_len': 10, 'pullback_bars': 0, 'interval': '5minute'}
+    ticks = []
+    res = hso.optimise_timeframes(charts.get, page, minutes=mins, top=10 ** 6,
+                                  progress=lambda d, t, **kw: ticks.append((d, t, kw.get('timeframe'))),
+                                  timeframes=('3minute', '5minute'))
+    assert res['timeframes'] == ['3minute', '5minute'] and res['swept'][0] == 'timeframe'
+    assert res['current']['timeframe'] == '5minute'
+    assert [b['timeframe'] for b in res['tf_boards']] == ['3minute', '5minute']
+    for b in res['tf_boards']:          # each board holds only its own chart, its ★ included
+        assert b['results'] and {r['timeframe'] for r in b['results']} == {b['timeframe']}
+        assert b['current']['timeframe'] == b['timeframe']
+    assert res['current'] is res['tf_boards'][1]['current']
+    assert res['results'] == [r for b in res['tf_boards'] for r in b['results']]
+    assert ticks and all(d <= t for d, t, _ in ticks)
+    for r in res['results'] + [b['current'] for b in res['tf_boards']]:
+        tf = r['timeframe']
+        eng = HullSuiteEngine(charts[tf], minutes=mins, bar_minutes=hso.tf_minutes(tf),
+                              **{k: r[k] for k in res['swept'] if k != 'timeframe'})
+        sm = summarise(eng.simulate())
+        assert (sm['total_trades'], sm['total_pnl']) == (r['total_trades'], r['total_pnl'])
+
+
+def test_a_page_timeframe_outside_the_sweep_is_still_the_default_row(monkeypatch):
+    from trading_app.Backtest import hull_suite_optimise as hso
+    monkeypatch.setattr(hso, 'GRID', [('slow_len', (40,)), ('medium_len', (20,)), ('fast_len', (10,)),
+                                      ('pullback_bars', (0,)), ('max_wait', (3,)), ('rr', (1.5,))])
+    monkeypatch.setattr(hso, 'NAMES', [n for n, _ in hso.GRID])
+    monkeypatch.setattr(hso, 'WALK', [])
+    monkeypatch.setattr(hso, 'MIN_TRADES', 1)
+    mins = _wave_days()
+    charts = {'5minute': _resample(mins, 5), '2minute': _resample(mins, 2)}
+    page = {'slow_len': 40, 'medium_len': 20, 'fast_len': 10, 'interval': '2minute'}
+    res = hso.optimise_timeframes(charts.get, page, minutes=mins, timeframes=('5minute',))
+    assert res['current']['timeframe'] == '2minute' and res['timeframes'] == ['5minute']
+    assert hso.tf_minutes('minute') == 1 and hso.tf_minutes('15minute') == 15
+
+
+def test_each_timeframe_board_is_priced_on_its_own_chart(monkeypatch):
+    from trading_app.Backtest import hull_suite_optimise as hso
+    monkeypatch.setattr(hso, 'GRID', [('slow_len', (40, 60)), ('medium_len', (20,)), ('fast_len', (10,)),
+                                      ('pullback_bars', (0,)), ('max_wait', (3,)), ('rr', (1.5,))])
+    monkeypatch.setattr(hso, 'NAMES', [n for n, _ in hso.GRID])
+    monkeypatch.setattr(hso, 'WALK', [])
+    monkeypatch.setattr(hso, 'MIN_TRADES', 1)
+    mins = _wave_days()
+    charts = {'3minute': _resample(mins, 3), '5minute': _resample(mins, 5), '2minute': _resample(mins, 2)}
+    seen = []
+
+    def fake_legs(symbol, trades, premium, mpb, *a, **k):
+        seen.append(mpb)
+        return trades, {'lot': 65}
+    monkeypatch.setattr(hso, 'attach_option_legs', fake_legs)
+    for page_tf, lone in (('5minute', False), ('2minute', True)):
+        seen.clear()
+        page = {'slow_len': 40, 'medium_len': 20, 'fast_len': 10, 'interval': page_tf, 'premium': 250}
+        res = hso.optimise_timeframes(charts.get, page, minutes=mins, timeframes=('3minute', '5minute'))
+        hso.verify_timeframes(res, charts.get, page, 'NIFTY', [], '', minutes=mins)
+        assert res['basis'] == 'option' and sorted(set(seen)) == ([2, 3, 5] if lone else [3, 5])
+        assert res['current']['timeframe'] == page_tf and 'book' in res['current']
+        for b in res['tf_boards']:
+            assert b['basis'] == 'option' and {r['timeframe'] for r in b['results']} == {b['timeframe']}

@@ -25,6 +25,18 @@
         "/private/tmp/claude-501/-Users-kavinkumar--claude-spares-spare-R9ho7I/9d8803b0-94c1-417f-a527-5529059260ac/scratchpad/value_harness.py"
       ],
       "port": 5058
+    },
+    {
+      "name": "hull-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5059",
+        "--directory",
+        "/private/tmp/claude-501/-Users-kavinkumar--claude-spares-spare-ReinGU/0e344a3f-4f2e-487e-b852-574809302e6d/scratchpad/hsh"
+      ],
+      "port": 5059
     }
   ]
 }

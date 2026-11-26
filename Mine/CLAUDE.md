@@ -627,7 +627,7 @@ the `pcLots` row).
   three Hull lengths × pullback lookback × break window × target = 432, then a one-box-at-a-time walk over the rest,
   ranked on return ÷ drawdown, best 15 re-priced on the option). No new URL: `strategy='hull_suite'` on
   `/backtest/st-bb-rsi/optimise`, the board is the shared Simple Trader one (prefix `hs`, names in
-  `SBR_PARAM_BY.hull_suite`). The timeframe is not swept. ~2 min of CPU for 2024-26 (727 combos). **It overfits**:
+  `SBR_PARAM_BY.hull_suite`). **The timeframe is swept since 2026-11-26** (`optimise_timeframes`, `TIMEFRAMES` = 3m / 5m / 15m): each chart is its own grid + walk and its own board (`tf_boards`, best `TF_ROWS` = 10, each with ★ = the page's settings on that chart), priced on the option on its own candles (`verify_timeframes`), and the page shows one collapsible grid per timeframe, Candle Breakout's layout (`renderHsTfBoards` → `_renderOptTfGrids`); USE sets the Timeframe box. `results` is every board's rows together (the 🧩 Combined popup reads it). ~2 min of CPU per timeframe for 2024-26 (727 combos each). **It overfits**:
   its 2024-26 top row (slow 300 / medium 100 / fast 20, pullback 24 bars, 2 R, breakeven at 1 R, 1 a day) read
   PF 1.53, +4,725 pts there, but PF 1.02, +316 pts on 2018-23, where the plain defaults made PF 1.17, +2,010.
   Check a row on a range it was not swept on before trusting it. A test holds every board row equal to a direct run.

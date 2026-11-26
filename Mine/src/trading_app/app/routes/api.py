@@ -5911,8 +5911,10 @@ def _run_ma_htf_optimise(data):
 def _run_hull_suite_optimise(data):
     """Find Best Params for the Hull Suite System (Backtest/hull_suite_optimise.py): a grid and a
     one-field-at-a-time walk over the page's boxes, on INDEX points from the run's own payload
-    (fills walked on the 1-minute bars, as the run), then the best 15 rows re-priced on the
-    option as the run prices them. Same task table and status route as the ST + BB + RSI sweep."""
+    (fills walked on the 1-minute bars, as the run), once per chart timeframe (hso.TIMEFRAMES:
+    3 / 5 / 15 minutes, one board each), then each board's best 10 re-priced on the option as the
+    run prices them, each on its own timeframe. Same task table and status route as the
+    ST + BB + RSI sweep."""
     from trading_app.Backtest import hull_suite_optimise as hso
     from trading_app.service import cpr_option_service as _cos
     symbol = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
@@ -5936,7 +5938,6 @@ def _run_hull_suite_optimise(data):
         return jsonify({'success': False,
                         'error': 'Fyers is not logged in — run the daily Fyers login first.'}), 503
     token = _sp_instrument_token(provider, symbol)
-    minutes_per_bar = int(''.join(ch for ch in str(interval) if ch.isdigit()) or 5)
 
     task_id = uuid.uuid4().hex
     task = {'status': 'running', 'started': _time.time(), 'progress': {'done': 0, 'total': 0}}
@@ -5945,24 +5946,38 @@ def _run_hull_suite_optimise(data):
 
     def _run():
         try:
-            # Run-in for the longest Hull the grid tries (300 candles, plus its √n smoothing).
-            need_days = 320 * minutes_per_bar / 375.0 * 1.6 + 10
-            minutes, bars, _, n_bars = _sbr_load_bars(provider, token, symbol, start_date_str, end_date_str,
-                                                      interval, warmup_days=int(max(20, need_days)))
-            if bars is None:
+            # Run-in for the longest Hull the grid tries, as the run sizes it (slow × 1.2 candles);
+            # one read of the minutes at the longest timeframe's, each chart resampled from it.
+            slow_max = max(dict(hso.GRID)['slow_len'])
+
+            def need_days(tf):
+                return int(max(20, slow_max * 1.2 * hso.tf_minutes(tf) / 375.0 * 1.6 + 10))
+
+            tfs = list(dict.fromkeys(list(hso.TIMEFRAMES) + [interval]))
+            minutes, _ = _sbr_load_minutes(provider, token, symbol, start_date_str, end_date_str,
+                                           warmup_days=max(need_days(tf) for tf in tfs))
+            if minutes is None:
                 task.update(status='error', error='No historical data found for the given range')
                 return
+            cache = {}
+
+            def bars_for(tf):
+                if tf not in cache:
+                    cache[tf] = _sbr_bars(minutes, tf, start_date_str, need_days(tf))[0]
+                return cache[tf]
+
+            n_bars = _sbr_bars(minutes, interval, start_date_str)[1]
 
             def _progress(done, total, **extra):
                 task['progress'] = {'done': done, 'total': total, **extra}
 
-            res = hso.optimise(bars, data, minutes_per_bar, from_date=start_date_str, minutes=minutes,
-                               progress=_progress)
+            res = hso.optimise_timeframes(bars_for, data, from_date=start_date_str, minutes=minutes,
+                                          progress=_progress)
             if price_options:
                 try:
-                    hso.verify_on_option(res, bars, data, minutes_per_bar, symbol,
-                                         sorted(set(minutes.index.date)), start_date_str, minutes=minutes,
-                                         progress=lambda k, n: _progress(k, n, stage='pricing'))
+                    hso.verify_timeframes(res, bars_for, data, symbol, sorted(set(minutes.index.date)),
+                                          start_date_str, minutes=minutes,
+                                          progress=lambda k, n, **kw: _progress(k, n, stage='pricing', **kw))
                 except Exception as e:      # noqa: BLE001 — no ICICI login: keep the index board
                     logger.warning('[HULL OPT] option verification failed: %s', e)
                     res['option_error'] = str(e)

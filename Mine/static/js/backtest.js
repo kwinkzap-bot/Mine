@@ -893,7 +893,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (pcLotRow)    pcLotRow.style.display    = 'grid';
             if (intFg) intFg.style.display = '';
             if (intervalSelect) intervalSelect.value = '5minute';
-            if (startDateInput) startDateInput.value = '2024-01-01';
+            if (startDateInput) startDateInput.value = '2020-01-01';
             updatePcInvestment();
 
         } else if (val === 'weekly_cpr_breakout') {
@@ -5255,7 +5255,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function _mapLegacyOptColumns(legacyCols, spec) {
         return legacyCols.map((c, idx) => {
             if (c.label === '#') {
-                return { label: '#', render: (_, r, i) => i + 1 };
+                return { label: '#', render: (_, r, i) => spec.ownIndex ? c.fmt(r, i) : i + 1 };
             }
             if (c.label === 'Live') {
                 return { label: 'Live', render: (_, r) => spec.isLive(r) ? LIVE_BADGE_HTML : '<span class="opt-live-off">—</span>' };
@@ -5283,7 +5283,7 @@ document.addEventListener('DOMContentLoaded', function() {
         container.innerHTML = groups.map((g, gi) => `
             <div class="opt-tf-block">
                 <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
-                    <span>best ${(g.results || []).length} of ${g.total}${g.from ? ` · sessions ${g.from} → ${g.to}` : ''}</span>
+                    <span>best ${g.count ?? (g.results || []).length} of ${g.total}${g.from ? ` · sessions ${g.from} → ${g.to}` : ''}</span>
                 </div>
                 <div class="opt-table-wrap collapsed-hide">
                     ${g.note ? `<div class="opt-tf-note" style="font-size:12px;color:var(--text-secondary,#64748b);padding:6px 10px;">${String(g.note).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</div>` : ''}
@@ -5309,11 +5309,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 defaultSort: { key: 'net_pnl_inr', dir: 'desc' },
                 // Highlight the leading row only while it's genuinely the
                 // ₹-P&L leader — i.e. still sorted net_pnl_inr desc, matching
-                // the pre-DataGrid `highlightBest` behaviour.
+                // the pre-DataGrid `highlightBest` behaviour. A ★ Default row
+                // (the page's own settings, Hull Suite) is marked as on the single grid.
                 rowClass: (row, i) => {
                     const st = tfState.sortState;
                     const isLeader = st && st.key === 'net_pnl_inr' && st.dir === 'desc';
-                    return (i === 0 && isLeader) ? 'opt-best' : '';
+                    return [(i === 0 && isLeader) ? 'opt-best' : '', row && row._current ? 'opt-default' : ''].join(' ').trim();
                 },
                 onSorted: (rows, sortState) => {
                     tfState.displayed = rows;
@@ -6092,7 +6093,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Where a strategy names the same field differently from the table above.
     const SBR_PARAM_BY = { ma_htf: { chop_lookback: ['Whipsaw', 'ChopLb'] },
         // Hull Suite (prefix 'hs'): fast_len / slow_len / max_wait / rr / stop_mode / session use the table above.
-        hull_suite: { slow_len: ['Slow HMA', 'Slow'], medium_len: ['Medium HMA', 'Medium'], fast_len: ['Fast HMA', 'Fast'],
+        hull_suite: { timeframe: ['Timeframe', ''], slow_len: ['Slow HMA', 'Slow'], medium_len: ['Medium HMA', 'Medium'], fast_len: ['Fast HMA', 'Fast'],
                       pullback_bars: ['Pullback bars', 'PbBars'], pullback_pct: ['Near %', 'PbPct'],
                       max_wait: ['Break within', 'MaxWait'], rr: ['Target R', 'Rr'],
                       slope_bars: ['Slope', 'Slope'], slow_slope: ['Slow agrees', 'SlowSlope'],
@@ -6129,6 +6130,122 @@ document.addEventListener('DOMContentLoaded', function() {
             { label: 'Max DD (₹)', key: 'max_drawdown', fmt: r => { const { lots, lotValue } = _pcOptMoney(); return _ddRsCell(r.max_drawdown || 0, lots, lotValue); } },
             { label: '', key: null, fmt: () => '' },   // Use button
         ];
+    }
+
+    // Hull Suite's board, laid out as Candle Breakout's (SC_OPT_COLS / _scOptCols): the params,
+    // Trades, Win%, index and option P&L each in points and ₹, brokerage, profit factor and the
+    // ₹ drawdown, sorted on the option's net ₹ with the leader highlighted. Only the swept boxes
+    // that differ between rows get a column — the walk leaves most of its 18 at the page's value,
+    // and those are listed once in the meta line instead (Use still writes every one back).
+    // On an option board the ₹ figures are the server's own (`rupee_card`: the run's books); a
+    // board that fell back to index points has no option columns and nets its own brokerage.
+    function hsOptCols(data, rows) {
+        const isOpt = data.basis === 'option';
+        const label = (k) => (((SBR_PARAM_BY.hull_suite || {})[k]) || SBR_PARAM[k] || [k])[0];
+        const show  = (v, k) => k === 'timeframe' ? (SBR_TF_LABEL[v] || v || '–')
+                              : typeof v === 'boolean' ? (v ? 'on' : 'off') : (v ?? '–');
+        const swept = data.swept || [];
+        const varies = swept.filter(k => new Set(rows.map(r => String(r[k]))).size > 1);
+        const held   = swept.filter(k => !varies.includes(k) && rows.length && rows[0][k] !== undefined)
+            .map(k => `${label(k)} ${show(rows[0][k], k)}`);
+        const idxPts = r => isOpt ? (r.index_pnl ?? null) : r.total_pnl;
+        const optPts = r => isOpt ? r.total_pnl : null;
+        const brok   = r => isOpt ? (r.brokerage_rs ?? null)
+                                  : calcBrokeragePerTrade(_pcOptMoney().lots) * (r.total_trades || 0);
+        // On the option board the order is the option, so the index ₹ is gross (as Candle Breakout's).
+        const idxRs  = r => { const v = idxPts(r); if (v == null) return null;
+                              const { lots, lotValue } = _pcOptMoney(); return v * lotValue * lots - (isOpt ? 0 : brok(r)); };
+        const optRs  = r => isOpt ? (r.net_rs ?? null) : null;
+        const ddRs   = r => isOpt && r.max_dd_rs != null ? -Math.abs(r.max_dd_rs)
+                            : (() => { const { lots, lotValue } = _pcOptMoney(); return -Math.abs(r.max_drawdown || 0) * lotValue * lots; })();
+        const cols = [
+            { label: '#', key: null, fmt: (r, i) => r._current ? '★' : i + 1 },
+            ...varies.map(k => ({ label: label(k), key: k, fmt: r => show(r[k], k) })),
+            { label: 'Trades', key: 'total_trades', fmt: r => r.total_trades },
+            { label: 'Win%', key: 'win_rate', fmt: r => `${(r.win_rate ?? 0).toFixed(0)}%` },
+            { label: 'Index P&L (pts)', key: 'index_pnl', fmt: r => _scPtsCell(idxPts(r)) },
+            { label: isOpt ? 'Index P&L (₹, gross)' : 'Index P&L (₹, net)', key: isOpt ? 'index_net_inr' : 'net_pnl_inr',
+              fmt: r => _scInrCell(idxRs(r)) },
+            ...(isOpt ? [
+                { label: 'Opt P&L (pts)', key: 'option_pnl', fmt: r => _scPtsCell(optPts(r)) },
+                { label: 'Opt P&L (₹, net)', key: 'net_pnl_inr', fmt: r => _scInrCell(optRs(r)) },
+            ] : []),
+            // Max DD sits beside the P&L it is read against (the results card's Max Drawdown);
+            // at the far right it was hidden under the USE column and Brokerage was read as it.
+            { label: 'Max DD (₹)', key: 'max_drawdown', fmt: r => `<span class="pnl-negative">-₹${Math.round(Math.abs(ddRs(r))).toLocaleString('en-IN')}</span>`
+                + ` <small style="color:var(--text-secondary,#64748b)">(${Math.abs(r.max_drawdown || 0).toFixed(1)} pts)</small>` },
+            { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const b = brok(r);
+                return b == null ? '—' : `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
+            { label: 'Prof. Factor', key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+            { label: '', key: null, fmt: () => '' },   // Use button
+        ];
+        const derived = {
+            index_pnl:     r => idxPts(r) ?? -Infinity,
+            option_pnl:    r => optPts(r) ?? -Infinity,
+            index_net_inr: r => idxRs(r) ?? -Infinity,
+            net_pnl_inr:   r => (isOpt ? optRs(r) : idxRs(r)) ?? -Infinity,
+            brokerage_inr: r => brok(r) ?? 0,
+            max_drawdown:  r => ddRs(r),
+            timeframe:     r => SBR_TF_MIN[r.timeframe] ?? 0,
+        };
+        return { cols, derived, held };
+    }
+
+    // Hull Suite's board, one collapsible grid per timeframe (Candle Breakout's layout:
+    // `_renderOptTfGrids`), each the best rows of that chart's own sweep with the page's settings
+    // on that chart as ★. The columns are hsOptCols over every board's rows, so they line up.
+    const _hsOptGroupsByTf = {};
+    function renderHsTfBoards(data, gridId, metaEl, sameRow) {
+        const container = document.getElementById(gridId);
+        const isOpt = data.basis === 'option';
+        const groups = data.tf_boards.map(b => {
+            let rows = (b.results || []).slice();
+            const cur = b.current;
+            if (cur) {
+                const hit = rows.findIndex(r => sameRow(r, cur));
+                if (hit >= 0) rows[hit] = { ...rows[hit], _current: true };
+                else rows = [{ ...cur, _current: true }, ...rows];
+            }
+            return { tf: b.timeframe, tf_label: SBR_TF_LABEL[b.timeframe] || b.timeframe, results: rows,
+                     count: (b.results || []).length,          // the ranked rows; an added ★ is not one
+                     total: b.qualified ?? (b.results || []).length,
+                     from: data.start_date, to: data.end_date, note: b.option_error
+                        ? `Option pricing unavailable (${b.option_error}); showing index points.` : '' };
+        });
+        const all = groups.flatMap(g => g.results);
+        const { cols, derived, held } = hsOptCols({ ...data, swept: (data.swept || []).filter(k => k !== 'timeframe') }, all);
+        if (metaEl) {
+            const tfs = (data.timeframes || []).map(tf => SBR_TF_LABEL[tf] || tf).join(' / ');
+            const cur = data.current;
+            const inSweep = cur && (data.timeframes || []).includes(cur.timeframe);
+            metaEl.textContent = `${data.total_combos_tested} combos · ${data.symbol} · multi-TF (${tfs}) · `
+                + `${data.start_date} → ${data.end_date} · ranked on ${isOpt ? 'option' : 'index'} P&L`
+                + (isOpt ? ' · every row booked on REAL option candles, as BACKTEST books it (the index sweep only shortlists)'
+                         : (data.option_error ? ` · option pricing unavailable (${data.option_error})` : ''))
+                + ' · ★ = your current settings on that timeframe'
+                + (cur && !inSweep ? ` · on your own ${SBR_TF_LABEL[cur.timeframe] || cur.timeframe}: ${cur.total_trades} trades, `
+                       + `${(cur.win_rate ?? 0).toFixed(0)}% win, PF ${(cur.profit_factor || 0).toFixed(2)}` : '')
+                + (held.length ? ` · same in every row: ${held.join(' · ')}` : '');
+        }
+        // The container is also the single-grid boards' element: its once-wired Use listener
+        // must not apply a row of an older board, and ☰ Columns re-renders these grids instead.
+        if (container) {
+            container._applyFn = null;
+            container._defaultFn = null;
+            container._colLabels = cols.map(c => c.label).filter(_optColHideable);
+            container._remount = () => renderHsTfBoards(data, gridId, metaEl, sameRow);
+        }
+        const hidden = _optHiddenCols();
+        _renderOptTfGrids(container, groups, cols.filter(c => !(_optColHideable(c.label) && hidden.has(c.label))), {
+            idPrefix: gridId + '-tf', isLive: () => false, ownIndex: true,
+            applyFn: applySbrStrategyResult('hull_suite', data.swept || []),
+            stateStore: _hsOptGroupsByTf, derivedSort: derived,
+        });
+        // Open the page's own timeframe's board (the rest stay folded, as Candle Breakout's).
+        const page = groups.findIndex(g => g.tf === (data.current || {}).timeframe);
+        const block = container && container.querySelectorAll('.opt-tf-block')[page >= 0 ? page : 0];
+        const title = block && block.querySelector('.opt-tf-title');
+        if (title && block.querySelector('.opt-table-wrap.collapsed-hide')) title.click();
     }
 
     function applySbrStrategyResult(strategy, swept) {
@@ -6278,18 +6395,19 @@ document.addEventListener('DOMContentLoaded', function() {
             ? [...cols.filter(c => c.key !== 'max_drawdown').slice(0, -1), ...rsCols, cols[cols.length - 1]] : cols;
         // The page's own settings, scored the same way, pinned as row ★ so the board can be
         // read against the run the user already trusts (the sweep has no SL/TSL, see note).
-        const cur = data.current;
-        let rows = data.results || [];
-        if (cur) {
-            // The default (current page settings) is one row on the board: if the sweep already
-            // holds that exact combination, flag it; otherwise add it, scored the same way.
-            const keys = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
+        const SAME_KEYS = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level',
                           'entry_start', 'cci_level', 'cpr_wide', 'cpr_narrow', 'rsi_entry', 'rsi_exit', 'gates', 'timeframe',
                           'rsi_period', 'red_len', 'arm_bars', 'min_gap', 'entry_mode', 'exit_mode', 'rr',
                           'green_len', 'pb_band', 'chop_lookback', 'htf', 'sl_on_close', 'direction',
                           'modes', 'stop_mode', 'min_wick_pct', 'touch_tol_pct', 'min_body_pct', 'outside_bar',
                           'entry_end', 'exit_cutoff', 'max_trades_per_day'];
-            const same = (r) => keys.every(k => r[k] === undefined || cur[k] === undefined || String(r[k]) === String(cur[k]));
+        const sameRow = (r, c) => SAME_KEYS.every(k => r[k] === undefined || c[k] === undefined || String(r[k]) === String(c[k]));
+        const cur = data.current;
+        let rows = data.results || [];
+        if (cur) {
+            // The default (current page settings) is one row on the board: if the sweep already
+            // holds that exact combination, flag it; otherwise add it, scored the same way.
+            const same = (r) => sameRow(r, cur);
             const hit = rows.findIndex(same);
             if (hit >= 0) rows = rows.map((r, i) => i === hit ? { ...r, _current: true, rank: cur.rank, option: r.option } : r);
             else rows = [{ ...cur, _current: true }, ...rows];
@@ -6301,6 +6419,28 @@ document.addEventListener('DOMContentLoaded', function() {
             + (cur.rank ? `— #${cur.rank} of ${data.basis === 'option' ? data.verified : (data.passed ?? data.qualified)}`
                         : `— outside the quality filter (win < ${data.min_win ?? 50}%, under ${data.min_board_trades ?? 150} trades, no recent profit or a net loss)`);
         if (metaEl && data.option_error) metaEl.textContent += `. Option pricing unavailable (${data.option_error}); showing index points.`;
+        if (data.strategy === 'hull_suite' && Array.isArray(data.tf_boards)) {
+            renderHsTfBoards(data, gridId, metaEl, sameRow);
+            return;
+        }
+        if (data.strategy === 'hull_suite') {
+            const { cols, derived, held } = hsOptCols(data, rows);
+            if (metaEl) {
+                // Candle Breakout's meta line, then the ★ Default note and the boxes every row shares.
+                const isOpt = data.basis === 'option';
+                const tfs = (data.timeframes || []).map(tf => SBR_TF_LABEL[tf] || tf).join(' / ');
+                metaEl.textContent = `${data.total_combos_tested} combos · ${data.symbol} · ${tfs || data.interval} · `
+                    + `${data.start_date} → ${data.end_date} · ranked on ${isOpt ? 'option' : 'index'} P&L`
+                    + (isOpt ? ` · every row booked on REAL option candles, as BACKTEST books it (the index sweep only shortlists the best ${data.verified - 1})`
+                             : (data.option_error ? ` · option pricing unavailable (${data.option_error})` : ''))
+                    + (cur ? ` · ★ Default (current settings): ${cur.total_trades} trades, ${(cur.win_rate ?? 0).toFixed(0)}% win, `
+                           + `PF ${(cur.profit_factor || 0).toFixed(2)}` : '')
+                    + (held.length ? ` · same in every row: ${held.join(' · ')}` : '');
+            }
+            _mountSingleOptGrid(gridId, rows, cols, 'net_pnl_inr',
+                                applySbrStrategyResult(data.strategy, data.swept || []), derived, null);
+            return;
+        }
         _mountSingleOptGrid(gridId, rows,
                             withRs(strat ? sbrStrategyCols((data.swept || []).filter(k => k !== 'timeframe'
                                 || (data.timeframes || []).length !== 1), data.rank_by, data.strategy) : SBR_SIMPLE_COLS),
