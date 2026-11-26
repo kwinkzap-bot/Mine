@@ -10,13 +10,16 @@
         {% if group == 'mine' %}{% for m in mine_tabs %}<button class="ag-subtab{% if key == m.key %} active{% endif %}" onclick="algoSwitch('{{ m.key }}')" title="ST Touch Break · {{ loop.index }}. {{ m.tab }} (flags ST{{ m.n }}_*)">{{ loop.index }}. {{ m.tab }}</button>
         {% endfor %}
         <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick='mineCombinedOpen({{ mine_tabs|tojson }})' title="All the live ST Touch Break algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>
+        {% elif group == 'hull' %}{% for m in hull_tabs %}<button class="ag-subtab{% if key == m.key %} active{% endif %}" onclick="algoSwitch('{{ m.key }}')" title="Hull Suite · {{ loop.index }}. {{ m.tab }} (flags ST{{ m.n }}_*)">{{ loop.index }}. {{ m.tab }}</button>
+        {% endfor %}
+        <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick='hullCombinedOpen({{ hull_tabs|tojson }})' title="All the live Hull Suite algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>
         {% else %}{% for n in range(1, 8) %}<button class="ag-subtab{% if key == 'simple-' ~ n %} active{% endif %}" onclick="algoSwitch('simple-{{ n }}')" title="{{ names[n] }}">{{ n }}</button>
         {% endfor %}
         <button class="ag-btn ag-btn-strikes" style="margin-left:auto" onclick="simpleCombinedOpen()" title="All seven live Simple Trader algos merged into one book: cards, equity curve, P&L breakdowns, trade history">🧩 Combined</button>{% endif %}
     </div>
 
     <div class="ag-header">
-        <span class="ag-title">{% if group == 'mine' %}ST Touch Break · {{ names[n] }}{% else %}{{ names[n] }} · {{ symbol }}{% endif %}</span>
+        <span class="ag-title">{% if group == 'mine' %}ST Touch Break · {{ names[n] }}{% elif group == 'hull' %}Hull Suite · {{ names[n] }}{% else %}{{ names[n] }} · {{ symbol }}{% endif %}</span>
         <span id="{{ p }}ModeBadge" class="dg-badge dg-badge--warn">PAPER</span>
         <!-- {{ pfx }}_MODE, read at every entry: Paper records the option leg at its real
              premium and sends nothing; Live buys it at every account with
@@ -32,7 +35,7 @@
         </span>
         <button class="ag-btn ag-btn-strikes" onclick="_stbbStart('{{ key }}')">▶ Start</button>
         <button class="ag-btn ag-btn-strikes" onclick="_stbbStop('{{ key }}')">■ Stop</button>
-        <a class="ag-btn ag-btn-strikes" href="/backtest" title="{% if group == 'mine' %}The rule's backtest: the ST Touch Break group{% else %}The rule's backtest: Simple Trader group, strategy {{ n }}{% endif %}">Backtest ↗</a>
+        <a class="ag-btn ag-btn-strikes" href="/backtest" title="{% if group == 'mine' %}The rule's backtest: the ST Touch Break group{% elif group == 'hull' %}The rule's backtest: the 🌀 Hull Suite ★ group{% else %}The rule's backtest: Simple Trader group, strategy {{ n }}{% endif %}">Backtest ↗</a>
         <span class="ag-last-upd" id="{{ p }}LastUpd" style="margin-left:auto"></span>
     </div>
 
@@ -41,6 +44,11 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Rule &amp; Accounts</span>
             <button class="ag-btn ag-btn-strikes" id="{{ p }}EditBtn" onclick="_stbbToggleEdit('{{ key }}')" title="Unlock the fields to change them; lock again to prevent accidental edits">🔒 Locked — Edit</button>
+            {% if group == 'hull' %}
+            <label class="cpr-num" title="Both (the row's), BUY only (CE on a break up) or SELL only (PE on a break down). Read at each signal.">Direction
+                <select id="{{ p }}Direction" disabled onchange="_stbbSave('{{ key }}', {direction:this.value})">
+                    <option value="long">BUY only</option><option value="short">SELL only</option><option value="both">Both</option></select></label>
+            {% endif %}
             {% if group == 'mine' %}
             <label class="cpr-num" title="BUY only (the default: CE on an uptrend's touch), SELL only (PE on a downtrend's touch) or both. Read at each setup.">Direction
                 <select id="{{ p }}Direction" disabled onchange="_stbbSave('{{ key }}', {direction:this.value})">

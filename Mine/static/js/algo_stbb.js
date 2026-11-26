@@ -14,6 +14,11 @@ for (let n = 1; n <= 7; n++) {
     _STBB[m.key] = { p: m.p, api: '/api/algo/simple-trader-' + m.n, sym: 'NIFTY', pfx: 'ST' + m.n, simple: true,
                      group: 'mine', label: `ST Touch Break · ${i + 1}. ${m.tab}`, touch: true };
 });
+// The Hull Suite group: the /backtest 🌀 Hull Suite ★ rows (strategies 16-18 of the same chassis), window.HULL_TABS.
+(window.HULL_TABS || []).forEach((m, i) => {
+    _STBB[m.key] = { p: m.p, api: '/api/algo/simple-trader-' + m.n, sym: 'NIFTY', pfx: 'ST' + m.n, simple: true,
+                     group: 'hull', label: `Hull Suite · ${i + 1}. ${m.tab}`, hull: true };
+});
 Object.values(_STBB).forEach(c => Object.assign(c, { timer: null, mode: null, book: 'all', history: [] }));
 
 const _stbbEl = (c, id) => document.getElementById(c.p + id);
@@ -72,7 +77,12 @@ function _stbbRender(c, key, d) {
     if (c.touch) { set(c.p + 'StPeriod', s.st_period); set(c.p + 'StMult', s.st_mult); set(c.p + 'MinWick', s.min_wick_pct); set(c.p + 'MinBody', s.min_body_pct); set(c.p + 'OutsideBar', s.outside_bar); set(c.p + 'StopTouch', s.stop_touch ? 1 : 0); }
     _stbbEl(c, 'Sizing').textContent =
         `Size is the flags: a live order is each account's BROKER_N_${c.pfx}_LOTS lots (at accounts with BROKER_N_${c.pfx}_ACTIVE=true); a paper trade takes ${d.paper_lots} lot(s).`;
-    if (c.touch) {
+    if (c.hull) {
+        _stbbEl(c, 'Rule').textContent = `${d.rule || ''} · ≈${Math.round(s.premium)} premium`
+            + (s.sl_pct ? ` · premium stop-loss ${s.sl_pct}% under the fill` : ' · no premium stop: the index stop / target are watched here (every 1-5 s and each closed minute) and sold at market — nothing rests at the broker')
+            + (s.tsl_x && s.tsl_y ? `, trailing +${s.tsl_y}% of entry per +${s.tsl_x}% risen` : '')
+            + ` · direction ${s.direction} · up to ${s.max_trades} trade(s) a day`;
+    } else if (c.touch) {
         const dir = s.direction === 'both' ? 'BUY (CE) and SELL (PE)' : (s.direction === 'short' ? 'SELL (PE) only' : 'BUY (CE) only');
         const atClose = s.min_body_pct > 0 || s.outside_bar === 'close';
         _stbbEl(c, 'Rule').textContent = `${s.bar || 3}-minute NIFTY candles, entries ${s.entry_start || '10:00'}–${s.entry_end || '15:14'} · SuperTrend(${s.st_period}, ${s.st_mult}) · ${dir}, ${({ through: 'Through', both: 'Bounce + Through' })[s.modes] || 'Bounce'}: a candle whose wick touches the line `
@@ -112,7 +122,7 @@ function _stbbRender(c, key, d) {
 }
 
 const _STBB_STATUS = { open: ['In trade', 'info'], closed: ['Closed', 'neutral'], missed: ['Missed', 'neg'], failed: ['Not filled', 'neg'],
-                       armed: ['Armed', 'info'], expired: ['Not triggered', 'neutral'] };
+                       armed: ['Armed', 'info'], expired: ['Not triggered', 'neutral'], invalidated: ['Stop first', 'neutral'] };
 
 function _stbbRenderTrades(c, trades) {
     const rows = trades.map(t => {
@@ -133,6 +143,7 @@ function _stbbRenderTrades(c, trades) {
             { key: 'mode', label: 'Book', format: v => v ? v.toUpperCase() : '—', badge: v => v === 'live' ? 'neg' : 'info' },
             { key: 'type', label: 'Side', tone: v => v === 'Short' ? 'neg' : 'pos', strong: true },
             { key: 'signal_bar', label: 'Signal candle', format: v => (v || '').slice(11, 16) },
+            c.hull ? { key: 'signal', label: 'Level · stop · target', format: (v, t) => v ? `${_stbbNum(t.level)} · ${_stbbNum(t.cur_stop ?? t.stop)}${t.be_done ? ' (cost)' : ''}${t.target != null ? ' · ' + _stbbNum(t.target) : ''}` : '—' } :
             c.touch ? { key: 'signal', label: 'Touch · level', format: v => v ? `ST ${_stbbNum(v.supertrend)} · level ${_stbbNum(v.level)}` : '—' }
                     : { key: 'signal', label: 'RSI · close', format: v => v ? `${v.rsi ?? '—'} · ${_stbbNum(v.close)}` + (v.pivot ? ` (${v.pivot} ${_stbbNum(v.pivot_level)})` : '') : '—' },
             { key: 'index_entry', label: c.fut ? 'Future in' : 'Index in', format: (v, t) => v == null ? '—' : `${_stbbNum(v)} @ ${t.entry_time || ''}` },
@@ -205,7 +216,7 @@ function _stbbSave(key, body) {
 function _stbbSetMode(key, mode) {
     const c = _STBB[key];
     if (mode === c.mode) return;
-    if (mode === 'live' && c.simple && !confirm(`Switch ${_stbbLabel(c, key)} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true (size: BROKER_N_${c.pfx}_LOTS). ${c.touch ? 'The SuperTrend exit (and any premium stop-loss you set) is managed by this app; an SL-M rests at the broker only when SL % is above 0.' : 'A stop-loss SL-M rests at the broker; the trail and the strategy\'s exit are managed by this app.'}`)) return;
+    if (mode === 'live' && c.simple && !confirm(`Switch ${_stbbLabel(c, key)} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true (size: BROKER_N_${c.pfx}_LOTS). ${c.hull ? 'The index stop, target and breakeven are watched by this app and sold at market; nothing rests at the broker unless SL % is above 0.' : c.touch ? 'The SuperTrend exit (and any premium stop-loss you set) is managed by this app; an SL-M rests at the broker only when SL % is above 0.' : 'A stop-loss SL-M rests at the broker; the trail and the strategy\'s exit are managed by this app.'}`)) return;
     if (mode === 'live' && !c.simple && !confirm(`Switch ST + BB + RSI ${c.sym} to LIVE? From the next entry, ${c.sym} options will be BOUGHT and SOLD with real orders at every account with BROKER_N_${c.pfx}_ACTIVE=true. There is no stop-loss: the trade ends only when the SuperTrend turns or at 15:14.`)) return;
     if (mode === 'paper' && !confirm(`Switch ${_stbbLabel(c, key)} to PAPER? New entries are only recorded. A live position already open keeps being managed until it is flat.`)) return;
     _stbbSave(key, { mode });

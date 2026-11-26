@@ -480,10 +480,41 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 274 rules (`tests/route_inventory.txt`): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params); the Value screener three (below).
+The api blueprint is at 274 rules (`tests/route_inventory.txt`; 289 since the Hull Suite live algo's 15 on 2026-11-26): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params); the Value screener three (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
+
+## Hull Suite live algo (/algo Hull Suite tab, 2026-11-26)
+
+The /backtest 🌀 Hull Suite ★ group's three rows run live on NIFTY options — the **Hull Suite** top tab on /algo,
+one sub-tab each, like ST Touch Break. **Paper by default; the live order path has never been exercised.** They are
+**strategies 16-18 of the Simple Trader chassis** (`simple_trader_live_engine._hull`, kind `'hs'`, `HULL_TABS`; flags
+`ST16-18_*` / `BROKER_N_ST16-18_ACTIVE|LOTS`; routes `/api/algo/simple-trader-{16,17,18}/*`; files
+`simple_trader_1{6,7,8}_*.json`). 16 was the old Touch Break row whose flags were cleared and files archived on 2026-10-30.
+
+```
+16  5m  300/100/20 · pullback 12 · wait 5 · 1:2 · slope 1 · slow agrees · 0.05 % · two_bar stop · BE 1R · 09:45-13:30
+17 15m  300/50/20  · pullback 24 · wait 2 · no target · slope 1 · slow free · 0.2 % · signal stop · 09:45-14:30
+18 15m  the same, wait 5                       all: both directions, sq-off 15:15, 2 a day, ≈250 premium, no premium SL
+```
+
+* **The rule is the backtest's** (`service/hull_suite_live_engine.py`): `HullSuiteEngine.signals()` on the closed
+  candles arms a stop at the signal candle's high (low); entered the moment the index trades through it inside
+  `max_wait` candles (poll 1-5 s, 1 s near a level), `invalidated` if the stop goes first, `missed` if the read is
+  > 0.5 R past the level. Exits on the INDEX: stop, target (`rr` R from the fill), stop to cost at `breakeven_rr` R,
+  15:15 — sold at market. Nothing rests at the broker (SL % 0).
+* **Every closed 1-minute bar is read** while armed / open (`on_minute`, the very minutes the backtest walks), and the
+  candle's last minute BEFORE the candle (`SimpleTraderAlgo._decide`); a candle is walked whole only when its minutes
+  were not (`on_bar`, marks them read). A minute opening past an armed level fills at that open, as the backtest.
+* **History**: HMA 300 on 15m is ~13 sessions of run-in — `warmup_days` of 1-minute bars, the days before today
+  fetched once a day (`_hull_rows`). HMA is finite-window, so the lines are the backtest's exactly.
+* **Replayed on Fyers 1-minute NIFTY 2025-01 → 2026-11** (poll at the level): 17 = 262/262 trades, 18 = 266/266,
+  same entry minute, reason and exit minute; 16 = 295/298 — the rest are days two setups waited at once, where the
+  backtest books them in signal order (hindsight) and live takes the one that breaks first.
+* Not in ⚖ Compare yet.
+
+Tests: `tests/test_hull_suite_live.py` (live = backtest on synthetic minutes, each decision, the paper thread end to end).
 
 ## Value screener (/scanners Value tab, 2026-11-19)
 
@@ -631,6 +662,10 @@ the `pcLots` row).
   its 2024-26 top row (slow 300 / medium 100 / fast 20, pullback 24 bars, 2 R, breakeven at 1 R, 1 a day) read
   PF 1.53, +4,725 pts there, but PF 1.02, +316 pts on 2018-23, where the plain defaults made PF 1.17, +2,010.
   Check a row on a range it was not swept on before trusting it. A test holds every board row equal to a direct run.
+* **🌀 Hull Suite ★ group (2026-11-26)**: a strategy-picker group of three rows the user ticked on the 🧩 Combined popup
+  (#14 5m 300/100/20 1:2 BE 1R; #21 / #29 15m 300/50/20 no target, break within 2 / 5). `HS_ROWS` in `backtest.js`,
+  options value `hull_suite` told apart by `data-hs-row` (as the 🧲 group's `data-stb-row`); picking one fills the form
+  (`hsApplyRow`: premium 250, options on, no compounding, start 2020-01-01). The group's status option is added from JS.
 
 Tests: `tests/test_hull_suite_engine.py`.
 

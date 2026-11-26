@@ -479,4 +479,18 @@
         }
         mineOpen();
     };
+
+    // Hull Suite: tabs = the page's hull_tabs ({n, tab}); both directions, so each row carries its own option_type.
+    let hullOpen = null;
+    window.hullCombinedOpen = function (tabs) {
+        if (!hullOpen) {
+            hullOpen = makeCombined({
+                title: 'Combined — Hull Suite (Live Algos)',
+                subtitle: `Every booked trade of the ${tabs.length} Hull Suite sub-tabs merged into one book.`,
+                csvName: 'combined_hull_live.csv',
+                defs: tabs.map((t, i) => ({ n: t.n, name: (i + 1) + '. ' + t.tab, symbol: 'NIFTY', side: 'CE' })),
+            });
+        }
+        hullOpen();
+    };
 })();

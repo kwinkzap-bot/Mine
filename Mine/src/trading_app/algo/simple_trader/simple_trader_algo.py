@@ -39,6 +39,7 @@ from trading_app.algo.st_bb_rsi.st_bb_rsi_algo import (   # noqa: F401 — the r
     StBbRsiAlgo, accounts, get_instance, load_history, mode, paper_lots, _flag, _hhmm, _now, _num, _uvar)
 from trading_app.app.utils.logger import logger
 from trading_app.service import simple_trader_live_engine as sim
+from trading_app.service import hull_suite_live_engine as hsl
 from trading_app.service import st_touch_break_live_engine as tb
 
 _DIR = os.path.dirname(__file__)
@@ -59,6 +60,9 @@ def _minute_before(hhmm) -> Optional[str]:
 def _label(spec: sim.Spec) -> str:
     """The title on this algo's alerts. A Touch Break row carries the serial /algo and /backtest show for it:
     its place in MINE_TABS, not its spec number."""
+    if spec.kind == 'hs':
+        serial = [n for n, _key, _p in sim.HULL_TABS].index(spec.n) + 1
+        return f'Hull Suite · {serial}. {spec.tab}'
     if spec.kind != 'tb':
         return f'Simple Trader {spec.n}'
     serial = [n for n, _key, _p in sim.MINE_TABS].index(spec.n) + 1
@@ -88,7 +92,7 @@ PROFILES: Dict[int, SimpleProfile] = {n: SimpleProfile(sp) for n, sp in sim.SPEC
 def _direction(username, p: SimpleProfile) -> str:
     """Seven strategies are one-sided by their rule. ST Touch Break (8) is the Mine group's and takes
     the tab's choice — long (BUY), short or both (the default) — read at each setup."""
-    if p.spec.kind != 'tb':
+    if p.spec.kind not in ('tb', 'hs'):
         return p.spec.side
     dflt = p.spec.fixed.get('direction', p.spec.side)
     v = _uvar(username, f'{p.pfx}_DIRECTION', dflt).lower()
@@ -117,6 +121,10 @@ def settings(username, p: SimpleProfile) -> Dict[str, Any]:
         # what the tab's rule line shows: candles and the entry window are the row's, not settings
         s.update(bar=sp.bar, entry_start=sp.entry_start, entry_end=sp.fixed.get('entry_end', '15:14'),
                  exit_cutoff=sp.fixed.get('exit_cutoff', '15:14'), modes=sp.fixed.get('modes', 'bounce'), tab=sp.tab)
+    if sp.kind == 'hs':                        # Hull Suite: the row's candles, window and its two non-numeric settings
+        s.update(bar=sp.bar, entry_start=sp.entry_start, entry_end=sp.fixed.get('entry_end', '14:30'),
+                 exit_cutoff=sp.fixed.get('exit_cutoff', '15:15'), slow_slope=sp.fixed.get('slow_slope', True),
+                 stop_mode=sp.fixed.get('stop_mode', 'signal'), tab=sp.tab)
     for k, v in sp.params.items():
         n = _num(username, f'{p.pfx}_{k.upper()}', v)
         s[k] = int(n) if isinstance(v, int) and not isinstance(v, bool) else n
@@ -133,6 +141,8 @@ class SimpleTraderAlgo(StBbRsiAlgo):
     # ── the hooks ──────────────────────────────────────────────────────
 
     def _history_rows(self, adapter, today: date) -> List[Dict[str, Any]]:
+        if self.spec.kind == 'hs':
+            return self._hull_rows(adapter, today)
         if self.spec.data != 'fut':
             return super()._history_rows(adapter, today)
         from datetime import timedelta
@@ -143,6 +153,24 @@ class SimpleTraderAlgo(StBbRsiAlgo):
             return []
         return adapter.historical_data(sym, (today - timedelta(days=base._PRIOR_DAYS)).isoformat(),
                                        today.isoformat(), 'minute', use_cache=False) or []
+
+    def _hull_rows(self, adapter, today: date) -> List[Dict[str, Any]]:
+        """Hull Suite's slow HMA (300 on 15 minutes = ~13 sessions) needs more run-in than the 14 days the
+        others read: `hsl.warmup_days` of 1-minute bars. The days before today are fetched once a day and
+        kept; each candle read fetches today alone."""
+        from trading_app.service import multichart_service as mc
+        sym = mc.resolve_symbol(self.p.symbol)
+        days = hsl.warmup_days(self._settings(), self.spec.bar)
+        cached = getattr(self, '_hs_prior', None)
+        if not cached or cached[0] != (today, days):
+            prior = adapter.historical_data(sym, (today - timedelta(days=days)).isoformat(),
+                                            (today - timedelta(days=1)).isoformat(), 'minute', use_cache=False) or []
+            if not prior:
+                logger.warning(f'[{self.p.tag}] no prior 1-minute history — the Hull lines cannot be drawn yet')
+                return []
+            self._hs_prior = cached = ((today, days), prior)
+        todays = adapter.historical_data(sym, today.isoformat(), today.isoformat(), 'minute', use_cache=False) or []
+        return list(cached[1]) + list(todays)
 
     def _bar_minutes(self) -> int:
         return self.spec.bar
@@ -155,7 +183,18 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         return {'entry_start': self.spec.entry_start, 'entry_end': f.get('entry_end', '15:14'),
                 'exit_cutoff': f.get('exit_cutoff', '15:14')}
 
+    def tick(self, now) -> None:
+        self._tick_now = now                 # the clock _decide reads (the tick's own, not a second wall-clock read)
+        super().tick(now)
+
     def _decide(self, day, bars, s):
+        if self.spec.kind == 'hs' and len(bars):
+            # the candle's last minute is read first, as the backtest walks it before the next signal: a level,
+            # stop or target in that minute is decided on the minute, not on the whole candle
+            end = bars.index[-1] + pd.Timedelta(minutes=self.spec.bar)
+            now = getattr(self, '_tick_now', None) or _now()
+            if (now.replace(tzinfo=None) - end).total_seconds() < base._STALE_SECS:
+                return self._minute_events(day, now, s) + sim.on_bar(day, bars, s)
         return sim.on_bar(day, bars, s)
 
     def _clock_exits(self, day, hhmm: str, cutoff: str):
@@ -164,6 +203,15 @@ class SimpleTraderAlgo(StBbRsiAlgo):
     def _price_events(self, day, now, s):
         """ST Touch Break (8) is entered INTRABAR: the index price is read only while a setup's break
         candle is running (or a 'touch' stop is armed), and never for the other seven strategies."""
+        if self.spec.kind == 'hs':
+            if not hsl.watching(day, _hhmm(now), s, self.spec.bar):
+                return []
+            events = self._minute_events(day, now, s)
+            spot = self._spot()
+            if spot is None:
+                return events
+            self.state['spot'] = spot
+            return events + hsl.on_price(day, spot, _hhmm(now), s, self.spec.bar)
         if self.spec.kind != 'tb' or not tb.watching(day, _hhmm(now), s, self.spec.bar):
             return []
         events = self._minute_events(day, now, s)
@@ -179,7 +227,12 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         """With an open trade under a 'touch' stop, each 1-minute index bar is read once it has closed
         (tried each poll for _MINUTE_TRIES polls while the feed is late) and its low/high checked against
         the line — the dip the 1 s poll is too coarse to see. See tb.on_minute."""
-        if not s.get('stop_touch') or not any(t['status'] == 'open' and t.get('stop_line') for t in day['trades']):
+        hull = self.spec.kind == 'hs'
+        mod = hsl if hull else tb
+        if hull:
+            if not hsl.watching(day, _hhmm(now), s, self.spec.bar):
+                return []
+        elif not s.get('stop_touch') or not any(t['status'] == 'open' and t.get('stop_line') for t in day['trades']):
             return []
         n = now.replace(tzinfo=None)
         want = (n - timedelta(minutes=1, seconds=base._FEED_SECS)).replace(second=0, microsecond=0)
@@ -206,11 +259,11 @@ class SimpleTraderAlgo(StBbRsiAlgo):
             ts = stamp.strftime('%Y-%m-%d %H:%M:%S')
             if ts[:10] != day['date'] or ts > want_s or ts <= (day.get('last_minute') or ''):
                 continue
-            for ev in tb.on_minute(day, {'ts': ts, 'high': r.get('high'), 'low': r.get('low'),
-                                         'close': r.get('close')}, s, self.spec.bar):
+            for ev in mod.on_minute(day, {'ts': ts, 'open': r.get('open'), 'high': r.get('high'), 'low': r.get('low'),
+                                          'close': r.get('close')}, s, self.spec.bar):
                 ev['minute'] = ts
                 events.append(ev)
-            if events:
+            if events and not hull:          # Hull Suite reads every minute in order: none may be skipped
                 break
         return events
 
@@ -231,11 +284,14 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         Short, line 23,247.81) the index went above it only by 2 pts, late in the 13:57 minute, and the
         exit's 239 fill came at 13:57:56 — a premium that fell 249 → 239.25 inside that minute."""
         wait = super()._poll_wait(now)
-        if self.spec.kind != 'tb' or not self.state:
+        if self.spec.kind not in ('tb', 'hs') or not self.state:
             return wait
         spot = self.state.get('spot')
         if not spot:
             return wait
+        if self.spec.kind == 'hs':
+            near = any(abs(float(spot) - float(v)) <= _NEAR_PCT / 100.0 * float(spot) for v in hsl.levels(self.state['day']))
+            return min(wait, 1.0) if near else wait
         for t in self.state['day']['trades']:
             lvl = t.get('stop_line') if t['status'] == 'open' else (
                 t.get('level') if t['status'] == 'armed' and not t.get('confirm') else None)
@@ -245,6 +301,28 @@ class SimpleTraderAlgo(StBbRsiAlgo):
 
     def _act(self, ev, now, s) -> None:
         t, kind = ev['trade'], ev['event']
+        if self.spec.kind == 'hs':
+            up = t['type'] == 'Long'
+            if kind == 'armed':
+                self._note(f"#{t['n']} {t['type']}: signal candle {t['signal_bar'][11:16]} — HMA {t['signal'].get('slow')} / "
+                           f"{t['signal'].get('medium')} / {t['signal'].get('fast')}; waiting for the index to trade "
+                           f"{'above' if up else 'below'} {t['level']:,.1f} (stop {t['stop']:,.1f}, risk {t['risk']:,.1f}) "
+                           f"until {t['break_end'] // 60:02d}:{t['break_end'] % 60:02d}")
+                return
+            if kind in ('expired', 'missed'):
+                self._note(f"#{t['n']} {t['type']}: {t.get('error') or 'setup dropped'}")
+                return
+            if kind == 'breakeven':
+                self._note(f"#{t['n']} {t['type']}: {t['be_rr']:g} R reached — stop moved to cost {t['cur_stop']:,.1f}")
+                return
+            if kind == 'entry' and ev.get('stale'):
+                t.update(status='missed', legs={}, error='the level was crossed while the algo was not watching — not chased')
+                self._note(f"#{t['n']} {t['type']}: {t['error']}")
+                return
+            if kind == 'exit' and ev.get('level') is not None:
+                self._note(f"#{t['n']} {t['type']}: index through the {ev['reason'].lower()} at {ev['level']:,.1f}")
+            super()._act(ev, now, s)
+            return
         if self.spec.kind == 'tb' and kind in ('armed', 'expired', 'missed'):
             sg = t.get('signal') or {}
             up = t['type'] == 'Long'
@@ -267,6 +345,9 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         super()._act(ev, now, s)
 
     def _signal_text(self, t) -> str:
+        if self.spec.kind == 'hs':
+            return f"signal {t['signal_bar'][11:16]}, level {t['level']:,.1f}, stop {t['stop']:,.1f}" + (
+                f", target {t['target']:,.1f}" if t.get('target') else '')
         if self.spec.kind != 'tb':
             return super()._signal_text(t)
         sg = t.get('signal') or {}
@@ -446,7 +527,7 @@ class SimpleTraderAlgo(StBbRsiAlgo):
         the target are settled on those same minute closes. An intrabar entry (ST Touch Break with
         no close confirmation) is priced on the forming minute and keeps the live pick."""
         pick = super()._pick_strike(t, opt_type, s)
-        if not pick or (self.spec.kind == 'tb' and not t.get('confirm')):
+        if not pick or self.spec.kind == 'hs' or (self.spec.kind == 'tb' and not t.get('confirm')):
             return pick
         step = self._chain_step()
         cheaper = step if opt_type == 'CE' else -step

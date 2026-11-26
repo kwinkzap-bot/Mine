@@ -27,6 +27,7 @@
         <button class="ag-tab"        id="algo-tab-straddle"        onclick="algoSwitch('straddle')">ATM Straddle</button>
         <button class="ag-tab"        id="algo-tab-simple"          onclick="algoSwitch('simple-1')">Simple Trader</button>
         <button class="ag-tab"        id="algo-tab-mine"            onclick="algoSwitch('mine-nifty')">ST Touch Break</button>
+        {% if hull_tabs %}<button class="ag-tab"        id="algo-tab-hull"            onclick="algoSwitch('{{ hull_tabs[0].key }}')">Hull Suite</button>{% endif %}
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
@@ -236,6 +237,10 @@
     {# The Mine group: ST Touch Break, one sub-tab per row (simple_trader_live_engine.MINE_TABS; 8 = mine-nifty). #}
     {% for m in mine_tabs %}{% with key=m.key, p=m.p, n=m.n, group='mine', names={m.n: loop.index ~ '. ' ~ m.tab}, symbol='NIFTY', pfx='ST' ~ m.n %}{% include 'algo_simple.html' %}{% endwith %}
     {% endfor %}
+
+    {# The Hull Suite group: the /backtest 🌀 Hull Suite ★ rows, one sub-tab each (simple_trader_live_engine.HULL_TABS, specs 16-18). #}
+    {% for m in hull_tabs or [] %}{% with key=m.key, p=m.p, n=m.n, group='hull', names={m.n: loop.index ~ '. ' ~ m.tab}, symbol='NIFTY', pfx='ST' ~ m.n %}{% include 'algo_simple.html' %}{% endwith %}
+    {% endfor %}
     {% include 'algo_ema_confluence.html' %}
 
     <!-- ════════════════════════════════════════════════════════ -->
@@ -279,7 +284,7 @@
 <script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_cpr.js') }}?v={{ sv('js/algo_cpr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_straddle.js') }}?v={{ sv('js/algo_straddle.js') }}"></script>
-<script>window.MINE_TABS = {{ mine_tabs|tojson }};</script>
+<script>window.MINE_TABS = {{ mine_tabs|tojson }}; window.HULL_TABS = {{ (hull_tabs or [])|tojson }};</script>
 <script src="{{ url_for('static', filename='js/algo_stbb.js') }}?v={{ sv('js/algo_stbb.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_simple_combined.js') }}?v={{ sv('js/algo_simple_combined.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_ema_confluence.js') }}?v={{ sv('js/algo_ema_confluence.js') }}"></script>

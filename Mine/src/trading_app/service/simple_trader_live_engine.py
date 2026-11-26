@@ -30,6 +30,8 @@ from trading_app.Backtest.st_rsi_cpr_bb_wr_sx_engine import StRsiCprBbWrSxEngine
 from trading_app.Backtest.st_rsi_pp_bb_engine import StRsiPpBbEngine
 from trading_app.Backtest.st_rsi_pp_bb_fut_engine import StRsiPpBbFutEngine
 from trading_app.Backtest.st_touch_break_engine import StTouchBreakEngine
+from trading_app.Backtest.hull_suite_engine import HullSuiteEngine
+from trading_app.service import hull_suite_live_engine as hsl
 from trading_app.service import st_touch_break_live_engine as tb
 
 
@@ -168,6 +170,45 @@ MINE_TABS = [(n, 'mine-nifty' if n == 8 else f'mine-{n}', 'mnn' if n == 8 else f
              for n, sp in SPECS.items() if sp.kind == 'tb']
 
 
+def _hull(n, tab, bar, slow, medium, fast, pullback_bars, max_wait, rr, slope_bars, slow_slope, pullback_pct,
+          stop_mode, stop_buffer, max_risk, breakeven_rr, direction, entry_start, entry_end, exit_cutoff, max_trades):
+    """A Hull Suite row run live (kind 'hs', service/hull_suite_live_engine): the numbers of one Find Best Params
+    row the user ticked on the Backtest page's 🧩 Combined popup (2026-11-26) — the /backtest 🌀 Hull Suite ★
+    group's rows. Premium 250 and no premium SL / trail, as the board priced them; paper first."""
+    dirs = {'both': 'both directions', 'long': 'BUY only', 'short': 'SELL only'}[direction]
+    stop_txt = 'the signal candle\'s low (high)' if stop_mode == 'signal' else 'the lower low (higher high) of it and the candle before'
+    return Spec(n, 'Hull Suite', HullSuiteEngine, 'hs', 'NIFTY', 'spot', bar,
+                'short' if direction == 'short' else 'long', 250, entry_start, 0, 0, 0, max_trades,
+                dict(slow_len=slow, medium_len=medium, fast_len=fast, pullback_bars=pullback_bars, max_wait=max_wait,
+                     rr=float(rr), slope_bars=slope_bars, pullback_pct=float(pullback_pct), stop_buffer=float(stop_buffer),
+                     max_risk=float(max_risk), breakeven_rr=float(breakeven_rr)),
+                fixed=dict(direction=direction, slow_slope=slow_slope, stop_mode=stop_mode, entry_end=entry_end,
+                           exit_cutoff=exit_cutoff),
+                rule=f'NIFTY {bar}-min, signals {entry_start}-{entry_end}: HMA {slow} / {medium} / {fast} — the first candle to'
+                     f' close above all three (below, for a sell), the medium and fast rising over {slope_bars} candle(s)'
+                     + (' and the slow too' if slow_slope else '') +
+                     (f', a low within {pullback_pct:g} % of the medium in the last {pullback_bars} candles' if pullback_bars else '')
+                     + f' arms a stop at its high (low); bought (≈250 CE, PE for a sell; {dirs}) the moment the index'
+                     f' trades through it within {max_wait} candle(s), dropped if it trades through the stop first.'
+                     f' Stop {stop_txt}' + (f' ∓ {stop_buffer:g} pts' if stop_buffer else '')
+                     + (f', target {rr:g} R' if rr else ', no target') + (f', stop to cost at {breakeven_rr:g} R' if breakeven_rr else '')
+                     + f', square-off {exit_cutoff}; up to {max_trades} a day, one at a time',
+                tab=tab)
+
+
+# The Hull Suite group (2026-11-26): the three rows of the /backtest 🌀 Hull Suite ★ group (Combined popup #14, #21, #29).
+#   n   tab                                     bar slow med fast pb wait rr slope slowup  near   stop       buf risk be  dir     from     until    sq-off  /day
+for _sp in (
+    _hull(16, '5m · 300/100/20 · 1:2 · BE 1R',          5,  300, 100, 20, 12, 5, 2, 1, True,  0.05, 'two_bar', 0, 0, 1, 'both', '09:45', '13:30', '15:15', 2),
+    _hull(17, '15m · 300/50/20 · no target · wait 2',   15, 300, 50,  20, 24, 2, 0, 1, False, 0.2,  'signal',  0, 0, 0, 'both', '09:45', '14:30', '15:15', 2),
+    _hull(18, '15m · 300/50/20 · no target · wait 5',   15, 300, 50,  20, 24, 5, 0, 1, False, 0.2,  'signal',  0, 0, 0, 'both', '09:45', '14:30', '15:15', 2),
+):
+    SPECS[_sp.n] = _sp
+
+# The Hull Suite top tab's sub-tabs: (spec number, page key, DOM prefix).
+HULL_TABS = [(n, f'hull-{n}', f'hl{n}') for n, sp in SPECS.items() if sp.kind == 'hs']
+
+
 def new_day(date_str: str) -> Dict[str, Any]:
     return {'date': date_str, 'trades': [], 'last_bar': None}
 
@@ -272,6 +313,8 @@ def on_bar(day: Dict[str, Any], bars: pd.DataFrame, s: Dict[str, Any]) -> List[D
     spec = SPECS[int(s['spec'])]
     if spec.kind == 'tb':
         return tb.on_bar(day, bars, dict(spec.fixed, **s), spec.bar)
+    if spec.kind == 'hs':
+        return hsl.on_bar(day, bars, dict(spec.fixed, **s), spec.bar)
     rd = _Read(spec, bars, s)
     if rd.ts[:10] != day['date'] or rd.ts == day.get('last_bar'):
         return []
@@ -313,5 +356,5 @@ def option_type(t: Dict[str, Any]) -> str:
     return 'CE' if t['type'] == 'Long' else 'PE'
 
 
-__all__ = ['SPECS', 'Spec', 'new_day', 'on_bar', 'time_exits', 'option_type', 'stop_level', 'tick_up',
+__all__ = ['SPECS', 'Spec', 'MINE_TABS', 'HULL_TABS', 'new_day', 'on_bar', 'time_exits', 'option_type', 'stop_level', 'tick_up',
            'engine_kwargs', 'brokerage_for']

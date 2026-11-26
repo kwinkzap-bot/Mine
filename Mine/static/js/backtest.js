@@ -510,6 +510,46 @@ document.addEventListener('DOMContentLoaded', function() {
         if (lot) lot.value = lotValueForSymbol('NIFTY');
     }
 
+    // The 🌀 Hull Suite ★ group: three rows the user ticked on the Hull Suite Find Best Params 🧩 Combined popup
+    // (2026-11-26, 2020-01-01 → 2026-11-26, option P&L net of brokerage). Each is the hull_suite strategy, told apart
+    // by data-hs-row; picking one fills the ordinary form (still editable) with that row's settings.
+    const HS_ROWS = [
+        { n: 14, tab: '5m · 300/100/20 · 1:2 · BE 1R', timeframe: '5minute', slow_len: 300, medium_len: 100, fast_len: 20,
+          pullback_bars: 12, max_wait: 5, rr: 2, slope_bars: 1, slow_slope: true, pullback_pct: 0.05, stop_mode: 'two_bar',
+          stop_buffer: 0, max_risk: 0, breakeven_rr: 1, direction: 'both', entry_start: '09:45', entry_end: '13:30',
+          exit_cutoff: '15:15', max_trades_per_day: 2 },
+        { n: 21, tab: '15m · 300/50/20 · no target · wait 2', timeframe: '15minute', slow_len: 300, medium_len: 50, fast_len: 20,
+          pullback_bars: 24, max_wait: 2, rr: 0, slope_bars: 1, slow_slope: false, pullback_pct: 0.2, stop_mode: 'signal',
+          stop_buffer: 0, max_risk: 0, breakeven_rr: 0, direction: 'both', entry_start: '09:45', entry_end: '14:30',
+          exit_cutoff: '15:15', max_trades_per_day: 2 },
+        { n: 29, tab: '15m · 300/50/20 · no target · wait 5', timeframe: '15minute', slow_len: 300, medium_len: 50, fast_len: 20,
+          pullback_bars: 24, max_wait: 5, rr: 0, slope_bars: 1, slow_slope: false, pullback_pct: 0.2, stop_mode: 'signal',
+          stop_buffer: 0, max_risk: 0, breakeven_rr: 0, direction: 'both', entry_start: '09:45', entry_end: '14:30',
+          exit_cutoff: '15:15', max_trades_per_day: 2 },
+    ];
+    const HS_ROW_IDS = { slow_len: 'hsSlow', medium_len: 'hsMedium', fast_len: 'hsFast', pullback_bars: 'hsPbBars',
+        max_wait: 'hsMaxWait', rr: 'hsRr', slope_bars: 'hsSlope', slow_slope: 'hsSlowSlope', pullback_pct: 'hsPbPct',
+        stop_mode: 'hsStopMode', stop_buffer: 'hsStopBuf', max_risk: 'hsMaxRisk', breakeven_rr: 'hsBe',
+        direction: 'hsDirection', entry_start: 'hsEntryStart', entry_end: 'hsEntryEnd', exit_cutoff: 'hsExitCutoff',
+        max_trades_per_day: 'hsMaxTrades' };
+    function hsSelectedRow() {
+        const n = strategySelect?.selectedOptions[0]?.dataset.hsRow;
+        return n ? HS_ROWS.find(t => String(t.n) === n) || null : null;
+    }
+    function hsApplyRow(t) {
+        Object.entries(HS_ROW_IDS).forEach(([k, id]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.type === 'checkbox') el.checked = !!t[k]; else el.value = t[k];
+        });
+        const set = (id, v) => { const el = document.getElementById(id); if (!el) return;
+                                 if (el.type === 'checkbox') el.checked = v; else el.value = v; };
+        set('hsPriceOptions', true); set('hsPremium', '250'); set('hsCompound', false);
+        set('hsCapital', 25000); set('hsPerLot', 25000);
+        const tf = document.getElementById('interval');
+        if (tf) tf.value = t.timeframe;
+    }
+
     function updateStrategyView() {
         if (!strategySelect) return;
 
@@ -894,6 +934,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intFg) intFg.style.display = '';
             if (intervalSelect) intervalSelect.value = '5minute';
             if (startDateInput) startDateInput.value = '2020-01-01';
+            const hsRow = hsSelectedRow();
+            if (hsRow) hsApplyRow(hsRow);
             updatePcInvestment();
 
         } else if (val === 'weekly_cpr_breakout') {
@@ -1037,8 +1079,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // rows — all with that same value, so everything keyed on strategySelect.value treats them as the one
     // strategy, told apart by data-stb-row. It has no plain entry (removed from Mine 2026-11-06).
     const STB_GROUP = 'st_touch_break';
+    const HS_GROUP = 'hull_suite_rows';                   // 🌀 Hull Suite ★: HS_ROWS, data-hs-row
+    const ROW_GROUP_KEY = { [STB_GROUP]: 'stbRow', [HS_GROUP]: 'hsRow' };
+    const isRowOption = opt => !!(opt && (opt.dataset.stbRow || opt.dataset.hsRow));
     const STRATEGY_STATUS = {
         [STB_GROUP]: ['st_touch_break'],
+        [HS_GROUP]: ['hull_suite'],
         simpler: ['simpler_trader', 'st_ema_rsi_cci', 'st_rsi_pp_bb', 'st_rsi_pp_bb_fut', 'st_rsi_cci_wr_pp_bb_fut', 'st_rsi_cpr_bb_sx', 'st_rsi_cpr_bb_wr_sx'],
         mine:    ['sunshine_straddle', 'hull_suite', 'smart_wheel', 'monthly_rsi_breakout', 'biweekly_iron_condor', 'st_all_indicators'],
         live:    ['second_candle', 'thirty_min_fakeout', 'swing_momentum', 'ema_pullback', 'atm_straddle'],
@@ -1055,6 +1101,17 @@ document.addEventListener('DOMContentLoaded', function() {
             opt.dataset.stbRow = t.n;
             strategySelect.appendChild(opt);
         });
+        HS_ROWS.forEach((t, i) => {
+            const opt = new Option(`🌀 ${i + 1}. Hull #${t.n} · ${t.tab}`, 'hull_suite');
+            opt.dataset.hsRow = t.n;
+            strategySelect.appendChild(opt);
+        });
+    }
+    // The group itself, after 🧲 ST Touch Break in the status box (added here so the template needs no change).
+    if (strategyStatusSelect && ![...strategyStatusSelect.options].some(o => o.value === HS_GROUP)) {
+        const after = [...strategyStatusSelect.options].find(o => o.value === STB_GROUP);
+        const g = new Option('🌀 Hull Suite ★', HS_GROUP);
+        if (after) after.after(g); else strategyStatusSelect.appendChild(g);
     }
     const _allStrategyOptions = strategySelect
         ? Array.from(strategySelect.options)
@@ -1064,17 +1121,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!strategySelect || !strategyStatusSelect) return;
         const allowed = STRATEGY_STATUS[strategyStatusSelect.value] || [];
         const prev    = strategySelect.value;
-        const rows    = strategyStatusSelect.value === STB_GROUP;
+        const prevRow = isRowOption(strategySelect.selectedOptions[0]);
+        const rowKey  = ROW_GROUP_KEY[strategyStatusSelect.value];
 
         strategySelect.innerHTML = '';
         _allStrategyOptions
-            .filter(opt => rows ? !!opt.dataset.stbRow : !opt.dataset.stbRow && allowed.includes(opt.value))
+            .filter(opt => rowKey ? !!opt.dataset[rowKey] : !isRowOption(opt) && allowed.includes(opt.value))
             .forEach(opt => strategySelect.appendChild(opt));
 
         if (!strategySelect.options.length) return;
         // Selection survives only if the strategy is still in the bucket;
         // otherwise fall back to the first one and rebuild the form for it.
-        if (allowed.includes(prev)) {
+        // A row group always opens on its first row (it fills the form), and leaving one rebuilds the plain form.
+        if (allowed.includes(prev) && !rowKey && !prevRow) {
             strategySelect.value = prev;
         } else {
             strategySelect.selectedIndex = 0;
@@ -6945,7 +7004,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const sel = document.getElementById('strategySelect');
             if (sel && x.strategy && sel.value !== x.strategy) {
                 // Filed under another group: go there first (the 🧲 group, for a Touch Break row).
-                const group = Object.keys(STRATEGY_STATUS).find(g => STRATEGY_STATUS[g].includes(x.strategy));
+                const groups = Object.keys(STRATEGY_STATUS).filter(g => STRATEGY_STATUS[g].includes(x.strategy));
+                const group = groups.find(g => !ROW_GROUP_KEY[g] || g === STB_GROUP) || groups[0];   // hull_suite → Mine, not ★
                 if (group && strategyStatusSelect && ![...sel.options].some(o => o.value === x.strategy)) {
                     strategyStatusSelect.value = group;
                     strategyStatusSelect.dispatchEvent(new Event('change', { bubbles: true }));

@@ -8,7 +8,8 @@ let _scLastActiveFlag  = false; // tracks last seen active flag
 let _activeTimer       = null;
 const _ALGO_TABS = ['active', 'sc', 'tmf', 'cpr', 'straddle',
     'simple-1', 'simple-2', 'simple-3', 'simple-4', 'simple-5', 'simple-6', 'simple-7',
-    ...(window.MINE_TABS || [{ key: 'mine-nifty' }]).map(m => m.key), 'ema-confluence', 'swing-momentum'];
+    ...(window.MINE_TABS || [{ key: 'mine-nifty' }]).map(m => m.key), ...(window.HULL_TABS || []).map(m => m.key),
+    'ema-confluence', 'swing-momentum'];
 
 // Round-trip charges are computed per trade from its own premium turnover
 // (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
@@ -246,7 +247,8 @@ function _legsOpen(src, data) {
             label: src.label, mode: t.mode || 'paper', direction: _activeDir(cpr ? t.trade : t.type),
             instrument: t.option ? `${t.option.type} ${t.option.strike}` : '—',
             entrySpot: cpr ? t.fill : t.index_entry, liveSpot: st.spot,
-            sl: cpr ? t.sl : t.stop_line, target: cpr ? t.target : undefined,
+            // Hull Suite carries its index stop (cost after breakeven) and target; ST Touch Break its SuperTrend line
+            sl: cpr ? t.sl : (t.cur_stop ?? t.stop_line), target: cpr || t.target != null ? t.target : undefined,
             entryPx: L.entry, ltp: L.ltp ?? undefined, pnl: L.mtm ?? undefined,
             entryTime: _activeClock(cpr ? t.fill_time : t.entry_time),
         };
@@ -278,6 +280,9 @@ const _ACTIVE_SOURCES = [
     // ST Touch Break shows the same serial (1-8) and tab name as its /algo sub-tab and its alerts.
     ...(window.MINE_TABS || [{ n: 8, tab: 'NIFTY - Both - 3m' }]).map((m, i) => ({
         label: `ST Touch Break · ${i + 1}. ${m.tab || ''}`.trim(), url: `/api/algo/simple-trader-${m.n}/status`,
+        histUrl: `/api/algo/simple-trader-${m.n}/history`, open: _legsOpen, done: _legsDone })),
+    ...(window.HULL_TABS || []).map((m, i) => ({
+        label: `Hull Suite · ${i + 1}. ${m.tab || ''}`.trim(), url: `/api/algo/simple-trader-${m.n}/status`,
         histUrl: `/api/algo/simple-trader-${m.n}/history`, open: _legsOpen, done: _legsDone })),
 ];
 
@@ -827,7 +832,7 @@ function algoSwitch(tab) {
         document.getElementById('algo-' + t + '-panel').classList.toggle('active', t === tab);
         // the seven Simple Trader strategies share one top tab ('simple'), with sub-tabs inside
         // the Mine group's algos (ST Touch Break on NIFTY) are one top tab ('mine') the same way
-        const grp = t.startsWith('simple-') ? 'simple-' : (t.startsWith('mine-') ? 'mine-' : null);
+        const grp = t.startsWith('simple-') ? 'simple-' : (t.startsWith('mine-') ? 'mine-' : (t.startsWith('hull-') ? 'hull-' : null));
         const top = grp ? grp.slice(0, -1) : t;
         const btn = document.getElementById('algo-tab-' + top);
         const on = grp ? tab.startsWith(grp) : t === tab;
@@ -857,7 +862,7 @@ function algoSwitch(tab) {
     } else if (tab === 'straddle') {
         _strFetchStatus();
         _strFetchHistory();
-    } else if (tab.startsWith('simple-') || tab.startsWith('mine-')) {
+    } else if (tab.startsWith('simple-') || tab.startsWith('mine-') || tab.startsWith('hull-')) {
         _stbbActivate(tab);
     } else if (tab === 'ema-confluence') {
         _emacFetchStatus();

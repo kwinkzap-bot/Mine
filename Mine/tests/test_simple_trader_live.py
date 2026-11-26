@@ -280,9 +280,9 @@ def test_one_trade_a_day_for_strategy_1_and_five_for_the_rest():
 def test_each_algo_has_its_own_flags_files_and_dispatch_route(monkeypatch):
     from trading_app.app.routes import api
     pr = algo.PROFILES
-    nums = list(range(1, 16))                                                  # 8-15 = ST Touch Break (Mine)
+    nums = list(range(1, 19))                                 # 8-15 = ST Touch Break (Mine), 16-18 = Hull Suite
     assert [p.pfx for p in pr.values()] == [f'ST{n}' for n in nums]
-    assert len({p.state_file() for p in pr.values()}) == 15 and len({p.history_file() for p in pr.values()}) == 15
+    assert len({p.state_file() for p in pr.values()}) == 18 and len({p.history_file() for p in pr.values()}) == 18
     assert pr[6].symbol == 'SENSEX' and pr[6].instrument == 'BFO' and pr[4].instrument == 'NFO'
     for n in nums:
         assert api._STBB_FLAGS[f'st{n}'] == f'ST{n}'

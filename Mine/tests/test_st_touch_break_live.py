@@ -474,7 +474,7 @@ def test_each_mine_row_is_its_own_paper_algo_with_the_rows_numbers(n, tmp_path, 
 def test_the_mine_tabs_are_8_and_the_seven_saved_rows():
     assert [n for n, _, _ in sim.MINE_TABS] == list(range(8, 16))
     assert sim.MINE_TABS[0] == (8, 'mine-nifty', 'mnn')
-    assert 16 not in sim.SPECS                                                # the 2026-10-29 rows are gone
+    assert sim.SPECS[16].kind == 'hs'                       # the 2026-10-29 rows are gone; 16-18 are Hull Suite now
     assert len({sim.SPECS[n].tab for n, _, _ in sim.MINE_TABS}) == 8
     assert sim.SPECS[9].tab == 'NIFTY - Sell - 5m - #15' and sim.SPECS[15].tab == 'NIFTY - Buy - 5m - #2'
     assert len({k for _, k, _ in sim.MINE_TABS}) == 8 and len({p for _, _, p in sim.MINE_TABS}) == 8
