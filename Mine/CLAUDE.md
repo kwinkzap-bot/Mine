@@ -484,7 +484,7 @@ by `data-stb-row`, so the form, Find Best Params and the run are the one strateg
 editable) with NIFTY, premium 250, no premium stop, start date 2026-11-01. It is the strategy's only entry: the plain `ST Touch Break (SuperTrend wick + break)` option in the Mine group was removed on 2026-11-06 (form-level only; engine, routes and sweep stay, since the rows and the live algos use them), and a Saved Touch Break row's USE now lands here on its saved start date. **The top tab on /algo reads ST Touch
 Break too, and both lists show the same serial, 1-8** (the row's place in `MINE_TABS`, so 1 = spec 8 … 8 = spec 15). That is
 display only: flags, routes, files and page keys keep the spec number (`ST8_*`, `mine-nifty`). Bell and Telegram alerts carry the same title (`ST Touch Break · 1. NIFTY - Both - 3m`).
-The api blueprint is at 274 rules (`tests/route_inventory.txt`; 289 since the Hull Suite live algo's 15 on 2026-11-26): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four (below, now with Find Best Params), the Smart Wheel four (with Find Best Params) and the Sunshine Straddle three (with Find Best Params); the Value screener three (below).
+The api blueprint is at 274 rules (`tests/route_inventory.txt`; 289 since the Hull Suite live algo's 15 on 2026-11-26): `/algo/compare-today/<key>` (the Active Trade tab's ⚖ Compare, below) added one, the ATM Straddle live algo added six (above), the Bi-weekly Iron Condor backtest three, the Monthly RSI Breakout four, the Smart Wheel four and the Sunshine Straddle three (all four backtests removed 2026-11-27, 275 since); the Value screener three (below).
 
 Tests: `tests/test_st_touch_break_live.py` (engine, paper thread, settings, that every candle the
 backtest trades is armed live, and the same per row for 9-16).
@@ -615,37 +615,12 @@ higher, and ST4/ST5 missed the 09:15 BUY their backtests took. ST1/ST3's entry (
 13:50:46; the minute check sold at 13:51:03 into a falling PE) are fills, not logic.
 Tests: `tests/test_live_vs_backtest.py` (SC/TMF too), `test_simple_trader_live.py::test_the_futures_closing_session_is_not_part_of_the_day`.
 
-## Sunshine Straddle backtest (NIFTY Mon/Tue + SENSEX Wed/Thu; `sunshine_straddle`)
+## Sunshine Straddle backtest — removed
 
-Added 2026-11-16 in the Mine group, from a video (Darshan Rathod, Lemon, "Sunshine & Sunset trading system",
-youtube 6qpMm393xKg, Hindi; the crude-oil half is not modelled — no MCX data here). `Backtest/sunshine_straddle_engine.py`
-(pure), routes `/api/backtest/sunshine-straddle{,/optimise,/status/<id>}` (the sweep polls the backtest's status
-route), params row `#sunshineStraddleParamsRow` (`ss*` ids), results in the shared `#crResults`, sweep panel
-`#sunshineStraddleOptimisePanel`, JS `runSunshineStraddle` / `runSsOptimise` / `applySsOptResult`.
-
-* **Rule**: on NIFTY Mon/Tue and SENSEX Wed/Thu (or each index's own 0/1 DTE, the Days box), the weekly running that
-  day: buy a CE + PE `hedge_strikes` (20) out a minute before the entry, sell the ATM CE + PE, a +50 % stop on each
-  short leg alone, out at the window's exit. NIFTY 09:22→10:16, 14:27→15:14; SENSEX 09:22→10:30, 13:35→15:14 (the
-  video's last exit is 15:30/15:35; 15:14 is his own alternative). SENSEX profit lock: at ₹2,000 a lot of MTM lock
-  ₹750, +₹10 per ₹20 more, out at the first minute close at/under it.
-* **Prices**: each contract's own 1-minute bars (`historical_option_minutes`, disk-cached per contract-session); a
-  price "at" HH:MM is the close of the minute before; a stop fills at its level (the open on a gap). Today's lots
-  (NIFTY 65, SENSEX 20) for every year. Charges: ₹20 an order + STT / exchange / SEBI / stamp / GST.
-* **Breeze**: ~4 contract-sessions a window cold; a run spends at most `_ss_budget()` (400 in market hours, else 2,500)
-  and a re-run carries on. **Breeze has no SENSEX option bars for Jan-May 2024** (cached as `[]`): those windows are
-  "no Breeze bars". 2024-01 → 2026-11 was warmed on 2026-11-16.
-* **⚡ Find Best Params**: `SWEEP_GRID` = stop (0-100 %) × each of the four windows off or one of its exits (AM
-  10:00-11:00, PM 15:00-15:25) × profit lock off / on NIFTY / SENSEX / both at four levels = 34,181 distinct combos,
-  at the page's entry times, hedges, lots and costs. A window's P&L depends only on (stop, its exit, its lock), so each
-  window instance is run once per such key and a combo is a sum of four daily vectors (~20 s for 18 months). **Cache
-  only — never a Breeze request**: run the backtest over a range first. A test holds every sweep row equal to
-  `simulate` + `summarise` of its own settings. `board` collapses rows whose lock never armed.
-* **First real run** (2024-01 → 2026-11-13, video defaults, 1 lot each): 1,044 windows, 53 % win, gross +₹1.80 L,
-  costs ₹2.23 L, **net −₹42.5 k**, DD ₹65.3 k, PF 0.91; 2024 −₹5.9 k, 2025 −₹50.6 k, 2026 +₹13.9 k. NIFTY AM −₹15.8 k
-  and SENSEX PM −₹28.1 k carry the loss. The sweep's best (in-sample): NIFTY PM to 15:25 + SENSEX AM to 11:00, stop
-  100 %, no lock — 521 windows, +₹60.4 k, DD ₹9.9 k, +₹36.9 k / +₹23.5 k by half. Not checked out of sample.
-
-Tests: `tests/test_sunshine_straddle_engine.py`.
+Added 2026-11-16 (Mine group, from a Darshan Rathod / Lemon video) and removed 2026-11-27 at the user's request:
+`Backtest/sunshine_straddle_engine.py`, the three `/api/backtest/sunshine-straddle{,/optimise,/status/<id>}` routes,
+its option, params row, Best Params panel, JS and `tests/test_sunshine_straddle_engine.py`. The video's settings lost
+money over 2024-26 (net −₹42.5 k); the sweep's best (in-sample) was +₹60 k. Its cached option minutes stay on disk.
 
 ## Hull Suite System backtest (NIFTY, the /backtest default; `hull_suite`)
 
@@ -687,258 +662,31 @@ the `pcLots` row).
 
 Tests: `tests/test_hull_suite_engine.py`.
 
-## Smart Wheel backtest (NIFTY 50 stock options; `smart_wheel`)
+## Smart Wheel backtest — removed
 
-Added 2026-11-15 in the Mine group, from a video (Kundan Prajapati on Upsurge, youtube TVTvKDJ44Vs, Hindi; transcript via
-youtube-transcript-api). `Backtest/smart_wheel_engine.py` (pure), routes `/api/backtest/smart-wheel{,/status/<id>}`, params
-row `#smartWheelParamsRow` (`sw*` ids), results in the shared `#crResults` (+ `#bicYearGrid`, Equity Curve / P&L Breakdown as
-the RSI Breakout renders them), JS `runSmartWheel` / `renderSmartWheel`.
+Added 2026-11-15 (Mine group, NIFTY 50 put → future + covered call, from a Kundan Prajapati / Upsurge video) and removed
+2026-11-27 at the user's request: `Backtest/smart_wheel_engine.py`, the four `/api/backtest/smart-wheel{,/status,/optimise,/optimise/status}`
+routes, its option, params row, Best Params panel, JS and `tests/test_smart_wheel_engine.py`. Model premiums made CAGR 6.2 %
+(2015-26); Breeze-priced boards read ~5 % CAGR on 2020-26. Kept: `IciciAdapter.historical_cash_daily` (added for it, now
+uncalled) and the `[]` caching of an empty expired-strike answer in `historical_option_range`, which every option path uses.
 
-* **Rule** (on daily closes): watchlist = NIFTY 50 stocks (`NIFTY50_SECTORS`, today's list) that have not fallen > 30 %
-  peak-to-trough in the last 5 years and are now ≥ 15 % under their all-time high; 5 at a time, one per sector. The session
-  after each monthly expiry, SELL that month's put ≥ 5 % under spot and under the 60-session low ("support"), if premium ×
-  qty ≥ 1 % of the ₹2 L per stock. A close at/under the put's breakeven → buy it back, buy the future, sell the ATM call
-  (next month's under 10 sessions left). Up: above the call's breakeven with ≤ 10 % of its premium left as time value
-  (`TIME_VALUE_LEFT`), or at its expiry → close both. Sideways: call expires → sell the next. Down: a close under
-  future entry − every call premium kept → sell the future, buy the call back. The video's "take delivery and wait" is not
-  modelled. Until the up-exit waited for the time value it closed at the bare call breakeven and lost money on most of them.
-* **Lot = `contract_value` (₹5 L) ÷ spot**, not NSE's real lot (not stored); the future is the stock less `carry_pct`
-  (0.5 %) a month.
-* **Premiums**: `prices='breeze'` reads each expired contract's real daily close (`historical_option_range(..., interval='day')`,
-  one request a contract, disk-cached; an expired strike Breeze answers empty is now cached as `[]` on that path too) —
-  `_sw_budget()` 400 requests in market hours, else 2,500, re-run carries on. **The stock files are split/bonus ADJUSTED**
-  (Reliance reads ₹655 in Feb 2020), so `BreezePrices` reads the unadjusted cash closes (`IciciAdapter.historical_cash_daily`,
-  new, one request a calendar year, cached) and moves every level onto the traded scale before asking for a strike, and every
-  premium back after. Strikes are probed on `strike_ladder` (fine step, then coarser; whole rupees only — Breeze takes an
-  integer strike). `prices='model'` = Black-Scholes on 20-session realised vol × `iv_mult` (1.2), no broker call.
-* **First run, model premiums only** (Breeze session expired that Sunday): 2015-01 → 2026-11, ₹10 L: 186 puts, 88.5 % won,
-  +₹10.3 L, CAGR 6.2 %, max DD 9.3 % (Mar 2020), PF 3.5; 38 run through, 14 stopped, worst −₹74.5 k (Reliance Mar 2020).
-  2021-24 trade little: the 15 %-off-high filter rarely passes in a bull run. **No real-premium run yet.**
-* **⚡ Find Best Params** (added the same evening): routes `/api/backtest/smart-wheel/optimise{,/status/<id>}`, panel
-  `#smartWheelOptimisePanel` / `#swOptGrid`, JS `runSwOptimise` / `applySwOptResult`. `SWEEP_GRID` = max fall (25-40) ×
-  under the high (10-25) × put distance (3-10) × support (off/20/60/120) × min premium (0.5-1.5) × `up_tv_pct` (10/25/50,
-  the up-exit's time value, now a box: "Up Exit: Time Value Left %") = 2,304 combos; money boxes and the premium source
-  come from the page. `board()` = union of the top 60 by CAGR ÷ DD, by CAGR and by the weaker half's CAGR (≥ 10 puts). On
-  **Breeze** it reads only contracts already on disk (`_sw_cached_fetchers()` with no state: never a request). A test
-  holds every sweep row equal to a direct `simulate` + `score` of its settings. ~65 s for 2015-20 on model premiums
-  (a run is ~0.05 s since `monthly_expiries` / the entry days use `bisect` — rebuilding a numpy date array per month
-  had made it 1.7 s). **It overfits**: 2015-20's top row (fall 40 · 15 % off high · put 10 % below · support 20 ·
-  premium 1.5 %) read CAGR 13.2 % / DD 2.9 % there (defaults 8.0 % / 9.3 %) but 6.5 % / 3.6 % on 2021-26, where the
-  defaults made 6.5 % / 3.0 %. Model premiums too, so read a board as a shortlist to try on Breeze, not an answer.
+## RSI 60-65 Breakout backtest — removed
 
-Tests: `tests/test_smart_wheel_engine.py`.
+Added 2026-11-13 (Mine group, stocks on monthly / weekly / daily RSI(14) breakouts with an EMA exit, from a Darshan Rathod
+video; the /backtest default until 2026-11-15) and removed 2026-11-27 at the user's request: `Backtest/monthly_rsi_breakout_engine.py`,
+the four `/api/backtest/monthly-rsi-breakout{,/status,/optimise,/optimise/status}` routes, its option, params row, Best Params
+panel, JS and `tests/test_monthly_rsi_breakout_engine.py`. Its swept defaults read CAGR 15-20 % on F&O 2015-26 (in-sample,
+survivorship-flattered). Kept: the shared Equity Curve / P&L Breakdown charts and `_displayResultsCore` restoring `#resultsRow1`.
 
-## RSI 60-65 Breakout backtest — Day / Week / Month (stocks; `monthly_rsi_breakout`)
+## NIFTY Bi-weekly Iron Condor backtest — removed
 
-Added 2026-11-13 in the Mine group, the default strategy on /backtest until 2026-11-15 (Hull Suite, above; it took over from the Bi-weekly Iron Condor), from a video (Darshan Rathod, "hedge fund / mutual fund strategy"; transcript via youtube-transcript-api).
-`Backtest/monthly_rsi_breakout_engine.py` (pure), routes `/api/backtest/monthly-rsi-breakout{,/status/<id>}`, params row
-`#monthlyRsiBreakoutParamsRow` (`mrb*` ids), results in the shared `#crResults` (`#crStats`, `#bicYearGrid` as the per-year table, `#crGrid`),
-JS `runMonthlyRsiBreakout` / `renderMonthlyRsiBreakout`.
-
-* **Rule**, on calendar-month candles folded from daily bars: a month closes with RSI(14) (Wilder, TradingView's) in 60-65 → next month only,
-  buy at that month's high (a gap over it fills at the open). Out when a month CLOSES below its 20 EMA and a later day trades below that
-  candle's low (filled at the low, or the open on a gap); a close back above disarms; consecutive closes below re-arm at the LATEST candle's low
-  (the video does not say which). ≤ 5 new stocks a month; no new entries while NIFTY's monthly RSI is < 40. EMA/RSI need 20 months of history.
-* **Not in the video, so boxes**: one cash portfolio (₹1 L since 2026-11-13 at the user's ask — that pot and what it earns pays for every buy,
-  nothing is added; `min_cash` in the result proves it never went below 0; it was ₹10 L; a buy the cash cannot
-  pay for in full is skipped, never bought smaller — until that rule the book filled up with ₹54 positions), a liquidity floor (₹1 Cr average daily
-  turnover in the scan month), 0.15 % charges a side plus ₹20 brokerage an order (each buy and sell; `brokerage`, the
-  Brokerage ₹ per Order box, added the same day). Same-day entries go most-liquid first.
-* **Position Size: Fixed ₹ (default) or Risk %** (`size_mode`, added the same day after a run, at the user's ask —
-  "all the stocks is should be same amount of investment"). Fixed buys every new stock with the same `fixed_amount`
-  (₹10,000 default — the "Amount per Stock" box); Risk % is the original video sizing, qty = equity × `risk_pct` ÷
-  (entry − 20 EMA), capped at `max_pos_pct` of equity — only those two boxes are live under Risk %, and only
-  Amount per Stock is live under Fixed (`syncMrbSizeMode` toggles them). Either way the cash-must-cover-the-whole-
-  buy rule above still applies. At ₹1 L / ₹10,000 F&O 2015-26: 190 trades (was 250), CAGR 16.4 % (was 20.4 %), max
-  DD 25.5 % (was 19 %), up to 50 holdings at once (was 37) — smaller, more numerous, more equal-sized positions;
-  read as one more draw from the same path-dependent pot, not a verdict on which sizing is "better". `simulate()`'s
-  sizing block now picks `q_target` (fixed_amount/px, or min(q_risk, q_cap) under Risk %) and only then floors it —
-  the cash check (`qty > q_cash` → skipped) stays a SEPARATE step after the floor, not folded into it: folding cash
-  into the floor silently shrinks a position instead of skipping it, which is the one thing this engine must never
-  do (caught by `test_a_buy_must_cover_its_brokerage`). Find Best Params (below) collapses `risk_pct` in its grid
-  to one value under Fixed sizing, since it cannot change the result there — sweeping it anyway would only triple
-  the combo count for identical rows.
-* **Data**: only the per-stock daily pickles under `data/stocks/` (`candle_store._load_disk`, the plain-symbol key the nightly EMA Narrow prewarm
-  fills) — no broker call, so it is safe in market hours; all ~2,600 NSE stocks load in ~10 s. Universe is today's NSE / F&O list (survivorship).
-  ~220 files carry a day opening 40 %+ from the last close (unadjusted splits, demergers, bad prints): `clean_daily` starts that stock's history at
-  its last such day. NIFTY is `NIFTY.pkl` (from 2013).
-* **First real run** (2015-01 → 2026-11-13, defaults, all NSE): 145 stocks bought, 41.6 % win, PF 2.76, CAGR 13.5 % vs NIFTY 9.3 %, max DD 32 %
-  (NIFTY 29 %); F&O only: 114 trades, CAGR 12.5 %. Cash is the binding limit (~6,900 breakouts skipped for it), so WHICH breakouts get taken is
-  luck of timing — so much so that the brokerage box alone moves CAGR 10.4-14.0 % with no trend (₹0 13.5 %, ₹5 14.0 %,
-  ₹20 10.4 %, ₹40 13.9 %) while costing only ~₹6 k in 12 years: a few rupees less cash buys a different stock and the path
-  forks. Read one run as one draw, ~10-14 % a year. Every breakout equally (7,448): 40.5 % win, median −9.2 %, mean +27.4 % — the edge is the fat right tail. Video checks: Phoenix
-  Mills Aug 2021 entry 447.48 (video ≈447), still held; Yes Bank exit 162 (video ≈168). BSE Jun 2023 reads RSI 56.9 here vs the video's 61.
-
-* **Timeframe box** (`timeframe`: month — the video's, default — / week / day; added the same day): the same rule on Mon-Sun weeks or days
-  (`period_bars`; signals are `signal_period`, labelled `YYYY-MM` / the Monday / the date). RSI, EMA, the next-candle entry, the exit and NIFTY's
-  RSI filter all move to that timeframe; the 5-a-month cap and the equity curve stay per calendar month. The day path is vectorised (128 k
-  breakouts over 2015-26, ~20 s for the run). 2015-26, all NSE, ₹20 brokerage: month 147 trades CAGR 10.4 %; week 396 trades, 34 % win, PF 1.16,
-  CAGR 3.7 %, DD 37 %; day 697 trades, 32 % win, PF 0.89, CAGR −2.7 %, DD 47 % (₹2.6 L of costs on ₹10 L; the 5-a-month cap leaves it mostly in cash,
-  1-6 stocks held). NIFTY made 9.3 %. Only the video's monthly reading beats the index.
-  At the ₹1 L default (same run): month 156 trades, CAGR 8.5 %, DD 36 %, ₹6.2 k brokerage = 6 % of the capital; week 3.0 %; day −3.8 %
-  (₹1 L → ₹63 k). Month at ₹1 L across brokerage ₹0 / 10 / 20 / 30: 12.4 / 10.5 / 8.5 / 14.9 % — the same path noise, so ~9-15 %, about NIFTY's 9.3 %.
-
-* **Defaults are the swept best since 2026-11-13** (the user asked for "better profit every year"): F&O universe, RSI 65-75, a 10 EMA
-  (`ema_len`), 0.5 % risk — the rest as before (₹1 L, 5 a month, 20 % max, NIFTY RSI 40, low-break exit, ₹1 Cr, 0.15 % + ₹20). The video's
-  60-65 / 20 EMA / 1 % stay in the boxes' notes. Sweep: 504 universe × band × EMA × exit × turnover × NIFTY-filter combos, then 256 sizing
-  combos, each on 5 brokerage-jittered paths (median), judged also per half (2015-20 / 2021-26). 65-75 was the best band in every EMA /
-  exit / universe and in both halves; EMA 10 > 20 > 30; F&O > all; 0.5 % risk > 1 % (more, smaller holdings: up to ~37); the NIFTY EMA
-  filter (`nifty_ema`, box, 0 = off) and the `exit_rule='close'` exit (box) did not help on average. Result at ₹1 L, 2015-26: 250 trades,
-  51 % win, PF 4.97, CAGR 20.4 % (was 9.75 %), max DD 19 % (was 35 %), better in 10 of 12 years; losing years 2015 −7.5 %, 2018 −11.1 %
-  (were 5: also 2022 −15 %, 2025 −4 %, 2026 −0.1 %). Started in 2016 / 2018 / 2020 / 2022 it still beats the old settings (24 / 22 / 26 /
-  21 % vs 17 / 13 / 16 / 15 %). Caveats: chosen on the same data it is scored on, and the F&O list is TODAY's — stocks that grew into it —
-  which flatters it more than the all-NSE list does. Every year positive was not reachable: 2015 and 2018 lose under every setting tried.
-  `simulate` marks holdings with a numpy search now (0.87 s → 0.05 s a run).
-
-* **⚡ Find Best Params (added 2026-11-13).** Routes `/api/backtest/monthly-rsi-breakout/optimise{,/status/<id>}`,
-  panel `#monthlyRsiBreakoutOptimisePanel` / `#mrbOptGrid`, JS `runMrbOptimise` / `applyMrbOptResult`. No cache, no
-  Breeze — same disk-only stock files as the backtest, so it is safe in market hours; a run just takes longer.
-  `SWEEP_GRID` is RSI band (8) × exit EMA (4) × exit rule (2) × risk % (3) × new-stocks cap (3) × NIFTY RSI floor
-  (2) = 1,152 combos; universe/timeframe/capital/max position %/costs/turnover/NIFTY trend EMA come from the
-  page's own boxes and are **not** swept (sweeping them too would multiply the grid for little gain — the first
-  sweep already showed universe and the trend filter settle one way). `candidates()` grew `keep_raw` (an
-  unrounded `_rsi` on each candidate) so one call per (EMA, exit rule) pair on the **widest** band in the grid
-  serves every RSI-band combo by slicing with `in_band()` — the band is the cheapest axis to re-check and the
-  only one `simulate()` can't be handed pre-filtered any other way. `score()` runs each combo on
-  `SWEEP_PATHS` (capital nudged ±0.1 %, since this portfolio is cash-bound and forks on a few rupees — see
-  above) and takes the median; `board()` keeps the union of the top 150 by CAGR, by the **weaker** half's CAGR
-  (steadiness) and by CAGR ÷ max drawdown, among combos with ≥10 trades, so a row that only wins because of one
-  lucky half doesn't crowd out a steadier one. A test (`test_sweep_row_matches_a_direct_simulate_of_its_own_params`)
-  holds one sweep row equal to a direct `simulate()`+`summarise()` of that row's own settings — the whole point
-  of candidate-sharing is that it must never change a result, only how fast it is computed. Real cost: ~245 s for
-  the full F&O 2015-26 grid (3.6 s building 8 candidate lists, ~0.2 s/combo scoring); a shorter range or All-NSE
-  universe scales with it. Route test fakes the stock files and shrinks the grid, the usual pattern.
-* **Equity Curve + P&L Breakdown (added same day, at the user's ask).** The two shared charts every other
-  backtest uses (`renderEquityCurve` / `renderPeriodBreakdown` in `static/js/backtest.js`) now also render
-  under this strategy's own `#crResults` panel, fed `pnl_rupees` directly (`entry_date` is mapped onto
-  `entry_time` for them, since every other caller's trades carry that field). Those two chart sections live
-  inside `#resultsArea`, a sibling of `#crResults` that this strategy otherwise leaves hidden, so it is shown
-  too — `#resultsRow1` (its one piece not already behind its own `display:none`) is hidden by hand instead, to
-  avoid a second, empty "Total Trades" row sitting under `#crResults`' own stat cards; every other strategy's
-  own render (`_displayResultsCore`) now unconditionally restores `#resultsRow1` first, so it never stays
-  hidden once a normal backtest runs. Both charts are built only AFTER `#resultsArea` is shown, not before —
-  Chart.js measures a canvas's size at construction, and a canvas under a still-hidden ancestor measures 0×0
-  and stays blank even once that ancestor is revealed a moment later (caught visually on the harness: the
-  P&L Breakdown bars were empty until the order was fixed).
-* **Max Amount Needed (added same day)**: `summarise`'s `max_invested` = `capital − min_cash` — the deepest
-  the cash pot ever dipped, i.e. the most ever actually tied up in stock at one time. Since every buy is paid
-  from cash in hand and nothing is added, this can never exceed `capital`; when it sits well under it, the
-  Capital box is bigger than the run ever needed. No new engine logic — `min_cash` already existed (the "₹1 L
-  never overspent" rule) — just a second reading of the same number.
-* **Compounding (added same day, Fixed ₹ mode only)**: the `Compounding` checkbox beside `Amount per Stock`
-  (`mrbCompound`, visible only under Fixed ₹ — `syncMrbSizeMode` hides it under Risk %). Off (default): every
-  new stock is bought with the plain `fixed_amount`. On: that amount scales with `capital + realized`, where
-  `realized` is the net ₹ of trades already CLOSED by that entry — never an open position's mark-to-market
-  gain, the same rule the ATM Straddle / Option Selling backtests use, so a position still open when the next
-  one is bought has not "paid" yet. `simulate()` tracks `realized` as a running total, updated only in
-  `close_out`, and stamps each position with its own `buy_cost` at purchase so the exact P&L of that trade can
-  be added back on exit without re-deriving it from `cost_pct`/`brokerage` a second time. Risk % sizing already
-  scales with mark-to-market equity on its own (`equity_at`), so `compounding` is a no-op there by design — a
-  test holds a risk-mode run identical with the flag on or off. Real effect on the full F&O 2015-26 run (₹1 L,
-  ₹10,000 base): position sizes grow from ~₹10,000 in 2015 to ~₹54,000 by 2026 as profits compound, net P&L
-  ₹6.55 L vs ₹7.6 L flat (same number of trades, bigger ones), CAGR 18.6% vs 20.4% flat on this particular run
-  — not a verdict either way, just a different sizing rule on the same path. Not swept by Find Best Params
-  (taken from the page like size_mode/fixed_amount).
-* **Max Stocks at Once (added same day, at the user's ask — "keep maximum of 10 stocks in progress at a
-  time"): `max_positions` (default 10, 0 = off).** A HARD cap on how many stocks are held concurrently, on
-  top of whatever cash and `max_new` (New Stocks a Month) already allow — a breakout is skipped for want of a
-  free slot (`skipped['slots']` / `skipped_slots`) even with cash in hand and room under the monthly cap; it
-  is its own skip reason precisely because `held`/`cash`/`month_cap` were not catching this case before. 10 is
-  not arbitrary: it is exactly what the default ₹1,00,000 capital ÷ ₹10,000 per stock already implied, so the
-  default run's numbers are unchanged by its addition (verified: `max_holdings` in the curve never exceeds the
-  cap, checked on real F&O 2015-26 data). **With `compounding` also on** (Fixed ₹ mode only), the sizing formula
-  changes: instead of `fixed_amount * (capital + realized) / capital`, the position size is the realised
-  balance split evenly across the `max_positions` slots — `(capital + realized) / max_positions` — so `Amount
-  per Stock` is NOT read in this combination (it only happens to match the default because ₹1,00,000 ÷ 10 =
-  ₹10,000). This is "compounding using the other stocks": a stock that exits with a profit grows the balance,
-  and the very next stock bought into its now-freed slot is sized off that larger balance — on real data,
-  position sizes grow from ~₹10,000 (2015) to ~₹39,000 (2026) under this combination. With `max_positions=0`
-  (off), compounding falls back to the plain capital-wide ratio exactly as before this feature existed — a
-  test (`test_compounding_without_a_slot_cap_falls_back_to_the_capital_ratio`) pins that exact backward
-  compatibility. `sweep()` also takes `max_positions` (not swept, taken from the page like the other sizing
-  params) so Find Best Params honours whatever cap the page is set to.
-
-Tests: `tests/test_monthly_rsi_breakout_engine.py` (synthetic months, days and weeks, the sweep/board unit tests, and both routes end to end on fake files).
-
-## NIFTY Bi-weekly Iron Condor backtest (Mine group)
-
-Added 2026-11-10 in the Mine group, the default strategy on /backtest until 2026-11-13 (Monthly RSI Breakout, above), from a Hindi video by its author
-(rule-based, no chart or OI reading). `Backtest/biweekly_iron_condor_engine.py` (pure), routes
-`/api/backtest/biweekly-iron-condor{,/optimise,/status/<id>}` (run on `_cr_start` like the call ratio),
-params `#biweeklyIcParamsRow` (`bic*` ids), results in the call ratio's `#crResults` plus `#bicYears`, sweep panel
-`#biweeklyIcOptimisePanel`, JS `runBiweeklyIc` / `runBicOptimise`.
-
-* **Rule.** Friday 15:15 (Thursday on a Friday holiday) while India VIX < 13: SELL a CE and a PE at ≈0.20 delta,
-  100-step strikes only, BUY each 200 further out, on the **bi-weekly** = the second weekly expiry after the Friday
-  (Tue 11 days out; Thu 13 days out before 2025-09-01). Skip if net credit × qty < 4 % of capital. Out at ±1 % of
-  capital (5-minute closes, booked at that close) or the next week's last session at 15:00. At 15:15 a profit
-  ≥ 0.8 % / loss ≥ 0.9 % is closed rather than carried overnight (the author's habit; boxes, 0 = off).
-* **Adjustments**, on 5-minute closes, a side = its short + hedge closed and re-opened together: premium doubled,
-  delta ≥ 0.30, or one side's delta > 2× the other's → that side moves OUT to ≈0.20; a short decayed 50 % is rolled
-  IN to ≈0.20 matching the other side's premium. Rule 3 with the high side already at ≈0.20 rolls the low side in
-  instead (the author: "it is 0.2 anyway"); an OUT move is only taken if it lands nearer 0.20, so nothing churns.
-  Brokerage `_OS_BROKERAGE_PER_LEG` (₹100) × every leg opened, adjustments included.
-* **Delta** is Black-76 off the leg's own premium; the forward is put-call parity at the entry ATM, then NIFTY +
-  that basis shrunk with time. Entry pair: nearest delta each side, unless the premiums are > 20 % apart; then the
-  side nearer 0.20 stays and only the OTHER side moves to the strike priced nearest it (the video's 0.23 CE at 57
-  against his 0.20 PE at 58). Until the evening of 2026-11-10 it took the closest-premium pair of all four strikes,
-  which walked BOTH sides in (0.24 / 0.22 on 2026-06-19) and let thin weeks clear the 4 % floor by selling nearer.
-  On one close a target/stop outranks the day-end rule it also trips (2026-01-16 read "Day-end loss" at −1.20 %).
-* **The adjustments read prices only, never the P&L**, so one path per (delta, gap, adjust) serves every
-  target / stop / day-end combo: `score_week` builds it once, and a test holds every sweep row equal to
-  `run_trade`. `SWEEP_GRID` is 9,216 combos since the calm key (VIX ceiling has no "off", so a calm-filter week costs 2 contracts).
-* **India VIX** is Fyers minutes via `minute_candle_store` (`NSE:INDIAVIX-INDEX`, file `fyers_INDIAVIX.pkl`,
-  fetched on first run); no VIX with Max VIX above 0 is an error.
-* **Contract window.** Thursday-era weeklies are sold 13 days out, past `cre.contract_window`'s 12 days, so
-  `bic.contract_window` widens those to 16 (Tuesday weeklies and monthlies keep the shared window and its cache).
-  `_cr_start`'s `frame_for` grew a `window=` argument for it, and its `breeze_requests` counter (the sweep budget,
-  removed with Matrix Calendar) is back.
-* **Capital is ₹ per NIFTY unit** (`capital_per_unit`, ₹1,280 = the author's ₹9.6 L on 10 lots of 75), × the lot size
-  × sets; no historical SPAN. Per unit since 2026-11-10: it was ₹96,000 per set on today's 65 lot, which priced
-  every credit 13 % low against capital and failed 19 of 22 calm Fridays on the 4 % floor (2 trades in the year).
-  **Sets default to 10** (the author's): brokerage is ₹100 a leg at any size, and at 1 set the 10-14 legs of an
-  adjusted week outweigh the 1 % target. An ATM with no candle at the entry falls back ±200 (`ATM_FALLBACK`).
-  First real run (Nov 2025 – Nov 2026): 29 of 51 Fridays VIX ≥ 13 — that rule, not a bug, is the main skip.
-* **3 % a month is out of reach** (checked the night of 2026-11-10 at the user's ask): over every board combo on cached
-  2020-26 the best average month was 0.71 % (1.69 % in 2024-26 alone, in-sample), median ≈ 0. It trades ~1.5 Fridays a
-  month at +1-1.5 % a win, so ~2 % is the ceiling even with no losses (the author's own claim: 2-2.5 %). The Per Month
-  card (`summarise`: `avg_month_pct`, `months_3pct`, `losing_months`; idle months count as 0) shows it per run.
-* **Amount needed** (2026-11-10 night): the form's description (`#bicNeed`, `updateBicNeed`, live off Sets / Capital % /
-  Hedge Gap / Stop) states the capital at NIFTY's 2020-26 high (26,400 × 5 % × qty: ₹8.58 L at 10 sets) and that one
-  trade can lose at most the hedge width × qty; after a run the Max Amount Needed card is `summarise`'s
-  `amount_needed` = the largest traded week's capital + max drawdown (and `max_trade_loss`).
-* **Calm-market filter** (`max_rv` 10 / `max_week_move` 2, boxes "Max NIFTY 10-Day Vol %" / "5-Day Move %", 0 = off;
-  `calm_reading` / `calm_skip`; NOT in the video, added the night of 2026-11-10): NIFTY's 10-session realised vol and
-  5-session move, each session read at the entry time, today's included. Why: on cached 2020-26 the MEDIAN sweep combo
-  lost money (net ÷ DD −0.34); with the filter the share in profit went 16 → 62 % (2020-23) and 48 → 77 % (2024-26), the
-  only filter tried that helped both halves (VIX change, realised vol alone, 20-day drawdown helped 2024-26 only).
-  Through the engine (5-minute bars, real cache, 5 % capital): author's defaults 83 trades ₹25 k DD ₹57 k → 54 trades
-  ₹88 k DD ₹29 k (2021 still −₹20 k); VIX 14 · Δ0.15 · hedge 300 · adjust on · credit 3 · T1.5/S0.75 · no day-end + calm:
-  71 trades ₹1.97 L DD ₹27 k, every traded year positive (2021 only +₹0.4 k). Borderline weeks flip with how the
-  daily price is read (an analysis on 1-minute closes had shown ₹1.11 L / DD ₹20 k), so the edge is real but not sharp. The sweep has a `calm` key (on/off), so the grid is 9,216 combos; a week the filter
-  drops has no "on" row, and `_KEYS` shares one key tuple per combo across Fridays to keep that board's memory down.
-* **Capital follows NIFTY** (`capital_pct`, the page's "Capital, % of NIFTY" = 5, since 2026-11-10 night;
-  `week_capital`): each Friday's capital = that % of NIFTY at the entry × qty, so the 4 % credit floor and the ±1 %
-  exits are on the margin of that week's index. The author's ₹9.6 L / 750 units is ≈5 % of NIFTY 25,700. With the
-  fixed ₹1,280 a unit (still there: % = 0) 2023's NIFTY ~18,000 failed the floor on 46 of 52 Fridays. Cached
-  2020-26, VIX 16 · Δ0.15 · hedge 300 · no adjust · T1.5/S2: 61 → 133 trades, ₹3.27 L → ₹4.90 L, DD ₹67 k → ₹93 k;
-  the defaults 49 → 84 trades. VIX (the author's rule) is then the main skip: 2020-22 sat above 16 most weeks.
-* **The sweep's Day-end "On" is `sweep_base`**: the page's two boxes, or 0.8 / 0.9 where a box is 0 (what applying
-  a Day-end Off row leaves), and every board row carries the levels it ran with so applying it writes them back.
-  Until 2026-11-10 night an Off row's zeros made the next sweep's "On" rows run with no day-end rule, and the board
-  no longer matched the backtest. On cached 2020-26 data, 25 random combos × 350 Fridays: board = backtest.
-* **Breeze history goes over one pooled keep-alive session** (`icici_data_service._HistoryTransport`, since
-  2026-11-10 night): the SDK's `get_historical_data_v2` was a fresh connection per request with no timeout, and
-  ~11 connects every 10 minutes hung for the OS's 75 s, so a 2020-26 condor sweep ran ~6.6 s a request. Only the
-  `historicalcharts` GET is re-routed (5 s connect / 30 s read, 2 connect retries); orders keep the SDK's path. A
-  sweep also waits (`_cr_yield_to_foreground`) while any ordinary backtest runs.
-* **Cost:** ~6 Breeze contracts a traded week plus 2-3 per adjustment, cached after. Nov 2025 – Nov 2026 at 10 sets
-  (real data): 12 trades of 51 Fridays, 7 W, +₹2.2 k, DD ₹28.2 k, PF 1.05 — wins ≈ +₹6.1-7.9 k, stops −₹8.9-10.7 k.
-* **A target/stop crossed inside a session is booked AT its level** (`booked`, since 2026-11-10 night; the straddle's
-  `exit_fill` rule), with the legs held before that close; a session's first close past it is booked at that close,
-  `Target (gap)` / `Stop loss (gap)`. Booking the close had shown stops at −1.18 / −1.23 %. P&L % still sits below
-  −1 % by the brokerage (₹100 × legs: 24 legs on 2025-12-05 = −1.29 %); Worst shows the −1.00 % booked. Tests: `tests/test_biweekly_iron_condor_engine.py`
-  (a synthetic Black-76 market).
+Added 2026-11-10 (Mine group, from a Hindi video: Friday 15:15 while India VIX is low, sell 0.20-delta CE + PE on the
+second weekly expiry with 200-point hedges, delta adjustments; the /backtest default until 2026-11-13) and removed 2026-11-27
+at the user's request: `Backtest/biweekly_iron_condor_engine.py`, the three `/api/backtest/biweekly-iron-condor{,/optimise,/status}`
+routes, its option, params row, Best Params panel, the `#bicYears` year table in `#crResults`, JS and
+`tests/test_biweekly_iron_condor_engine.py`. Kept, because the Call Ratio / ATM Straddle machinery is shared: `_cr_start`'s
+`frame_for(window=)` argument and `breeze_requests` counter, and the pooled Breeze history session (`_HistoryTransport`).
+India VIX minutes (`fyers_INDIAVIX.pkl`) stay on disk.
 
 ## NIFTY Monthly Call Ratio backtest ("No-Brainer")
 
