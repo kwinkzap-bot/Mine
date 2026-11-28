@@ -5713,6 +5713,7 @@ def _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval, d
     row as index_pnl / index_pf."""
     from trading_app.Backtest.st_bb_rsi_engine import (
         StBbRsiEngine, attach_option_legs, summarise, rank_quality, rupee_card, _parse_hhmm)
+    from trading_app.Backtest.st_touch_break_optimise import book_entry
     premium = float(data.get('premium') or 250) or None
     sl_pct = max(0.0, float(data.get('sl_pct') or 0))
     tsl_x = max(0.0, float(data.get('tsl_x') or 0))
@@ -5750,6 +5751,8 @@ def _verify_on_option(res, cur_trades, bars, minutes, knobs, symbol, interval, d
         out.update(index_pnl=row['total_pnl'], index_pf=row['profit_factor'],
                    unpriced=info.get('unpriced', 0),
                    recent_pnl=round(sum(t['pnl'] for t in priced if t['entry_time'][:10] >= cut), 2))
+        # The row's own trades, compact (BOOK_FIELDS): the 🧩 Combined popup merges ticked rows on them.
+        out['book'] = [book_entry(t) for t in priced if t.get('pnl_rupees') is not None]
         return out
 
     rows, current = [], None

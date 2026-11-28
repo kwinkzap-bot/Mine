@@ -1168,9 +1168,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     setInterval(syncSaiSymbol, 400);
 
-    // ST Touch Break: the symbol sets the lot and the premium — NIFTY 250, BANKNIFTY 300, SENSEX 500,
+    // ST Touch Break: the symbol sets the lot and the premium — NIFTY 250, BANKNIFTY 500, SENSEX 500,
     // a stock is bought ATM (0) — and brings that symbol's saved defaults. All stay editable; re-set only when the symbol changes.
-    const STB_PREMIUM = { NIFTY: '250', FINNIFTY: '250', MIDCPNIFTY: '250', BANKNIFTY: '300', SENSEX: '500' };
+    const STB_PREMIUM = { NIFTY: '250', FINNIFTY: '250', MIDCPNIFTY: '250', BANKNIFTY: '500', SENSEX: '500' };
     function syncStbSymbol() {
         if (!strategySelect || strategySelect.value !== 'st_touch_break' || !symbolSearch) { _stbKey = null; return; }
         const sym = (symbolSearch.value || '').trim().toUpperCase();
@@ -1202,6 +1202,39 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (lot && !Object.keys(lotSizeBySymbol).length) _hsKey = null;   // lot sizes not loaded yet: next poll
     }
     setInterval(syncHsSymbol, 400);
+
+    // Simple Trader group: the symbol sets the Lot Value (its lot size) and, for strategies 2-5, the Option Premium ≈
+    // box — BANKNIFTY ≈500, SENSEX ≈800, everything else NIFTY-sized (250). #1 (sbrPremium), ALL Indicators and ST
+    // Touch Break set their own premium above; the two SENSEX strategies pin their symbol and lot. Re-set only when the
+    // strategy or symbol changes, so a hand-picked premium or lot sticks.
+    const ST_GROUP_PREMIUM_IDS = { st_ema_rsi_cci: 'secPremium', st_rsi_pp_bb: 'srpPremium',
+                                   st_rsi_pp_bb_fut: 'srfPremium', st_rsi_cci_wr_pp_bb_fut: 'scwPremium' };
+    const ST_GROUP_PREMIUMS = {
+        DEFAULT:   { list: [150, 200, 250, 300], def: 250 },
+        BANKNIFTY: { list: [250, 300, 400, 500, 600], def: 500 },
+        SENSEX:    { list: [500, 650, 800, 1000], def: 800 },
+    };
+    let _stGroupKey = null;
+    function syncStGroupSymbol() {
+        const strat = strategySelect ? strategySelect.value : '';
+        if (!SIMPLE_STRATS.includes(strat) || strat === 'st_rsi_cpr_bb_sx' || strat === 'st_rsi_cpr_bb_wr_sx' || !symbolSearch) {
+            _stGroupKey = null; return;
+        }
+        const sym = (symbolSearch.value || '').trim().toUpperCase();
+        const key = `${strat}|${sym}`;
+        if (!sym || sym === ALL_STOCKS || key === _stGroupKey) return;
+        if (!lotSizeBySymbol[sym] && !Object.keys(lotSizeBySymbol).length) return;   // lot sizes not loaded yet: next poll
+        _stGroupKey = key;
+        const lot = document.getElementById('pcLotValue');
+        if (lot) { lot.value = lotValueForSymbol(sym); if (typeof updatePcInvestment === 'function') updatePcInvestment(); }
+        const prem = document.getElementById(ST_GROUP_PREMIUM_IDS[strat]);
+        if (prem) {
+            const cfg = ST_GROUP_PREMIUMS[sym.includes('BANKNIFTY') ? 'BANKNIFTY' : sym.includes('SENSEX') ? 'SENSEX' : 'DEFAULT'];
+            prem.innerHTML = cfg.list.map(v => `<option value="${v}"${v === cfg.def ? ' selected' : ''}>${v}</option>`).join('');
+            prem.value = String(cfg.def);
+        }
+    }
+    setInterval(syncStGroupSymbol, 400);
 
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
@@ -5346,6 +5379,8 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: '',           key: null,            fmt: () => '' },   // Use button
     ];
 
+    // Strategy 1's swept knobs, in its board's column order (its payload carries no `swept`).
+    const SBR_SIMPLE_SWEPT = ['rsi_level', 'st_period', 'st_mult', 'bb_period', 'bb_mult', 'wr_level', 'entry_start'];
     function applySbrSimpleResult(r) {
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         set('sbrRsi', r.rsi_level);
@@ -5879,7 +5914,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }).filter(Boolean);
             items = [];
             boards.forEach(b => {
-                const swept = (b.data.swept || []);
+                // Strategy 1 (no `strategy` on its payload) sweeps fixed knobs and sends no `swept`.
+                const swept = b.data.swept || (b.data.strategy ? [] : SBR_SIMPLE_SWEPT);
                 const label = (r) => swept.filter(k => r[k] !== undefined)
                     .map(k => k === 'timeframe' ? (SBR_TF_LABEL[r[k]] || r[k]) : r[k]).join(' / ');
                 const title = (r) => swept.filter(k => r[k] !== undefined)
@@ -5900,6 +5936,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 runKey = key;
                 picks = new Set(items.length ? [items[0].r] : []);
                 note.textContent = '';
+                const out = document.getElementById('sbrCombOptOut');
+                if (out) out.innerHTML = '';
             }
         }
 
@@ -5910,8 +5948,9 @@ document.addEventListener('DOMContentLoaded', function() {
             Object.entries(r).forEach(([k, v]) => {
                 if (k !== 'book' && k !== 'option' && !k.startsWith('_') && (v === null || typeof v !== 'object')) params[k] = v;
             });
-            return { key: [d.strategy, d.direction || '', d.symbol, it.label].join('|'),
-                     strategy: d.strategy, direction: d.direction || null, swept: d.swept || [],
+            const strategy = d.strategy || 'simpler_trader';
+            return { key: [strategy, d.direction || '', d.symbol, it.label].join('|'),
+                     strategy, direction: d.direction || null, swept: d.swept || (d.strategy ? [] : SBR_SIMPLE_SWEPT),
                      board: it.b.name, tag: it.tag, label: it.label, title: it.title,
                      symbol: d.symbol || 'NIFTY', start_date: d.start_date, end_date: d.end_date, params };
         }
@@ -6102,32 +6141,153 @@ document.addEventListener('DOMContentLoaded', function() {
             return { net: cum, dd, score: dd > 0 ? cum / dd : (cum > 0 ? Infinity : 0) };
         }
 
-        // ⚡ Optimize: greedy forward search on the merged books — start from the best single row,
-        // keep adding the row that raises net ÷ max drawdown most, stop when none does.
-        function optimize() {
+        // ⚡ Optimize: every combination of rows (a beam search when there are too many), on the P&L
+        // box's basis. Kept: combinations whose merged book wins ≥ the Win % box. Listed: the ones no
+        // other beats on both net and max drawdown, lowest drawdown first. Ticked: the Pick box's choice
+        // (highest net by default) inside the Max DD box.
+        // The template carries both; a server still serving the older template gets them from here.
+        let optOut = document.getElementById('sbrCombOptOut');
+        if (!optOut && note) {
+            optOut = document.createElement('div');
+            optOut.id = 'sbrCombOptOut';
+            note.after(optOut);
+        }
+        let minWinIn = document.getElementById('sbrCombMinWin');
+        if (!minWinIn && optBtn) {
+            const lab = document.createElement('label');
+            lab.title = 'Only combinations whose merged book wins at least this share of its trades are kept';
+            lab.innerHTML = 'Win % ≥ <input type="number" id="sbrCombMinWin" value="40" min="0" max="100" step="1" style="width:52px">';
+            optBtn.before(lab);
+            minWinIn = lab.querySelector('input');
+        }
+        // Which qualifying combination is ticked: Balanced (default — net, drawdown and win rate scored
+        // together), the highest net, the best net ÷ DD, the lowest DD or the highest win rate — inside the
+        // Max DD box when it is filled.
+        let pickSel = document.getElementById('sbrCombPick'), maxDDIn = document.getElementById('sbrCombMaxDD');
+        if (!pickSel && optBtn) {
+            const lab = document.createElement('label');
+            lab.title = 'Which of the qualifying combinations Optimize ticks';
+            lab.innerHTML = 'Pick <select id="sbrCombPick"><option value="balanced">Balanced</option><option value="net">Highest net</option>'
+                + '<option value="ratio">Best net ÷ DD</option><option value="dd">Lowest DD</option>'
+                + '<option value="win">Highest win %</option></select>';
+            optBtn.before(lab);
+            pickSel = lab.querySelector('select');
+        }
+        if (!maxDDIn && optBtn) {
+            const lab = document.createElement('label');
+            lab.title = 'Only combinations whose max drawdown is at most this many ₹ (empty = any)';
+            lab.innerHTML = 'Max DD ≤ ₹<input type="number" id="sbrCombMaxDD" min="0" step="1000" placeholder="any" style="width:80px">';
+            optBtn.before(lab);
+            maxDDIn = lab.querySelector('input');
+        }
+        let optRunning = false, optFront = [];
+        const inr0 = (v) => (v < 0 ? '−₹' : '₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+        async function optimize() {
+            if (optRunning) return;
+            if (optOut) optOut.innerHTML = '';
             if (!items.length) { note.textContent = 'No row of this run carries its trades — run Find Best Params again.'; return; }
-            let chosen = [], best = null;
-            items.forEach(it => { const st = bookStats([it]); if (st.net > 0 && (!best || st.score > best.score)) { best = st; chosen = [it]; } });
-            if (!best) { note.textContent = 'No row made a net profit — nothing to combine.'; return; }
-            const single = best;
-            for (;;) {
-                let step = null;
-                items.forEach(it => {
-                    if (chosen.includes(it)) return;
-                    const st = bookStats([...chosen, it]);
-                    if (st.score > (step ? step.st.score : best.score) + 1e-9) step = { it, st };
-                });
-                if (!step) break;
-                chosen.push(step.it); best = step.st;
+            const gross = basisSel && basisSel.value === 'gross';
+            const minWin = Math.max(0, Math.min(100, parseFloat(minWinIn && minWinIn.value) || 0));
+            // Rows with the same trades (a ★ Default that is also a ranked row, two settings that never
+            // differ) are one candidate; a row that lost money on its own is left out.
+            const sig = new Set(), cand = [];
+            let twins = 0, losers = 0;
+            items.forEach(it => {
+                const trades = it.r.book.map(e => [e[B.entry], Number(gross ? e[B.gross] : e[B.net]) || 0]);
+                const net = trades.reduce((s, x) => s + x[1], 0);
+                const k = trades.length + '|' + trades[0][0] + '|' + trades[trades.length - 1][0] + '|' + net.toFixed(2);
+                if (sig.has(k)) { twins++; return; }
+                sig.add(k);
+                if (!(net > 0)) { losers++; return; }
+                cand.push({ it, trades });
+            });
+            if (!cand.length) { note.textContent = 'No row made a net profit — nothing to combine.'; return; }
+            optRunning = true;
+            if (optBtn) optBtn.disabled = true;
+            let res;
+            try {
+                res = await window.BtCombSearch(cand, { minWin, onProgress: (d, of) => {
+                    note.textContent = `⚡ Searching ${cand.length} rows… ${Math.round(d / of * 100)} %`;
+                } });
+            } finally {
+                optRunning = false;
+                if (optBtn) optBtn.disabled = false;
             }
-            picks = new Set(chosen.map(it => it.r));
-            const inr0 = (v) => '₹' + Math.round(v).toLocaleString('en-IN');
-            note.textContent = `⚡ Optimize searched ${items.length} rows: ${chosen.length} row${chosen.length > 1 ? 's' : ''} `
-                + `give net ${inr0(best.net)} on a max drawdown of ${inr0(best.dd)} (net ÷ DD ${best.score.toFixed(2)}`
-                + (chosen.length > 1 ? `; the best single row alone: ${single.score.toFixed(2)}` : '; no row added to it improved that')
-                + '). Only those are ticked.';
+            const how = (res.exhaustive ? `checked all ${res.combos.toLocaleString('en-IN')} combinations of ${cand.length} rows`
+                       : `${cand.length} rows are too many to check every combination (2^${cand.length}); a beam search checked `
+                         + `${res.evals.toLocaleString('en-IN')} of them`)
+                + (twins ? ` · ${twins} duplicate row${twins > 1 ? 's' : ''} counted once` : '')
+                + (losers ? ` · ${losers} losing row${losers > 1 ? 's' : ''} left out` : '');
+            optFront = res.front.map(c => ({ ...c, list: c.idx.map(j => cand[j].it) }));
+            if (!optFront.length) {
+                note.textContent = `⚡ Optimize ${how}. None wins ${minWin} % of its trades: a merged book's win rate is the `
+                    + `trade-weighted average of its rows', so it can never beat the best single row — here ${res.maxWin.toFixed(1)} %. `
+                    + `Lower the Win % box to ${Math.floor(res.maxWin)} or below. Nothing was re-ticked.`;
+                return;
+            }
+            const ratio = (c) => c.dd > 0 ? c.net / c.dd : Infinity;
+            const best = optFront.reduce((a, c) => ratio(c) > ratio(a) ? c : a);
+            const lowDD = optFront[0], hiNet = optFront.reduce((a, c) => c.net > a.net ? c : a);
+            const capDD = parseFloat(maxDDIn && maxDDIn.value);
+            const mode = (pickSel && pickSel.value) || 'balanced';
+            const pool = optFront.filter(c => !(capDD > 0) || c.dd <= capDD);
+            // Balance (0-100): each aim scaled 0 → 1 across the qualifying combinations — net (more is
+            // better), max DD (less is better), win % (more is better) — and averaged with equal weight.
+            const span = (f) => { const v = pool.map(f); return [Math.min(...v), Math.max(...v)]; };
+            const [n0, n1] = span(c => c.net), [d0, d1] = span(c => c.dd), [w0, w1] = span(c => c.win);
+            const part = (v, lo, hi) => hi > lo ? (v - lo) / (hi - lo) : 1;
+            optFront.forEach(c => {
+                c.bal = (part(c.net, n0, n1) + (1 - part(c.dd, d0, d1)) + part(c.win, w0, w1)) / 3 * 100;
+            });
+            const top = (f) => pool.reduce((a, c) => f(c) > f(a) ? c : a);
+            const chosen = !pool.length ? null
+                : mode === 'ratio' ? top(ratio)
+                : mode === 'dd' ? pool[0]
+                : mode === 'win' ? top(c => c.win + c.net / 1e12)
+                : mode === 'net' ? top(c => c.net)
+                : top(c => c.bal);
+            const balTop = pool.length ? top(c => c.bal) : null;
+            const hiWin = optFront.reduce((a, c) => c.win > a.win ? c : a);
+            const modeTxt = { balanced: 'the best balance of net, drawdown and win rate', net: 'the highest net',
+                              ratio: 'the best net ÷ DD', dd: 'the lowest drawdown', win: 'the highest win rate' }[mode];
+            note.textContent = `⚡ Optimize ${how}. ${optFront.length} combination${optFront.length > 1 ? 's' : ''} win ≥ ${minWin} % `
+                + `and are not beaten on net, drawdown AND win rate together by another — listed below, lowest drawdown first. `
+                + (chosen ? `Ticked: ${modeTxt}${capDD > 0 ? ` with max DD ≤ ${inr0(capDD)}` : ''} — net ${inr0(chosen.net)}, `
+                            + `DD ${inr0(chosen.dd)}, win ${(chosen.wins / chosen.n * 100).toFixed(1)} %.`
+                          : `None has a max DD ≤ ${inr0(capDD)} (the lowest is ${inr0(lowDD.dd)}) — raise the Max DD box. Nothing was re-ticked.`);
+            // A long front is thinned for the table; the marked ones always stay.
+            let show = optFront;
+            if (show.length > 15) {
+                const keep = new Set([best, lowDD, hiNet, hiWin, chosen].filter(Boolean));
+                [...optFront].sort((a, b) => b.bal - a.bal).slice(0, 5).forEach(c => keep.add(c));
+                const step = (show.length - 1) / 11;
+                for (let i = 0; i < 12; i++) keep.add(show[Math.round(i * step)]);
+                show = show.filter(c => keep.has(c));
+            }
+            const multi = boards.length > 1;
+            const tagOf = (it) => esc(multi ? it.name : it.tag);
+            if (optOut) optOut.innerHTML = `<div class="bc-scroll" style="margin:0 0 10px"><table class="bc-tbl">
+                <thead><tr><th></th><th>Rows</th><th>Trades</th><th>Win %</th><th>Net ₹</th><th>Max DD ₹</th><th>Net ÷ DD</th><th title="Net, max drawdown and win % each scaled 0-1 across the qualifying combinations, averaged">Balance</th><th></th></tr></thead>
+                <tbody>${show.map(c => `<tr${c === chosen ? ' style="font-weight:600;background:rgba(22,163,74,.08)"' : ''}>
+                    <td>${[c === chosen ? '✔ ticked' : '', c === balTop ? '🎯 balanced' : '', c === lowDD ? '🛡 lowest DD' : '',
+                           c === best ? '⭐ best net ÷ DD' : '', c === hiNet ? '💰 highest net' : '',
+                           c === hiWin ? '🏹 highest win %' : ''].filter(Boolean).join('<br>')}</td>
+                    <td title="${c.list.map(it => esc(it.name + ' · ' + it.label)).join('\n')}">${c.list.map(tagOf).join(', ')}</td>
+                    <td>${c.n}</td><td>${(c.wins / c.n * 100).toFixed(1)}</td>
+                    <td class="bc-pos">${inr0(c.net)}</td><td class="bc-neg">${inr0(c.dd)}</td>
+                    <td>${ratio(c) === Infinity ? '∞' : ratio(c).toFixed(2)}</td><td>${c.bal.toFixed(0)}</td>
+                    <td><button type="button" class="bc-run" data-front="${optFront.indexOf(c)}">Tick these</button></td></tr>`).join('')}</tbody>
+                </table></div>`;
+            if (chosen) picks = new Set(chosen.list.map(it => it.r));
             paint();
         }
+        optOut?.addEventListener('click', (e) => {
+            const b = e.target.closest('[data-front]');
+            const c = b && optFront[+b.dataset.front];
+            if (!c) return;
+            picks = new Set(c.list.map(it => it.r));
+            paint();
+        });
 
         const close = () => {
             if (modal.style.display === 'none') return;
@@ -6279,6 +6439,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             if (x.strategy === 'atm_straddle') applyStraddleOptResult(x.params || {});
+            else if (x.strategy === 'simpler_trader') applySbrSimpleResult(x.params || {});
             else withDirection(applySbrStrategyResult(x.strategy, x.swept || []), x.direction)(x.params || {});
             close();
         }

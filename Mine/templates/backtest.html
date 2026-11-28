@@ -2489,8 +2489,10 @@
                         </div>
                         <div class="bc-dates">
                             <label>P&amp;L <select id="sbrCombBasis"><option value="net">Net of brokerage</option><option value="gross">Gross</option></select></label>
+                            <label title="Only combinations whose merged book wins at least this share of its trades are kept">Win % ≥
+                                <input type="number" id="sbrCombMinWin" value="40" min="0" max="100" step="1" style="width:52px"></label>
                             <button type="button" id="sbrCombOptimize" class="bc-run"
-                                    title="Search the rows for the set whose combined book has the best net P&amp;L ÷ max drawdown, and tick only those">⚡ Optimize</button>
+                                    title="Check the combinations of rows: keep those whose merged book reaches the Win % box, list the ones no other beats on both net P&amp;L and max drawdown, and tick the best net ÷ drawdown">⚡ Optimize</button>
                             <button type="button" id="sbrCombCapitalBtn" class="bc-run bc-run-alt"
                                     title="The money needed to run the ticked rows live: the most premium ever open at once, plus the combined book's worst drawdown — and why">💰 Capital needed</button>
                         </div>
@@ -2499,6 +2501,7 @@
                     <div class="bt-modal-body bc-body">
                         <div id="sbrCombChips"></div>
                         <div class="bc-note" id="sbrCombNote"></div>
+                        <div id="sbrCombOptOut"></div>
                         <div id="sbrCombCapital" class="bc-cap" style="display:none"></div>
                         <div id="sbrCombReport"></div>
                     </div>

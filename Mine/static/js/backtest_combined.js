@@ -1100,3 +1100,124 @@ window.BtCombinedCapital = function (box, list) {
 
     window.BtScCombined = { open };
 })();
+
+// ⚡ The Combined popup's Optimize search. `rows` = [{ trades: [[entryIso, pnl], …] }, …] (one per
+// candidate row); `minWin` = the Win % box. A merged book is every picked row's trades in entry order —
+// the same book BtCombinedReport draws — and a trade wins when its pnl > 0, as the report counts it.
+// Returns the Pareto front of the combinations that reach minWin: none of them is beaten on BOTH
+// net (higher) and max drawdown (lower) by another qualifying combination.
+//   Every combination is checked when 2^rows × trades is small enough (`exhaustive: true`); past that
+//   it is a beam search (all singles, then the best `beam` sets each grown by every other row).
+window.BtCombSearch = async function (rows, opts = {}) {
+    const minWin = Number(opts.minWin) || 0, W = opts.beam || 150;
+    const budget = opts.budget || 1.5e9, onProgress = opts.onProgress || (() => {});
+    const m = rows.length;
+    const ev = [];
+    rows.forEach((r, i) => r.trades.forEach(([t, v]) => ev.push([t, i, Number(v) || 0])));
+    ev.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]);
+    const T = ev.length, ri = new Uint16Array(T), val = new Float64Array(T);
+    ev.forEach((e, k) => { ri[k] = e[1]; val[k] = e[2]; });
+    const nT = rows.map(r => r.trades.length);
+    const nW = rows.map(r => r.trades.filter(x => Number(x[1]) > 0).length);
+    const sel = new Uint8Array(m);
+    let evals = 0;
+    const ddOf = () => {
+        evals++;
+        let cum = 0, peak = 0, dd = 0;
+        for (let k = 0; k < T; k++) {
+            if (!sel[ri[k]]) continue;
+            cum += val[k];
+            if (cum > peak) peak = cum; else if (peak - cum > dd) dd = peak - cum;
+        }
+        return { net: cum, dd };
+    };
+    const ok = (w, n) => n > 0 && w * 100 >= minWin * n - 1e-9;
+    const front = [];
+    const offer = (c) => {
+        // Three aims: more net, less drawdown, a higher win rate. Kept unless another combination is
+        // at least as good on all three.
+        if (!(c.net > 0)) return;
+        c.win = c.n ? c.wins / c.n * 100 : 0;
+        for (const a of front) if (a.net >= c.net - 1e-6 && a.dd <= c.dd + 1e-6 && a.win >= c.win - 1e-9) return;
+        for (let i = front.length - 1; i >= 0; i--)
+            if (c.net >= front[i].net && c.dd <= front[i].dd && c.win >= front[i].win) front.splice(i, 1);
+        front.push(c);
+    };
+    let tick = performance.now();
+    const breathe = async (done, of) => {
+        if (performance.now() - tick < 40) return;
+        onProgress(done, of);
+        await new Promise(r => setTimeout(r, 0));
+        tick = performance.now();
+    };
+    const exhaustive = m <= 24 && Math.pow(2, m) * Math.max(T, 1) <= budget;
+    if (exhaustive) {
+        // Gray code: each step flips one row, so the trade/win counts are kept in O(1) and only the
+        // combinations that reach the Win % box pay for a drawdown walk.
+        const N = Math.pow(2, m);
+        let w = 0, n = 0;
+        for (let g = 1; g < N; g++) {
+            const i = 31 - Math.clz32(g & -g);
+            sel[i] ^= 1;
+            const s = sel[i] ? 1 : -1;
+            w += s * nW[i]; n += s * nT[i];
+            if (ok(w, n)) {
+                const r = ddOf();
+                if (r.net > 0) {
+                    const idx = [];
+                    for (let j = 0; j < m; j++) if (sel[j]) idx.push(j);
+                    offer({ idx, net: r.net, dd: r.dd, n, wins: w });
+                }
+            }
+            if ((g & 1023) === 0) await breathe(g, N);
+        }
+    } else {
+        const seen = new Set();
+        const score = (c) => c.ok ? 1e12 + (c.dd > 0 ? c.net / c.dd : c.net * 1e3) : c.wins / c.n * 1e6 + c.net / 1e6;
+        const evalSet = (idx) => {
+            sel.fill(0); idx.forEach(j => { sel[j] = 1; });
+            let w = 0, n = 0;
+            idx.forEach(j => { w += nW[j]; n += nT[j]; });
+            const r = ddOf(), c = { idx, net: r.net, dd: r.dd, n, wins: w, ok: ok(w, n) };
+            if (c.ok) offer(c);
+            return c;
+        };
+        // A third of the beam is the best net ÷ DD, a third the highest net…
+        const byNet = (c) => c.ok ? 1e12 + c.net : c.wins / c.n * 1e6 + c.net / 1e6;
+        // …and a third the highest win rate, so all three aims are grown.
+        const byWin = (c) => (c.ok ? 1e12 : 0) + c.wins / c.n * 1e6 + c.net / 1e6;
+        const keep = (list) => {
+            const out = [], inOut = new Set(), third = Math.ceil(W / 3);
+            [score, byNet, byWin].forEach(f => {
+                [...list].sort((x, y) => f(y) - f(x)).filter(c => !inOut.has(c)).slice(0, third)
+                    .forEach(c => { inOut.add(c); out.push(c); });
+            });
+            return out;
+        };
+        let beam = [];
+        for (let j = 0; j < m; j++) { seen.add(String(j)); beam.push(evalSet([j])); }
+        beam = keep(beam);
+        let best = Math.max(0, ...beam.map(score)), bestNet = Math.max(0, ...beam.map(byNet)), stale = 0;
+        for (let size = 2; size <= m && beam.length && stale < 4; size++) {
+            const next = [];
+            for (let bi = 0; bi < beam.length; bi++) {
+                const base = beam[bi];
+                for (let j = 0; j < m; j++) {
+                    if (base.idx.includes(j)) continue;
+                    const idx = [...base.idx, j].sort((a, b) => a - b), key = idx.join(',');
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    next.push(evalSet(idx));
+                }
+                await breathe(size, m);
+            }
+            beam = keep(next);
+            const top = Math.max(0, ...beam.map(score)), topNet = Math.max(0, ...beam.map(byNet));
+            if (top > best + 1e-9 || topNet > bestNet + 1e-9) { best = Math.max(best, top); bestNet = Math.max(bestNet, topNet); stale = 0; }
+            else stale++;
+        }
+    }
+    front.sort((a, b) => a.dd - b.dd || b.net - a.net);
+    return { front, exhaustive, evals, combos: exhaustive ? Math.pow(2, m) - 1 : evals, trades: T,
+             maxWin: Math.max(0, ...rows.map((r, i) => nT[i] ? nW[i] / nT[i] * 100 : 0)) };
+};
