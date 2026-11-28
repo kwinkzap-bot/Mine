@@ -36,5 +36,43 @@
     "charges": 103.0,
     "net": -2612.0,
     "unconfirmed": null
+  },
+  {
+    "date": "2026-11-27",
+    "n": 2,
+    "mode": "paper",
+    "side": "Short",
+    "signal_bar": "2026-11-27 10:50:00",
+    "signal": {
+      "rsi": null,
+      "close": 25753.95,
+      "level": 25750.8,
+      "stop": 25800.6,
+      "slow": 25922.71,
+      "medium": 25831.16,
+      "fast": 25778.92
+    },
+    "index_entry": 25750.35,
+    "entry_time": "10:55",
+    "index_exit": 25650.95,
+    "exit_time": "13:26",
+    "result": "Target",
+    "strike": 25900,
+    "option_type": "PE",
+    "legs": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": null,
+        "entry": 257.9,
+        "exit": 335.2,
+        "pnl": 5024.5,
+        "exit_reason": null
+      }
+    },
+    "pnl": 5024.5,
+    "charges": 103.0,
+    "net": 4921.5,
+    "unconfirmed": null
   }
 ]

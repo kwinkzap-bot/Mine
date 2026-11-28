@@ -4200,11 +4200,25 @@ document.addEventListener('DOMContentLoaded', function() {
     // columns above still apply — the signal, SL and Target are index levels —
     // so these say which leg was priced against them and what it cost, and keep
     // the index result visible next to the premium P&L the row is booked on.
+    // Entry / Exit Strike: the contract bought and the one sold. They differ
+    // only on a positional trade rolled to the ≈premium strike (Hilega Milega's
+    // Roll To box); a one-contract trade carries just `strike`, used for both.
+    const _optLeg = (t, end) => {
+        const k = t[`${end}_strike`] ?? t.strike;
+        return k ? `${k} ${t.option_type || ''}`.trim() : '—';
+    };
     const SC_OPTION_COLS = [
-        { label: 'Leg', sortable: true,
-          sortValue: t => Number(t.strike) || 0,
-          format: (_, t) => t.strike ? `${t.strike} ${t.option_type || ''}`.trim() : '—',
-          title: (_, t) => t.expiry ? `expiry ${t.expiry}` : '' },
+        { label: 'Entry Strike', sortable: true,
+          sortValue: t => Number(t.entry_strike ?? t.strike) || 0,
+          format: (_, t) => _optLeg(t, 'entry'),
+          title: (_, t) => (t.entry_expiry || t.expiry) ? `expiry ${t.entry_expiry || t.expiry}` : '' },
+        { label: 'Exit Strike', sortable: true,
+          sortValue: t => Number(t.exit_strike ?? t.strike) || 0,
+          format: (_, t) => _optLeg(t, 'exit'),
+          title: (_, t) => [(t.exit_expiry || t.expiry) ? `expiry ${t.exit_expiry || t.expiry}` : '',
+                            t.rolls ? `${t.rolls} roll${t.rolls === 1 ? '' : 's'}: `
+                                + (t.legs || []).map(g => `${g.strike} (${g.expiry})`).join(' → ') : '']
+                           .filter(Boolean).join('  ·  ') },
         { key: 'expiry', label: 'Expiry', sortable: true,
           format: v => v || '—' },
         { key: 'entry_premium', label: 'Entry Prem', sortable: true,

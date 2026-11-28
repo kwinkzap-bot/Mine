@@ -181,6 +181,11 @@ def test_positional_legs_roll_to_the_next_expiry_while_the_signal_is_on(monkeypa
         assert date.fromisoformat(b['expiry']) > date.fromisoformat(a['expiry'])
     assert p['pnl'] == round(sum(g['exit'] - g['entry'] for g in p['legs']), 2)
     assert p['entry_premium'] == p['legs'][0]['entry'] and p['exit_premium'] == p['legs'][-1]['exit']
+    assert p['entry_strike'] == p['exit_strike'] == p['strike']           # the table's Entry / Exit Strike
+    assert (p['entry_expiry'], p['exit_expiry']) == (p['legs'][0]['expiry'], p['legs'][-1]['expiry'])
+    # rolled to the ≈premium strike: the exit strike is the last contract's, not the entry's
+    q = hm.attach_positional_legs('NIFTY', [trade], 250.0, calendar=cal, roll='premium')[0][0]
+    assert q['entry_strike'] == q['legs'][0]['strike'] and q['exit_strike'] == q['legs'][-1]['strike']
 
 
 def test_daily_candles_are_positional_and_ignore_the_clock_window():

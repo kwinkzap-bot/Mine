@@ -546,6 +546,10 @@ def attach_positional_legs(symbol: str, trades: List[Dict[str, Any]], premium: f
             t, index_pnl=t['pnl'], entry_premium=legs[0]['entry'], exit_premium=legs[-1]['exit'], pnl=pnl,
             result='WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
             strike=legs[0]['strike'], option_type=res['option_type'], expiry=legs[-1]['expiry'],
+            # A roll to the ≈premium strike changes the contract: the strike bought at the entry
+            # and the one sold at the exit are both shown (equal unless it rolled to a new one).
+            entry_strike=legs[0]['strike'], entry_expiry=legs[0]['expiry'],
+            exit_strike=legs[-1]['strike'], exit_expiry=legs[-1]['expiry'],
             rolls=len(legs) - 1, legs=legs)
         hit = res.get('stopped')
         if hit:                       # the premium stop ended the hold before the index trade did

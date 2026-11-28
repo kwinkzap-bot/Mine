@@ -622,10 +622,11 @@ Added 2026-11-16 (Mine group, from a Darshan Rathod / Lemon video) and removed 2
 its option, params row, Best Params panel, JS and `tests/test_sunshine_straddle_engine.py`. The video's settings lost
 money over 2024-26 (net −₹42.5 k); the sweep's best (in-sample) was +₹60 k. Its cached option minutes stay on disk.
 
-## Hull Suite System backtest (NIFTY, the /backtest default; `hull_suite`)
+## Hull Suite System backtest (NIFTY; `hull_suite`; the /backtest default 2026-11-15 → 11-27)
 
-Added 2026-11-15 in the Mine group, **the default strategy on /backtest** since that day (it took over from the
-Monthly RSI Breakout), from a video (Animesh Kumar, PhonePe Invest series, youtube xVF85pCj1YQ).
+Added 2026-11-15 in the Mine group, the default strategy on /backtest from that day (it took over from the
+Monthly RSI Breakout) until 2026-11-27, when 🧪 Testing → 🌀 Hilega Milega became the page's default selection
+(the two `selected` options in `templates/backtest.html`), from a video (Animesh Kumar, PhonePe Invest series, youtube xVF85pCj1YQ).
 `Backtest/hull_suite_engine.py` (pure), route `/api/backtest/hull-suite` (option legs priced in the background and
 polled on `/backtest/st-bb-rsi/status/<id>`, as MA Cross + HTF), params row `#hullSuiteParamsRow` (`hs*` ids, shares
 the `pcLots` row).

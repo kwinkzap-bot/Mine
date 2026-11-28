@@ -1,0 +1,40 @@
+[
+  {
+    "date": "2026-11-27",
+    "n": 1,
+    "mode": "paper",
+    "side": "Short",
+    "signal_bar": "2026-11-27 13:15:00",
+    "signal": {
+      "rsi": null,
+      "close": 25647.3,
+      "level": 25646.85,
+      "stop": 25684.0,
+      "slow": 25884.28,
+      "medium": 25718.71,
+      "fast": 25655.86
+    },
+    "index_entry": 25646.2,
+    "entry_time": "13:30",
+    "index_exit": 25684.3,
+    "exit_time": "13:39",
+    "result": "Stop Loss",
+    "strike": 25800,
+    "option_type": "PE",
+    "legs": {
+      "paper": {
+        "name": "Paper",
+        "lots": 1,
+        "qty": null,
+        "entry": 262.8,
+        "exit": 230.4,
+        "pnl": -2106.0,
+        "exit_reason": null
+      }
+    },
+    "pnl": -2106.0,
+    "charges": 103.0,
+    "net": -2209.0,
+    "unconfirmed": null
+  }
+]
